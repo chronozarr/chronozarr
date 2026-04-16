@@ -137,7 +137,8 @@ def phase2_encode(cfg: dict, mosaics: dict[str, np.ndarray]) -> dict:
     all_metrics["baseline_b2_chunked"] = metrics_b2c
 
     # --- Experimental: keyframe + delta at various intervals ---
-    for kf_interval in [3, 6, 12]:
+    # kf=1 is effectively "all keyframes" = no delta advantage baseline
+    for kf_interval in [1, 3, 6, 12]:
         label = f"experimental_kf{kf_interval}"
         logger.info("Encoding %s...", label)
         t0 = time.time()
@@ -157,8 +158,8 @@ def phase2_encode(cfg: dict, mosaics: dict[str, np.ndarray]) -> dict:
 
 
 def phase3_quality(cfg: dict, mosaics: dict[str, np.ndarray], encode_result: dict) -> None:
-    """Verify reconstruction quality and generate QC outputs."""
-    from spacetime.bench import init_db, record_quality
+    """Verify reconstruction quality, change analysis, and QC outputs."""
+    from spacetime.bench import init_db, record_change_analysis, record_quality
     from spacetime.chunk import extract_chunk
     from spacetime.encode import experimental
     from spacetime.qc import save_comparison_panel, save_delta_stats_plot
@@ -170,7 +171,17 @@ def phase3_quality(cfg: dict, mosaics: dict[str, np.ndarray], encode_result: dic
     db = init_db(DATA / "reports" / "bench.duckdb")
 
     months = sorted(mosaics.keys())
-    # Check reconstruction for a sample of chunks and months
+
+    # --- Change analysis: all chunks, consecutive months ---
+    logger.info("Running change analysis...")
+    for r, c in grid.chunk_ids:
+        cid = grid.chunk_id_str(r, c)
+        for i in range(1, len(months)):
+            prev = extract_chunk(mosaics[months[i - 1]], grid, r, c)
+            curr = extract_chunk(mosaics[months[i]], grid, r, c)
+            record_change_analysis(db, aoi_name, cid, months[i - 1], months[i], prev, curr)
+
+    # --- Reconstruction quality ---
     sample_chunks = [(0, 0), (grid.n_rows // 2, grid.n_cols // 2)]
     sample_months = [
         months[0],
@@ -180,7 +191,7 @@ def phase3_quality(cfg: dict, mosaics: dict[str, np.ndarray], encode_result: dic
         months[-1],
     ]
 
-    for kf_interval in [3, 6, 12]:
+    for kf_interval in [1, 3, 6, 12]:
         label = f"experimental_kf{kf_interval}"
         exp_store = store_root / label
 
@@ -311,79 +322,138 @@ def phase4_access_sim(cfg: dict, mosaics: dict[str, np.ndarray], encode_result: 
 
 
 def phase5_report(cfg: dict) -> None:
-    """Generate summary reports from the benchmark database."""
-    from spacetime.bench import init_db, print_storage_summary
+    """Generate summary reports framed around three hypotheses."""
+    from spacetime.bench import init_db
 
+    aoi = cfg["name"]
     db = init_db(DATA / "reports" / "bench.duckdb")
-    print_storage_summary(db)
 
-    # Access summary
+    # ===== H1: Product Unification =====
+    print("\n" + "=" * 70)
+    print(f"RESULTS FOR: {aoi}")
+    print("=" * 70)
+
+    result = db.execute(
+        """
+        SELECT representation, variant, total_bytes, n_months, n_chunks
+        FROM storage_metrics WHERE aoi = ?
+        ORDER BY total_bytes
+    """,
+        [aoi],
+    ).fetchall()
+
+    if result:
+        print("\n--- H1: Product Unification (A vs B) ---")
+        for row in result:
+            rep, var, total, _nm, _nc = row
+            label = f"{rep}/{var}" if var else rep
+            print(f"  {label:<30} {total / 1e6:>10.2f} MB")
+
+    # ===== H2: Temporal Encoding vs B2_chunked =====
+    b2c_row = db.execute(
+        """
+        SELECT total_bytes FROM storage_metrics
+        WHERE aoi = ? AND variant = 'b2_chunked'
+    """,
+        [aoi],
+    ).fetchone()
+
+    if b2c_row:
+        b2c_bytes = b2c_row[0]
+        print(f"\n--- H2: Temporal Encoding (vs B2_chunked = {b2c_bytes / 1e6:.2f} MB) ---")
+        exp_rows = db.execute(
+            """
+            SELECT variant, keyframe_interval, total_bytes
+            FROM storage_metrics
+            WHERE aoi = ? AND representation = 'experimental'
+            ORDER BY keyframe_interval
+        """,
+            [aoi],
+        ).fetchall()
+        for _var, kf, total in exp_rows:
+            ratio = b2c_bytes / max(total, 1)
+            savings = (1 - total / max(b2c_bytes, 1)) * 100
+            print(f"  kf={kf:>2}: {total / 1e6:>8.2f} MB  ({ratio:.2f}x B2c, {savings:+.1f}%)")
+
+    # ===== H3: Access Pattern =====
     result = db.execute(
         """
         SELECT representation, variant, pattern, product,
                AVG(bytes_fetched) as avg_bytes,
                AVG(decode_time_ms) as avg_ms
-        FROM access_metrics
-        WHERE aoi = ?
+        FROM access_metrics WHERE aoi = ?
         GROUP BY representation, variant, pattern, product
-        ORDER BY pattern, representation, variant
+        ORDER BY pattern, avg_bytes
     """,
-        [cfg["name"]],
-    ).fetchall()
-
-    print("\n=== Access Pattern Summary ===")
-    print(
-        f"{'Rep':<15} {'Variant':<10} {'Pattern':<15} {'Product':<15} "
-        f"{'Avg Bytes':>12} {'Avg ms':>10}"
-    )
-    print("-" * 80)
-    for row in result:
-        rep, var, pat, prod, avg_b, avg_ms = row
-        print(f"{rep:<15} {var:<10} {pat:<15} {prod:<15} {avg_b:>12,.0f} {avg_ms:>10.1f}")
-
-    # Quality summary
-    result = db.execute(
-        """
-        SELECT variant, AVG(psnr) as avg_psnr, AVG(ssim) as avg_ssim,
-               MAX(max_abs_error) as worst_error
-        FROM quality_metrics
-        WHERE aoi = ?
-        GROUP BY variant
-        ORDER BY variant
-    """,
-        [cfg["name"]],
-    ).fetchall()
-
-    print("\n=== Reconstruction Quality ===")
-    print(f"{'Variant':<25} {'Avg PSNR':>10} {'Avg SSIM':>10} {'Worst Error':>12}")
-    print("-" * 60)
-    for row in result:
-        var, psnr, ssim, worst = row
-        psnr_str = f"{psnr:.1f}" if psnr != float("inf") else "inf"
-        print(f"{var:<25} {psnr_str:>10} {ssim:.6f}{'':>3} {worst:>12}")
-
-    # Delta stats summary
-    result = db.execute(
-        """
-        SELECT keyframe_interval,
-               AVG(mean_abs_delta) as avg_mean_delta,
-               AVG(pct_zero) as avg_pct_zero,
-               AVG(pct_under_50) as avg_pct_under_50
-        FROM delta_stats
-        WHERE aoi = ?
-        GROUP BY keyframe_interval
-        ORDER BY keyframe_interval
-    """,
-        [cfg["name"]],
+        [aoi],
     ).fetchall()
 
     if result:
-        print("\n=== Delta Statistics (chunk 0,0) ===")
-        print(f"{'KF Interval':>12} {'Avg |delta|':>12} {'% zero':>10} {'% < 50':>10}")
-        print("-" * 50)
+        print("\n--- H3: Access Patterns ---")
+        hdr = f"  {'Rep/Var':<25} {'Pattern':<15} {'Product':<12} {'Bytes':>12} {'ms':>8}"
+        print(hdr)
+        print(f"  {'-' * 75}")
         for row in result:
-            kf, avg_d, pz, p50 = row
-            print(f"{kf:>12} {avg_d:>12.1f} {pz:>10.1f} {p50:>10.1f}")
+            rep, var, pat, prod, ab, ams = row
+            label = f"{rep}/{var}" if var else rep
+            print(f"  {label:<25} {pat:<15} {prod:<12} {ab:>12,.0f} {ams:>8.1f}")
+
+    # ===== Incremental Time-Step Cost =====
+    inc_rows = db.execute(
+        """
+        SELECT variant, is_keyframe_boundary,
+               AVG(bytes_marginal) as avg_marginal,
+               AVG(decode_time_ms) as avg_ms
+        FROM incremental_cost WHERE aoi = ?
+        GROUP BY variant, is_keyframe_boundary
+        ORDER BY variant, is_keyframe_boundary
+    """,
+        [aoi],
+    ).fetchall()
+
+    if inc_rows:
+        print("\n--- Incremental Time-Step Cost ---")
+        for var, is_kf, avg_m, avg_ms in inc_rows:
+            tag = "keyframe boundary" if is_kf else "delta step"
+            print(f"  {var:<20} {tag:<20} avg={avg_m:>10,.0f} bytes  {avg_ms:>6.1f}ms")
+
+    # ===== Change Analysis Summary =====
+    change_rows = db.execute(
+        """
+        SELECT
+            AVG(pct_changed) as avg_changed,
+            AVG(mean_abs_delta) as avg_delta,
+            AVG(delta_entropy) as avg_entropy,
+            MIN(pct_changed) as min_changed,
+            MAX(pct_changed) as max_changed
+        FROM change_analysis WHERE aoi = ?
+    """,
+        [aoi],
+    ).fetchone()
+
+    if change_rows and change_rows[0] is not None:
+        avg_ch, avg_d, avg_e, min_ch, max_ch = change_rows
+        print("\n--- Temporal Change Profile ---")
+        print(f"  Avg changed pixels/month: {avg_ch:.1f}%")
+        print(f"  Range: {min_ch:.1f}% - {max_ch:.1f}%")
+        print(f"  Avg |delta|: {avg_d:.1f}")
+        print(f"  Avg delta entropy ratio: {avg_e:.3f}")
+
+    # ===== Reconstruction Quality =====
+    q_rows = db.execute(
+        """
+        SELECT variant, AVG(psnr), AVG(ssim), MAX(max_abs_error)
+        FROM quality_metrics WHERE aoi = ?
+        GROUP BY variant ORDER BY variant
+    """,
+        [aoi],
+    ).fetchall()
+
+    if q_rows:
+        print("\n--- Reconstruction Quality ---")
+        for var, psnr, ssim_val, worst in q_rows:
+            p = "inf" if psnr == float("inf") else f"{psnr:.1f}"
+            print(f"  {var:<25} PSNR={p:>6}  SSIM={ssim_val:.6f}  worst={worst}")
 
     db.close()
 

@@ -82,6 +82,37 @@ def init_db(db_path: Path) -> duckdb.DuckDBPyConnection:
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS change_analysis (
+            aoi TEXT,
+            chunk_id TEXT,
+            month_from TEXT,
+            month_to TEXT,
+            pct_changed DOUBLE,
+            mean_abs_delta DOUBLE,
+            median_abs_delta DOUBLE,
+            max_abs_delta INTEGER,
+            delta_entropy DOUBLE,
+            per_band_mean_abs TEXT,
+            created_at TIMESTAMP DEFAULT current_timestamp
+        )
+    """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS incremental_cost (
+            aoi TEXT,
+            representation TEXT,
+            variant TEXT,
+            chunk_id TEXT,
+            month_from TEXT,
+            month_to TEXT,
+            bytes_marginal INTEGER,
+            decode_time_ms DOUBLE,
+            is_keyframe_boundary BOOLEAN,
+            created_at TIMESTAMP DEFAULT current_timestamp
+        )
+    """)
+
     return conn
 
 
@@ -218,6 +249,93 @@ def record_delta_stats(
                 s["pct_under_50"],
             ],
         )
+
+
+def record_change_analysis(
+    conn: duckdb.DuckDBPyConnection,
+    aoi: str,
+    chunk_id: str,
+    month_from: str,
+    month_to: str,
+    prev_bands: np.ndarray,
+    curr_bands: np.ndarray,
+    change_threshold: int = 50,
+) -> None:
+    """Analyze and record temporal change between consecutive months for a chunk."""
+    delta = curr_bands.astype(np.int32) - prev_bands.astype(np.int32)
+    abs_delta = np.abs(delta)
+
+    changed_pixels = np.any(abs_delta > change_threshold, axis=0)
+    pct_changed = float(changed_pixels.mean() * 100)
+    mean_abs = float(abs_delta.mean())
+    median_abs = float(np.median(abs_delta))
+    max_abs = int(abs_delta.max())
+
+    # Per-band mean abs delta
+    per_band = [float(abs_delta[i].mean()) for i in range(abs_delta.shape[0])]
+
+    # Delta entropy: how much information is in the residual
+    # Approximated by compressed-size / uncompressed-size of the delta
+    from numcodecs import Blosc
+
+    compressor = Blosc(cname="zstd", clevel=5, shuffle=Blosc.BITSHUFFLE)
+    delta_i16 = delta.clip(-32768, 32767).astype(np.int16)
+    compressed = compressor.encode(delta_i16)
+    raw_size = delta_i16.nbytes
+    entropy_ratio = len(compressed) / max(raw_size, 1)
+
+    conn.execute(
+        """INSERT INTO change_analysis
+           (aoi, chunk_id, month_from, month_to,
+            pct_changed, mean_abs_delta, median_abs_delta, max_abs_delta,
+            delta_entropy, per_band_mean_abs)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        [
+            aoi,
+            chunk_id,
+            month_from,
+            month_to,
+            pct_changed,
+            mean_abs,
+            median_abs,
+            max_abs,
+            entropy_ratio,
+            str(per_band),
+        ],
+    )
+
+
+def record_incremental_cost(
+    conn: duckdb.DuckDBPyConnection,
+    aoi: str,
+    representation: str,
+    variant: str,
+    chunk_id: str,
+    month_from: str,
+    month_to: str,
+    bytes_marginal: int,
+    decode_time_ms: float,
+    is_keyframe_boundary: bool,
+) -> None:
+    """Record the marginal cost of advancing one time step."""
+    conn.execute(
+        """INSERT INTO incremental_cost
+           (aoi, representation, variant, chunk_id,
+            month_from, month_to, bytes_marginal, decode_time_ms,
+            is_keyframe_boundary)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        [
+            aoi,
+            representation,
+            variant,
+            chunk_id,
+            month_from,
+            month_to,
+            bytes_marginal,
+            decode_time_ms,
+            is_keyframe_boundary,
+        ],
+    )
 
 
 def print_storage_summary(conn: duckdb.DuckDBPyConnection) -> None:
