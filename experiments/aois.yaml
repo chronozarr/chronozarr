@@ -1,0 +1,32 @@
+# AOI definitions for spacetime chunk experiments
+# Each AOI: ~25 km x 25 km footprint, chosen for contrasting temporal behavior
+
+aois:
+  sahara_tamanrasset:
+    label: "Sahara (Tamanrasset, Algeria)"
+    description: "Hyper-arid desert, near-zero vegetation change, extreme low temporal entropy"
+    bbox: [5.40, 22.70, 5.65, 22.95]   # lon_min, lat_min, lon_max, lat_max
+    epsg: 32631  # UTM zone 31N
+    expected_behavior: "Best-case for delta encoding: near-zero residuals month-to-month"
+
+  iowa_ames:
+    label: "Iowa Cropland (near Ames, IA)"
+    description: "Corn/soybean rotation, strong phenological cycle, seasonal snow"
+    bbox: [-93.80, 41.95, -93.55, 42.20]  # lon_min, lat_min, lon_max, lat_max
+    epsg: 32615  # UTM zone 15N
+    expected_behavior: "Stress-test for deltas: large seasonal swings, snow/bare/crop transitions"
+
+# Shared parameters
+time_range:
+  start: "2023-01-01"
+  end: "2024-12-31"
+
+bands:
+  - B02  # Blue  (10m)
+  - B03  # Green (10m)
+  - B04  # Red   (10m)
+  - B08  # NIR   (10m)
+
+mask_band: SCL  # Scene Classification Layer (20m, resampled to 10m)
+
+chunk_size: 512  # pixels per side at 10m = 5.12 km
