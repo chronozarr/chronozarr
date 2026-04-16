@@ -141,30 +141,52 @@ def load_scene(
     dst_crs: rasterio.crs.CRS,
     dst_height: int,
     dst_width: int,
+    max_retries: int = 3,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load all bands + SCL mask for one scene, reprojected to target grid.
+
+    Retries on network/warp failures.
 
     Returns:
         bands: uint16 array of shape (n_bands, height, width)
         valid: bool array of shape (height, width)
     """
-    bands = np.zeros((len(REQUIRED_BANDS), dst_height, dst_width), dtype=np.uint16)
-    for i, band_name in enumerate(REQUIRED_BANDS):
-        href = scene.asset_hrefs[band_name]
-        bands[i] = read_band_window(href, dst_transform, dst_crs, dst_height, dst_width)
+    import time as _time
 
-    valid = read_scl_mask(scene.scl_href, dst_transform, dst_crs, dst_height, dst_width)
+    for attempt in range(max_retries):
+        try:
+            bands = np.zeros((len(REQUIRED_BANDS), dst_height, dst_width), dtype=np.uint16)
+            for i, band_name in enumerate(REQUIRED_BANDS):
+                href = scene.asset_hrefs[band_name]
+                bands[i] = read_band_window(href, dst_transform, dst_crs, dst_height, dst_width)
 
-    # Also mask nodata (band value 0)
-    band_valid = np.all(bands > 0, axis=0)
-    valid = valid & band_valid
+            valid = read_scl_mask(scene.scl_href, dst_transform, dst_crs, dst_height, dst_width)
 
-    logger.info(
-        "Loaded %s: %.1f%% valid pixels",
-        scene.item_id[:40],
-        100.0 * valid.mean(),
-    )
-    return bands, valid
+            band_valid = np.all(bands > 0, axis=0)
+            valid = valid & band_valid
+
+            logger.info(
+                "Loaded %s: %.1f%% valid pixels",
+                scene.item_id[:40],
+                100.0 * valid.mean(),
+            )
+            return bands, valid
+
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)
+                logger.warning(
+                    "Retry %d/%d for %s after error: %s (waiting %ds)",
+                    attempt + 1,
+                    max_retries,
+                    scene.item_id[:30],
+                    e,
+                    wait,
+                )
+                _time.sleep(wait)
+            else:
+                logger.error("Failed after %d retries: %s", max_retries, scene.item_id)
+                raise
 
 
 def monthly_composite(
@@ -272,6 +294,16 @@ def build_monthly_mosaics(
     prev_composite: np.ndarray | None = None
 
     for month_key in months:
+        out_path = output_dir / f"{month_key}.npz"
+
+        # Skip already-completed months (resume support)
+        if out_path.exists():
+            logger.info("Skipping %s (already exists)", month_key)
+            data = load_mosaic(out_path)
+            prev_composite = data["bands"]
+            outputs[month_key] = out_path
+            continue
+
         scenes = scenes_by_month[month_key]
         logger.info("=== Processing %s (%d scenes) ===", month_key, len(scenes))
 
