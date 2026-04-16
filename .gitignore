@@ -1,0 +1,35 @@
+# Data artifacts (large, regenerable)
+data/
+*.tif
+*.tiff
+*.zarr/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Reports (regenerable)
+reports/
+
+# Handover
+HANDOVER.md
+
+# Napkin
+.napkin.md
