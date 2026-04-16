@@ -1,10 +1,10 @@
 [project]
-name = "spacetime"
+name = "tileripper"
 version = "0.1.0"
-description = "Spacetime chunk architecture for remote-sensing basemaps"
+description = "Low-cost API for temporally coherent EO basemaps with queryable values"
 requires-python = ">=3.11"
 dependencies = [
-    # STAC / catalog
+    # STAC / catalog (ingestion pipeline)
     "pystac-client>=0.8",
     "planetary-computer>=1.0",
     # Raster IO
@@ -28,16 +28,20 @@ dependencies = [
     # Utilities
     "tqdm>=4.66",
     "click>=8.1",
+    # Coordinate transforms
+    "pyproj>=3.6",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
+    "httpx>=0.27",
 ]
 serve = [
     "fastapi>=0.111",
     "uvicorn>=0.30",
+    "pillow>=10.0",
 ]
 
 [build-system]

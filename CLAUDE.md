@@ -1,57 +1,78 @@
-# Spacetime Chunk Prototype
+# TileRipper
 
-Research prototype comparing spacetime chunk architecture vs conventional precomputed basemaps for Sentinel-2 temporal remote sensing data.
+Low-cost API for temporally coherent EO basemaps with queryable values.
+Product name: TileRipper. Internal package name: spacetime.
+
+## Architecture
+
+B2_chunked Zarr is the native format. Products derived at serve time.
+Chunk-grid access is the runtime. See ARCHITECTURE_DECISION.md for spec.
 
 ## Project structure
 
 ```
 src/spacetime/
+  api/
+    v1.py          # v1 API router (catalog, tiles, query, stats, usage)
+    auth.py        # API key auth middleware + rate limiting
+    models.py      # Pydantic response models
+    products.py    # Product catalog + tier gating
+    metering.py    # Usage tracking
+    geo.py         # Coordinate transforms (WGS84 ↔ UTM ↔ pixel)
+  serve.py         # FastAPI app entry point (mounts v1, auth, CORS)
+  render.py        # Band math: true_color, false_color, NDVI, NDWI, water
+  chunk.py         # 512px spatial chunking grid
   catalog.py       # STAC search (Planetary Computer, S2 L2A)
   mosaic.py        # Monthly median composite with SCL cloud masking
-  chunk.py         # 512px spatial chunking grid
-  render.py        # Band math: true_color, false_color, NDVI, NDWI
+  static/
+    index.html     # Product demo (map + click-to-query values panel)
   encode/
-    baseline_a.py  # Per-product per-month PNGs (conventional strawman)
-    baseline_b.py  # Multiband Zarr (B1=independent, B2=stacked, B2_chunked)
-    experimental.py # Keyframe + int16 delta + zstd
-  decode/          # (decode functions live in encode modules)
-  access.py        # Access pattern simulation (viewport, pan, scrub, product switch)
-  bench.py         # DuckDB-backed metrics (storage, access, quality)
-  qc.py            # Visual comparison panels, delta stats plots
+    baseline_b.py  # Multiband Zarr encoder (B2_chunked — v0 format)
+    baseline_a.py  # Per-product PNGs (superseded)
+    experimental.py # Keyframe + delta (optional optimization)
+  access.py        # Access pattern simulation
+  bench.py         # DuckDB-backed metrics
+  qc.py            # Visual comparison panels
 experiments/
   aois.yaml        # AOI definitions (Sahara + Iowa)
-  run_experiment.py # Full pipeline orchestrator (phases 1-5)
-  quick_bench.py   # Quick bench on partial data
+  run_experiment.py # Full pipeline orchestrator
 data/              # gitignored: raw/, mosaics/, stores/, reports/
 ```
 
 ## How to run
 
 ```bash
-# Full pipeline for one AOI
+# Tile server + demo (http://localhost:8765)
+uv run --extra serve uvicorn spacetime.serve:app --host 0.0.0.0 --port 8765
+
+# Full ingestion pipeline for one AOI
 uv run python experiments/run_experiment.py --aoi sahara_tamanrasset
-
-# Skip download if mosaics already exist
-uv run python experiments/run_experiment.py --aoi sahara_tamanrasset --skip-download --phases 2,3,4,5
-
-# Quick benchmark on whatever mosaics exist
-uv run python experiments/quick_bench.py --aoi sahara_tamanrasset
 ```
+
+## API endpoints (v1)
+
+- `GET /v1/catalog` — list AOIs + products
+- `GET /v1/tiles/{aoi}/{month}/{chunk_id}` — rendered tile image
+- `GET /v1/query/{aoi}/{month}?lat=...&lng=...` — point query (maps + values)
+- `GET /v1/stats/{aoi}/{month}?product=ndvi` — AOI summary statistics
+- `GET /v1/products` — product catalog with tier requirements
+- `GET /v1/months/{aoi}` — available months
+- `GET /v1/usage` — current key usage
+
+## Products and tiers
+
+- Explorer ($3): true_color, false_color, ndvi
+- Builder ($5): + ndwi, water
+- Pro ($7): + weekly Sentinel-2 (future)
+- Dev: all products, no rate limits
 
 ## Key design decisions
 
-- Store in UTM-per-AOI, never Web Mercator for analysis data
-- Median monthly composite with SCL cloud masking, carry-forward for gaps
-- Lossless delta encoding (int16 residuals, zstd compressed)
-- numcodecs pinned <0.15 for zarr 2.x compatibility
-- All encoders track bytes written for benchmarking
-
-## Representations compared
-
-| Label | Description | When better |
-|-------|-------------|-------------|
-| A     | Per-product per-month PNGs | Simplest serving, worst storage |
-| B1    | Independent multiband Zarr per chunk/month | Good balance, no product duplication |
-| B2    | Time-stacked Zarr (bulk compressed) | Best raw compression, worst partial access |
-| B2_chunked | Time-stacked with per-month Zarr chunks | Good compression + partial access |
-| X_kf{N} | Keyframe every N months + int16 deltas | Best partial access for time scrub |
+- B2_chunked Zarr: (n_months, 4, H, W), chunks (1, 4, H, W)
+- Chunk-grid serving is the runtime (mosaic endpoint removed)
+- manifest.json per store — self-describing
+- UTM-per-AOI, never Web Mercator for analysis data
+- 512 px default chunk size, 256 px for low-latency
+- numcodecs <0.15 for zarr 2.x compatibility
+- API key auth via X-API-Key header, Bearer token, or query param
+- Dev mode: no key required, defaults to dev tier

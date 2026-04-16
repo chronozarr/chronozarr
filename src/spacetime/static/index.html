@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TileRipper — Maps + Values</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --surface: #141820;
+    --surface2: #1a1f2b;
+    --border: #252a38;
+    --text: #e2e4ea;
+    --text-dim: #6b7394;
+    --accent: #4f8ff7;
+    --accent-dim: #2a4a8a;
+    --green: #34d399;
+    --blue: #60a5fa;
+    --amber: #fbbf24;
+    --red: #f87171;
+    --water: #2980b9;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* --- Header --- */
+  header {
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    background: var(--surface);
+  }
+  .logo {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    color: var(--text);
+  }
+  .logo span { color: var(--accent); }
+  .tagline {
+    font-size: 11px;
+    color: var(--text-dim);
+    border-left: 1px solid var(--border);
+    padding-left: 12px;
+  }
+  .header-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  /* --- Controls --- */
+  .controls {
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    background: var(--surface);
+  }
+  .control-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .control-group label {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+  }
+  select {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  input[type="range"] {
+    width: 200px;
+    accent-color: var(--accent);
+  }
+  #month-label {
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    min-width: 60px;
+    color: var(--accent);
+  }
+  .pill-bar { display: flex; gap: 3px; }
+  .pill-bar button {
+    background: var(--surface2);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.12s;
+    font-weight: 500;
+  }
+  .pill-bar button:hover { border-color: var(--accent); color: var(--text); }
+  .pill-bar button.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  .pill-bar button.locked {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .status {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+  .status .timing { color: var(--accent); }
+
+  /* --- Main layout --- */
+  .main-layout {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+  .map-panel {
+    flex: 1;
+    padding: 16px;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    overflow: auto;
+    position: relative;
+  }
+  #chunk-grid {
+    display: grid;
+    gap: 0px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    line-height: 0;
+    cursor: crosshair;
+    position: relative;
+  }
+  #chunk-grid img {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: cover;
+    transition: opacity 0.08s;
+  }
+  #chunk-grid img.loading { opacity: 0.35; }
+
+  /* Click marker */
+  .click-marker {
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 0 8px rgba(79,143,247,0.6);
+    z-index: 10;
+    display: none;
+  }
+
+  /* --- Query panel --- */
+  .query-panel {
+    width: 320px;
+    min-width: 320px;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  .panel-header {
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .panel-header h2 {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+  .panel-header p {
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .panel-section {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .panel-section h3 {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  .value-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 0;
+    font-size: 12px;
+  }
+  .value-row .label { color: var(--text-dim); }
+  .value-row .value {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .value-bar {
+    height: 4px;
+    background: var(--surface2);
+    border-radius: 2px;
+    margin-top: 3px;
+    overflow: hidden;
+  }
+  .value-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+  }
+  .band-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 12px;
+  }
+  .band-item {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    padding: 2px 0;
+  }
+  .band-item .name { color: var(--text-dim); }
+  .band-item .val { font-weight: 500; font-variant-numeric: tabular-nums; }
+
+  /* API call display */
+  .api-call {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 10px;
+    line-height: 1.5;
+    color: var(--text-dim);
+    word-break: break-all;
+    position: relative;
+  }
+  .api-call .method { color: var(--green); font-weight: 600; }
+  .api-call .path { color: var(--text); }
+  .api-call .param { color: var(--amber); }
+  .copy-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border-radius: 3px;
+    padding: 2px 6px;
+    font-size: 9px;
+    cursor: pointer;
+  }
+  .copy-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  /* Empty state */
+  .empty-state {
+    padding: 32px 16px;
+    text-align: center;
+    color: var(--text-dim);
+  }
+  .empty-state .icon { font-size: 32px; margin-bottom: 8px; opacity: 0.5; }
+  .empty-state p { font-size: 12px; line-height: 1.6; }
+
+  /* --- Footer --- */
+  .keyboard-hint {
+    font-size: 10px;
+    color: var(--text-dim);
+    padding: 6px 20px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  kbd {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0 4px;
+    font-family: inherit;
+    font-size: 10px;
+  }
+
+  /* Water indicator */
+  .water-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 4px;
+  }
+  .water-yes { background: var(--water); }
+  .water-no { background: var(--text-dim); opacity: 0.4; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Tile<span>Ripper</span></div>
+  <div class="tagline">Month-specific satellite maps with queryable values</div>
+  <div class="header-right">
+    <a href="/docs" style="font-size:11px; color:var(--text-dim);">API Docs</a>
+  </div>
+</header>
+
+<div class="controls">
+  <div class="control-group">
+    <label>AOI</label>
+    <select id="aoi-select"></select>
+  </div>
+  <div class="control-group">
+    <label>Product</label>
+    <div class="pill-bar" id="product-pills"></div>
+  </div>
+  <div class="control-group">
+    <label>Month</label>
+    <input type="range" id="month-slider" min="0" max="23" value="0">
+    <span id="month-label"></span>
+  </div>
+  <div class="control-group" style="margin-left: 4px;">
+    <button class="pill-bar" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;cursor:pointer;color:var(--text-dim);" id="play-btn" title="Play/Pause">&#9654;</button>
+  </div>
+  <div class="status" id="status"></div>
+</div>
+
+<div class="main-layout">
+  <div class="map-panel">
+    <div id="chunk-grid">
+      <div class="click-marker" id="click-marker"></div>
+    </div>
+  </div>
+
+  <div class="query-panel" id="query-panel">
+    <div class="panel-header">
+      <h2>Point Query</h2>
+      <p>Click anywhere on the map to query values</p>
+    </div>
+
+    <div id="query-empty" class="empty-state">
+      <div class="icon">+</div>
+      <p>Click on the map to get<br>band values and derived indices<br>at any point.</p>
+      <p style="margin-top:12px;font-size:11px;color:var(--accent)">Maps + Values</p>
+    </div>
+
+    <div id="query-results" style="display:none;">
+      <div class="panel-section" id="position-section">
+        <h3>Position</h3>
+        <div class="value-row">
+          <span class="label">Lat / Lng</span>
+          <span class="value" id="q-latlng">—</span>
+        </div>
+        <div class="value-row">
+          <span class="label">Month</span>
+          <span class="value" id="q-month">—</span>
+        </div>
+        <div class="value-row">
+          <span class="label">Chunk</span>
+          <span class="value" id="q-chunk" style="font-size:10px;color:var(--text-dim)">—</span>
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <h3>Derived Values</h3>
+        <div id="values-list"></div>
+      </div>
+
+      <div class="panel-section">
+        <h3>Raw Bands</h3>
+        <div class="band-grid" id="bands-grid"></div>
+      </div>
+
+      <div class="panel-section">
+        <h3>API Call</h3>
+        <div class="api-call" id="api-call-display">
+          <button class="copy-btn" id="copy-btn">Copy</button>
+          <span id="api-call-text"></span>
+        </div>
+      </div>
+
+      <div class="panel-section" style="border-bottom:none;">
+        <h3>Source</h3>
+        <div class="value-row">
+          <span class="label">Satellite</span>
+          <span class="value" id="q-source" style="font-size:11px;">—</span>
+        </div>
+        <div class="value-row">
+          <span class="label">Method</span>
+          <span class="value" id="q-method" style="font-size:10px;color:var(--text-dim)">—</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="keyboard-hint">
+  <span><kbd>&larr;</kbd><kbd>&rarr;</kbd> month</span>
+  <span><kbd>1</kbd>-<kbd>5</kbd> product</span>
+  <span><kbd>Space</kbd> play/pause</span>
+  <span>Click map for values</span>
+</div>
+
+<script>
+const PRODUCTS = [
+  { id: 'true_color',  label: 'True Color',  key: '1', tier: 'explorer' },
+  { id: 'false_color', label: 'False Color', key: '2', tier: 'explorer' },
+  { id: 'ndvi',        label: 'NDVI',        key: '3', tier: 'explorer' },
+  { id: 'ndwi',        label: 'NDWI',        key: '4', tier: 'builder' },
+  { id: 'water',       label: 'Water',       key: '5', tier: 'builder' },
+];
+
+const MAX_GRID_WIDTH = Math.min(window.innerWidth - 368, 900);
+
+const aoiSelect = document.getElementById('aoi-select');
+const monthSlider = document.getElementById('month-slider');
+const monthLabel = document.getElementById('month-label');
+const statusEl = document.getElementById('status');
+const grid = document.getElementById('chunk-grid');
+const productPills = document.getElementById('product-pills');
+const playBtn = document.getElementById('play-btn');
+const marker = document.getElementById('click-marker');
+
+let catalog = {};
+let currentAoi = null;
+let currentAoiName = null;
+let currentProduct = 'true_color';
+let currentMonth = 0;
+let playing = false;
+let playTimer = null;
+let tileEls = {};
+let gridScale = 1;
+let queryPixel = null; // { row, col }
+
+// --- Product pills ---
+PRODUCTS.forEach(p => {
+  const btn = document.createElement('button');
+  btn.textContent = p.label;
+  btn.dataset.product = p.id;
+  if (p.id === currentProduct) btn.classList.add('active');
+  btn.addEventListener('click', () => setProduct(p.id));
+  productPills.appendChild(btn);
+});
+
+// --- Init ---
+async function init() {
+  const resp = await fetch('/v1/catalog');
+  const data = await resp.json();
+  catalog = {};
+
+  // Build catalog keyed by aoi id
+  data.aois.forEach(aoi => {
+    catalog[aoi.id] = aoi;
+    const opt = document.createElement('option');
+    opt.value = aoi.id;
+    opt.textContent = aoi.name;
+    aoiSelect.appendChild(opt);
+  });
+
+  const keys = Object.keys(catalog);
+  if (!keys.length) { statusEl.textContent = 'No data available'; return; }
+
+  const preferred = keys.find(k => k.includes('sahara')) || keys[0];
+  aoiSelect.value = preferred;
+  setAoi(preferred);
+}
+
+// --- AOI switch ---
+function setAoi(id) {
+  currentAoiName = id;
+  const meta = catalog[id];
+  if (!meta) return;
+
+  // We need the full aoi_key for tile URLs — use the grid info
+  // The v1 API accepts just the aoi name
+  currentAoi = id;
+  monthSlider.max = meta.n_months - 1;
+  currentMonth = 0;
+  monthSlider.value = 0;
+  queryPixel = null;
+  marker.style.display = 'none';
+  showEmptyState();
+  buildGrid(meta.grid);
+  updateMonthLabel();
+  loadAllTiles();
+}
+
+// --- Build grid ---
+function buildGrid(g) {
+  // Remove old images but keep the marker
+  Array.from(grid.children).forEach(el => {
+    if (el.id !== 'click-marker') grid.removeChild(el);
+  });
+  tileEls = {};
+
+  const totalW = g.mosaic_width || g.n_cols * g.chunk_size;
+  const totalH = g.mosaic_height || g.n_rows * g.chunk_size;
+  gridScale = MAX_GRID_WIDTH / totalW;
+  const gridW = Math.round(totalW * gridScale);
+
+  const colWidths = [];
+  for (let c = 0; c < g.n_cols; c++) {
+    colWidths.push(Math.round(Math.min(g.chunk_size, totalW - c * g.chunk_size) * gridScale));
+  }
+  const rowHeights = [];
+  for (let r = 0; r < g.n_rows; r++) {
+    rowHeights.push(Math.round(Math.min(g.chunk_size, totalH - r * g.chunk_size) * gridScale));
+  }
+
+  grid.style.gridTemplateColumns = colWidths.map(w => w + 'px').join(' ');
+  grid.style.gridTemplateRows = rowHeights.map(h => h + 'px').join(' ');
+  grid.style.width = gridW + 'px';
+
+  for (let r = 0; r < g.n_rows; r++) {
+    for (let c = 0; c < g.n_cols; c++) {
+      const cid = `r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`;
+      const img = document.createElement('img');
+      img.alt = cid;
+      img.classList.add('loading');
+      img.draggable = false;
+      grid.appendChild(img);
+      tileEls[cid] = img;
+    }
+  }
+}
+
+// --- Product switch ---
+function setProduct(product) {
+  currentProduct = product;
+  productPills.querySelectorAll('button').forEach(btn =>
+    btn.classList.toggle('active', btn.dataset.product === product)
+  );
+  loadAllTiles();
+  if (queryPixel) doPointQuery(queryPixel.row, queryPixel.col);
+}
+
+// --- Month ---
+function setMonth(index) {
+  if (!currentAoi) return;
+  const meta = catalog[currentAoi];
+  currentMonth = Math.max(0, Math.min(index, meta.n_months - 1));
+  monthSlider.value = currentMonth;
+  updateMonthLabel();
+  loadAllTiles();
+  if (queryPixel) doPointQuery(queryPixel.row, queryPixel.col);
+}
+
+function updateMonthLabel() {
+  if (!currentAoi) return;
+  monthLabel.textContent = catalog[currentAoi].months[currentMonth] || '';
+}
+
+// --- Tile URL (v1 API) ---
+function tileUrl(aoi, chunkId, month, product) {
+  return `/v1/tiles/${aoi}/${month}/${chunkId}?product=${product}`;
+}
+
+// --- Tile loading ---
+let loadGeneration = 0;
+
+function loadAllTiles() {
+  if (!currentAoi) return;
+  const meta = catalog[currentAoi];
+  const gen = ++loadGeneration;
+  const t0 = performance.now();
+  const monthStr = meta.months[currentMonth];
+
+  // Build chunk IDs from grid
+  const chunkIds = [];
+  for (let r = 0; r < meta.grid.n_rows; r++) {
+    for (let c = 0; c < meta.grid.n_cols; c++) {
+      chunkIds.push(`r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`);
+    }
+  }
+
+  let loaded = 0;
+  const total = chunkIds.length;
+
+  for (const cid of chunkIds) {
+    const img = tileEls[cid];
+    if (!img) continue;
+    img.classList.add('loading');
+
+    const url = tileUrl(currentAoi, cid, monthStr, currentProduct);
+    const probe = new Image();
+    probe.onload = () => {
+      if (gen !== loadGeneration) return;
+      img.src = probe.src;
+      img.classList.remove('loading');
+      loaded++;
+      if (loaded === total) {
+        const elapsed = (performance.now() - t0).toFixed(0);
+        statusEl.innerHTML = `<span class="timing">${elapsed} ms</span> &mdash; ${total} tiles &mdash; ${monthStr}`;
+      }
+    };
+    probe.onerror = () => { if (gen === loadGeneration) loaded++; };
+    probe.src = url;
+  }
+
+  // Prefetch adjacent months
+  for (let d = 1; d <= 2; d++) {
+    for (const offset of [d, -d]) {
+      const m = currentMonth + offset;
+      if (m < 0 || m >= meta.n_months) continue;
+      const mStr = meta.months[m];
+      for (const cid of chunkIds) {
+        const p = new Image();
+        p.src = tileUrl(currentAoi, cid, mStr, currentProduct);
+      }
+    }
+  }
+}
+
+// --- Playback ---
+playBtn.addEventListener('click', togglePlay);
+
+function togglePlay() {
+  playing = !playing;
+  playBtn.textContent = playing ? '\u23F8' : '\u25B6';
+  if (playing) {
+    playTimer = setInterval(() => {
+      const meta = catalog[currentAoi];
+      setMonth(currentMonth >= meta.n_months - 1 ? 0 : currentMonth + 1);
+    }, 700);
+  } else {
+    clearInterval(playTimer);
+    playTimer = null;
+  }
+}
+
+// --- Click to query ---
+grid.addEventListener('click', (e) => {
+  if (e.target.id === 'click-marker') return;
+
+  const rect = grid.getBoundingClientRect();
+  const screenX = e.clientX - rect.left;
+  const screenY = e.clientY - rect.top;
+
+  // Screen → mosaic pixel
+  const pixelCol = Math.floor(screenX / gridScale);
+  const pixelRow = Math.floor(screenY / gridScale);
+
+  // Show marker
+  marker.style.display = 'block';
+  marker.style.left = screenX + 'px';
+  marker.style.top = screenY + 'px';
+
+  queryPixel = { row: pixelRow, col: pixelCol };
+  doPointQuery(pixelRow, pixelCol);
+});
+
+async function doPointQuery(pixelRow, pixelCol) {
+  if (!currentAoi) return;
+  const meta = catalog[currentAoi];
+  const monthStr = meta.months[currentMonth];
+
+  const url = `/v1/query/${currentAoi}/${monthStr}?pixel_row=${pixelRow}&pixel_col=${pixelCol}`;
+
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      const err = await resp.json();
+      console.warn('Query error:', err);
+      return;
+    }
+    const data = await resp.json();
+    showQueryResults(data, url);
+  } catch (e) {
+    console.error('Query failed:', e);
+  }
+}
+
+function showEmptyState() {
+  document.getElementById('query-empty').style.display = 'block';
+  document.getElementById('query-results').style.display = 'none';
+}
+
+function showQueryResults(data, apiUrl) {
+  document.getElementById('query-empty').style.display = 'none';
+  document.getElementById('query-results').style.display = 'block';
+
+  // Position
+  document.getElementById('q-latlng').textContent =
+    `${data.lat.toFixed(4)}, ${data.lng.toFixed(4)}`;
+  document.getElementById('q-month').textContent = data.month;
+  document.getElementById('q-chunk').textContent =
+    `${data.pixel.chunk_id} (px ${data.pixel.row}, ${data.pixel.col})`;
+
+  // Values
+  const valuesList = document.getElementById('values-list');
+  valuesList.innerHTML = '';
+  const valueConfigs = {
+    ndvi:  { label: 'NDVI', color: 'var(--green)', min: -1, max: 1 },
+    ndwi:  { label: 'NDWI', color: 'var(--blue)',  min: -1, max: 1 },
+    water: { label: 'Water', color: 'var(--water)', min: 0, max: 1 },
+  };
+
+  for (const [key, cfg] of Object.entries(valueConfigs)) {
+    const val = data.values[key];
+    if (val === undefined) continue;
+
+    const row = document.createElement('div');
+    row.style.marginBottom = '8px';
+
+    const headerRow = document.createElement('div');
+    headerRow.className = 'value-row';
+
+    let displayVal;
+    if (key === 'water') {
+      const dotClass = val > 0 ? 'water-yes' : 'water-no';
+      displayVal = `<span class="water-indicator ${dotClass}"></span>${val > 0 ? 'Yes' : 'No'}`;
+    } else {
+      displayVal = val !== null ? val.toFixed(4) : 'N/A';
+    }
+
+    headerRow.innerHTML = `
+      <span class="label">${cfg.label}</span>
+      <span class="value">${displayVal}</span>
+    `;
+    row.appendChild(headerRow);
+
+    if (key !== 'water' && val !== null) {
+      const barOuter = document.createElement('div');
+      barOuter.className = 'value-bar';
+      const barFill = document.createElement('div');
+      barFill.className = 'value-bar-fill';
+      const pct = ((val - cfg.min) / (cfg.max - cfg.min)) * 100;
+      barFill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+      barFill.style.background = cfg.color;
+      barOuter.appendChild(barFill);
+      row.appendChild(barOuter);
+    }
+
+    valuesList.appendChild(row);
+  }
+
+  // Bands
+  const bandsGrid = document.getElementById('bands-grid');
+  bandsGrid.innerHTML = '';
+  const bandLabels = {
+    B02: 'B02 (Blue)',
+    B03: 'B03 (Green)',
+    B04: 'B04 (Red)',
+    B08: 'B08 (NIR)',
+  };
+  for (const [band, label] of Object.entries(bandLabels)) {
+    const item = document.createElement('div');
+    item.className = 'band-item';
+    item.innerHTML = `<span class="name">${label}</span><span class="val">${data.bands[band]}</span>`;
+    bandsGrid.appendChild(item);
+  }
+
+  // API call
+  const curlUrl = `${window.location.origin}${apiUrl}`;
+  const apiCallText = document.getElementById('api-call-text');
+  apiCallText.innerHTML = `<span class="method">GET</span> <span class="path">/v1/query/${data.aoi}/${data.month}</span>?<span class="param">lat</span>=${data.lat}&<span class="param">lng</span>=${data.lng}`;
+
+  document.getElementById('copy-btn').onclick = () => {
+    navigator.clipboard.writeText(`curl "${curlUrl}"`);
+    document.getElementById('copy-btn').textContent = 'Copied!';
+    setTimeout(() => { document.getElementById('copy-btn').textContent = 'Copy'; }, 1500);
+  };
+
+  // Source
+  document.getElementById('q-source').textContent = data.source || '—';
+  document.getElementById('q-method').textContent = data.composite_method || '—';
+}
+
+// --- Keyboard ---
+aoiSelect.addEventListener('change', () => setAoi(aoiSelect.value));
+monthSlider.addEventListener('input', () => setMonth(parseInt(monthSlider.value)));
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  switch (e.key) {
+    case 'ArrowLeft': e.preventDefault(); setMonth(currentMonth - 1); break;
+    case 'ArrowRight': e.preventDefault(); setMonth(currentMonth + 1); break;
+    case '1': setProduct('true_color'); break;
+    case '2': setProduct('false_color'); break;
+    case '3': setProduct('ndvi'); break;
+    case '4': setProduct('ndwi'); break;
+    case '5': setProduct('water'); break;
+    case ' ': e.preventDefault(); togglePlay(); break;
+  }
+});
+
+init();
+</script>
+</body>
+</html>
