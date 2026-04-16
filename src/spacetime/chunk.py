@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 from rasterio.transform import Affine
@@ -155,16 +154,12 @@ def reassemble_mosaic(
     if sample.ndim == 3:
         if n_bands is None:
             n_bands = sample.shape[0]
-        out = np.zeros(
-            (n_bands, grid.mosaic_height, grid.mosaic_width), dtype=sample.dtype
-        )
+        out = np.zeros((n_bands, grid.mosaic_height, grid.mosaic_width), dtype=sample.dtype)
         for (row, col), chunk in chunks.items():
             ys, xs = grid.chunk_slice(row, col)
             out[:, ys, xs] = chunk
     else:
-        out = np.zeros(
-            (grid.mosaic_height, grid.mosaic_width), dtype=sample.dtype
-        )
+        out = np.zeros((grid.mosaic_height, grid.mosaic_width), dtype=sample.dtype)
         for (row, col), chunk in chunks.items():
             ys, xs = grid.chunk_slice(row, col)
             out[ys, xs] = chunk

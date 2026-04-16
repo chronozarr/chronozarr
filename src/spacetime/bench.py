@@ -6,7 +6,6 @@ All results are written to a DuckDB database for easy querying.
 from __future__ import annotations
 
 import logging
-import time
 from pathlib import Path
 
 import duckdb
@@ -176,12 +175,12 @@ def record_quality(
     mean_abs = float(np.mean(np.abs(diff)))
 
     # PSNR
-    mse = np.mean(diff ** 2)
+    mse = np.mean(diff**2)
     if mse == 0:
         psnr = float("inf")
     else:
         max_val = 10000.0  # typical max reflectance value
-        psnr = 10 * np.log10(max_val ** 2 / mse)
+        psnr = 10 * np.log10(max_val**2 / mse)
 
     # SSIM (simplified, per-band average)
     ssim_val = _simple_ssim(original, reconstructed)
@@ -233,11 +232,13 @@ def print_storage_summary(conn: duckdb.DuckDBPyConnection) -> None:
     """).fetchall()
 
     print("\n=== Storage Summary ===")
-    print(f"{'AOI':<20} {'Rep':<15} {'Variant':<12} {'KF Int':>6} "
-          f"{'Total MB':>10} {'Per Chunk/Mo':>12} {'Ratio':>8}")
+    print(
+        f"{'AOI':<20} {'Rep':<15} {'Variant':<12} {'KF Int':>6} "
+        f"{'Total MB':>10} {'Per Chunk/Mo':>12} {'Ratio':>8}"
+    )
     print("-" * 90)
     for row in result:
-        aoi, rep, var, kf, total, nm, nc, bpcm, ratio = row
+        aoi, rep, var, kf, total, _nm, _nc, bpcm, ratio = row
         ratio_str = f"{ratio:.1f}x" if ratio else "N/A"
         print(
             f"{aoi:<20} {rep:<15} {var:<12} {kf:>6} "
@@ -260,6 +261,6 @@ def _simple_ssim(a: np.ndarray, b: np.ndarray) -> float:
     c2 = (0.03 * 10000) ** 2
 
     ssim = ((2 * mu_a * mu_b + c1) * (2 * sig_ab + c2)) / (
-        (mu_a ** 2 + mu_b ** 2 + c1) * (sig_a ** 2 + sig_b ** 2 + c2)
+        (mu_a**2 + mu_b**2 + c1) * (sig_a**2 + sig_b**2 + c2)
     )
     return float(ssim)

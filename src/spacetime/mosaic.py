@@ -13,7 +13,6 @@ import numpy as np
 import rasterio
 from rasterio.transform import from_bounds
 from rasterio.warp import Resampling, reproject
-from rasterio.windows import from_bounds as window_from_bounds
 
 from spacetime.catalog import REQUIRED_BANDS, SceneRef
 
@@ -92,17 +91,16 @@ def read_band_window(
     """
     dst = np.zeros((dst_height, dst_width), dtype=np.uint16)
 
-    with rasterio.Env(**GDAL_ENV):
-        with rasterio.open(href) as src:
-            reproject(
-                source=rasterio.band(src, 1),
-                destination=dst,
-                src_transform=src.transform,
-                src_crs=src.crs,
-                dst_transform=dst_transform,
-                dst_crs=dst_crs,
-                resampling=resampling,
-            )
+    with rasterio.Env(**GDAL_ENV), rasterio.open(href) as src:
+        reproject(
+            source=rasterio.band(src, 1),
+            destination=dst,
+            src_transform=src.transform,
+            src_crs=src.crs,
+            dst_transform=dst_transform,
+            dst_crs=dst_crs,
+            resampling=resampling,
+        )
     return dst
 
 
@@ -122,17 +120,16 @@ def read_scl_mask(
     """
     scl = np.zeros((dst_height, dst_width), dtype=np.uint8)
 
-    with rasterio.Env(**GDAL_ENV):
-        with rasterio.open(scl_href) as src:
-            reproject(
-                source=rasterio.band(src, 1),
-                destination=scl,
-                src_transform=src.transform,
-                src_crs=src.crs,
-                dst_transform=dst_transform,
-                dst_crs=dst_crs,
-                resampling=Resampling.nearest,
-            )
+    with rasterio.Env(**GDAL_ENV), rasterio.open(scl_href) as src:
+        reproject(
+            source=rasterio.band(src, 1),
+            destination=scl,
+            src_transform=src.transform,
+            src_crs=src.crs,
+            dst_transform=dst_transform,
+            dst_crs=dst_crs,
+            resampling=Resampling.nearest,
+        )
 
     valid = np.isin(scl, list(SCL_VALID))
     return valid
@@ -202,13 +199,22 @@ def monthly_composite(
     # Stack all scenes: (n_scenes, n_bands, height, width) as float32 for masked median
     stack = np.full((n_scenes, n_bands, dst_height, dst_width), np.nan, dtype=np.float32)
 
-    for i, scene in enumerate(scenes):
-        bands, valid = load_scene(scene, dst_transform, dst_crs, dst_height, dst_width)
-        # Apply mask: set invalid pixels to NaN
-        mask_3d = np.broadcast_to(valid[np.newaxis, :, :], bands.shape)
-        scene_float = bands.astype(np.float32)
-        scene_float[~mask_3d] = np.nan
-        stack[i] = scene_float
+    # Load scenes in parallel (network-bound, benefits from concurrency)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _load(idx_scene):
+        idx, scene = idx_scene
+        return idx, load_scene(scene, dst_transform, dst_crs, dst_height, dst_width)
+
+    max_workers = min(4, n_scenes)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_load, (i, s)): i for i, s in enumerate(scenes)}
+        for future in as_completed(futures):
+            i, (bands, valid) = future.result()
+            mask_3d = np.broadcast_to(valid[np.newaxis, :, :], bands.shape)
+            scene_float = bands.astype(np.float32)
+            scene_float[~mask_3d] = np.nan
+            stack[i] = scene_float
 
     # Median ignoring NaN
     with np.errstate(all="ignore"):

@@ -1,7 +1,7 @@
 """Baseline A: per-product, per-month, per-chunk rendered PNGs.
 
 This is the "conventional precomputed basemap" strawman.
-Each chunk × month × product is stored as an independent PNG file.
+Each chunk x month x product is stored as an independent PNG file.
 
 Storage structure:
     store_dir/
@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 from spacetime.chunk import ChunkGrid, extract_chunk
-from spacetime.render import render_product, _stretch_to_uint8
+from spacetime.render import render_product
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def encode(
     store_dir: Path,
     products: tuple[str, ...] = PRODUCTS,
 ) -> dict[str, int]:
-    """Encode all months × chunks × products as PNGs.
+    """Encode all months x chunks x products as PNGs.
 
     Args:
         monthly_mosaics: Dict mapping "YYYY-MM" to (n_bands, H, W) uint16 arrays
@@ -46,6 +46,7 @@ def encode(
         Dict of metrics: total_bytes, n_files, bytes_per_product, etc.
     """
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -102,6 +103,7 @@ def decode_tile(store_dir: Path, product: str, month: str, chunk_id: str) -> np.
         uint8 (H, W, 3) RGB array
     """
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 

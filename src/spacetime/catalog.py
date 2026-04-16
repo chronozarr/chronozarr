@@ -87,6 +87,15 @@ def search_scenes(
             scenes.append(scene)
 
     scenes.sort(key=lambda s: s.datetime)
+
+    # Deduplicate: same acquisition (date + MGRS tile) can appear multiple times
+    # with different processing versions. Keep the latest processing (last in list
+    # since PC returns newest processing first, but we sort by datetime).
+    before = len(scenes)
+    scenes = _deduplicate_scenes(scenes)
+    if len(scenes) < before:
+        logger.info("Deduplicated %d → %d scenes", before, len(scenes))
+
     logger.info("Found %d scenes", len(scenes))
     return scenes
 
@@ -113,6 +122,21 @@ def search_scenes_by_month(
         {k: len(v) for k, v in by_month.items()},
     )
     return by_month
+
+
+def _deduplicate_scenes(scenes: list[SceneRef]) -> list[SceneRef]:
+    """Keep one scene per (date, mgrs_tile) pair.
+
+    When multiple processing versions exist for the same acquisition,
+    keep the one with the longest item_id suffix (typically the latest
+    processing timestamp). This avoids downloading the same acquisition twice.
+    """
+    best: dict[tuple, SceneRef] = {}
+    for scene in scenes:
+        key = (scene.datetime, scene.mgrs_tile)
+        if key not in best or scene.item_id > best[key].item_id:
+            best[key] = scene
+    return sorted(best.values(), key=lambda s: s.datetime)
 
 
 def _item_to_scene_ref(item: pystac.Item) -> SceneRef | None:

@@ -9,7 +9,7 @@ Two sub-variants:
 
 Storage structure:
     B1: store_dir/b1/{chunk_id}/{month}.zarr
-    B2: store_dir/b2/{chunk_id}/stack.zarr  (time × bands × H × W)
+    B2: store_dir/b2/{chunk_id}/stack.zarr  (time x bands x H x W)
 """
 
 from __future__ import annotations
@@ -170,9 +170,7 @@ def encode_b2_chunked_time(
         fsize = _dir_size(arr_path)
         total_bytes += fsize
 
-    logger.info(
-        "Baseline B2-chunked: %d chunks, %.2f MB total", grid.n_chunks, total_bytes / 1e6
-    )
+    logger.info("Baseline B2-chunked: %d chunks, %.2f MB total", grid.n_chunks, total_bytes / 1e6)
     return {
         "total_bytes": total_bytes,
         "n_chunks": grid.n_chunks,
@@ -183,7 +181,7 @@ def encode_b2_chunked_time(
 
 
 def decode_b1(store_dir: Path, chunk_id: str, month: str) -> np.ndarray:
-    """Read a single chunk × month from B1 store.
+    """Read a single chunk x month from B1 store.
 
     Returns:
         uint16 array of shape (n_bands, H, W)

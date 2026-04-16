@@ -4,7 +4,7 @@ Simulates realistic map interaction patterns and measures bytes touched
 and decode latency for each representation.
 
 Access patterns:
-    1. cold_viewport: Load a 3×3 chunk viewport at month t from scratch
+    1. cold_viewport: Load a 3x3 chunk viewport at month t from scratch
     2. pan: Shift viewport by 1 chunk in a direction (reuse 6, fetch 3)
     3. time_scrub: Same viewport, advance by 1 month
     4. time_jump: Same viewport, jump N months forward/backward
@@ -17,8 +17,6 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-
-import numpy as np
 
 from spacetime.chunk import ChunkGrid
 
@@ -43,7 +41,7 @@ def viewport_chunk_ids(
 ) -> list[tuple[int, int]]:
     """Return chunk IDs for a viewport centered at (center_row, center_col).
 
-    Default radius=1 gives a 3×3 viewport.
+    Default radius=1 gives a 3x3 viewport.
     """
     ids = []
     for dr in range(-radius, radius + 1):
@@ -179,15 +177,17 @@ def sim_time_scrub_experimental(
             _ = render_product(bands, product)
         elapsed = (time.perf_counter() - t0) * 1000
 
-        results.append(AccessResult(
-            pattern="time_scrub",
-            bytes_fetched=total_bytes,
-            decode_time_ms=elapsed,
-            n_chunks_fetched=len(vp),
-            month=month,
-            product=product,
-            chunk_ids=[grid.chunk_id_str(r, c) for r, c in vp],
-        ))
+        results.append(
+            AccessResult(
+                pattern="time_scrub",
+                bytes_fetched=total_bytes,
+                decode_time_ms=elapsed,
+                n_chunks_fetched=len(vp),
+                month=month,
+                product=product,
+                chunk_ids=[grid.chunk_id_str(r, c) for r, c in vp],
+            )
+        )
 
     return results
 
@@ -222,14 +222,16 @@ def sim_product_switch(
                 total_bytes += bytes_for_tile(store_dir, product, month, cid)
                 _ = decode_tile(store_dir, product, month, cid)
             elapsed = (time.perf_counter() - t0) * 1000
-            results.append(AccessResult(
-                pattern="product_switch",
-                bytes_fetched=total_bytes,
-                decode_time_ms=elapsed,
-                n_chunks_fetched=len(vp),
-                month=month,
-                product=product,
-            ))
+            results.append(
+                AccessResult(
+                    pattern="product_switch",
+                    bytes_fetched=total_bytes,
+                    decode_time_ms=elapsed,
+                    n_chunks_fetched=len(vp),
+                    month=month,
+                    product=product,
+                )
+            )
     else:
         # For multiband stores, bands fetched once, product is just re-render
         # First product: full fetch
@@ -269,13 +271,15 @@ def sim_product_switch(
                     _ = render_product(cached_bands[cid], product)
                 elapsed = (time.perf_counter() - t0) * 1000
 
-            results.append(AccessResult(
-                pattern="product_switch",
-                bytes_fetched=total_bytes,
-                decode_time_ms=elapsed,
-                n_chunks_fetched=len(vp) if i == 0 else 0,
-                month=month,
-                product=product,
-            ))
+            results.append(
+                AccessResult(
+                    pattern="product_switch",
+                    bytes_fetched=total_bytes,
+                    decode_time_ms=elapsed,
+                    n_chunks_fetched=len(vp) if i == 0 else 0,
+                    month=month,
+                    product=product,
+                )
+            )
 
     return results

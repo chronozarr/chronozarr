@@ -7,9 +7,7 @@ from pathlib import Path
 import numpy as np
 
 
-def reconstruction_diff_map(
-    original: np.ndarray, reconstructed: np.ndarray
-) -> np.ndarray:
+def reconstruction_diff_map(original: np.ndarray, reconstructed: np.ndarray) -> np.ndarray:
     """Compute per-band absolute difference.
 
     Args:
@@ -19,9 +17,7 @@ def reconstruction_diff_map(
     Returns:
         uint16 (n_bands, H, W) — absolute differences
     """
-    return np.abs(
-        original.astype(np.int32) - reconstructed.astype(np.int32)
-    ).astype(np.uint16)
+    return np.abs(original.astype(np.int32) - reconstructed.astype(np.int32)).astype(np.uint16)
 
 
 def save_comparison_panel(
@@ -37,6 +33,7 @@ def save_comparison_panel(
     for the difference.
     """
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -57,7 +54,7 @@ def save_comparison_panel(
     axes[1].set_axis_off()
 
     im = axes[2].imshow(diff_sum, cmap="hot", vmin=0, vmax=np.percentile(diff_sum, 99))
-    axes[2].set_title(f"Abs Diff (sum over bands)")
+    axes[2].set_title("Abs Diff (sum over bands)")
     axes[2].set_axis_off()
     plt.colorbar(im, ax=axes[2], shrink=0.8)
 
@@ -80,6 +77,7 @@ def save_delta_stats_plot(
 ) -> Path:
     """Plot delta statistics over time for chunk (0,0)."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 

@@ -60,7 +60,9 @@ def phase1_mosaics(cfg: dict) -> dict[str, Path]:
     total_mb = sum(p.stat().st_size for p in outputs.values()) / 1e6
     logger.info(
         "Phase 1 done: %d months, %.1f MB total, %.0fs elapsed",
-        len(outputs), total_mb, elapsed,
+        len(outputs),
+        total_mb,
+        elapsed,
     )
     return outputs
 
@@ -95,8 +97,8 @@ def phase2_encode(cfg: dict, mosaics: dict[str, np.ndarray]) -> dict:
     bands = m["bands"]
     grid = make_chunk_grid(bands.shape[1], bands.shape[2], m["transform"], m["epsg"], chunk_size)
 
-    # Raw uncompressed size per chunk per month: 4 bands × chunk_h × chunk_w × 2 bytes
-    raw_chunk_bytes = 4 * chunk_size * chunk_size * 2  # ~2 MB for 512×512
+    # Raw uncompressed size per chunk per month: 4 bands x chunk_h x chunk_w x 2 bytes
+    raw_chunk_bytes = 4 * chunk_size * chunk_size * 2  # ~2 MB for 512x512
 
     db = init_db(DATA / "reports" / "bench.duckdb")
     store_root = DATA / "stores" / aoi_name
@@ -140,7 +142,9 @@ def phase2_encode(cfg: dict, mosaics: dict[str, np.ndarray]) -> dict:
         logger.info("Encoding %s...", label)
         t0 = time.time()
         metrics_x = experimental.encode(
-            mosaics, grid, store_root / label,
+            mosaics,
+            grid,
+            store_root / label,
             keyframe_interval=kf_interval,
         )
         logger.info("%s: %.1fs", label, time.time() - t0)
@@ -168,8 +172,13 @@ def phase3_quality(cfg: dict, mosaics: dict[str, np.ndarray], encode_result: dic
     months = sorted(mosaics.keys())
     # Check reconstruction for a sample of chunks and months
     sample_chunks = [(0, 0), (grid.n_rows // 2, grid.n_cols // 2)]
-    sample_months = [months[0], months[len(months) // 4], months[len(months) // 2],
-                     months[3 * len(months) // 4], months[-1]]
+    sample_months = [
+        months[0],
+        months[len(months) // 4],
+        months[len(months) // 2],
+        months[3 * len(months) // 4],
+        months[-1],
+    ]
 
     for kf_interval in [3, 6, 12]:
         label = f"experimental_kf{kf_interval}"
@@ -182,13 +191,17 @@ def phase3_quality(cfg: dict, mosaics: dict[str, np.ndarray], encode_result: dic
                 reconstructed = experimental.decode(exp_store, chunk_id, month)
 
                 # Record metrics
-                record_quality(db, aoi_name, "experimental", label, month, chunk_id,
-                               original, reconstructed)
+                record_quality(
+                    db, aoi_name, "experimental", label, month, chunk_id, original, reconstructed
+                )
 
                 # Visual comparison for kf=6 only (avoid too many PNGs)
                 if kf_interval == 6:
                     save_comparison_panel(
-                        original, reconstructed, month, chunk_id,
+                        original,
+                        reconstructed,
+                        month,
+                        chunk_id,
                         qc_dir / "comparisons",
                     )
 
@@ -200,6 +213,16 @@ def phase3_quality(cfg: dict, mosaics: dict[str, np.ndarray], encode_result: dic
 
     db.close()
     logger.info("Phase 3 done: QC outputs in %s", qc_dir)
+
+
+def _log_access(label: str, product: str, r) -> None:
+    logger.info(
+        "%s cold_viewport %s: %d bytes, %.1fms",
+        label,
+        product,
+        r.bytes_fetched,
+        r.decode_time_ms,
+    )
 
 
 def phase4_access_sim(cfg: dict, mosaics: dict[str, np.ndarray], encode_result: dict) -> None:
@@ -232,25 +255,26 @@ def phase4_access_sim(cfg: dict, mosaics: dict[str, np.ndarray], encode_result: 
             store_root / "baseline_a", grid, cr, cc, test_month, product
         )
         record_access(db, aoi_name, "baseline_a", "", r)
-        logger.info("A cold_viewport %s: %d bytes, %.1fms", product, r.bytes_fetched, r.decode_time_ms)
+        _log_access("A", product, r)
+        record_access(db, aoi_name, "baseline_a", "", r)
 
         # Baseline B1
         r = sim_cold_viewport_baseline_b1(
             store_root / "baseline_b", grid, cr, cc, test_month, product
         )
+        _log_access("B1", product, r)
         record_access(db, aoi_name, "baseline_b", "b1", r)
-        logger.info("B1 cold_viewport %s: %d bytes, %.1fms", product, r.bytes_fetched, r.decode_time_ms)
 
         # Experimental (kf=6)
         r = sim_cold_viewport_experimental(
             store_root / "experimental_kf6", grid, cr, cc, test_month, product
         )
+        _log_access("X(kf6)", product, r)
         record_access(db, aoi_name, "experimental", "kf6", r)
-        logger.info("X(kf6) cold_viewport %s: %d bytes, %.1fms", product, r.bytes_fetched, r.decode_time_ms)
 
     # Time scrub: 6 consecutive months
     scrub_start = max(0, len(months) // 2 - 3)
-    scrub_months = months[scrub_start:scrub_start + 6]
+    scrub_months = months[scrub_start : scrub_start + 6]
     results = sim_time_scrub_experimental(
         store_root / "experimental_kf6", grid, cr, cc, scrub_months, "true_color"
     )
@@ -270,15 +294,16 @@ def phase4_access_sim(cfg: dict, mosaics: dict[str, np.ndarray], encode_result: 
         ("experimental", "kf6", store_root / "experimental_kf6"),
     ]:
         rep_name = rep if rep != "baseline_b" else "baseline_b1"
-        results = sim_product_switch(
-            store_path, grid, cr, cc, test_month, products, rep_name
-        )
+        results = sim_product_switch(store_path, grid, cr, cc, test_month, products, rep_name)
         for r in results:
             record_access(db, aoi_name, rep, var, r)
         total_bytes = sum(r.bytes_fetched for r in results)
         logger.info(
             "%s product_switch (%s): %d total bytes for %d products",
-            rep, var, total_bytes, len(products),
+            rep,
+            var,
+            total_bytes,
+            len(products),
         )
 
     db.close()
@@ -293,7 +318,8 @@ def phase5_report(cfg: dict) -> None:
     print_storage_summary(db)
 
     # Access summary
-    result = db.execute("""
+    result = db.execute(
+        """
         SELECT representation, variant, pattern, product,
                AVG(bytes_fetched) as avg_bytes,
                AVG(decode_time_ms) as avg_ms
@@ -301,25 +327,32 @@ def phase5_report(cfg: dict) -> None:
         WHERE aoi = ?
         GROUP BY representation, variant, pattern, product
         ORDER BY pattern, representation, variant
-    """, [cfg["name"]]).fetchall()
+    """,
+        [cfg["name"]],
+    ).fetchall()
 
     print("\n=== Access Pattern Summary ===")
-    print(f"{'Rep':<15} {'Variant':<10} {'Pattern':<15} {'Product':<15} "
-          f"{'Avg Bytes':>12} {'Avg ms':>10}")
+    print(
+        f"{'Rep':<15} {'Variant':<10} {'Pattern':<15} {'Product':<15} "
+        f"{'Avg Bytes':>12} {'Avg ms':>10}"
+    )
     print("-" * 80)
     for row in result:
         rep, var, pat, prod, avg_b, avg_ms = row
         print(f"{rep:<15} {var:<10} {pat:<15} {prod:<15} {avg_b:>12,.0f} {avg_ms:>10.1f}")
 
     # Quality summary
-    result = db.execute("""
+    result = db.execute(
+        """
         SELECT variant, AVG(psnr) as avg_psnr, AVG(ssim) as avg_ssim,
                MAX(max_abs_error) as worst_error
         FROM quality_metrics
         WHERE aoi = ?
         GROUP BY variant
         ORDER BY variant
-    """, [cfg["name"]]).fetchall()
+    """,
+        [cfg["name"]],
+    ).fetchall()
 
     print("\n=== Reconstruction Quality ===")
     print(f"{'Variant':<25} {'Avg PSNR':>10} {'Avg SSIM':>10} {'Worst Error':>12}")
@@ -330,7 +363,8 @@ def phase5_report(cfg: dict) -> None:
         print(f"{var:<25} {psnr_str:>10} {ssim:.6f}{'':>3} {worst:>12}")
 
     # Delta stats summary
-    result = db.execute("""
+    result = db.execute(
+        """
         SELECT keyframe_interval,
                AVG(mean_abs_delta) as avg_mean_delta,
                AVG(pct_zero) as avg_pct_zero,
@@ -339,7 +373,9 @@ def phase5_report(cfg: dict) -> None:
         WHERE aoi = ?
         GROUP BY keyframe_interval
         ORDER BY keyframe_interval
-    """, [cfg["name"]]).fetchall()
+    """,
+        [cfg["name"]],
+    ).fetchall()
 
     if result:
         print("\n=== Delta Statistics (chunk 0,0) ===")
@@ -355,10 +391,12 @@ def phase5_report(cfg: dict) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Spacetime chunk experiment runner")
     parser.add_argument("--aoi", required=True, help="AOI name from aois.yaml")
-    parser.add_argument("--skip-download", action="store_true",
-                        help="Skip Phase 1 (use existing mosaics)")
-    parser.add_argument("--phases", default="1,2,3,4,5",
-                        help="Comma-separated phase numbers to run")
+    parser.add_argument(
+        "--skip-download", action="store_true", help="Skip Phase 1 (use existing mosaics)"
+    )
+    parser.add_argument(
+        "--phases", default="1,2,3,4,5", help="Comma-separated phase numbers to run"
+    )
     args = parser.parse_args()
 
     phases = {int(p) for p in args.phases.split(",")}
@@ -390,8 +428,11 @@ def main():
             first_path = DATA / "mosaics" / cfg["name"] / f"{sorted(mosaics.keys())[0]}.npz"
             m = load_mosaic(first_path)
             grid = make_chunk_grid(
-                m["bands"].shape[1], m["bands"].shape[2],
-                m["transform"], m["epsg"], cfg["chunk_size"]
+                m["bands"].shape[1],
+                m["bands"].shape[2],
+                m["transform"],
+                m["epsg"],
+                cfg["chunk_size"],
             )
             encode_result = {"grid": grid, "mosaic_meta": m, "metrics": {}}
         phase3_quality(cfg, mosaics, encode_result)
@@ -405,8 +446,11 @@ def main():
             first_path = DATA / "mosaics" / cfg["name"] / f"{sorted(mosaics.keys())[0]}.npz"
             m = load_mosaic(first_path)
             grid = make_chunk_grid(
-                m["bands"].shape[1], m["bands"].shape[2],
-                m["transform"], m["epsg"], cfg["chunk_size"]
+                m["bands"].shape[1],
+                m["bands"].shape[2],
+                m["transform"],
+                m["epsg"],
+                cfg["chunk_size"],
             )
             encode_result = {"grid": grid, "mosaic_meta": m, "metrics": {}}
         phase4_access_sim(cfg, mosaics, encode_result)

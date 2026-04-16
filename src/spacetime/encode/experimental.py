@@ -23,11 +23,11 @@ Storage structure:
     store_dir/
         {chunk_id}/
             keyframes/
-                {month}.zarr   (uint16, n_bands × H × W)
+                {month}.zarr   (uint16, n_bands x H x W)
             deltas/
-                {month}.zarr   (int16, n_bands × H × W)
+                {month}.zarr   (int16, n_bands x H x W)
             masks/
-                {month}.zarr   (uint8, H × W, optional change mask)
+                {month}.zarr   (uint8, H x W, optional change mask)
             meta.json          (month ordering, keyframe indices)
 
 The access-cost advantage: to render month t, you fetch 1 keyframe +
@@ -106,15 +106,18 @@ def encode(
 
         for t, month_key in enumerate(months):
             chunk = extract_chunk(monthly_mosaics[month_key], grid, row, col)
-            is_keyframe = (t % keyframe_interval == 0)
+            is_keyframe = t % keyframe_interval == 0
 
             if is_keyframe:
                 # Store full keyframe
                 kf_path = kf_dir / f"{month_key}.zarr"
                 z = zarr.open(
-                    str(kf_path), mode="w",
-                    shape=chunk.shape, dtype=np.uint16,
-                    compressor=COMPRESSOR, chunks=chunk.shape,
+                    str(kf_path),
+                    mode="w",
+                    shape=chunk.shape,
+                    dtype=np.uint16,
+                    compressor=COMPRESSOR,
+                    chunks=chunk.shape,
                 )
                 z[:] = chunk
                 total_keyframe_bytes += _dir_size(kf_path)
@@ -129,9 +132,12 @@ def encode(
 
                 d_path = delta_dir / f"{month_key}.zarr"
                 z = zarr.open(
-                    str(d_path), mode="w",
-                    shape=delta_i16.shape, dtype=np.int16,
-                    compressor=COMPRESSOR, chunks=delta_i16.shape,
+                    str(d_path),
+                    mode="w",
+                    shape=delta_i16.shape,
+                    dtype=np.int16,
+                    compressor=COMPRESSOR,
+                    chunks=delta_i16.shape,
                 )
                 z[:] = delta_i16
                 total_delta_bytes += _dir_size(d_path)
@@ -141,31 +147,38 @@ def encode(
                 # Track delta statistics (for the first chunk only, to avoid bloat)
                 if row == 0 and col == 0:
                     abs_delta = np.abs(delta_i16).astype(np.float32)
-                    delta_stats.append({
-                        "month": month_key,
-                        "mean_abs_delta": float(abs_delta.mean()),
-                        "max_abs_delta": int(abs_delta.max()),
-                        "pct_zero": float((delta_i16 == 0).mean() * 100),
-                        "pct_under_10": float((abs_delta < 10).mean() * 100),
-                        "pct_under_50": float((abs_delta < 50).mean() * 100),
-                    })
+                    delta_stats.append(
+                        {
+                            "month": month_key,
+                            "mean_abs_delta": float(abs_delta.mean()),
+                            "max_abs_delta": int(abs_delta.max()),
+                            "pct_zero": float((delta_i16 == 0).mean() * 100),
+                            "pct_under_10": float((abs_delta < 10).mean() * 100),
+                            "pct_under_50": float((abs_delta < 50).mean() * 100),
+                        }
+                    )
 
                 # Optional change mask
                 if change_threshold > 0:
                     changed = np.any(np.abs(delta_i16) > change_threshold, axis=0)
                     mask_path = mask_dir / f"{month_key}.zarr"
                     z = zarr.open(
-                        str(mask_path), mode="w",
-                        shape=changed.shape, dtype=np.uint8,
-                        compressor=COMPRESSOR, chunks=changed.shape,
+                        str(mask_path),
+                        mode="w",
+                        shape=changed.shape,
+                        dtype=np.uint8,
+                        compressor=COMPRESSOR,
+                        chunks=changed.shape,
                     )
                     z[:] = changed.astype(np.uint8)
                     total_mask_bytes += _dir_size(mask_path)
 
                 # Reconstruct for next delta (lossless chain)
                 prev_reconstructed = (
-                    prev_reconstructed.astype(np.int32) + delta_i16.astype(np.int32)
-                ).clip(0, 65535).astype(np.uint16)
+                    (prev_reconstructed.astype(np.int32) + delta_i16.astype(np.int32))
+                    .clip(0, 65535)
+                    .astype(np.uint16)
+                )
 
         # Save metadata per chunk
         meta = {

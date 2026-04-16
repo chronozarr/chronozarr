@@ -153,9 +153,7 @@ def save_png(arr: np.ndarray, path) -> None:
         plt.close(fig)
 
 
-def _stretch_to_uint8(
-    rgb: np.ndarray, percentile_stretch: tuple[float, float]
-) -> np.ndarray:
+def _stretch_to_uint8(rgb: np.ndarray, percentile_stretch: tuple[float, float]) -> np.ndarray:
     """Percentile contrast stretch of a (3, H, W) float array to (H, W, 3) uint8."""
     out = np.zeros((*rgb.shape[1:], 3), dtype=np.uint8)
     for i in range(3):
