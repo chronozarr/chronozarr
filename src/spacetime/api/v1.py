@@ -84,7 +84,7 @@ def _render_tile(bands: np.ndarray, product: str, fmt: str = "jpeg") -> tuple[by
     return buf.getvalue(), "image/jpeg"
 
 
-CACHE_HEADER = "no-cache"  # TODO: restore "public, max-age=86400, immutable" for prod
+CACHE_HEADER = "public, max-age=86400, immutable"
 
 
 def _get_aoi(aoi: str) -> dict:
