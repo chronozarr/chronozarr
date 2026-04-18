@@ -96,6 +96,98 @@ def test_tile_png(api_client):
 
 
 @pytest.mark.unit
+def test_unsuffixed_aoi_prefers_smallest_chunk_size(zarr_store_multi_chunk_sizes, monkeypatch):
+    """Unsuffixed AOI resolution should prefer the smallest available chunk size."""
+    import spacetime.api.v1 as v1_mod
+    from spacetime.api.jobs import JobDB
+    from spacetime.api.v1 import AOI_CATALOG, _get_aoi, _get_aoi_key, _load_bands
+    from spacetime.serve import _discover_aois
+
+    AOI_CATALOG.clear()
+    _load_bands.cache_clear()
+    monkeypatch.setattr(
+        "spacetime.serve.STORES_ROOT",
+        zarr_store_multi_chunk_sizes["stores_root"],
+    )
+    monkeypatch.setattr(
+        v1_mod,
+        "JOB_DB",
+        JobDB(db_path=zarr_store_multi_chunk_sizes["stores_root"].parent / "test_jobs.sqlite"),
+    )
+    AOI_CATALOG.update(_discover_aois())
+
+    assert _get_aoi_key("test_aoi") == "test_aoi/cs256"
+    assert _get_aoi("test_aoi")["chunk_size"] == 256
+    assert _get_aoi_key("test_aoi/cs512") == "test_aoi/cs512"
+
+    AOI_CATALOG.clear()
+    _load_bands.cache_clear()
+
+
+@pytest.mark.unit
+def test_profile_tile_render_reports_cold_then_warm(zarr_store, monkeypatch):
+    """Tile profiler distinguishes cache misses from warm-cache renders."""
+    from spacetime.api.v1 import AOI_CATALOG, _load_bands, profile_tile_render
+    from spacetime.serve import _discover_aois
+
+    AOI_CATALOG.clear()
+    _load_bands.cache_clear()
+    monkeypatch.setattr("spacetime.serve.STORES_ROOT", zarr_store["stores_root"])
+    AOI_CATALOG.update(_discover_aois())
+
+    meta = AOI_CATALOG["test_aoi/cs512"]
+    cold = profile_tile_render(
+        meta["store_dir"],
+        "r000_c000",
+        0,
+        "true_color",
+        clear_cache=True,
+        encoder="pil",
+    )
+    warm = profile_tile_render(meta["store_dir"], "r000_c000", 0, "true_color", encoder="pil")
+
+    assert cold.media_type == "image/jpeg"
+    assert cold.encoder == "pil"
+    assert len(cold.img_bytes) > 0
+    assert cold.band_bytes == zarr_store["data"][0].nbytes
+    assert cold.cache_entries == 1
+    assert cold.cache_hit is False
+    assert cold.zarr_ms >= 0
+    assert cold.total_ms >= cold.render_ms
+    assert cold.total_ms >= cold.encode_ms
+
+    assert warm.media_type == "image/jpeg"
+    assert warm.encoder == "pil"
+    assert len(warm.img_bytes) > 0
+    assert warm.band_bytes == zarr_store["data"][0].nbytes
+    assert warm.cache_entries == 1
+    assert warm.cache_hit is True
+    assert warm.zarr_ms == 0.0
+
+    AOI_CATALOG.clear()
+    _load_bands.cache_clear()
+
+
+@pytest.mark.unit
+def test_profile_tile_render_invalid_encoder(zarr_store, monkeypatch):
+    """Tile profiler rejects unknown encoder ids with a clear error."""
+    from spacetime.api.v1 import AOI_CATALOG, _load_bands, profile_tile_render
+    from spacetime.serve import _discover_aois
+
+    AOI_CATALOG.clear()
+    _load_bands.cache_clear()
+    monkeypatch.setattr("spacetime.serve.STORES_ROOT", zarr_store["stores_root"])
+    AOI_CATALOG.update(_discover_aois())
+
+    meta = AOI_CATALOG["test_aoi/cs512"]
+    with pytest.raises(ValueError, match="Unknown encoder"):
+        profile_tile_render(meta["store_dir"], "r000_c000", 0, "true_color", encoder="nope")
+
+    AOI_CATALOG.clear()
+    _load_bands.cache_clear()
+
+
+@pytest.mark.unit
 def test_tile_ndvi(api_client):
     """GET /v1/tiles with product=ndvi returns colormapped tile."""
     r = api_client.get("/v1/tiles/test_aoi/0/r000_c000?product=ndvi")

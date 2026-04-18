@@ -27,7 +27,9 @@ import gzip
 import io
 import logging
 import os
+import sys
 import time
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -38,13 +40,6 @@ from fastapi.responses import Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
-try:
-    import pyvips
-
-    HAS_PYVIPS = True
-except (ImportError, OSError):
-    pyvips = None
-    HAS_PYVIPS = False
 from spacetime.api.geo import latlng_to_pixel, pixel_rowcol_to_coords, pixel_to_latlng
 from spacetime.api.jobs import JobDB, JobDetail, JobStatus, JobSubmission
 from spacetime.api.metering import meter
@@ -65,7 +60,56 @@ from spacetime.api.models import (
 from spacetime.api.products import PRODUCTS, products_for_tier, tier_can_access
 from spacetime.render import render_product, water_mask
 
+
+def _configure_macos_vips_runtime() -> None:
+    """Make Homebrew libvips visible to pyvips on macOS."""
+    if sys.platform != "darwin":
+        return
+
+    lib_dirs = ["/opt/homebrew/lib", "/usr/local/lib"]
+    available_dirs = [
+        lib_dir for lib_dir in lib_dirs if Path(lib_dir, "libvips.42.dylib").exists()
+    ]
+    if not available_dirs:
+        return
+
+    for env_var in ("DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"):
+        current = os.environ.get(env_var, "")
+        parts = [part for part in current.split(":") if part]
+        updated = parts.copy()
+        for lib_dir in available_dirs:
+            if lib_dir not in updated:
+                updated.insert(0, lib_dir)
+        os.environ[env_var] = ":".join(updated)
+
+
+_configure_macos_vips_runtime()
+
+try:
+    import pyvips
+
+    HAS_PYVIPS = True
+except (ImportError, OSError):
+    pyvips = None
+    HAS_PYVIPS = False
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class TileProfile:
+    """Stage timings and outputs for one tile render request."""
+
+    img_bytes: bytes
+    media_type: str
+    encoder: str
+    band_bytes: int
+    cache_entries: int
+    zarr_ms: float
+    render_ms: float
+    encode_ms: float
+    total_ms: float
+    cache_hit: bool
 
 
 def _encode_pyvips(rendered: np.ndarray, fmt: str, quality: int = 85) -> tuple[bytes, str]:
@@ -105,36 +149,106 @@ def _load_bands(store_dir: str, chunk_id: str, month_index: int, level: int = 0)
     return np.array(z[month_index])
 
 
-def _render_tile(bands: np.ndarray, product: str, fmt: str = "jpeg") -> tuple[bytes, str]:
-    """Render a product from bands and encode as image bytes."""
+def _render_product_array(bands: np.ndarray, product: str) -> np.ndarray:
+    """Render a product to an RGB array, applying colormap for float outputs."""
     from spacetime.render import ndvi_colormap, ndwi_colormap
 
     rendered = render_product(bands, product)
     if rendered.dtype == np.float32:
         cmap = ndwi_colormap if product == "ndwi" else ndvi_colormap
         rendered = cmap(rendered)
-    if HAS_PYVIPS:
-        return _encode_pyvips(rendered, fmt, quality=85)
+    return rendered
+
+
+def _encode_rendered(
+    rendered: np.ndarray, fmt: str = "jpeg", encoder: str = "auto"
+) -> tuple[bytes, str, str]:
+    """Encode a rendered RGB array as PNG or JPEG bytes."""
+    if encoder not in {"auto", "pil", "pyvips"}:
+        raise ValueError(f"Unknown encoder '{encoder}'. Expected one of auto, pil, pyvips.")
+
+    use_pyvips = encoder == "pyvips" or (encoder == "auto" and HAS_PYVIPS)
+    if encoder == "pyvips" and not HAS_PYVIPS:
+        raise RuntimeError("pyvips encoder requested but pyvips is not available")
+    if use_pyvips:
+        img_bytes, media_type = _encode_pyvips(rendered, fmt, quality=85)
+        return (img_bytes, media_type, "pyvips")
+
     img = Image.fromarray(rendered)
     buf = io.BytesIO()
     if fmt == "png":
         img.save(buf, format="PNG", optimize=False)
-        return (buf.getvalue(), "image/png")
+        return (buf.getvalue(), "image/png", "pil")
     img.save(buf, format="JPEG", quality=85)
-    return (buf.getvalue(), "image/jpeg")
+    return (buf.getvalue(), "image/jpeg", "pil")
+
+
+def profile_tile_render(
+    store_dir: str,
+    chunk_id: str,
+    month_index: int,
+    product: str,
+    fmt: str = "jpeg",
+    level: int = 0,
+    clear_cache: bool = False,
+    encoder: str = "auto",
+) -> TileProfile:
+    """Measure one tile render through load, render, and encode stages."""
+    if clear_cache:
+        _load_bands.cache_clear()
+
+    t0 = time.perf_counter()
+    cache_info_before = _load_bands.cache_info()
+    t_zarr_start = time.perf_counter()
+    bands = _load_bands(store_dir, chunk_id, month_index, level)
+    t_zarr_end = time.perf_counter()
+    cache_info_after = _load_bands.cache_info()
+    cache_miss = (
+        cache_info_after.misses > cache_info_before.misses
+        or cache_info_after.currsize > cache_info_before.currsize
+    )
+
+    t_render_start = time.perf_counter()
+    rendered = _render_product_array(bands, product)
+    t_render_end = time.perf_counter()
+
+    t_encode_start = time.perf_counter()
+    img_bytes, media_type, encoder_used = _encode_rendered(rendered, fmt, encoder=encoder)
+    t_encode_end = time.perf_counter()
+
+    return TileProfile(
+        img_bytes=img_bytes,
+        media_type=media_type,
+        encoder=encoder_used,
+        band_bytes=bands.nbytes,
+        cache_entries=cache_info_after.currsize,
+        zarr_ms=(t_zarr_end - t_zarr_start) * 1000 if cache_miss else 0.0,
+        render_ms=(t_render_end - t_render_start) * 1000,
+        encode_ms=(t_encode_end - t_encode_start) * 1000,
+        total_ms=(time.perf_counter() - t0) * 1000,
+        cache_hit=not cache_miss,
+    )
 
 
 CACHE_HEADER = "public, max-age=86400, immutable"
+
+
+def _aoi_candidates(aoi: str) -> list[tuple[int, str]]:
+    """Return matching AOI catalog keys sorted by chunk size ascending."""
+    candidates = []
+    for key, meta in AOI_CATALOG.items():
+        if meta["aoi"] == aoi:
+            candidates.append((int(meta["chunk_size"]), key))
+    return sorted(candidates)
 
 
 def _get_aoi(aoi: str) -> dict:
     """Look up AOI metadata, raising 404 if not found."""
     if aoi in AOI_CATALOG:
         return AOI_CATALOG[aoi]
-    for suffix in ["/cs512", "/cs256", "/cs1024"]:
-        key = aoi + suffix
-        if key in AOI_CATALOG:
-            return AOI_CATALOG[key]
+    candidates = _aoi_candidates(aoi)
+    if candidates:
+        return AOI_CATALOG[candidates[0][1]]
     raise HTTPException(404, detail=f"Unknown AOI: {aoi}")
 
 
@@ -142,10 +256,9 @@ def _get_aoi_key(aoi: str) -> str:
     """Resolve the full AOI key including chunk size."""
     if aoi in AOI_CATALOG:
         return aoi
-    for suffix in ["/cs512", "/cs256", "/cs1024"]:
-        key = aoi + suffix
-        if key in AOI_CATALOG:
-            return key
+    candidates = _aoi_candidates(aoi)
+    if candidates:
+        return candidates[0][1]
     raise HTTPException(404, detail=f"Unknown AOI: {aoi}")
 
 
@@ -326,50 +439,19 @@ def get_tile(
     requested product is derived on demand. Month can be an index (0-23)
     or a YYYY-MM string.
     """
-    t0 = time.perf_counter()
     _check_product_access(request, product)
     aoi_key = _get_aoi_key(aoi)
     meta = AOI_CATALOG[aoi_key]
     month_index = _resolve_month(month, meta)
     _validate_chunk_id(meta, chunk_id, level)
-    render_product_id = product
-    if product in ("ndvi", "ndwi"):
-        render_product_id = product
-    cache_info_before = _load_bands.cache_info()
-    t_zarr_start = time.perf_counter()
-    bands = _load_bands(meta["store_dir"], chunk_id, month_index, level)
-    t_zarr_end = time.perf_counter()
-    cache_info_after = _load_bands.cache_info()
-    cache_miss = (
-        cache_info_after.misses > cache_info_before.misses
-        or cache_info_after.currsize > cache_info_before.currsize
+    profile = profile_tile_render(
+        meta["store_dir"],
+        chunk_id,
+        month_index,
+        product,
+        fmt=fmt,
+        level=level,
     )
-    zarr_ms = (t_zarr_end - t_zarr_start) * 1000 if cache_miss else 0.0
-    t_render_start = time.perf_counter()
-    from spacetime.render import ndvi_colormap, ndwi_colormap, render_product
-
-    rendered = render_product(bands, render_product_id)
-    if rendered.dtype == np.float32:
-        cmap = ndwi_colormap if product == "ndwi" else ndvi_colormap
-        rendered = cmap(rendered)
-    t_render_end = time.perf_counter()
-    render_ms = (t_render_end - t_render_start) * 1000
-    t_encode_start = time.perf_counter()
-    if HAS_PYVIPS:
-        img_bytes, media_type = _encode_pyvips(rendered, fmt, quality=85)
-    else:
-        img = Image.fromarray(rendered)
-        buf = io.BytesIO()
-        if fmt == "png":
-            img.save(buf, format="PNG", optimize=False)
-            media_type = "image/png"
-        else:
-            img.save(buf, format="JPEG", quality=85)
-            media_type = "image/jpeg"
-        img_bytes = buf.getvalue()
-    t_encode_end = time.perf_counter()
-    encode_ms = (t_encode_end - t_encode_start) * 1000
-    total_ms = (time.perf_counter() - t0) * 1000
     logger.info(
         "tile %s/%s/%s product=%s level=%d: zarr=%.1fms render=%.1fms encode=%.1fms total=%.1fms",
         aoi,
@@ -377,16 +459,16 @@ def get_tile(
         chunk_id,
         product,
         level,
-        zarr_ms,
-        render_ms,
-        encode_ms,
-        total_ms,
+        profile.zarr_ms,
+        profile.render_ms,
+        profile.encode_ms,
+        profile.total_ms,
     )
-    meter.record(request.state.api_key, "tile", bytes_served=len(img_bytes))
+    meter.record(request.state.api_key, "tile", bytes_served=len(profile.img_bytes))
     return Response(
-        content=img_bytes,
-        media_type=media_type,
-        headers={"Cache-Control": CACHE_HEADER, "X-Timing-Ms": f"{total_ms:.1f}"},
+        content=profile.img_bytes,
+        media_type=profile.media_type,
+        headers={"Cache-Control": CACHE_HEADER, "X-Timing-Ms": f"{profile.total_ms:.1f}"},
     )
 
 

@@ -75,6 +75,53 @@ def zarr_store(tmp_path: Path):
 
 
 @pytest.fixture()
+def zarr_store_multi_chunk_sizes(tmp_path: Path):
+    """Create two stores for the same AOI at different chunk sizes."""
+    aoi_name = "test_aoi"
+    months = ["2024-01"]
+    epsg = 32631
+    transform = [10.0, 0.0, 500000.0, 0.0, -10.0, 2600000.0]
+    stores_root = tmp_path / "stores"
+    rng = np.random.default_rng(42)
+    datasets: dict[int, np.ndarray] = {}
+
+    for chunk_size, high in ((256, 1200), (512, 8000)):
+        store_dir = stores_root / aoi_name / f"cs{chunk_size}"
+        chunk_dir = store_dir / "r000_c000"
+        chunk_dir.mkdir(parents=True)
+
+        manifest = {
+            "aoi": aoi_name,
+            "label": f"Test AOI cs{chunk_size}",
+            "chunk_size": chunk_size,
+            "n_rows": 1,
+            "n_cols": 1,
+            "months": months,
+            "epsg": epsg,
+            "transform": transform,
+            "mosaic_height": 8,
+            "mosaic_width": 8,
+            "source": "Sentinel-2 L2A",
+            "composite_method": "monthly median, SCL cloud mask",
+        }
+        (store_dir / "manifest.json").write_text(json.dumps(manifest))
+
+        data = rng.integers(100, high, size=(1, 4, 8, 8), dtype=np.uint16)
+        z = zarr.open(str(chunk_dir / "stack.zarr"), mode="w", shape=data.shape, dtype="u2")
+        z[:] = data
+        datasets[chunk_size] = data
+
+    return {
+        "stores_root": stores_root,
+        "aoi_name": aoi_name,
+        "months": months,
+        "epsg": epsg,
+        "transform": transform,
+        "datasets": datasets,
+    }
+
+
+@pytest.fixture()
 def api_client(zarr_store, monkeypatch):
     """FastAPI TestClient with a synthetic Zarr store backing AOI_CATALOG."""
     from fastapi.testclient import TestClient

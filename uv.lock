@@ -13,6 +13,10 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
+[options]
+exclude-newer = "2026-04-11T04:02:43.753796Z"
+exclude-newer-span = "P7D"
+
 [[package]]
 name = "affine"
 version = "2.4.0"
