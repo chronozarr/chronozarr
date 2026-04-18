@@ -27,7 +27,6 @@ import gzip
 import io
 import logging
 import os
-import sys
 import time
 from dataclasses import dataclass
 from functools import lru_cache
@@ -60,39 +59,6 @@ from spacetime.api.models import (
 from spacetime.api.products import PRODUCTS, products_for_tier, tier_can_access
 from spacetime.render import render_product, water_mask
 
-
-def _configure_macos_vips_runtime() -> None:
-    """Make Homebrew libvips visible to pyvips on macOS."""
-    if sys.platform != "darwin":
-        return
-
-    lib_dirs = ["/opt/homebrew/lib", "/usr/local/lib"]
-    available_dirs = [
-        lib_dir for lib_dir in lib_dirs if Path(lib_dir, "libvips.42.dylib").exists()
-    ]
-    if not available_dirs:
-        return
-
-    for env_var in ("DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"):
-        current = os.environ.get(env_var, "")
-        parts = [part for part in current.split(":") if part]
-        updated = parts.copy()
-        for lib_dir in available_dirs:
-            if lib_dir not in updated:
-                updated.insert(0, lib_dir)
-        os.environ[env_var] = ":".join(updated)
-
-
-_configure_macos_vips_runtime()
-
-try:
-    import pyvips
-
-    HAS_PYVIPS = True
-except (ImportError, OSError):
-    pyvips = None
-    HAS_PYVIPS = False
-
 logger = logging.getLogger(__name__)
 
 
@@ -102,7 +68,6 @@ class TileProfile:
 
     img_bytes: bytes
     media_type: str
-    encoder: str
     band_bytes: int
     cache_entries: int
     zarr_ms: float
@@ -110,25 +75,6 @@ class TileProfile:
     encode_ms: float
     total_ms: float
     cache_hit: bool
-
-
-def _encode_pyvips(rendered: np.ndarray, fmt: str, quality: int = 85) -> tuple[bytes, str]:
-    """Encode rendered image to bytes using pyvips.
-
-    Args:
-        rendered: RGB array (H, W, 3) as uint8
-        fmt: 'jpeg' or 'png'
-        quality: JPEG quality (1-100), ignored for PNG
-
-    Returns:
-        (image_bytes, mime_type)
-    """
-    assert HAS_PYVIPS and pyvips is not None
-    h, w = rendered.shape[:2]
-    vimg = pyvips.Image.new_from_memory(rendered.tobytes(), w, h, 3, "uchar")
-    if fmt == "png":
-        return (vimg.pngsave_buffer(), "image/png")
-    return (vimg.jpegsave_buffer(Q=quality), "image/jpeg")
 
 
 router = APIRouter(prefix="/v1", tags=["v1"])
@@ -160,27 +106,15 @@ def _render_product_array(bands: np.ndarray, product: str) -> np.ndarray:
     return rendered
 
 
-def _encode_rendered(
-    rendered: np.ndarray, fmt: str = "jpeg", encoder: str = "auto"
-) -> tuple[bytes, str, str]:
+def _encode_rendered(rendered: np.ndarray, fmt: str = "jpeg") -> tuple[bytes, str]:
     """Encode a rendered RGB array as PNG or JPEG bytes."""
-    if encoder not in {"auto", "pil", "pyvips"}:
-        raise ValueError(f"Unknown encoder '{encoder}'. Expected one of auto, pil, pyvips.")
-
-    use_pyvips = encoder == "pyvips" or (encoder == "auto" and HAS_PYVIPS)
-    if encoder == "pyvips" and not HAS_PYVIPS:
-        raise RuntimeError("pyvips encoder requested but pyvips is not available")
-    if use_pyvips:
-        img_bytes, media_type = _encode_pyvips(rendered, fmt, quality=85)
-        return (img_bytes, media_type, "pyvips")
-
     img = Image.fromarray(rendered)
     buf = io.BytesIO()
     if fmt == "png":
         img.save(buf, format="PNG", optimize=False)
-        return (buf.getvalue(), "image/png", "pil")
+        return (buf.getvalue(), "image/png")
     img.save(buf, format="JPEG", quality=85)
-    return (buf.getvalue(), "image/jpeg", "pil")
+    return (buf.getvalue(), "image/jpeg")
 
 
 def profile_tile_render(
@@ -191,7 +125,6 @@ def profile_tile_render(
     fmt: str = "jpeg",
     level: int = 0,
     clear_cache: bool = False,
-    encoder: str = "auto",
 ) -> TileProfile:
     """Measure one tile render through load, render, and encode stages."""
     if clear_cache:
@@ -213,13 +146,12 @@ def profile_tile_render(
     t_render_end = time.perf_counter()
 
     t_encode_start = time.perf_counter()
-    img_bytes, media_type, encoder_used = _encode_rendered(rendered, fmt, encoder=encoder)
+    img_bytes, media_type = _encode_rendered(rendered, fmt)
     t_encode_end = time.perf_counter()
 
     return TileProfile(
         img_bytes=img_bytes,
         media_type=media_type,
-        encoder=encoder_used,
         band_bytes=bands.nbytes,
         cache_entries=cache_info_after.currsize,
         zarr_ms=(t_zarr_end - t_zarr_start) * 1000 if cache_miss else 0.0,

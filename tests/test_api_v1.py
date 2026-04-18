@@ -142,12 +142,10 @@ def test_profile_tile_render_reports_cold_then_warm(zarr_store, monkeypatch):
         0,
         "true_color",
         clear_cache=True,
-        encoder="pil",
     )
-    warm = profile_tile_render(meta["store_dir"], "r000_c000", 0, "true_color", encoder="pil")
+    warm = profile_tile_render(meta["store_dir"], "r000_c000", 0, "true_color")
 
     assert cold.media_type == "image/jpeg"
-    assert cold.encoder == "pil"
     assert len(cold.img_bytes) > 0
     assert cold.band_bytes == zarr_store["data"][0].nbytes
     assert cold.cache_entries == 1
@@ -157,31 +155,11 @@ def test_profile_tile_render_reports_cold_then_warm(zarr_store, monkeypatch):
     assert cold.total_ms >= cold.encode_ms
 
     assert warm.media_type == "image/jpeg"
-    assert warm.encoder == "pil"
     assert len(warm.img_bytes) > 0
     assert warm.band_bytes == zarr_store["data"][0].nbytes
     assert warm.cache_entries == 1
     assert warm.cache_hit is True
     assert warm.zarr_ms == 0.0
-
-    AOI_CATALOG.clear()
-    _load_bands.cache_clear()
-
-
-@pytest.mark.unit
-def test_profile_tile_render_invalid_encoder(zarr_store, monkeypatch):
-    """Tile profiler rejects unknown encoder ids with a clear error."""
-    from spacetime.api.v1 import AOI_CATALOG, _load_bands, profile_tile_render
-    from spacetime.serve import _discover_aois
-
-    AOI_CATALOG.clear()
-    _load_bands.cache_clear()
-    monkeypatch.setattr("spacetime.serve.STORES_ROOT", zarr_store["stores_root"])
-    AOI_CATALOG.update(_discover_aois())
-
-    meta = AOI_CATALOG["test_aoi/cs512"]
-    with pytest.raises(ValueError, match="Unknown encoder"):
-        profile_tile_render(meta["store_dir"], "r000_c000", 0, "true_color", encoder="nope")
 
     AOI_CATALOG.clear()
     _load_bands.cache_clear()

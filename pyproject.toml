@@ -42,7 +42,6 @@ serve = [
     "fastapi>=0.111",
     "uvicorn>=0.30",
     "pillow>=10.0",
-    "pyvips>=2.2",
 ]
 
 [build-system]
