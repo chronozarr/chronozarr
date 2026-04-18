@@ -1,0 +1,535 @@
+"""TileRipper v1 API router.
+
+All public endpoints live here. The router is mounted at /v1/ by serve.py.
+
+Endpoints:
+    GET /v1/                        API info
+    GET /v1/catalog                 List AOIs + products
+    GET /v1/catalog/{aoi}           AOI detail
+    GET /v1/products                Product catalog
+    GET /v1/months/{aoi}            Available months
+    GET /v1/tiles/{aoi}/{month}/{chunk_id}  Rendered tile image
+    GET /v1/query/{aoi}/{month}     Point query (maps + values)
+    GET /v1/stats/{aoi}/{month}     AOI summary statistics
+    GET /v1/usage                   Current usage for this key
+"""
+
+from __future__ import annotations
+
+import io
+import logging
+from functools import lru_cache
+from pathlib import Path
+
+import numpy as np
+import zarr
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import Response
+from PIL import Image
+
+from spacetime.api.geo import latlng_to_pixel, pixel_rowcol_to_coords, pixel_to_latlng
+from spacetime.api.metering import meter
+from spacetime.api.models import (
+    AOISummary,
+    CatalogResponse,
+    ErrorResponse,
+    GridInfo,
+    MonthsResponse,
+    PixelLocation,
+    PointQueryResponse,
+    ProductInfo,
+    StatsResponse,
+    UsageResponse,
+)
+from spacetime.api.products import PRODUCTS, products_for_tier, tier_can_access
+from spacetime.render import render_product, water_mask
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/v1", tags=["v1"])
+
+# --- Store catalog (populated at startup by serve.py) ---
+
+AOI_CATALOG: dict[str, dict] = {}
+
+# Band cache: (store_dir, chunk_id, month_index) → uint16 (4, H, W)
+_BAND_CACHE_SIZE = 512
+
+
+@lru_cache(maxsize=_BAND_CACHE_SIZE)
+def _load_bands(store_dir: str, chunk_id: str, month_index: int) -> np.ndarray:
+    """Load raw multiband data for a chunk/month. Cached for product switching."""
+    zarr_path = Path(store_dir) / chunk_id / "stack.zarr"
+    z = zarr.open(str(zarr_path), mode="r")
+    return np.array(z[month_index])
+
+
+def _render_tile(bands: np.ndarray, product: str, fmt: str = "jpeg") -> tuple[bytes, str]:
+    """Render a product from bands and encode as image bytes."""
+    from spacetime.render import ndvi_colormap, ndwi_colormap
+
+    rendered = render_product(bands, product)
+
+    # Index products (float32) need colormapping for tile output
+    if rendered.dtype == np.float32:
+        cmap = ndwi_colormap if product == "ndwi" else ndvi_colormap
+        rendered = cmap(rendered)
+
+    img = Image.fromarray(rendered)
+    buf = io.BytesIO()
+    if fmt == "png":
+        img.save(buf, format="PNG", optimize=False)
+        return buf.getvalue(), "image/png"
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue(), "image/jpeg"
+
+
+CACHE_HEADER = "public, max-age=86400, immutable"
+
+
+def _get_aoi(aoi: str) -> dict:
+    """Look up AOI metadata, raising 404 if not found."""
+    # Try exact match first
+    if aoi in AOI_CATALOG:
+        return AOI_CATALOG[aoi]
+    # Try with default chunk size
+    for suffix in ["/cs512", "/cs256", "/cs1024"]:
+        key = aoi + suffix
+        if key in AOI_CATALOG:
+            return AOI_CATALOG[key]
+    raise HTTPException(404, detail=f"Unknown AOI: {aoi}")
+
+
+def _get_aoi_key(aoi: str) -> str:
+    """Resolve the full AOI key including chunk size."""
+    if aoi in AOI_CATALOG:
+        return aoi
+    for suffix in ["/cs512", "/cs256", "/cs1024"]:
+        key = aoi + suffix
+        if key in AOI_CATALOG:
+            return key
+    raise HTTPException(404, detail=f"Unknown AOI: {aoi}")
+
+
+def _check_product_access(request: Request, product: str) -> None:
+    """Raise 403 if the request's tier cannot access this product."""
+    tier = request.state.tier
+    if not tier_can_access(tier, product):
+        required = PRODUCTS[product]["tier"]
+        raise HTTPException(
+            403,
+            detail=f"Product '{product}' requires {required} tier or above. "
+            f"Current tier: {tier}. Upgrade at https://tileripper.dev/pricing",
+        )
+
+
+# ---- Endpoints ----
+
+
+@router.get("/")
+def api_info():
+    """API root — version and links."""
+    return {
+        "name": "TileRipper",
+        "version": "0.1.0",
+        "description": "Temporally coherent earth observation basemaps with queryable values",
+        "docs": "/docs",
+        "endpoints": {
+            "catalog": "/v1/catalog",
+            "products": "/v1/products",
+            "tiles": "/v1/tiles/{aoi}/{month}/{chunk_id}",
+            "query": "/v1/query/{aoi}/{month}?lat=...&lng=...",
+            "stats": "/v1/stats/{aoi}/{month}?product=ndvi",
+        },
+    }
+
+
+@router.get("/catalog", response_model=CatalogResponse)
+def get_catalog(request: Request):
+    """List all available AOIs and products."""
+    tier = request.state.tier
+    accessible = products_for_tier(tier)
+
+    aois = []
+    seen = set()
+    for _key, meta in AOI_CATALOG.items():
+        aoi_id = meta["aoi"]
+        if aoi_id in seen:
+            continue
+        seen.add(aoi_id)
+
+        aois.append(
+            AOISummary(
+                id=aoi_id,
+                name=meta.get("label", aoi_id),
+                source=meta.get("source", "Sentinel-2 L2A"),
+                epsg=meta["epsg"],
+                months=meta["months"],
+                n_months=meta["n_months"],
+                grid=GridInfo(
+                    n_rows=meta["n_rows"],
+                    n_cols=meta["n_cols"],
+                    chunk_size=meta["chunk_size"],
+                    mosaic_height=meta["mosaic_height"],
+                    mosaic_width=meta["mosaic_width"],
+                ),
+                products=accessible,
+                bbox_wgs84=meta.get("bbox_wgs84"),
+            )
+        )
+
+    products = [
+        ProductInfo(**{k: v for k, v in p.items() if k != "range"}, **{"range": p["range"]})
+        if p["range"] is not None
+        else ProductInfo(**p)
+        for p in PRODUCTS.values()
+    ]
+
+    return CatalogResponse(aois=aois, products=products)
+
+
+@router.get("/catalog/{aoi}", response_model=AOISummary)
+def get_aoi_detail(aoi: str, request: Request):
+    """Get detailed info for a specific AOI."""
+    meta = _get_aoi(aoi)
+    tier = request.state.tier
+    return AOISummary(
+        id=meta["aoi"],
+        name=meta.get("label", meta["aoi"]),
+        source=meta.get("source", "Sentinel-2 L2A"),
+        epsg=meta["epsg"],
+        months=meta["months"],
+        n_months=meta["n_months"],
+        grid=GridInfo(
+            n_rows=meta["n_rows"],
+            n_cols=meta["n_cols"],
+            chunk_size=meta["chunk_size"],
+            mosaic_height=meta["mosaic_height"],
+            mosaic_width=meta["mosaic_width"],
+        ),
+        products=products_for_tier(tier),
+        bbox_wgs84=meta.get("bbox_wgs84"),
+    )
+
+
+@router.get("/products", response_model=list[ProductInfo])
+def list_products(request: Request):
+    """List all available products and their tier requirements."""
+    return [
+        ProductInfo(**{k: v for k, v in p.items() if k != "range"}, **{"range": p["range"]})
+        if p["range"] is not None
+        else ProductInfo(**p)
+        for p in PRODUCTS.values()
+    ]
+
+
+@router.get("/months/{aoi}", response_model=MonthsResponse)
+def get_months(aoi: str):
+    """List available months for an AOI."""
+    meta = _get_aoi(aoi)
+    months = meta["months"]
+    return MonthsResponse(
+        aoi=meta["aoi"],
+        months=months,
+        n_months=len(months),
+        first=months[0],
+        last=months[-1],
+    )
+
+
+@router.get(
+    "/tiles/{aoi}/{month}/{chunk_id}",
+    responses={200: {"content": {"image/jpeg": {}, "image/png": {}}}},
+)
+def get_tile(
+    aoi: str,
+    month: str,
+    chunk_id: str,
+    request: Request,
+    product: str = Query(default="true_color", description="Product to render"),
+    fmt: str = Query(default="jpeg", description="Image format: jpeg or png"),
+):
+    """Serve a rendered tile image.
+
+    The core endpoint: raw bands are loaded from Zarr (cached), and the
+    requested product is derived on demand. Month can be an index (0-23)
+    or a YYYY-MM string.
+    """
+    _check_product_access(request, product)
+
+    aoi_key = _get_aoi_key(aoi)
+    meta = AOI_CATALOG[aoi_key]
+
+    # Resolve month: accept index or YYYY-MM string
+    month_index = _resolve_month(month, meta)
+
+    if chunk_id not in meta["chunk_ids"]:
+        raise HTTPException(404, detail=f"Unknown chunk: {chunk_id}")
+
+    # Render tile for visual products; for index products, use colormapped version
+    render_product_id = product
+    if product in ("ndvi", "ndwi"):
+        render_product_id = product  # _render_tile handles colormapping
+
+    bands = _load_bands(meta["store_dir"], chunk_id, month_index)
+    img_bytes, media_type = _render_tile(bands, render_product_id, fmt)
+
+    meter.record(request.state.api_key, "tile", bytes_served=len(img_bytes))
+
+    return Response(
+        content=img_bytes,
+        media_type=media_type,
+        headers={"Cache-Control": CACHE_HEADER},
+    )
+
+
+@router.get(
+    "/query/{aoi}/{month}",
+    response_model=PointQueryResponse,
+    responses={400: {"model": ErrorResponse}},
+)
+def point_query(
+    aoi: str,
+    month: str,
+    request: Request,
+    lat: float | None = Query(default=None, description="Latitude (WGS84)"),
+    lng: float | None = Query(default=None, description="Longitude (WGS84)"),
+    pixel_row: int | None = Query(default=None, description="Mosaic pixel row"),
+    pixel_col: int | None = Query(default=None, description="Mosaic pixel column"),
+):
+    """Query band values and derived products at a geographic point.
+
+    This is the 'maps plus values' endpoint. Provide either lat/lng (WGS84)
+    or pixel_row/pixel_col (mosaic coordinates).
+
+    Returns raw band reflectance, NDVI, NDWI, water classification, and
+    source metadata for the queried point.
+    """
+    meta = _get_aoi(aoi)
+    month_index = _resolve_month(month, meta)
+    month_str = meta["months"][month_index]
+
+    # Resolve coordinates
+    if lat is not None and lng is not None:
+        coords = latlng_to_pixel(
+            lat,
+            lng,
+            meta["epsg"],
+            meta["transform"],
+            meta["chunk_size"],
+            meta["mosaic_height"],
+            meta["mosaic_width"],
+        )
+        if coords is None:
+            raise HTTPException(
+                400,
+                detail=f"Point ({lat}, {lng}) falls outside AOI bounds",
+            )
+    elif pixel_row is not None and pixel_col is not None:
+        coords = pixel_rowcol_to_coords(
+            pixel_row,
+            pixel_col,
+            meta["epsg"],
+            meta["transform"],
+            meta["chunk_size"],
+            meta["mosaic_height"],
+            meta["mosaic_width"],
+        )
+        if coords is None:
+            raise HTTPException(
+                400,
+                detail=f"Pixel ({pixel_row}, {pixel_col}) outside mosaic bounds",
+            )
+        # Compute lat/lng from pixel
+        lat, lng = pixel_to_latlng(pixel_row, pixel_col, meta["epsg"], meta["transform"])
+    else:
+        raise HTTPException(
+            400,
+            detail="Provide either lat+lng or pixel_row+pixel_col",
+        )
+
+    # Load bands for the chunk containing this pixel
+    bands = _load_bands(meta["store_dir"], coords.chunk_id, month_index)
+
+    # Extract single-pixel values
+    lr, lc = coords.local_row, coords.local_col
+    h, w = bands.shape[1], bands.shape[2]
+    if lr >= h or lc >= w:
+        raise HTTPException(400, detail="Pixel outside chunk bounds (edge chunk)")
+
+    pixel_bands = bands[:, lr, lc]  # (4,) uint16
+
+    # Compute derived values
+    b02, b03, b04, b08 = [int(pixel_bands[i]) for i in range(4)]
+    nir_f, red_f, green_f = float(b08), float(b04), float(b03)
+
+    ndvi_val = _safe_ratio(nir_f - red_f, nir_f + red_f)
+    ndwi_val = _safe_ratio(green_f - nir_f, green_f + nir_f)
+    is_water = ndwi_val is not None and ndwi_val > 0
+
+    # Build response based on tier access
+    tier = request.state.tier
+    values: dict[str, float | None] = {}
+    if tier_can_access(tier, "ndvi"):
+        values["ndvi"] = _round(ndvi_val)
+    if tier_can_access(tier, "ndwi"):
+        values["ndwi"] = _round(ndwi_val)
+    if tier_can_access(tier, "water"):
+        values["water"] = 1.0 if is_water else 0.0
+
+    meter.record(request.state.api_key, "query")
+
+    return PointQueryResponse(
+        aoi=meta["aoi"],
+        month=month_str,
+        lat=round(lat, 6),
+        lng=round(lng, 6),
+        pixel=PixelLocation(
+            row=coords.pixel_row,
+            col=coords.pixel_col,
+            chunk_id=coords.chunk_id,
+            utm_x=round(coords.utm_x, 2),
+            utm_y=round(coords.utm_y, 2),
+        ),
+        values=values,
+        bands={"B02": b02, "B03": b03, "B04": b04, "B08": b08},
+        source=meta.get("source", "Sentinel-2 L2A"),
+        composite_method=meta.get("composite_method", "monthly median, SCL cloud mask"),
+    )
+
+
+@router.get(
+    "/stats/{aoi}/{month}",
+    response_model=StatsResponse,
+    responses={400: {"model": ErrorResponse}},
+)
+def get_stats(
+    aoi: str,
+    month: str,
+    request: Request,
+    product: str = Query(default="ndvi", description="Product to compute stats for"),
+):
+    """Compute summary statistics for a product over the full AOI.
+
+    Returns mean, median, std, min, max, p10, p90, and valid pixel counts.
+    """
+    _check_product_access(request, product)
+
+    meta = _get_aoi(aoi)
+    month_index = _resolve_month(month, meta)
+    month_str = meta["months"][month_index]
+
+    # Load all chunks and compute the product
+    all_values = []
+    total_pixels = 0
+    for chunk_id in meta["chunk_ids"]:
+        bands = _load_bands(meta["store_dir"], chunk_id, month_index)
+        rendered = render_product(bands, product)
+
+        if rendered.dtype == np.float32:
+            # Index product: collect valid (non-NaN) values
+            valid = rendered[~np.isnan(rendered)]
+            all_values.append(valid.ravel())
+            total_pixels += rendered.size
+        elif product == "water":
+            # Water classification: fraction of water pixels
+            mask = water_mask(bands)
+            nodata = (bands[0].astype(np.float32) + bands[3].astype(np.float32)) == 0
+            valid_mask = ~nodata
+            all_values.append(mask[valid_mask].astype(np.float32).ravel())
+            total_pixels += mask.size
+        else:
+            # RGB product: compute mean brightness
+            brightness = rendered.mean(axis=-1).astype(np.float32)
+            valid = brightness[brightness > 0]
+            all_values.append(valid.ravel())
+            total_pixels += brightness.size
+
+    combined = np.concatenate(all_values) if all_values else np.array([])
+    valid_pixels = len(combined)
+
+    if valid_pixels == 0:
+        raise HTTPException(400, detail="No valid pixels for this AOI/month/product")
+
+    stats = {
+        "mean": _round(float(np.mean(combined))),
+        "median": _round(float(np.median(combined))),
+        "std": _round(float(np.std(combined))),
+        "min": _round(float(np.min(combined))),
+        "max": _round(float(np.max(combined))),
+        "p10": _round(float(np.percentile(combined, 10))),
+        "p90": _round(float(np.percentile(combined, 90))),
+    }
+
+    meter.record(request.state.api_key, "stats")
+
+    return StatsResponse(
+        aoi=meta["aoi"],
+        month=month_str,
+        product=product,
+        stats=stats,
+        valid_pixels=valid_pixels,
+        total_pixels=total_pixels,
+    )
+
+
+@router.get("/usage", response_model=UsageResponse)
+def get_usage(request: Request):
+    """Get current usage for this API key."""
+    from spacetime.api.auth import TIERS
+
+    key = request.state.api_key
+    tier = request.state.tier
+    usage = meter.get(key)
+    quota = TIERS[tier]["monthly_quota"]
+
+    return UsageResponse(
+        tier=tier,
+        period="current",
+        requests=usage.requests,
+        tile_requests=usage.tile_requests,
+        query_requests=usage.query_requests,
+        quota=quota,
+    )
+
+
+# ---- Helpers ----
+
+
+def _resolve_month(month: str, meta: dict) -> int:
+    """Resolve a month string (index or YYYY-MM) to a valid month index."""
+    # Try as integer index
+    try:
+        idx = int(month)
+        if 0 <= idx < meta["n_months"]:
+            return idx
+        raise HTTPException(
+            400,
+            detail=f"Month index {idx} out of range [0, {meta['n_months']})",
+        )
+    except ValueError:
+        pass
+
+    # Try as YYYY-MM string
+    if month in meta["months"]:
+        return meta["months"].index(month)
+
+    raise HTTPException(
+        400,
+        detail=f"Unknown month '{month}'. Use an index (0-{meta['n_months'] - 1}) "
+        f"or YYYY-MM string (e.g. '{meta['months'][0]}')",
+    )
+
+
+def _safe_ratio(num: float, denom: float) -> float | None:
+    """Compute a ratio, returning None if denominator is zero."""
+    if denom == 0:
+        return None
+    return num / denom
+
+
+def _round(val: float | None, digits: int = 4) -> float | None:
+    """Round a float value, passing through None."""
+    if val is None:
+        return None
+    return round(val, digits)
