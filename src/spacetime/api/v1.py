@@ -12,10 +12,12 @@ Endpoints:
     GET /v1/query/{aoi}/{month}     Point query (maps + values)
     GET /v1/stats/{aoi}/{month}     AOI summary statistics
     GET /v1/usage                   Current usage for this key
+    GET /v1/raw/{aoi}/{month}/{chunk_id}  Raw uint16 band data (gzipped)
 """
 
 from __future__ import annotations
 
+import gzip
 import io
 import logging
 from functools import lru_cache
@@ -490,6 +492,64 @@ def get_usage(request: Request):
         tile_requests=usage.tile_requests,
         query_requests=usage.query_requests,
         quota=quota,
+    )
+
+
+@router.get(
+    "/raw/{aoi}/{month}/{chunk_id}",
+    responses={200: {"content": {"application/octet-stream": {}}}},
+)
+def get_raw_bands(
+    aoi: str,
+    month: str,
+    chunk_id: str,
+    request: Request,
+):
+    """Serve raw uint16 band data as gzipped binary.
+
+    Returns B02, B03, B04, B08 band data in a compact binary format:
+    - 8-byte header: uint16 n_bands, uint16 height, uint16 width, uint16 reserved(0)
+    - Followed by n_bands x height x width x 2 bytes of uint16 little-endian data
+
+    No tier gating — raw bands are available to all tiers.
+    """
+    aoi_key = _get_aoi_key(aoi)
+    meta = AOI_CATALOG[aoi_key]
+
+    # Resolve month: accept index or YYYY-MM string
+    month_index = _resolve_month(month, meta)
+
+    if chunk_id not in meta["chunk_ids"]:
+        raise HTTPException(404, detail=f"Unknown chunk: {chunk_id}")
+
+    # Load bands from cache (same as tiles)
+    bands = _load_bands(meta["store_dir"], chunk_id, month_index)
+
+    # Get shape: (n_bands, height, width)
+    n_bands, height, width = bands.shape
+
+    # Build 8-byte header: uint16 n_bands, height, width, reserved(0)
+    header = np.array([n_bands, height, width, 0], dtype=np.uint16).tobytes()
+
+    # Convert bands to little-endian uint16 bytes
+    # bands are already uint16 from Zarr, ensure little-endian
+    data_bytes = bands.astype(np.uint16, copy=False).tobytes()
+
+    # Combine header and data
+    raw_bytes = header + data_bytes
+
+    # Gzip compress with level=1 for speed
+    compressed = gzip.compress(raw_bytes, compresslevel=1)
+
+    meter.record(request.state.api_key, "raw", bytes_served=len(compressed))
+
+    return Response(
+        content=compressed,
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": CACHE_HEADER,
+            "Content-Encoding": "gzip",
+        },
     )
 
 

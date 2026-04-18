@@ -19,6 +19,7 @@ class KeyUsage:
     tile_requests: int = 0
     query_requests: int = 0
     stats_requests: int = 0
+    raw_requests: int = 0
     bytes_served: int = 0
     period_start: float = field(default_factory=time.time)
 
@@ -41,6 +42,8 @@ class UsageMeter:
             u.query_requests += 1
         elif endpoint == "stats":
             u.stats_requests += 1
+        elif endpoint == "raw":
+            u.raw_requests += 1
 
     def get(self, key: str) -> KeyUsage:
         """Get usage for a key."""
