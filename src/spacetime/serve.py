@@ -16,6 +16,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from spacetime.api.auth import AuthMiddleware
 from spacetime.api.jobs import JobDB
@@ -139,6 +140,10 @@ app.add_middleware(AuthMiddleware)
 
 # Mount v1 API
 app.include_router(v1_router)
+
+# Serve static assets (shaders.js, etc.)
+_static_dir = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
