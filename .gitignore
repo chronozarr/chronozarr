@@ -37,3 +37,10 @@ HANDOVER.md
 # dgov / sentrux
 .dgov/
 .sentrux/
+
+# Test/bench artifacts
+.playwright-mcp/
+src/spacetime/static/bench/
+
+# Screenshots (development artifacts)
+*.png

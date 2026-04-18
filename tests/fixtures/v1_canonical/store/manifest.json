@@ -1,0 +1,63 @@
+{
+  "version": "1.0.0",
+  "epsg": 32631,
+  "transform": [
+    10.0,
+    0.0,
+    500000.0,
+    0.0,
+    -10.0,
+    2500000.0
+  ],
+  "mosaic_height": 32,
+  "mosaic_width": 32,
+  "bands": [
+    "B02",
+    "B03",
+    "B04",
+    "B08"
+  ],
+  "dtype": "uint16",
+  "nodata": 0,
+  "months": [
+    "2024-01",
+    "2024-02",
+    "2024-03"
+  ],
+  "compressor": "zstd",
+  "compressor_level": 5,
+  "lod_levels": 2,
+  "lod_factor": 2,
+  "temporal": {
+    "encoding": "star-delta",
+    "anchor_interval": 2,
+    "anchor_indices": [
+      0,
+      2
+    ],
+    "delta_reference": {
+      "1": 0
+    }
+  },
+  "lods": [
+    {
+      "level": 0,
+      "resolution_m": 10.0,
+      "grid_rows": 1,
+      "grid_cols": 1,
+      "chunk_size": 32
+    },
+    {
+      "level": 1,
+      "resolution_m": 20.0,
+      "grid_rows": 1,
+      "grid_cols": 1,
+      "chunk_size": 32
+    }
+  ],
+  "cells": {
+    "r000_c000": {
+      "volatility": 0.0098525146484375
+    }
+  }
+}

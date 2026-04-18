@@ -180,6 +180,7 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["GET"],
     allow_headers=["*"],
+    expose_headers=["X-Chunk-Width", "X-Chunk-Height", "X-Chunk-Encoding", "X-Timing-Ms"],
 )
 
 # Auth + rate limiting

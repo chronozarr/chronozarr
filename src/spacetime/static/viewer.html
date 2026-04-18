@@ -170,6 +170,38 @@
   }
   .status .timing { color: var(--green); }
   .status .error { color: var(--red); }
+
+  /* Metrics panel */
+  .metrics-panel {
+    position: absolute;
+    top: 28px;
+    left: 28px;
+    font-size: 11px;
+    color: var(--text-dim);
+    background: rgba(11, 14, 20, 0.92);
+    padding: 10px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.6;
+    min-width: 200px;
+    display: none;
+  }
+  .metrics-panel.visible { display: block; }
+  .metrics-panel .label { color: var(--text-dim); }
+  .metrics-panel .value { color: var(--text); float: right; }
+  .metrics-panel .sep {
+    border-top: 1px solid var(--border);
+    margin: 4px 0;
+  }
+  .metrics-panel .heading {
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 2px;
+  }
 </style>
 </head>
 <body>
@@ -181,7 +213,8 @@
 
 <div class="canvas-container">
   <canvas id="gl-canvas" width="512" height="512"></canvas>
-  <div class="chunk-note" id="chunk-note">Showing chunk r000_c000 only</div>
+  <div class="chunk-note" id="chunk-note"></div>
+  <div class="metrics-panel" id="metrics-panel"></div>
   <div class="error-overlay" id="error-overlay">
     <h3 id="error-title">Error</h3>
     <p id="error-message">Something went wrong</p>
@@ -203,6 +236,9 @@
     <select id="aoi-select">
       <option value="sahara_tamanrasset">sahara_tamanrasset</option>
     </select>
+  </div>
+  <div class="control-group">
+    <button id="metrics-btn">Metrics</button>
   </div>
   <div class="status" id="status">Loading...</div>
 </div>
@@ -350,7 +386,7 @@ function initWebGL() {
     gl = canvas.getContext('webgl2', {
         alpha: false,
         premultipliedAlpha: false,
-        preserveDrawingBuffer: false,
+        preserveDrawingBuffer: true,
         antialias: false,
     });
     
@@ -432,42 +468,6 @@ function createBandTexture(data, width, height) {
     return texture;
 }
 
-function render() {
-    if (!program || textures.length !== 4) return;
-    
-    gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.clearColor(0.0, 0.0, 0.0, 1.0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    
-    gl.useProgram(program);
-    
-    // Bind attributes
-    const positionLoc = gl.getAttribLocation(program, 'a_position');
-    const texCoordLoc = gl.getAttribLocation(program, 'a_texCoord');
-    
-    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-    gl.enableVertexAttribArray(positionLoc);
-    gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
-    
-    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
-    gl.enableVertexAttribArray(texCoordLoc);
-    gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, 0, 0);
-    
-    // Bind textures
-    for (let i = 0; i < 4; i++) {
-        const loc = gl.getUniformLocation(program, `u_band${i}`);
-        gl.activeTexture(gl.TEXTURE0 + i);
-        gl.bindTexture(gl.TEXTURE_2D, textures[i]);
-        gl.uniform1i(loc, i);
-    }
-    
-    // Set resolution
-    const resLoc = gl.getUniformLocation(program, 'u_resolution');
-    gl.uniform2f(resLoc, canvasWidth, canvasHeight);
-    
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-}
-
 function showError(title, message) {
     errorTitle.textContent = title;
     errorMessage.textContent = message;
@@ -487,101 +487,438 @@ function setStatus(msg, isTiming = false) {
     }
 }
 
-// Fetch and decode chunk data
-async function fetchChunk(aoi, lod, chunkId, monthIndex) {
+// --- Chunk cache ---
+// Key: "lod/chunkId/monthIndex" → { data: Uint16Array, compressed_bytes, raw_bytes }
+const chunkCache = new Map();
+
+function cacheKey(lod, chunkId, monthIndex) {
+    return `${lod}/${chunkId}/${monthIndex}`;
+}
+
+// Per-frame request log (reset each loadMonth)
+let requestLog = [];
+
+// --- Anchor cache metrics (cumulative, session-wide) ---
+const anchorStats = { hits: 0, misses: 0 };
+let prefetchGeneration = 0;
+let prefetchStatus = 'idle';
+
+// Fetch raw chunk bytes and decompress, with cache.
+// silent=true skips requestLog (used by prefetch to avoid polluting frame metrics).
+async function fetchChunk(aoi, lod, chunkId, monthIndex, { silent = false } = {}) {
+    const key = cacheKey(lod, chunkId, monthIndex);
+    const isAnchor = manifest && manifest.temporal.anchor_indices.includes(monthIndex);
+    const cached = chunkCache.get(key);
+    if (cached) {
+        if (isAnchor) anchorStats.hits++;
+        if (!silent) requestLog.push({ chunkId, monthIndex, cache_hit: true, fetch_ms: 0, decode_ms: 0,
+            compressed_bytes: cached.compressed_bytes, raw_bytes: cached.raw_bytes });
+        return {
+            data: cached.data,
+            timing: { fetch_ms: 0, decode_ms: 0,
+                compressed_bytes: cached.compressed_bytes, raw_bytes: cached.raw_bytes }
+        };
+    }
+
+    if (isAnchor) anchorStats.misses++;
+
     const url = `/v1/chunk/${aoi}/${lod}/${chunkId}/${monthIndex}`;
+    const t0 = performance.now();
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
     const compressed = new Uint8Array(await response.arrayBuffer());
+    const fetch_ms = performance.now() - t0;
+
+    const t1 = performance.now();
     const raw = decompress(compressed);
-    return new Uint16Array(raw.buffer, raw.byteOffset, raw.byteLength / 2);
+    const decode_ms = performance.now() - t1;
+
+    const data = new Uint16Array(raw.buffer, raw.byteOffset, raw.byteLength / 2);
+    const compressed_bytes = compressed.byteLength;
+    const raw_bytes = raw.byteLength;
+
+    // Cache the decoded chunk
+    chunkCache.set(key, { data, compressed_bytes, raw_bytes });
+
+    if (!silent) requestLog.push({ chunkId, monthIndex, cache_hit: false, fetch_ms, decode_ms,
+        compressed_bytes, raw_bytes });
+
+    return { data, timing: { fetch_ms, decode_ms, compressed_bytes, raw_bytes } };
 }
 
-// Star-delta decoding
+// Compute actual pixel dimensions for a chunk at (row, col) in the grid
+function chunkDims(row, col, gridRows, gridCols, chunkSize, mosaicW, mosaicH) {
+    const w = (col < gridCols - 1) ? chunkSize : (mosaicW - (gridCols - 1) * chunkSize);
+    const h = (row < gridRows - 1) ? chunkSize : (mosaicH - (gridRows - 1) * chunkSize);
+    return { w, h };
+}
+
+// Star-delta decoding — returns { data, timing, isDelta, anchorWarm }
 async function fetchAndDecodeMonth(aoi, lod, chunkId, monthIndex) {
     const temporal = manifest.temporal;
-    
-    // Check if this is an anchor month
+
+    // Anchor month: just fetch and return
     if (temporal.anchor_indices.includes(monthIndex)) {
-        // Anchor: just fetch and return
-        return await fetchChunk(aoi, lod, chunkId, monthIndex);
+        const result = await fetchChunk(aoi, lod, chunkId, monthIndex);
+        return { data: result.data, timing: result.timing, isDelta: false, anchorWarm: result.timing.fetch_ms === 0 };
     }
-    
+
     // Delta: fetch anchor + delta, then reconstruct
     const anchorIndex = temporal.delta_reference[String(monthIndex)];
     if (anchorIndex === undefined) {
         throw new Error(`No delta reference found for month ${monthIndex}`);
     }
-    
-    const [anchorData, deltaData] = await Promise.all([
+
+    // Check anchor residency BEFORE fetching
+    const anchorWarm = chunkCache.has(cacheKey(lod, chunkId, anchorIndex));
+
+    const [anchor, delta] = await Promise.all([
         fetchChunk(aoi, lod, chunkId, anchorIndex),
         fetchChunk(aoi, lod, chunkId, monthIndex)
     ]);
-    
-    // Reconstruct: anchor (uint16) + delta (int16 reinterpreted from uint16)
-    const result = new Uint16Array(anchorData.length);
-    const deltaView = new Int16Array(deltaData.buffer);
-    
-    for (let i = 0; i < anchorData.length; i++) {
-        const val = anchorData[i] + deltaView[i];
+
+    const t0 = performance.now();
+    const result = new Uint16Array(anchor.data.length);
+    const deltaView = new Int16Array(delta.data.buffer);
+    for (let i = 0; i < anchor.data.length; i++) {
+        const val = anchor.data[i] + deltaView[i];
         result[i] = Math.max(0, Math.min(65535, val));
     }
-    
-    return result;
+    const reconstruct_ms = performance.now() - t0;
+
+    return {
+        data: result,
+        timing: {
+            fetch_ms: Math.max(anchor.timing.fetch_ms, delta.timing.fetch_ms),
+            decode_ms: anchor.timing.decode_ms + delta.timing.decode_ms,
+            reconstruct_ms,
+            compressed_bytes: anchor.timing.compressed_bytes + delta.timing.compressed_bytes,
+            raw_bytes: anchor.timing.raw_bytes + delta.timing.raw_bytes,
+        },
+        isDelta: true,
+        anchorWarm,
+    };
 }
 
-// Load and render a month
+// Render a single chunk's band data at a viewport position. Returns { upload_ms, draw_ms }
+function renderChunkAt(bandsData, w, h, x, y) {
+    const nBands = 4;
+    const pixelsPerBand = bandsData.length / nBands;
+
+    // Clean up old textures
+    textures.forEach(t => gl.deleteTexture(t));
+    textures = [];
+
+    const t0 = performance.now();
+    for (let b = 0; b < nBands; b++) {
+        const bandOffset = b * pixelsPerBand;
+        const bandData = bandsData.subarray(bandOffset, bandOffset + pixelsPerBand);
+        const texture = createBandTexture(bandData, w, h);
+        textures.push(texture);
+    }
+    const upload_ms = performance.now() - t0;
+
+    const t1 = performance.now();
+    gl.useProgram(program);
+
+    const positionLoc = gl.getAttribLocation(program, 'a_position');
+    const texCoordLoc = gl.getAttribLocation(program, 'a_texCoord');
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.enableVertexAttribArray(positionLoc);
+    gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+    gl.enableVertexAttribArray(texCoordLoc);
+    gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, 0, 0);
+
+    for (let i = 0; i < 4; i++) {
+        const loc = gl.getUniformLocation(program, `u_band${i}`);
+        gl.activeTexture(gl.TEXTURE0 + i);
+        gl.bindTexture(gl.TEXTURE_2D, textures[i]);
+        gl.uniform1i(loc, i);
+    }
+
+    const resLoc = gl.getUniformLocation(program, 'u_resolution');
+    gl.uniform2f(resLoc, w, h);
+
+    gl.viewport(x, y, w, h);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    const draw_ms = performance.now() - t1;
+
+    return { upload_ms, draw_ms };
+}
+
+// Last frame metrics (accessible from console as `lastFrame`)
+let lastFrame = null;
+
+// Load and render a month — all chunks stitched, fully instrumented
 async function loadMonth(monthIndex) {
     hideError();
-    setStatus('Loading...');
     const t0 = performance.now();
-    
+
     try {
-        const chunkId = 'r000_c000'; // MVP: just first chunk
-        const lodData = manifest.lod_levels[currentLod];
-        
-        // Fetch decoded band data
-        const bandsData = await fetchAndDecodeMonth(currentAoi, currentLod, chunkId, monthIndex);
-        
-        // bandsData is shape (n_bands, H, W) in C-order
-        // n_bands = 4 (B02, B03, B04, B08)
-        const nBands = 4;
-        const pixelsPerBand = bandsData.length / nBands;
-        const size = Math.sqrt(pixelsPerBand);
-        canvasWidth = size;
-        canvasHeight = size;
-        
-        // Resize canvas
+        const lodMeta = manifest.lods[currentLod];
+        const gridRows = lodMeta.grid_rows;
+        const gridCols = lodMeta.grid_cols;
+        const chunkSize = lodMeta.chunk_size;
+        const totalChunks = gridRows * gridCols;
+        const factor = Math.pow(manifest.lod_factor, currentLod);
+
+        // Compute actual mosaic pixel dimensions at this LOD
+        const mosaicW = Math.ceil(manifest.mosaic_width / factor);
+        const mosaicH = Math.ceil(manifest.mosaic_height / factor);
+
+        canvasWidth = mosaicW;
+        canvasHeight = mosaicH;
         canvas.width = canvasWidth;
         canvas.height = canvasHeight;
-        
-        // Create textures for each band
-        // Clean up old textures
-        textures.forEach(t => gl.deleteTexture(t));
-        textures = [];
-        
-        for (let b = 0; b < nBands; b++) {
-            const bandOffset = b * pixelsPerBand;
-            const bandData = bandsData.subarray(bandOffset, bandOffset + pixelsPerBand);
-            const texture = createBandTexture(bandData, canvasWidth, canvasHeight);
-            textures.push(texture);
+
+        // Clear to black
+        gl.viewport(0, 0, canvasWidth, canvasHeight);
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        // Build chunk fetch list
+        const chunkJobs = [];
+        for (let r = 0; r < gridRows; r++) {
+            for (let c = 0; c < gridCols; c++) {
+                const chunkId = `r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`;
+                chunkJobs.push({ chunkId, row: r, col: c });
+            }
         }
-        
-        render();
-        
-        const elapsed = Math.round(performance.now() - t0);
-        setStatus(`${elapsed}ms — ${manifest.months[monthIndex]}`, true);
-        
+
+        // Reset per-frame request log
+        requestLog = [];
+
+        // Fetch all chunks in parallel, collect per-chunk metrics
+        let loaded = 0;
+        setStatus(`Loading 0/${totalChunks}...`);
+        const chunkMetrics = [];
+
+        const promises = chunkJobs.map(async ({ chunkId, row, col }) => {
+            const result = await fetchAndDecodeMonth(currentAoi, currentLod, chunkId, monthIndex);
+            const { w, h } = chunkDims(row, col, gridRows, gridCols, chunkSize, mosaicW, mosaicH);
+            const x = col * chunkSize;
+            const y = canvasHeight - (row * chunkSize) - h;
+            const gpu = renderChunkAt(result.data, w, h, x, y);
+
+            chunkMetrics.push({
+                chunkId, row, col, w, h,
+                pixels: w * h,
+                isDelta: result.isDelta,
+                anchorWarm: result.anchorWarm,
+                ...result.timing,
+                ...gpu,
+            });
+
+            loaded++;
+            setStatus(`Loading ${loaded}/${totalChunks}...`);
+        });
+
+        await Promise.all(promises);
+        const total_ms = performance.now() - t0;
+
+        // Aggregate frame metrics
+        const sum = (arr, key) => arr.reduce((s, c) => s + (c[key] || 0), 0);
+        const max = (arr, key) => Math.max(...arr.map(c => c[key] || 0));
+        const percentile = (arr, key, p) => {
+            const vals = arr.map(c => c[key] || 0).sort((a, b) => a - b);
+            const idx = Math.ceil(vals.length * p / 100) - 1;
+            return vals[Math.max(0, idx)];
+        };
+
+        const totalPixels = sum(chunkMetrics, 'pixels');
+        const totalCompressed = sum(chunkMetrics, 'compressed_bytes');
+        const totalRaw = sum(chunkMetrics, 'raw_bytes');
+        const nDeltas = chunkMetrics.filter(c => c.isDelta).length;
+
+        // Request topology from requestLog
+        const hits = requestLog.filter(r => r.cache_hit);
+        const misses = requestLog.filter(r => !r.cache_hit);
+        const fetchTimes = misses.map(r => r.fetch_ms).sort((a, b) => a - b);
+
+        lastFrame = {
+            month: manifest.months[monthIndex],
+            lod: currentLod,
+            resolution_m: lodMeta.resolution_m,
+            grid: `${gridRows}x${gridCols}`,
+            n_chunks: totalChunks,
+            n_deltas: nDeltas,
+            total_ms: Math.round(total_ms),
+            fetch_ms: Math.round(max(chunkMetrics, 'fetch_ms')),
+            decode_ms: Math.round(sum(chunkMetrics, 'decode_ms')),
+            reconstruct_ms: Math.round(sum(chunkMetrics, 'reconstruct_ms')),
+            upload_ms: Math.round(sum(chunkMetrics, 'upload_ms')),
+            draw_ms: Math.round(sum(chunkMetrics, 'draw_ms')),
+            compressed_bytes: totalCompressed,
+            raw_bytes: totalRaw,
+            compression_ratio: totalRaw > 0 ? (totalRaw / totalCompressed).toFixed(2) : '—',
+            pixels: totalPixels,
+            bytes_per_pixel_month: totalCompressed > 0 ? (totalCompressed / totalPixels).toFixed(2) : '—',
+            canvas: `${canvasWidth}x${canvasHeight}`,
+            // Request topology
+            requests_total: requestLog.length,
+            requests_network: misses.length,
+            requests_cached: hits.length,
+            cache_entries: chunkCache.size,
+            req_median_ms: fetchTimes.length ? Math.round(fetchTimes[Math.floor(fetchTimes.length / 2)]) : 0,
+            req_p95_ms: fetchTimes.length ? Math.round(fetchTimes[Math.ceil(fetchTimes.length * 0.95) - 1]) : 0,
+            wire_bytes: sum(misses, 'compressed_bytes'),
+            // Anchor cache state
+            anchor_warm_count: chunkMetrics.filter(c => c.anchorWarm).length,
+            anchor_warm_pct: chunkMetrics.length > 0
+                ? Math.round(chunkMetrics.filter(c => c.anchorWarm).length / chunkMetrics.length * 100) : 0,
+            anchor_hits_session: anchorStats.hits,
+            anchor_misses_session: anchorStats.misses,
+            chunks: chunkMetrics,
+        };
+
+        // Update UI
+        const note = document.getElementById('chunk-note');
+        note.textContent = `${gridRows}x${gridCols} chunks — LOD ${currentLod}`;
+        setStatus(`${lastFrame.total_ms}ms — ${manifest.months[monthIndex]}`, true);
+        updateMetricsPanel();
+
+        // Prefetch adjacent months in background
+        prefetchAdjacent(monthIndex);
+
     } catch (err) {
         console.error('Failed to load month:', err);
-        setStatus('chunk unavailable');
-        // Clear canvas to black
+        setStatus(`Error: ${err.message}`);
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.clearColor(0.0, 0.0, 0.0, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
     }
+}
+
+// --- Anchor cache introspection ---
+function getAnchorCacheInfo() {
+    let resident = 0, bytes = 0;
+    if (!manifest) return { resident, bytes };
+    const anchors = manifest.temporal.anchor_indices;
+    for (const [key, entry] of chunkCache) {
+        const monthIdx = parseInt(key.split('/')[2]);
+        if (anchors.includes(monthIdx)) {
+            resident++;
+            bytes += entry.compressed_bytes;
+        }
+    }
+    return { resident, bytes };
+}
+
+// --- Adjacent-month prefetch ---
+async function prefetchAdjacent(monthIndex) {
+    const gen = ++prefetchGeneration;
+
+    const targets = [];
+    if (monthIndex + 1 < manifest.months.length) targets.push(monthIndex + 1);
+    if (monthIndex - 1 >= 0) targets.push(monthIndex - 1);
+    if (targets.length === 0) return;
+
+    prefetchStatus = `month ${targets.map(t => manifest.months[t]).join(', ')}`;
+    updateMetricsPanel();
+
+    const lodMeta = manifest.lods[currentLod];
+    const chunkIds = [];
+    for (let r = 0; r < lodMeta.grid_rows; r++) {
+        for (let c = 0; c < lodMeta.grid_cols; c++) {
+            chunkIds.push(`r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`);
+        }
+    }
+
+    const temporal = manifest.temporal;
+    const CONCURRENCY = 4;
+
+    for (const targetMonth of targets) {
+        // Determine which raw chunks are needed
+        const needed = [];
+        if (temporal.anchor_indices.includes(targetMonth)) {
+            for (const id of chunkIds) {
+                if (!chunkCache.has(cacheKey(currentLod, id, targetMonth)))
+                    needed.push([id, targetMonth]);
+            }
+        } else {
+            const anchorIdx = temporal.delta_reference[String(targetMonth)];
+            for (const id of chunkIds) {
+                if (!chunkCache.has(cacheKey(currentLod, id, anchorIdx)))
+                    needed.push([id, anchorIdx]);
+                if (!chunkCache.has(cacheKey(currentLod, id, targetMonth)))
+                    needed.push([id, targetMonth]);
+            }
+        }
+
+        // Fetch in batches with limited concurrency
+        for (let i = 0; i < needed.length; i += CONCURRENCY) {
+            if (gen !== prefetchGeneration) return; // navigation changed, abort
+            const batch = needed.slice(i, i + CONCURRENCY);
+            await Promise.all(batch.map(([id, mIdx]) =>
+                fetchChunk(currentAoi, currentLod, id, mIdx, { silent: true }).catch(() => {})
+            ));
+        }
+    }
+
+    if (gen === prefetchGeneration) {
+        prefetchStatus = 'done';
+        updateMetricsPanel();
+    }
+}
+
+function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+function updateMetricsPanel() {
+    const panel = document.getElementById('metrics-panel');
+    if (!panel.classList.contains('visible') || !lastFrame) return;
+
+    const f = lastFrame;
+    panel.innerHTML = `
+        <div class="heading">Frame</div>
+        <div><span class="label">Total</span><span class="value">${f.total_ms} ms</span></div>
+        <div><span class="label">Month</span><span class="value">${f.month}</span></div>
+        <div><span class="label">LOD</span><span class="value">${f.lod} (${f.resolution_m}m)</span></div>
+        <div><span class="label">Canvas</span><span class="value">${f.canvas}</span></div>
+        <div class="sep"></div>
+        <div class="heading">Pipeline</div>
+        <div><span class="label">Fetch (wall)</span><span class="value">${f.fetch_ms} ms</span></div>
+        <div><span class="label">Decode (sum)</span><span class="value">${f.decode_ms} ms</span></div>
+        <div><span class="label">Reconstruct</span><span class="value">${f.reconstruct_ms} ms</span></div>
+        <div><span class="label">GPU upload</span><span class="value">${f.upload_ms} ms</span></div>
+        <div><span class="label">GPU draw</span><span class="value">${f.draw_ms} ms</span></div>
+        <div class="sep"></div>
+        <div class="heading">Requests</div>
+        <div><span class="label">Total</span><span class="value">${f.requests_total}</span></div>
+        <div><span class="label">Network</span><span class="value">${f.requests_network}</span></div>
+        <div><span class="label">Cache hits</span><span class="value">${f.requests_cached}</span></div>
+        <div><span class="label">Cache size</span><span class="value">${f.cache_entries}</span></div>
+        <div><span class="label">Req median</span><span class="value">${f.req_median_ms} ms</span></div>
+        <div><span class="label">Req p95</span><span class="value">${f.req_p95_ms} ms</span></div>
+        <div><span class="label">Wire</span><span class="value">${formatBytes(f.wire_bytes)}</span></div>
+        <div class="sep"></div>
+        <div class="heading">Data</div>
+        <div><span class="label">Chunks</span><span class="value">${f.n_chunks} (${f.n_deltas} delta)</span></div>
+        <div><span class="label">Compressed</span><span class="value">${formatBytes(f.compressed_bytes)}</span></div>
+        <div><span class="label">Raw</span><span class="value">${formatBytes(f.raw_bytes)}</span></div>
+        <div><span class="label">Ratio</span><span class="value">${f.compression_ratio}x</span></div>
+        <div><span class="label">Pixels</span><span class="value">${(f.pixels / 1e6).toFixed(2)}M</span></div>
+        <div><span class="label">B/px-month</span><span class="value">${f.bytes_per_pixel_month}</span></div>
+        <div class="sep"></div>
+        <div class="heading">Anchor Cache</div>
+        <div><span class="label">Warm fraction</span><span class="value">${f.anchor_warm_pct}%</span></div>
+        <div><span class="label">Warm chunks</span><span class="value">${f.anchor_warm_count} / ${f.n_chunks}</span></div>
+        <div><span class="label">Hits (session)</span><span class="value">${f.anchor_hits_session}</span></div>
+        <div><span class="label">Misses (session)</span><span class="value">${f.anchor_misses_session}</span></div>
+        <div><span class="label">Resident</span><span class="value">${getAnchorCacheInfo().resident}</span></div>
+        <div><span class="label">Anchor bytes</span><span class="value">${formatBytes(getAnchorCacheInfo().bytes)}</span></div>
+        <div class="sep"></div>
+        <div class="heading">Prefetch</div>
+        <div><span class="label">Status</span><span class="value">${prefetchStatus}</span></div>
+    `;
 }
 
 // Update month label
@@ -667,6 +1004,11 @@ async function init() {
     prevBtn.addEventListener('click', prevMonth);
     nextBtn.addEventListener('click', nextMonth);
     lodSelect.addEventListener('change', (e) => setLod(e.target.value));
+    document.getElementById('metrics-btn').addEventListener('click', () => {
+        const panel = document.getElementById('metrics-panel');
+        panel.classList.toggle('visible');
+        updateMetricsPanel();
+    });
     
     // Keyboard navigation
     document.addEventListener('keydown', (e) => {

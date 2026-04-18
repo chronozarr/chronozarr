@@ -696,6 +696,11 @@ def get_chunk(
             404, detail=f"Chunk not found: {chunk_id} at LOD {lod}, month {month_index}"
         )
 
+    # Read Zarr metadata to get actual chunk dimensions
+    zarr_dir = chunk_file.parent
+    z = zarr.open(str(zarr_dir), mode="r")
+    chunk_height, chunk_width = z.shape[2], z.shape[3]
+
     # Read raw bytes (already Zstd compressed)
     chunk_bytes = chunk_file.read_bytes()
 
@@ -705,6 +710,8 @@ def get_chunk(
         headers={
             "Cache-Control": V1_CHUNK_CACHE_HEADER,
             "X-Chunk-Encoding": "zstd",
+            "X-Chunk-Height": str(chunk_height),
+            "X-Chunk-Width": str(chunk_width),
         },
     )
 
