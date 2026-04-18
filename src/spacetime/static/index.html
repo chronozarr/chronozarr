@@ -147,8 +147,8 @@
     flex: 1;
     padding: 16px;
     display: flex;
-    justify-content: center;
-    align-items: flex-start;
+    flex-direction: column;
+    align-items: center;
     overflow: auto;
     position: relative;
   }
@@ -163,14 +163,14 @@
     cursor: crosshair;
     position: relative;
   }
-  #chunk-grid img {
+  #chunk-grid img, #chunk-grid canvas {
     width: 100%;
     height: 100%;
     display: block;
     object-fit: cover;
     transition: opacity 0.08s;
   }
-  #chunk-grid img.loading { opacity: 0.35; }
+  #chunk-grid img.loading, #chunk-grid canvas.loading { opacity: 0.35; }
 
   /* Click marker */
   .click-marker {
@@ -328,6 +328,43 @@
   }
   .water-yes { background: var(--water); }
   .water-no { background: var(--text-dim); opacity: 0.4; }
+
+  /* Latency indicator */
+  .latency-indicator {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-left: 12px;
+  }
+  .latency-indicator .timing {
+    color: var(--green);
+    font-weight: 600;
+  }
+
+  /* Product switcher above grid */
+  .product-switcher {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .product-switcher button {
+    background: var(--surface2);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.12s;
+    font-weight: 500;
+  }
+  .product-switcher button:hover { border-color: var(--accent); color: var(--text); }
+  .product-switcher button.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
 </style>
 </head>
 <body>
@@ -346,10 +383,6 @@
     <select id="aoi-select"></select>
   </div>
   <div class="control-group">
-    <label>Product</label>
-    <div class="pill-bar" id="product-pills"></div>
-  </div>
-  <div class="control-group">
     <label>Month</label>
     <input type="range" id="month-slider" min="0" max="23" value="0">
     <span id="month-label"></span>
@@ -358,10 +391,12 @@
     <button class="pill-bar" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;cursor:pointer;color:var(--text-dim);" id="play-btn" title="Play/Pause">&#9654;</button>
   </div>
   <div class="status" id="status"></div>
+  <div class="latency-indicator" id="latency"></div>
 </div>
 
 <div class="main-layout">
   <div class="map-panel">
+    <div class="product-switcher" id="product-switcher"></div>
     <div id="chunk-grid">
       <div class="click-marker" id="click-marker"></div>
     </div>
@@ -436,6 +471,7 @@
   <span>Click map for values</span>
 </div>
 
+<script src="/static/shaders.js"></script>
 <script>
 const PRODUCTS = [
   { id: 'true_color',  label: 'True Color',  key: '1', tier: 'explorer' },
@@ -451,34 +487,58 @@ const aoiSelect = document.getElementById('aoi-select');
 const monthSlider = document.getElementById('month-slider');
 const monthLabel = document.getElementById('month-label');
 const statusEl = document.getElementById('status');
+const latencyEl = document.getElementById('latency');
 const grid = document.getElementById('chunk-grid');
-const productPills = document.getElementById('product-pills');
+const productSwitcher = document.getElementById('product-switcher');
 const playBtn = document.getElementById('play-btn');
 const marker = document.getElementById('click-marker');
 
 let catalog = {};
+
+// WebGL state
+let webglSupported = false;
+let tileElements = {};  // cid -> { element (img or canvas), renderer (ShaderRenderer if WebGL) }
+let chunkBandData = {};  // cid -> { buffer, width, height }
+
+// Check WebGL2 support
+function checkWebGLSupport() {
+  const testCanvas = document.createElement('canvas');
+  webglSupported = !!testCanvas.getContext('webgl2');
+  return webglSupported;
+}
 let currentAoi = null;
 let currentAoiName = null;
 let currentProduct = 'true_color';
 let currentMonth = 0;
 let playing = false;
 let playTimer = null;
-let tileEls = {};
 let gridScale = 1;
 let queryPixel = null; // { row, col }
 
-// --- Product pills ---
-PRODUCTS.forEach(p => {
-  const btn = document.createElement('button');
-  btn.textContent = p.label;
-  btn.dataset.product = p.id;
-  if (p.id === currentProduct) btn.classList.add('active');
-  btn.addEventListener('click', () => setProduct(p.id));
-  productPills.appendChild(btn);
-});
+// --- Product switcher UI ---
+function buildProductSwitcher() {
+  PRODUCTS.forEach(product => {
+    const btn = document.createElement('button');
+    btn.textContent = product.label;
+    btn.dataset.product = product.id;
+    btn.addEventListener('click', () => setProduct(product.id));
+    productSwitcher.appendChild(btn);
+  });
+  updateProductSwitcherUI();
+}
+
+function updateProductSwitcherUI() {
+  const buttons = productSwitcher.querySelectorAll('button');
+  buttons.forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.product === currentProduct);
+  });
+}
 
 // --- Init ---
 async function init() {
+  checkWebGLSupport();
+  buildProductSwitcher();
+
   const resp = await fetch('/v1/catalog');
   const data = await resp.json();
   catalog = {};
@@ -522,11 +582,12 @@ function setAoi(id) {
 
 // --- Build grid ---
 function buildGrid(g) {
-  // Remove old images but keep the marker
+  // Remove old elements but keep the marker
   Array.from(grid.children).forEach(el => {
     if (el.id !== 'click-marker') grid.removeChild(el);
   });
-  tileEls = {};
+  tileElements = {};
+  chunkBandData = {};
 
   const totalW = g.mosaic_width || g.n_cols * g.chunk_size;
   const totalH = g.mosaic_height || g.n_rows * g.chunk_size;
@@ -549,23 +610,68 @@ function buildGrid(g) {
   for (let r = 0; r < g.n_rows; r++) {
     for (let c = 0; c < g.n_cols; c++) {
       const cid = `r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`;
-      const img = document.createElement('img');
-      img.alt = cid;
-      img.classList.add('loading');
-      img.draggable = false;
-      grid.appendChild(img);
-      tileEls[cid] = img;
+
+      let element;
+      let renderer = null;
+
+      if (webglSupported) {
+        // Create canvas for WebGL rendering
+        element = document.createElement('canvas');
+        element.classList.add('loading');
+        element.style.width = '100%';
+        element.style.height = '100%';
+        element.draggable = false;
+
+        try {
+          renderer = new ShaderRenderer(element);
+        } catch (e) {
+          console.warn('ShaderRenderer failed for chunk', cid, e);
+          // Fall back to img
+          element = document.createElement('img');
+          renderer = null;
+        }
+      }
+
+      if (!renderer) {
+        // Fallback to img for server-rendered tiles
+        element = document.createElement('img');
+        element.alt = cid;
+        element.classList.add('loading');
+        element.draggable = false;
+      }
+
+      grid.appendChild(element);
+      tileElements[cid] = { element, renderer };
     }
   }
 }
 
 // --- Product switch ---
 function setProduct(product) {
+  const t0 = performance.now();
   currentProduct = product;
-  productPills.querySelectorAll('button').forEach(btn =>
-    btn.classList.toggle('active', btn.dataset.product === product)
-  );
-  loadAllTiles();
+  updateProductSwitcherUI();
+
+  if (webglSupported) {
+    // Instant switch - just re-render with new shader
+    for (const cid of Object.keys(tileElements)) {
+      const tileInfo = tileElements[cid];
+      if (tileInfo && tileInfo.renderer && chunkBandData[cid]) {
+        tileInfo.renderer.switchProduct(product);
+      }
+    }
+
+    // For any tiles without band data loaded yet, fall back to JPEG
+    loadMissingTilesAsImages();
+
+    const elapsed = Math.round(performance.now() - t0);
+    latencyEl.innerHTML = `Product switch: <span class="timing">${elapsed}ms</span>`;
+    setTimeout(() => { latencyEl.textContent = ''; }, 2000);
+  } else {
+    // Fallback: reload all tiles from server
+    loadAllTilesAsImages();
+  }
+
   if (queryPixel) doPointQuery(queryPixel.row, queryPixel.col);
 }
 
@@ -576,7 +682,10 @@ function setMonth(index) {
   currentMonth = Math.max(0, Math.min(index, meta.n_months - 1));
   monthSlider.value = currentMonth;
   updateMonthLabel();
+
+  // Month change requires fetching new raw band data
   loadAllTiles();
+
   if (queryPixel) doPointQuery(queryPixel.row, queryPixel.col);
 }
 
@@ -585,15 +694,105 @@ function updateMonthLabel() {
   monthLabel.textContent = catalog[currentAoi].months[currentMonth] || '';
 }
 
-// --- Tile URL (v1 API) ---
+// --- URL builders ---
 function tileUrl(aoi, chunkId, month, product) {
   return `/v1/tiles/${aoi}/${month}/${chunkId}?product=${product}`;
+}
+
+function rawBandUrl(aoi, chunkId, month) {
+  return `/v1/raw/${aoi}/${month}/${chunkId}`;
 }
 
 // --- Tile loading ---
 let loadGeneration = 0;
 
 function loadAllTiles() {
+  if (webglSupported) {
+    loadAllTilesWebGL();
+  } else {
+    loadAllTilesAsImages();
+  }
+}
+
+// Fetch raw band data for WebGL rendering
+async function loadAllTilesWebGL() {
+  if (!currentAoi) return;
+  const meta = catalog[currentAoi];
+  const gen = ++loadGeneration;
+  const t0 = performance.now();
+  const monthStr = meta.months[currentMonth];
+
+  statusEl.textContent = 'Loading band data...';
+
+  // Build chunk IDs from grid
+  const chunkIds = [];
+  for (let r = 0; r < meta.grid.n_rows; r++) {
+    for (let c = 0; c < meta.grid.n_cols; c++) {
+      chunkIds.push(`r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`);
+    }
+  }
+
+  let loaded = 0;
+  const total = chunkIds.length;
+
+  for (const cid of chunkIds) {
+    const tileInfo = tileElements[cid];
+    if (!tileInfo) continue;
+
+    const { element, renderer } = tileInfo;
+    element.classList.add('loading');
+
+    try {
+      // Fetch raw band data
+      const url = rawBandUrl(currentAoi, cid, monthStr);
+      const response = await fetch(url);
+
+      if (gen !== loadGeneration) return;
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const buffer = await response.arrayBuffer();
+
+      if (gen !== loadGeneration) return;
+
+      if (renderer) {
+        // Load band data into WebGL renderer
+        const result = renderer.loadBandData(buffer);
+        chunkBandData[cid] = { buffer, ...result };
+
+        // Switch to current product and render
+        renderer.switchProduct(currentProduct);
+        element.classList.remove('loading');
+      }
+
+      loaded++;
+      if (loaded === total) {
+        const elapsed = (performance.now() - t0).toFixed(0);
+        statusEl.innerHTML = `<span class="timing">${elapsed} ms</span> &mdash; ${total} chunks &mdash; ${monthStr}`;
+      }
+    } catch (e) {
+      console.warn('Failed to load band data for', cid, e);
+      if (gen !== loadGeneration) return;
+
+      // Fall back to server-rendered JPEG for this tile
+      if (element.tagName === 'IMG' || !renderer) {
+        element.src = tileUrl(currentAoi, cid, monthStr, currentProduct);
+        element.onload = () => element.classList.remove('loading');
+      }
+
+      loaded++;
+      if (loaded === total) {
+        const elapsed = (performance.now() - t0).toFixed(0);
+        statusEl.innerHTML = `<span class="timing">${elapsed} ms</span> &mdash; ${total} chunks &mdash; ${monthStr}`;
+      }
+    }
+  }
+}
+
+// Fallback: load server-rendered JPEG tiles
+function loadAllTilesAsImages() {
   if (!currentAoi) return;
   const meta = catalog[currentAoi];
   const gen = ++loadGeneration;
@@ -612,16 +811,20 @@ function loadAllTiles() {
   const total = chunkIds.length;
 
   for (const cid of chunkIds) {
-    const img = tileEls[cid];
-    if (!img) continue;
-    img.classList.add('loading');
+    const tileInfo = tileElements[cid];
+    if (!tileInfo) continue;
+
+    const { element } = tileInfo;
+    if (element.tagName !== 'IMG') continue;
+
+    element.classList.add('loading');
 
     const url = tileUrl(currentAoi, cid, monthStr, currentProduct);
     const probe = new Image();
     probe.onload = () => {
       if (gen !== loadGeneration) return;
-      img.src = probe.src;
-      img.classList.remove('loading');
+      element.src = probe.src;
+      element.classList.remove('loading');
       loaded++;
       if (loaded === total) {
         const elapsed = (performance.now() - t0).toFixed(0);
@@ -631,17 +834,28 @@ function loadAllTiles() {
     probe.onerror = () => { if (gen === loadGeneration) loaded++; };
     probe.src = url;
   }
+}
 
-  // Prefetch adjacent months
-  for (let d = 1; d <= 2; d++) {
-    for (const offset of [d, -d]) {
-      const m = currentMonth + offset;
-      if (m < 0 || m >= meta.n_months) continue;
-      const mStr = meta.months[m];
-      for (const cid of chunkIds) {
-        const p = new Image();
-        p.src = tileUrl(currentAoi, cid, mStr, currentProduct);
-      }
+// Load any missing tiles as images (fallback for WebGL mode)
+function loadMissingTilesAsImages() {
+  const meta = catalog[currentAoi];
+  if (!meta) return;
+  const monthStr = meta.months[currentMonth];
+
+  for (const cid of Object.keys(tileElements)) {
+    const tileInfo = tileElements[cid];
+    if (!tileInfo) continue;
+
+    const { element } = tileInfo;
+
+    // Skip if we have band data for this chunk
+    if (chunkBandData[cid]) continue;
+
+    // If it's an img element, update the src
+    if (element.tagName === 'IMG') {
+      element.classList.add('loading');
+      element.src = tileUrl(currentAoi, cid, monthStr, currentProduct);
+      element.onload = () => element.classList.remove('loading');
     }
   }
 }
