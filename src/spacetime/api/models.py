@@ -115,3 +115,6 @@ class UsageResponse(BaseModel):
 class ErrorResponse(BaseModel):
     error: str
     detail: str | None = None
+
+
+# --- Jobs (re-exported from jobs module) ---

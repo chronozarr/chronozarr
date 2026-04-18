@@ -17,7 +17,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 from spacetime.api.auth import AuthMiddleware
+from spacetime.api.jobs import JobDB
 from spacetime.api.v1 import AOI_CATALOG, HAS_PYVIPS
+from spacetime.api.v1 import JOB_DB as v1_job_db
 from spacetime.api.v1 import router as v1_router
 
 logger = logging.getLogger(__name__)
@@ -96,6 +98,14 @@ def _discover_aois() -> dict[str, dict]:
 
 @app.on_event("startup")
 def startup():
+    # Initialize job database
+    job_db = JobDB()
+    v1_job_db.__class__.JOBS = job_db  # Access the module-level JOB_DB via the class
+    import spacetime.api.v1 as v1_module
+
+    v1_module.JOB_DB = job_db
+
+    # Discover existing AOIs
     catalog = _discover_aois()
     AOI_CATALOG.update(catalog)
     encoder = "pyvips" if HAS_PYVIPS else "PIL"
@@ -107,6 +117,7 @@ def startup():
     )
     if not AOI_CATALOG:
         logger.warning("No stores found under %s", STORES_ROOT)
+    logger.info("Job database initialized at %s", job_db.db_path)
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
