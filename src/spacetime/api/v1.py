@@ -20,6 +20,7 @@ from __future__ import annotations
 import gzip
 import io
 import logging
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -257,6 +258,7 @@ def get_tile(
     requested product is derived on demand. Month can be an index (0-23)
     or a YYYY-MM string.
     """
+    t0 = time.perf_counter()
     _check_product_access(request, product)
 
     aoi_key = _get_aoi_key(aoi)
@@ -271,17 +273,74 @@ def get_tile(
     # Render tile for visual products; for index products, use colormapped version
     render_product_id = product
     if product in ("ndvi", "ndwi"):
-        render_product_id = product  # _render_tile handles colormapping
+        render_product_id = product  # handles colormapping
 
+    # --- Stage 1: zarr_read (cache miss only) ---
+    # Check cache info before to detect if this will be a miss
+    cache_info_before = _load_bands.cache_info()
+    t_zarr_start = time.perf_counter()
     bands = _load_bands(meta["store_dir"], chunk_id, month_index)
-    img_bytes, media_type = _render_tile(bands, render_product_id, fmt)
+    t_zarr_end = time.perf_counter()
+    cache_info_after = _load_bands.cache_info()
+    # Cache miss if: misses increased or currsize increased
+    cache_miss = (
+        cache_info_after.misses > cache_info_before.misses
+        or cache_info_after.currsize > cache_info_before.currsize
+    )
+    # Only count zarr time on cache miss; otherwise it's negligible (cached)
+    zarr_ms = (t_zarr_end - t_zarr_start) * 1000 if cache_miss else 0.0
+
+    # --- Stage 2: render (render_product + colormapping) ---
+    t_render_start = time.perf_counter()
+    from spacetime.render import ndvi_colormap, ndwi_colormap, render_product
+
+    rendered = render_product(bands, render_product_id)
+
+    # Index products (float32) need colormapping for tile output
+    if rendered.dtype == np.float32:
+        cmap = ndwi_colormap if product == "ndwi" else ndvi_colormap
+        rendered = cmap(rendered)
+    t_render_end = time.perf_counter()
+    render_ms = (t_render_end - t_render_start) * 1000
+
+    # --- Stage 3: encode (PIL Image.fromarray + save to BytesIO) ---
+    t_encode_start = time.perf_counter()
+    img = Image.fromarray(rendered)
+    buf = io.BytesIO()
+    if fmt == "png":
+        img.save(buf, format="PNG", optimize=False)
+        media_type = "image/png"
+    else:
+        img.save(buf, format="JPEG", quality=85)
+        media_type = "image/jpeg"
+    img_bytes = buf.getvalue()
+    t_encode_end = time.perf_counter()
+    encode_ms = (t_encode_end - t_encode_start) * 1000
+
+    # --- Total timing and logging ---
+    total_ms = (time.perf_counter() - t0) * 1000
+
+    logger.info(
+        "tile %s/%s/%s product=%s: zarr=%.1fms render=%.1fms encode=%.1fms total=%.1fms",
+        aoi,
+        month,
+        chunk_id,
+        product,
+        zarr_ms,
+        render_ms,
+        encode_ms,
+        total_ms,
+    )
 
     meter.record(request.state.api_key, "tile", bytes_served=len(img_bytes))
 
     return Response(
         content=img_bytes,
         media_type=media_type,
-        headers={"Cache-Control": CACHE_HEADER},
+        headers={
+            "Cache-Control": CACHE_HEADER,
+            "X-Timing-Ms": f"{total_ms:.1f}",
+        },
     )
 
 
