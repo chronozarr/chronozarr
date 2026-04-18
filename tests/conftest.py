@@ -79,6 +79,8 @@ def api_client(zarr_store, monkeypatch):
     """FastAPI TestClient with a synthetic Zarr store backing AOI_CATALOG."""
     from fastapi.testclient import TestClient
 
+    import spacetime.api.v1 as v1_mod
+    from spacetime.api.jobs import JobDB
     from spacetime.api.v1 import AOI_CATALOG, _load_bands
     from spacetime.serve import _discover_aois, app
 
@@ -88,6 +90,10 @@ def api_client(zarr_store, monkeypatch):
 
     # Monkeypatch STORES_ROOT to point at our tmp dir
     monkeypatch.setattr("spacetime.serve.STORES_ROOT", zarr_store["stores_root"])
+
+    # Initialize job DB in tmp dir
+    job_db = JobDB(db_path=zarr_store["stores_root"].parent / "test_jobs.sqlite")
+    monkeypatch.setattr(v1_mod, "JOB_DB", job_db)
 
     # Run discovery
     catalog = _discover_aois()

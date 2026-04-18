@@ -609,24 +609,6 @@ def list_jobs(
     return jobs
 
 
-@router.get("/jobs/{job_id}", response_model=JobDetail)
-def get_job_detail(job_id: str, request: Request):
-    """Get full details of a specific job.
-
-    Accessible only by the API key that submitted the job, or by dev tier.
-    """
-    if JOB_DB is None:
-        raise HTTPException(503, detail="Job database not initialized")
-    job = JOB_DB.get(job_id)
-    if job is None:
-        raise HTTPException(404, detail=f"Job not found: {job_id}")
-    api_key = request.state.api_key
-    tier = request.state.tier
-    if job.api_key != api_key and tier != "dev":
-        raise HTTPException(403, detail="Access denied: job owned by different API key")
-    return job
-
-
 @router.get("/jobs/next", response_model=JobDetail | None)
 def claim_next_job(
     request: Request, worker_id: str = Query(default="default", description="Worker identifier")
@@ -642,6 +624,24 @@ def claim_next_job(
     job = JOB_DB.claim(worker_id)
     if job is None:
         raise HTTPException(204)
+    return job
+
+
+@router.get("/jobs/{job_id}", response_model=JobDetail)
+def get_job_detail(job_id: str, request: Request):
+    """Get full details of a specific job.
+
+    Accessible only by the API key that submitted the job, or by dev tier.
+    """
+    if JOB_DB is None:
+        raise HTTPException(503, detail="Job database not initialized")
+    job = JOB_DB.get(job_id)
+    if job is None:
+        raise HTTPException(404, detail=f"Job not found: {job_id}")
+    api_key = request.state.api_key
+    tier = request.state.tier
+    if job.api_key != api_key and tier != "dev":
+        raise HTTPException(403, detail="Access denied: job owned by different API key")
     return job
 
 
