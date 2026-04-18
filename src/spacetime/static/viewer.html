@@ -965,6 +965,167 @@ function populateLodSelect() {
     currentLod = maxLod;
 }
 
+// --- Bundled viewport fetch (single HTTP request for all chunks) ---
+
+async function fetchViewportBundle(aoi, lod, monthIndex) {
+    const url = `/v1/viewport/${aoi}/${lod}/${monthIndex}`;
+    const t0 = performance.now();
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    const buffer = await response.arrayBuffer();
+    const fetch_ms = performance.now() - t0;
+
+    const view = new DataView(buffer);
+    let offset = 0;
+
+    // Parse header: version(u16), lod(u16), monthIndex(u16), nChunks(u16)
+    offset += 2; // version
+    offset += 2; // lod
+    offset += 2; // monthIndex
+    const nChunks = view.getUint16(offset, true); offset += 2;
+
+    const t1 = performance.now();
+    const chunks = [];
+
+    for (let i = 0; i < nChunks; i++) {
+        const row = view.getUint16(offset, true); offset += 2;
+        const col = view.getUint16(offset, true); offset += 2;
+        const h = view.getUint16(offset, true); offset += 2;
+        const w = view.getUint16(offset, true); offset += 2;
+        const compLen = view.getInt32(offset, true); offset += 4;
+
+        const compressed = new Uint8Array(buffer, offset, compLen);
+        offset += compLen;
+
+        const raw = decompress(compressed);
+        const data = new Uint16Array(raw.buffer, raw.byteOffset, raw.byteLength / 2);
+
+        const chunkId = `r${String(row).padStart(3,'0')}_c${String(col).padStart(3,'0')}`;
+        chunkCache.set(cacheKey(lod, chunkId, monthIndex), {
+            data, compressed_bytes: compLen, raw_bytes: raw.byteLength
+        });
+
+        chunks.push({ chunkId, row, col, data, w, h });
+    }
+    const decode_ms = performance.now() - t1;
+
+    return { fetch_ms, decode_ms, total_bytes: buffer.byteLength, chunks };
+}
+
+// Bundled loadMonth: one request, then render from cache
+async function loadMonthBundled(monthIndex) {
+    hideError();
+    const t0 = performance.now();
+
+    try {
+        const lodMeta = manifest.lods[currentLod];
+        const factor = Math.pow(manifest.lod_factor, currentLod);
+        const mosaicW = Math.ceil(manifest.mosaic_width / factor);
+        const mosaicH = Math.ceil(manifest.mosaic_height / factor);
+
+        canvasWidth = mosaicW;
+        canvasHeight = mosaicH;
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+
+        gl.viewport(0, 0, canvasWidth, canvasHeight);
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        // Single bundled fetch
+        const bundle = await fetchViewportBundle(currentAoi, currentLod, monthIndex);
+
+        // Render each chunk from cache
+        let upload_ms = 0, draw_ms = 0;
+        for (const { data, w, h, row, col } of bundle.chunks) {
+            const chunkSize = lodMeta.chunk_size;
+            const x = col * chunkSize;
+            const y = canvasHeight - (row * chunkSize) - h;
+            const gpu = renderChunkAt(data, w, h, x, y);
+            upload_ms += gpu.upload_ms;
+            draw_ms += gpu.draw_ms;
+        }
+
+        const total_ms = performance.now() - t0;
+        return {
+            total_ms: Math.round(total_ms),
+            fetch_ms: Math.round(bundle.fetch_ms),
+            decode_ms: Math.round(bundle.decode_ms),
+            upload_ms: Math.round(upload_ms),
+            draw_ms: Math.round(draw_ms),
+            wire_bytes: bundle.total_bytes,
+            n_chunks: bundle.chunks.length,
+            requests: 1,
+        };
+    } catch (err) {
+        console.error('Bundled load failed:', err);
+        return { error: err.message };
+    }
+}
+
+// A/B cold-open benchmark: bundled vs individual
+async function benchmarkColdOpen() {
+    const nMonths = manifest.months.length;
+    const lods = [manifest.lods.length - 1, 0]; // overview and detail
+
+    console.log('%c=== Cold-Open A/B: Bundled vs Individual ===', 'font-weight:bold;font-size:14px');
+    console.log(`AOI: ${currentAoi} | Months: ${nMonths} | Grid: ${manifest.lods[0].grid_rows}x${manifest.lods[0].grid_cols}`);
+
+    const rows = [];
+
+    for (const lod of lods) {
+        const lodMeta = manifest.lods[lod];
+        const label = `LOD ${lod} (${lodMeta.grid_rows}x${lodMeta.grid_cols})`;
+
+        // --- Individual (current approach) ---
+        chunkCache.clear();
+        anchorStats.hits = 0;
+        anchorStats.misses = 0;
+        currentLod = lod;
+        lodSelect.value = lod;
+
+        const t0 = performance.now();
+        await loadMonth(0);
+        const individual_ms = performance.now() - t0;
+        const indivFrame = { ...lastFrame };
+
+        // --- Bundled ---
+        chunkCache.clear();
+        anchorStats.hits = 0;
+        anchorStats.misses = 0;
+
+        const bundled = await loadMonthBundled(0);
+
+        rows.push({
+            lod: label,
+            method: 'individual',
+            total_ms: Math.round(individual_ms),
+            fetch_ms: indivFrame.fetch_ms,
+            decode_ms: indivFrame.decode_ms,
+            upload_ms: indivFrame.upload_ms,
+            draw_ms: indivFrame.draw_ms,
+            wire_KB: Math.round(indivFrame.wire_bytes / 1024 * 10) / 10,
+            requests: indivFrame.requests_network,
+        });
+        rows.push({
+            lod: label,
+            method: 'bundled',
+            total_ms: bundled.total_ms,
+            fetch_ms: bundled.fetch_ms,
+            decode_ms: bundled.decode_ms,
+            upload_ms: bundled.upload_ms,
+            draw_ms: bundled.draw_ms,
+            wire_KB: Math.round(bundled.wire_bytes / 1024 * 10) / 10,
+            requests: bundled.requests,
+        });
+    }
+
+    console.table(rows);
+    return rows;
+}
+
+window.benchmarkColdOpen = benchmarkColdOpen;
+
 // --- Flow benchmark (callable from browser console) ---
 
 function waitForPrefetch(timeoutMs = 15000) {

@@ -716,6 +716,77 @@ def get_chunk(
     )
 
 
+@router.get("/viewport/{aoi}/{lod}/{month_index}")
+def get_viewport(
+    aoi: str,
+    lod: int,
+    month_index: int,
+    request: Request,
+):
+    """Bundled viewport fetch: all chunks for one month in a single response.
+
+    Binary format (little-endian):
+        u16 version (1), u16 lod, u16 month_index, u16 n_chunks
+        Per chunk (grid row-major order):
+            u16 row, u16 col, u16 chunk_height, u16 chunk_width
+            u32 compressed_len
+            [compressed_len bytes of Zstd-compressed chunk data]
+    """
+    import math
+    import struct
+
+    meta = _get_v1_aoi(aoi)
+
+    lod_levels = meta.get("lod_levels", 0)
+    if lod < 0 or lod >= lod_levels:
+        raise HTTPException(400, detail=f"LOD {lod} out of range [0, {lod_levels})")
+    n_months = meta["n_months"]
+    if month_index < 0 or month_index >= n_months:
+        raise HTTPException(400, detail=f"Month index {month_index} out of range [0, {n_months})")
+
+    lod_meta = meta["lods"][lod]
+    grid_rows = lod_meta["grid_rows"]
+    grid_cols = lod_meta["grid_cols"]
+    chunk_size = lod_meta["chunk_size"]
+    factor = meta.get("lod_factor", 2) ** lod
+    mosaic_w = math.ceil(meta["mosaic_width"] / factor)
+    mosaic_h = math.ceil(meta["mosaic_height"] / factor)
+
+    store_dir = Path(meta["store_dir"])
+    n_chunks = grid_rows * grid_cols
+
+    buf = bytearray()
+    buf += struct.pack("<HHHH", 1, lod, month_index, n_chunks)
+
+    for r in range(grid_rows):
+        for c in range(grid_cols):
+            chunk_id = f"r{r:03d}_c{c:03d}"
+            chunk_file = (
+                store_dir
+                / "lod"
+                / str(lod)
+                / "chunks"
+                / chunk_id
+                / "stack.zarr"
+                / f"{month_index}.0.0.0"
+            )
+            if not chunk_file.exists():
+                raise HTTPException(404, detail=f"Chunk not found: {chunk_id}")
+
+            w = chunk_size if c < grid_cols - 1 else mosaic_w - (grid_cols - 1) * chunk_size
+            h = chunk_size if r < grid_rows - 1 else mosaic_h - (grid_rows - 1) * chunk_size
+            data = chunk_file.read_bytes()
+
+            buf += struct.pack("<HHHHi", r, c, h, w, len(data))
+            buf += data
+
+    return Response(
+        content=bytes(buf),
+        media_type="application/octet-stream",
+        headers={"Cache-Control": V1_CHUNK_CACHE_HEADER},
+    )
+
+
 def _check_worker_key(request: Request) -> None:
     """Validate worker key from X-Worker-Key header.
 
