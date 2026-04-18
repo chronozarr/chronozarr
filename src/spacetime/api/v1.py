@@ -42,7 +42,7 @@ try:
     import pyvips
 
     HAS_PYVIPS = True
-except ImportError:
+except (ImportError, OSError):
     pyvips = None
     HAS_PYVIPS = False
 from spacetime.api.geo import latlng_to_pixel, pixel_rowcol_to_coords, pixel_to_latlng

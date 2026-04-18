@@ -30,9 +30,10 @@ const float TC_GAMMA = 1.5;
 const float TC_SAT = 1.5;
 const float TC_G_OFF = 0.01;
 
-// Reconstruct uint16 from hi/lo bytes
+// Reconstruct uint16 from hi/lo bytes packed in RGBA8 textures.
+// sampler2D returns normalized [0,1] floats, so multiply by 255 first.
 float decodeUint16(float hi, float lo) {
-    return hi * 256.0 + lo;
+    return floor(hi * 255.0 + 0.5) * 256.0 + floor(lo * 255.0 + 0.5);
 }
 
 // Convert uint16 reflectance to float [0, 1]

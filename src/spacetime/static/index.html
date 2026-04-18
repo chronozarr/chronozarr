@@ -732,63 +732,61 @@ async function loadAllTilesWebGL() {
     }
   }
 
-  let loaded = 0;
   const total = chunkIds.length;
+  let loaded = 0;
 
-  for (const cid of chunkIds) {
+  // Fetch all chunks in parallel (browser limits concurrency per-origin)
+  const promises = chunkIds.map(async (cid) => {
     const tileInfo = tileElements[cid];
-    if (!tileInfo) continue;
+    if (!tileInfo) return;
 
     const { element, renderer } = tileInfo;
     element.classList.add('loading');
 
     try {
-      // Fetch raw band data
       const url = rawBandUrl(currentAoi, cid, monthStr);
       const response = await fetch(url);
 
       if (gen !== loadGeneration) return;
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
       const buffer = await response.arrayBuffer();
-
       if (gen !== loadGeneration) return;
 
       if (renderer) {
-        // Load band data into WebGL renderer
         const result = renderer.loadBandData(buffer);
-        chunkBandData[cid] = { buffer, ...result };
-
-        // Switch to current product and render
+        chunkBandData[cid] = result;
         renderer.switchProduct(currentProduct);
         element.classList.remove('loading');
-      }
-
-      loaded++;
-      if (loaded === total) {
-        const elapsed = (performance.now() - t0).toFixed(0);
-        statusEl.innerHTML = `<span class="timing">${elapsed} ms</span> &mdash; ${total} chunks &mdash; ${monthStr}`;
       }
     } catch (e) {
       console.warn('Failed to load band data for', cid, e);
       if (gen !== loadGeneration) return;
 
-      // Fall back to server-rendered JPEG for this tile
-      if (element.tagName === 'IMG' || !renderer) {
+      // Fall back to server-rendered JPEG — replace canvas with img if needed
+      if (element.tagName === 'CANVAS' && renderer) {
+        renderer.destroy();
+        const img = document.createElement('img');
+        img.className = element.className;
+        img.style.cssText = element.style.cssText;
+        img.src = tileUrl(currentAoi, cid, monthStr, currentProduct);
+        img.onload = () => img.classList.remove('loading');
+        element.replaceWith(img);
+        tileElements[cid] = { element: img, renderer: null };
+      } else if (element.tagName === 'IMG') {
         element.src = tileUrl(currentAoi, cid, monthStr, currentProduct);
         element.onload = () => element.classList.remove('loading');
       }
-
+    } finally {
       loaded++;
       if (loaded === total) {
         const elapsed = (performance.now() - t0).toFixed(0);
         statusEl.innerHTML = `<span class="timing">${elapsed} ms</span> &mdash; ${total} chunks &mdash; ${monthStr}`;
       }
     }
-  }
+  });
+
+  await Promise.all(promises);
 }
 
 // Fallback: load server-rendered JPEG tiles
