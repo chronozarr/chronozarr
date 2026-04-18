@@ -13,6 +13,8 @@ Endpoints:
     GET /v1/stats/{aoi}/{month}     AOI summary statistics
     GET /v1/usage                   Current usage for this key
     GET /v1/raw/{aoi}/{month}/{chunk_id}  Raw uint16 band data (gzipped)
+    GET /v1/manifest/{aoi}          ChronoFabric v1 manifest JSON
+    GET /v1/chunk/{aoi}/{lod}/{chunk_id}/{month_index}  Raw Zarr chunk bytes (zstd)
     POST /v1/jobs                   Submit a new processing job
     GET /v1/jobs                    List jobs for current API key
     GET /v1/jobs/{job_id}           Get job detail
@@ -163,13 +165,19 @@ def profile_tile_render(
 
 
 CACHE_HEADER = "public, max-age=86400, immutable"
+V1_MANIFEST_CACHE_HEADER = "public, max-age=3600"
+V1_CHUNK_CACHE_HEADER = "public, max-age=86400, immutable"
 
 
 def _aoi_candidates(aoi: str) -> list[tuple[int, str]]:
-    """Return matching AOI catalog keys sorted by chunk size ascending."""
+    """Return matching AOI catalog keys sorted by chunk size ascending.
+
+    Only includes v0 stores (with chunk_size). v1 stores are excluded
+    from v0 endpoint resolution.
+    """
     candidates = []
     for key, meta in AOI_CATALOG.items():
-        if meta["aoi"] == aoi:
+        if meta["aoi"] == aoi and "chunk_size" in meta:
             candidates.append((int(meta["chunk_size"]), key))
     return sorted(candidates)
 
@@ -610,6 +618,94 @@ def get_raw_bands(
         content=compressed,
         media_type="application/octet-stream",
         headers={"Cache-Control": CACHE_HEADER, "Content-Encoding": "gzip"},
+    )
+
+
+def _get_v1_aoi(aoi: str) -> dict:
+    """Look up v1 AOI metadata, raising 404 if not found.
+
+    The AOI key should be in format 'aoi_name/v1'.
+    """
+    key = f"{aoi}/v1"
+    if key in AOI_CATALOG:
+        meta = AOI_CATALOG[key]
+        if meta.get("version") == "1.0.0":
+            return meta
+    raise HTTPException(404, detail=f"Unknown v1 AOI: {aoi}")
+
+
+@router.get("/manifest/{aoi}")
+def get_manifest(aoi: str, request: Request):
+    """Serve v1 manifest JSON for an AOI."""
+    meta = _get_v1_aoi(aoi)
+    manifest_path = Path(meta["store_dir"]) / "manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(404, detail=f"Manifest not found for AOI: {aoi}")
+    manifest_content = manifest_path.read_text()
+    return Response(
+        content=manifest_content,
+        media_type="application/json",
+        headers={"Cache-Control": V1_MANIFEST_CACHE_HEADER},
+    )
+
+
+@router.get("/chunk/{aoi}/{lod}/{chunk_id}/{month_index}")
+def get_chunk(
+    aoi: str,
+    lod: int,
+    chunk_id: str,
+    month_index: int,
+    request: Request,
+):
+    """Serve raw Zarr chunk bytes for browser-side decode.
+
+    The chunk file is already Zstd-compressed by the encoder.
+    Returns application/octet-stream, no further compression.
+    """
+    meta = _get_v1_aoi(aoi)
+
+    # Validate lod range
+    lod_levels = meta.get("lod_levels", 0)
+    if lod < 0 or lod >= lod_levels:
+        raise HTTPException(
+            400,
+            detail=f"LOD {lod} out of range [0, {lod_levels})",
+        )
+
+    # Validate month_index range
+    n_months = meta["n_months"]
+    if month_index < 0 or month_index >= n_months:
+        raise HTTPException(
+            400,
+            detail=f"Month index {month_index} out of range [0, {n_months})",
+        )
+
+    # Build chunk file path: {store_dir}/lod/{lod}/chunks/{chunk_id}/stack.zarr/{month_index}.0.0.0
+    chunk_file = (
+        Path(meta["store_dir"])
+        / "lod"
+        / str(lod)
+        / "chunks"
+        / chunk_id
+        / "stack.zarr"
+        / f"{month_index}.0.0.0"
+    )
+
+    if not chunk_file.exists():
+        raise HTTPException(
+            404, detail=f"Chunk not found: {chunk_id} at LOD {lod}, month {month_index}"
+        )
+
+    # Read raw bytes (already Zstd compressed)
+    chunk_bytes = chunk_file.read_bytes()
+
+    return Response(
+        content=chunk_bytes,
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": V1_CHUNK_CACHE_HEADER,
+            "X-Chunk-Encoding": "zstd",
+        },
     )
 
 

@@ -39,6 +39,53 @@ def _discover_aois() -> dict[str, dict]:
         b2c_dir = manifest_path.parent
         manifest = json.loads(manifest_path.read_text())
 
+        # Check if this is a v1 store (ChronoFabric format)
+        if manifest.get("version") == "1.0.0":
+            # v1 store - key as aoi/v1
+            aoi_name = b2c_dir.parent.name  # Parent dir is the AOI name
+            key = f"{aoi_name}/v1"
+
+            # Collect chunk IDs from lod/0/chunks/
+            lod0_chunks_dir = b2c_dir / "lod" / "0" / "chunks"
+            chunk_ids = (
+                sorted(
+                    d.name
+                    for d in lod0_chunks_dir.iterdir()
+                    if d.is_dir() and d.name.startswith("r")
+                )
+                if lod0_chunks_dir.is_dir()
+                else []
+            )
+
+            # Build LODs info from manifest
+            lods = manifest.get("lods", [])
+            lod_levels = manifest.get("lod_levels", len(lods))
+
+            aois[key] = {
+                "aoi": aoi_name,
+                "label": manifest.get("label", aoi_name),
+                "version": "1.0.0",
+                "store_dir": str(b2c_dir),
+                "chunk_ids": chunk_ids,
+                "months": manifest["months"],
+                "n_months": len(manifest["months"]),
+                "epsg": manifest.get("epsg"),
+                "transform": manifest.get("transform"),
+                "mosaic_height": manifest.get("mosaic_height"),
+                "mosaic_width": manifest.get("mosaic_width"),
+                "source": manifest.get("source", "Sentinel-2 L2A"),
+                "composite_method": manifest.get(
+                    "composite_method", "monthly median, SCL cloud mask"
+                ),
+                "lod_levels": lod_levels,
+                "lods": lods,
+                "temporal": manifest.get("temporal", {}),
+                "cells": manifest.get("cells", {}),
+                "compressor": manifest.get("compressor", "zstd"),
+            }
+            continue
+
+        # v0 store (original format)
         aoi_name = manifest["aoi"]
         chunk_size = manifest["chunk_size"]
         n_rows = manifest["n_rows"]

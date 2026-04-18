@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TileRipper — ChronoFabric Viewer</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --surface: #141820;
+    --surface2: #1a1f2b;
+    --border: #252a38;
+    --text: #e2e4ea;
+    --text-dim: #6b7394;
+    --accent: #4f8ff7;
+    --accent-dim: #2a4a8a;
+    --green: #34d399;
+    --red: #f87171;
+    --amber: #fbbf24;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Header */
+  header {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: var(--surface);
+  }
+  .logo {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+  }
+  .logo span { color: var(--accent); }
+  .tagline {
+    font-size: 11px;
+    color: var(--text-dim);
+    border-left: 1px solid var(--border);
+    padding-left: 12px;
+  }
+
+  /* Main canvas area */
+  .canvas-container {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+  }
+  #gl-canvas {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    max-width: 100%;
+    max-height: 100%;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+  }
+  .chunk-note {
+    position: absolute;
+    top: 28px;
+    right: 28px;
+    font-size: 11px;
+    color: var(--text-dim);
+    background: rgba(11, 14, 20, 0.8);
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+  .error-overlay {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--surface);
+    border: 1px solid var(--red);
+    border-radius: var(--radius);
+    padding: 24px 32px;
+    text-align: center;
+    display: none;
+  }
+  .error-overlay.visible { display: block; }
+  .error-overlay h3 {
+    color: var(--red);
+    font-size: 14px;
+    margin-bottom: 8px;
+  }
+  .error-overlay p {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  /* Bottom controls bar */
+  .controls-bar {
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  .control-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .control-group label {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+  }
+  button {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.12s;
+    font-weight: 500;
+  }
+  button:hover { border-color: var(--accent); }
+  button:active { background: var(--accent-dim); }
+  button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    border-color: var(--border);
+  }
+  select {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  #month-label {
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    min-width: 80px;
+    color: var(--accent);
+    text-align: center;
+  }
+  .status {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+  }
+  .status .timing { color: var(--green); }
+  .status .error { color: var(--red); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Tile<span>Ripper</span></div>
+  <div class="tagline">ChronoFabric Viewer — v1 temporal basemap pipeline</div>
+</header>
+
+<div class="canvas-container">
+  <canvas id="gl-canvas" width="512" height="512"></canvas>
+  <div class="chunk-note" id="chunk-note">Showing chunk r000_c000 only</div>
+  <div class="error-overlay" id="error-overlay">
+    <h3 id="error-title">Error</h3>
+    <p id="error-message">Something went wrong</p>
+  </div>
+</div>
+
+<div class="controls-bar">
+  <div class="control-group">
+    <button id="prev-btn">&larr; Prev</button>
+    <span id="month-label">—</span>
+    <button id="next-btn">Next &rarr;</button>
+  </div>
+  <div class="control-group">
+    <label>LOD</label>
+    <select id="lod-select"></select>
+  </div>
+  <div class="control-group">
+    <label>AOI</label>
+    <select id="aoi-select">
+      <option value="sahara_tamanrasset">sahara_tamanrasset</option>
+    </select>
+  </div>
+  <div class="status" id="status">Loading...</div>
+</div>
+
+<script type="module">
+let decompress;
+try {
+    const fzstd = await import('/static/fzstd.js');
+    decompress = fzstd.decompress;
+} catch (e) {
+    console.error('fzstd import failed:', e);
+}
+
+// Constants from shaders.js
+const TC_MAX_R = 1.5;
+const TC_MID_R = 0.13;
+const TC_GAMMA = 1.5;
+const TC_SAT = 1.5;
+const TC_G_OFF = 0.01;
+
+// WebGL2 shader sources
+const VERTEX_SHADER = `#version 300 es
+in vec2 a_position;
+in vec2 a_texCoord;
+out vec2 v_texCoord;
+void main() {
+    gl_Position = vec4(a_position, 0.0, 1.0);
+    v_texCoord = a_texCoord;
+}`;
+
+const FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+in vec2 v_texCoord;
+uniform highp usampler2D u_band0;  // B02 (blue)
+uniform highp usampler2D u_band1;  // B03 (green)
+uniform highp usampler2D u_band2;  // B04 (red)
+uniform highp usampler2D u_band3;  // B08 (NIR)
+uniform vec2 u_resolution;
+out vec4 outColor;
+
+const float TC_MAX_R = 1.5;
+const float TC_MID_R = 0.13;
+const float TC_GAMMA = 1.5;
+const float TC_SAT = 1.5;
+const float TC_G_OFF = 0.01;
+
+float toReflectance(float val) {
+    return val / 10000.0;
+}
+
+float highlightCompress(float a) {
+    float ar = clamp(a / TC_MAX_R, 0.0, 1.0);
+    float tx_norm = TC_MID_R / TC_MAX_R;
+    float num = ar * (ar * tx_norm - 1.0);
+    float den = ar * (2.0 * tx_norm - 1.0) - tx_norm;
+    if (abs(den) > 1e-10) {
+        return clamp(num / den, 0.0, 1.0);
+    }
+    return 0.0;
+}
+
+float adjGamma(float b) {
+    float g_off_pow = pow(TC_G_OFF, TC_GAMMA);
+    float g_off_range = pow(1.0 + TC_G_OFF, TC_GAMMA) - g_off_pow;
+    return (pow(b + TC_G_OFF, TC_GAMMA) - g_off_pow) / g_off_range;
+}
+
+float sAdj(float a) {
+    return adjGamma(highlightCompress(a));
+}
+
+vec3 satEnhance(vec3 rgb, float sat) {
+    float avg = (rgb.r + rgb.g + rgb.b) / 3.0 * (1.0 - sat);
+    return clamp(vec3(avg + rgb.r * sat, avg + rgb.g * sat, avg + rgb.b * sat), 0.0, 1.0);
+}
+
+float linearToSrgb(float linear) {
+    if (linear <= 0.0031308) {
+        return 12.92 * linear;
+    }
+    return 1.055 * pow(linear, 1.0 / 2.4) - 0.055;
+}
+
+vec3 linearToSrgb(vec3 linear) {
+    return vec3(linearToSrgb(linear.r), linearToSrgb(linear.g), linearToSrgb(linear.b));
+}
+
+void main() {
+    ivec2 texel = ivec2(v_texCoord * u_resolution);
+    
+    float b02 = float(texelFetch(u_band0, texel, 0).r);  // Blue
+    float b03 = float(texelFetch(u_band1, texel, 0).r);  // Green
+    float b04 = float(texelFetch(u_band2, texel, 0).r);  // Red
+    float b08 = float(texelFetch(u_band3, texel, 0).r);  // NIR
+    
+    // Check for nodata (all zeros)
+    if (b02 == 0.0 && b03 == 0.0 && b04 == 0.0 && b08 == 0.0) {
+        outColor = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+    
+    // Convert to reflectance [0, 1]
+    float r = toReflectance(b04);
+    float g = toReflectance(b03);
+    float b = toReflectance(b02);
+    
+    // Highlight compression + gamma
+    vec3 adj = vec3(sAdj(r), sAdj(g), sAdj(b));
+    
+    // Saturation boost
+    vec3 sat = satEnhance(adj, TC_SAT);
+    
+    // sRGB encoding
+    vec3 srgb = linearToSrgb(sat);
+    
+    outColor = vec4(clamp(srgb, 0.0, 1.0), 1.0);
+}`;
+
+// State
+let gl = null;
+let program = null;
+let textures = [];
+let positionBuffer = null;
+let texCoordBuffer = null;
+let manifest = null;
+let currentAoi = 'sahara_tamanrasset';
+let currentLod = 0;
+let currentMonth = 0;
+let canvasWidth = 512;
+let canvasHeight = 512;
+
+// DOM elements
+const canvas = document.getElementById('gl-canvas');
+const statusEl = document.getElementById('status');
+const monthLabel = document.getElementById('month-label');
+const lodSelect = document.getElementById('lod-select');
+const prevBtn = document.getElementById('prev-btn');
+const nextBtn = document.getElementById('next-btn');
+const errorOverlay = document.getElementById('error-overlay');
+const errorTitle = document.getElementById('error-title');
+const errorMessage = document.getElementById('error-message');
+
+// Initialize WebGL2
+function initWebGL() {
+    gl = canvas.getContext('webgl2', {
+        alpha: false,
+        premultipliedAlpha: false,
+        preserveDrawingBuffer: false,
+        antialias: false,
+    });
+    
+    if (!gl) {
+        showError('WebGL2 not supported', 'Your browser does not support WebGL2, which is required for rendering.');
+        return false;
+    }
+    
+    // Check for integer texture support
+    const ext = gl.getExtension('EXT_color_buffer_integer');
+    if (!ext) {
+        console.warn('EXT_color_buffer_integer not available, but R16UI should still work for textures');
+    }
+    
+    return true;
+}
+
+function compileShader(type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        const info = gl.getShaderInfoLog(shader);
+        gl.deleteShader(shader);
+        throw new Error('Shader compilation error: ' + info);
+    }
+    
+    return shader;
+}
+
+function createProgram() {
+    const vs = compileShader(gl.VERTEX_SHADER, VERTEX_SHADER);
+    const fs = compileShader(gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
+    
+    program = gl.createProgram();
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        const info = gl.getProgramInfoLog(program);
+        gl.deleteProgram(program);
+        throw new Error('Program linking error: ' + info);
+    }
+    
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+}
+
+function setupGeometry() {
+    const positions = new Float32Array([
+        -1, -1,  1, -1,  -1,  1,
+        -1,  1,  1, -1,   1,  1,
+    ]);
+    
+    const texCoords = new Float32Array([
+        0, 1,  1, 1,  0, 0,
+        0, 0,  1, 1,  1, 0,
+    ]);
+    
+    positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+    
+    texCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
+}
+
+function createBandTexture(data, width, height) {
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16UI, width, height, 0, gl.RED_INTEGER, gl.UNSIGNED_SHORT, data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    return texture;
+}
+
+function render() {
+    if (!program || textures.length !== 4) return;
+    
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clearColor(0.0, 0.0, 0.0, 1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    
+    gl.useProgram(program);
+    
+    // Bind attributes
+    const positionLoc = gl.getAttribLocation(program, 'a_position');
+    const texCoordLoc = gl.getAttribLocation(program, 'a_texCoord');
+    
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.enableVertexAttribArray(positionLoc);
+    gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+    
+    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+    gl.enableVertexAttribArray(texCoordLoc);
+    gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, 0, 0);
+    
+    // Bind textures
+    for (let i = 0; i < 4; i++) {
+        const loc = gl.getUniformLocation(program, `u_band${i}`);
+        gl.activeTexture(gl.TEXTURE0 + i);
+        gl.bindTexture(gl.TEXTURE_2D, textures[i]);
+        gl.uniform1i(loc, i);
+    }
+    
+    // Set resolution
+    const resLoc = gl.getUniformLocation(program, 'u_resolution');
+    gl.uniform2f(resLoc, canvasWidth, canvasHeight);
+    
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+}
+
+function showError(title, message) {
+    errorTitle.textContent = title;
+    errorMessage.textContent = message;
+    errorOverlay.classList.add('visible');
+    statusEl.innerHTML = `<span class="error">${title}</span>`;
+}
+
+function hideError() {
+    errorOverlay.classList.remove('visible');
+}
+
+function setStatus(msg, isTiming = false) {
+    if (isTiming) {
+        statusEl.innerHTML = `<span class="timing">${msg}</span>`;
+    } else {
+        statusEl.textContent = msg;
+    }
+}
+
+// Fetch and decode chunk data
+async function fetchChunk(aoi, lod, chunkId, monthIndex) {
+    const url = `/v1/chunk/${aoi}/${lod}/${chunkId}/${monthIndex}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    const compressed = new Uint8Array(await response.arrayBuffer());
+    const raw = decompress(compressed);
+    return new Uint16Array(raw.buffer, raw.byteOffset, raw.byteLength / 2);
+}
+
+// Star-delta decoding
+async function fetchAndDecodeMonth(aoi, lod, chunkId, monthIndex) {
+    const temporal = manifest.temporal;
+    
+    // Check if this is an anchor month
+    if (temporal.anchor_indices.includes(monthIndex)) {
+        // Anchor: just fetch and return
+        return await fetchChunk(aoi, lod, chunkId, monthIndex);
+    }
+    
+    // Delta: fetch anchor + delta, then reconstruct
+    const anchorIndex = temporal.delta_reference[String(monthIndex)];
+    if (anchorIndex === undefined) {
+        throw new Error(`No delta reference found for month ${monthIndex}`);
+    }
+    
+    const [anchorData, deltaData] = await Promise.all([
+        fetchChunk(aoi, lod, chunkId, anchorIndex),
+        fetchChunk(aoi, lod, chunkId, monthIndex)
+    ]);
+    
+    // Reconstruct: anchor (uint16) + delta (int16 reinterpreted from uint16)
+    const result = new Uint16Array(anchorData.length);
+    const deltaView = new Int16Array(deltaData.buffer);
+    
+    for (let i = 0; i < anchorData.length; i++) {
+        const val = anchorData[i] + deltaView[i];
+        result[i] = Math.max(0, Math.min(65535, val));
+    }
+    
+    return result;
+}
+
+// Load and render a month
+async function loadMonth(monthIndex) {
+    hideError();
+    setStatus('Loading...');
+    const t0 = performance.now();
+    
+    try {
+        const chunkId = 'r000_c000'; // MVP: just first chunk
+        const lodData = manifest.lod_levels[currentLod];
+        
+        // Fetch decoded band data
+        const bandsData = await fetchAndDecodeMonth(currentAoi, currentLod, chunkId, monthIndex);
+        
+        // bandsData is shape (n_bands, H, W) in C-order
+        // n_bands = 4 (B02, B03, B04, B08)
+        const nBands = 4;
+        const pixelsPerBand = bandsData.length / nBands;
+        const size = Math.sqrt(pixelsPerBand);
+        canvasWidth = size;
+        canvasHeight = size;
+        
+        // Resize canvas
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+        
+        // Create textures for each band
+        // Clean up old textures
+        textures.forEach(t => gl.deleteTexture(t));
+        textures = [];
+        
+        for (let b = 0; b < nBands; b++) {
+            const bandOffset = b * pixelsPerBand;
+            const bandData = bandsData.subarray(bandOffset, bandOffset + pixelsPerBand);
+            const texture = createBandTexture(bandData, canvasWidth, canvasHeight);
+            textures.push(texture);
+        }
+        
+        render();
+        
+        const elapsed = Math.round(performance.now() - t0);
+        setStatus(`${elapsed}ms — ${manifest.months[monthIndex]}`, true);
+        
+    } catch (err) {
+        console.error('Failed to load month:', err);
+        setStatus('chunk unavailable');
+        // Clear canvas to black
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+}
+
+// Update month label
+function updateMonthLabel() {
+    if (!manifest) return;
+    monthLabel.textContent = manifest.months[currentMonth] || `Month ${currentMonth}`;
+}
+
+// Navigation handlers
+function prevMonth() {
+    if (!manifest || currentMonth <= 0) return;
+    currentMonth--;
+    updateMonthLabel();
+    loadMonth(currentMonth);
+}
+
+function nextMonth() {
+    if (!manifest || currentMonth >= manifest.months.length - 1) return;
+    currentMonth++;
+    updateMonthLabel();
+    loadMonth(currentMonth);
+}
+
+function setLod(lod) {
+    currentLod = parseInt(lod);
+    loadMonth(currentMonth);
+}
+
+// Populate LOD dropdown
+function populateLodSelect() {
+    lodSelect.innerHTML = '';
+    const lods = manifest.lods || [];
+    for (let i = 0; i < lods.length; i++) {
+        const lod = lods[i];
+        const option = document.createElement('option');
+        option.value = i;
+        option.textContent = `LOD ${i} (${lod.resolution_m}m, ${lod.grid_rows}x${lod.grid_cols})`;
+        lodSelect.appendChild(option);
+    }
+    // Select highest LOD (smallest grid = fastest load)
+    const maxLod = lods.length - 1;
+    lodSelect.value = maxLod;
+    currentLod = maxLod;
+}
+
+// Initialize
+async function init() {
+    // Check for fzstd
+    if (typeof decompress !== 'function') {
+        showError('Zstd decoder not available', 'Failed to load fzstd library. Check your internet connection.');
+        return;
+    }
+    
+    // Initialize WebGL
+    if (!initWebGL()) return;
+    createProgram();
+    setupGeometry();
+    
+    // Fetch manifest
+    setStatus('Fetching manifest...');
+    try {
+        const response = await fetch(`/v1/manifest/${currentAoi}`);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        manifest = await response.json();
+    } catch (err) {
+        showError('Manifest fetch failed', err.message);
+        return;
+    }
+    
+    // Populate LOD dropdown
+    populateLodSelect();
+    
+    // Set initial month
+    currentMonth = 0;
+    updateMonthLabel();
+    
+    // Load initial data
+    await loadMonth(currentMonth);
+    
+    // Event listeners
+    prevBtn.addEventListener('click', prevMonth);
+    nextBtn.addEventListener('click', nextMonth);
+    lodSelect.addEventListener('change', (e) => setLod(e.target.value));
+    
+    // Keyboard navigation
+    document.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'SELECT') return;
+        switch (e.key) {
+            case 'ArrowLeft': e.preventDefault(); prevMonth(); break;
+            case 'ArrowRight': e.preventDefault(); nextMonth(); break;
+        }
+    });
+}
+
+init();
+</script>
+</body>
+</html>
