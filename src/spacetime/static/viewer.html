@@ -235,6 +235,7 @@
     <label>AOI</label>
     <select id="aoi-select">
       <option value="sahara_tamanrasset">sahara_tamanrasset</option>
+      <option value="iowa_ames">iowa_ames</option>
     </select>
   </div>
   <div class="control-group">
@@ -1071,8 +1072,29 @@ async function benchmarkFlows() {
     return { flowA: flowAResults, flowC: flowCResults };
 }
 
-// Expose benchmark to browser console
+// Switch AOI: reload manifest and re-render
+async function switchAoi(aoi) {
+    currentAoi = aoi;
+    chunkCache.clear();
+    anchorStats.hits = 0;
+    anchorStats.misses = 0;
+    prefetchGeneration++;
+    prefetchStatus = 'idle';
+
+    setStatus('Fetching manifest...');
+    const response = await fetch(`/v1/manifest/${aoi}`);
+    if (!response.ok) { showError('Manifest fetch failed', `HTTP ${response.status}`); return; }
+    manifest = await response.json();
+
+    populateLodSelect();
+    currentMonth = 0;
+    updateMonthLabel();
+    await loadMonth(currentMonth);
+}
+
+// Expose to browser console
 window.benchmarkFlows = benchmarkFlows;
+window.switchAoi = switchAoi;
 
 // Initialize
 async function init() {
