@@ -19,21 +19,14 @@ from fastapi.responses import HTMLResponse
 
 from spacetime.api.auth import AuthMiddleware
 from spacetime.api.jobs import JobDB
-from spacetime.api.v1 import (
-    AOI_CATALOG,
-    HAS_PYVIPS,
-)
-from spacetime.api.v1 import (
-    JOB_DB as v1_job_db,
-)
-from spacetime.api.v1 import (
-    router as v1_router,
-)
+from spacetime.api.v1 import AOI_CATALOG
+from spacetime.api.v1 import router as v1_router
 
 logger = logging.getLogger(__name__)
 
 DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
 STORES_ROOT = DATA_ROOT / "stores"
+
 
 def _discover_aois() -> dict[str, dict]:
     """Scan stores directory for available AOIs via manifest.json files."""
@@ -97,7 +90,6 @@ def _discover_aois() -> dict[str, dict]:
 def _initialize_app_state() -> None:
     """Initialize shared application state on startup."""
     job_db = JobDB()
-    v1_job_db.__class__.JOBS = job_db  # Access the module-level JOB_DB via the class
     import spacetime.api.v1 as v1_module
 
     v1_module.JOB_DB = job_db
@@ -105,8 +97,7 @@ def _initialize_app_state() -> None:
     AOI_CATALOG.clear()
     catalog = _discover_aois()
     AOI_CATALOG.update(catalog)
-    encoder = "pyvips" if HAS_PYVIPS else "PIL"
-    logger.info("TileRipper encoder: %s", encoder)
+    logger.info("TileRipper encoder: PIL")
     logger.info(
         "TileRipper ready — %d store(s): %s",
         len(AOI_CATALOG),
