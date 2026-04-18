@@ -30,6 +30,15 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 from PIL import Image
 
+# Try to import pyvips for faster image encoding
+try:
+    import pyvips
+
+    HAS_PYVIPS = True
+except ImportError:
+    pyvips = None  # type: ignore
+    HAS_PYVIPS = False
+
 from spacetime.api.geo import latlng_to_pixel, pixel_rowcol_to_coords, pixel_to_latlng
 from spacetime.api.metering import meter
 from spacetime.api.models import (
@@ -48,6 +57,27 @@ from spacetime.api.products import PRODUCTS, products_for_tier, tier_can_access
 from spacetime.render import render_product, water_mask
 
 logger = logging.getLogger(__name__)
+
+
+def _encode_pyvips(rendered: np.ndarray, fmt: str, quality: int = 85) -> tuple[bytes, str]:
+    """Encode rendered image to bytes using pyvips.
+
+    Args:
+        rendered: RGB array (H, W, 3) as uint8
+        fmt: 'jpeg' or 'png'
+        quality: JPEG quality (1-100), ignored for PNG
+
+    Returns:
+        (image_bytes, mime_type)
+    """
+    assert HAS_PYVIPS and pyvips is not None
+    h, w = rendered.shape[:2]
+    # pyvips expects bands interleaved: create image from memory buffer
+    vimg = pyvips.Image.new_from_memory(rendered.tobytes(), w, h, 3, "uchar")
+    if fmt == "png":
+        return vimg.pngsave_buffer(), "image/png"
+    return vimg.jpegsave_buffer(Q=quality), "image/jpeg"
+
 
 router = APIRouter(prefix="/v1", tags=["v1"])
 
@@ -77,6 +107,10 @@ def _render_tile(bands: np.ndarray, product: str, fmt: str = "jpeg") -> tuple[by
     if rendered.dtype == np.float32:
         cmap = ndwi_colormap if product == "ndwi" else ndvi_colormap
         rendered = cmap(rendered)
+
+    # Use pyvips if available, otherwise fall back to PIL
+    if HAS_PYVIPS:
+        return _encode_pyvips(rendered, fmt, quality=85)
 
     img = Image.fromarray(rendered)
     buf = io.BytesIO()
@@ -303,17 +337,20 @@ def get_tile(
     t_render_end = time.perf_counter()
     render_ms = (t_render_end - t_render_start) * 1000
 
-    # --- Stage 3: encode (PIL Image.fromarray + save to BytesIO) ---
+    # --- Stage 3: encode (pyvips if available, else PIL) ---
     t_encode_start = time.perf_counter()
-    img = Image.fromarray(rendered)
-    buf = io.BytesIO()
-    if fmt == "png":
-        img.save(buf, format="PNG", optimize=False)
-        media_type = "image/png"
+    if HAS_PYVIPS:
+        img_bytes, media_type = _encode_pyvips(rendered, fmt, quality=85)
     else:
-        img.save(buf, format="JPEG", quality=85)
-        media_type = "image/jpeg"
-    img_bytes = buf.getvalue()
+        img = Image.fromarray(rendered)
+        buf = io.BytesIO()
+        if fmt == "png":
+            img.save(buf, format="PNG", optimize=False)
+            media_type = "image/png"
+        else:
+            img.save(buf, format="JPEG", quality=85)
+            media_type = "image/jpeg"
+        img_bytes = buf.getvalue()
     t_encode_end = time.perf_counter()
     encode_ms = (t_encode_end - t_encode_start) * 1000
 
