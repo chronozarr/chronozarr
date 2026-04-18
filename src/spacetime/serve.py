@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -18,40 +19,21 @@ from fastapi.responses import HTMLResponse
 
 from spacetime.api.auth import AuthMiddleware
 from spacetime.api.jobs import JobDB
-from spacetime.api.v1 import AOI_CATALOG, HAS_PYVIPS
-from spacetime.api.v1 import JOB_DB as v1_job_db
-from spacetime.api.v1 import router as v1_router
+from spacetime.api.v1 import (
+    AOI_CATALOG,
+    HAS_PYVIPS,
+)
+from spacetime.api.v1 import (
+    JOB_DB as v1_job_db,
+)
+from spacetime.api.v1 import (
+    router as v1_router,
+)
 
 logger = logging.getLogger(__name__)
 
 DATA_ROOT = Path(__file__).resolve().parents[2] / "data"
 STORES_ROOT = DATA_ROOT / "stores"
-
-app = FastAPI(
-    title="TileRipper",
-    version="0.1.0",
-    description=(
-        "Low-cost API for temporally coherent Sentinel-2 and Landsat basemaps, "
-        "vegetation indices, and water layers — with maps plus values."
-    ),
-    docs_url="/docs",
-    redoc_url="/redoc",
-)
-
-# CORS — allow browser access from any origin for the demo
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["GET"],
-    allow_headers=["*"],
-)
-
-# Auth + rate limiting
-app.add_middleware(AuthMiddleware)
-
-# Mount v1 API
-app.include_router(v1_router)
-
 
 def _discover_aois() -> dict[str, dict]:
     """Scan stores directory for available AOIs via manifest.json files."""
@@ -93,19 +75,34 @@ def _discover_aois() -> dict[str, dict]:
             "source": manifest.get("source", "Sentinel-2 L2A"),
             "composite_method": manifest.get("composite_method", "monthly median, SCL cloud mask"),
         }
+        pyramid_meta = manifest.get("pyramid")
+        if pyramid_meta:
+            for lvl in pyramid_meta["levels"]:
+                level_dir = b2c_dir / "pyramid" / str(lvl["level"])
+                lvl["chunk_ids"] = (
+                    sorted(
+                        d.name
+                        for d in level_dir.iterdir()
+                        if d.is_dir() and d.name.startswith("r")
+                    )
+                    if level_dir.is_dir()
+                    else []
+                )
+            aois[key]["pyramid"] = pyramid_meta
+        else:
+            aois[key]["pyramid"] = None
     return aois
 
 
-@app.on_event("startup")
-def startup():
-    # Initialize job database
+def _initialize_app_state() -> None:
+    """Initialize shared application state on startup."""
     job_db = JobDB()
     v1_job_db.__class__.JOBS = job_db  # Access the module-level JOB_DB via the class
     import spacetime.api.v1 as v1_module
 
     v1_module.JOB_DB = job_db
 
-    # Discover existing AOIs
+    AOI_CATALOG.clear()
     catalog = _discover_aois()
     AOI_CATALOG.update(catalog)
     encoder = "pyvips" if HAS_PYVIPS else "PIL"
@@ -118,6 +115,39 @@ def startup():
     if not AOI_CATALOG:
         logger.warning("No stores found under %s", STORES_ROOT)
     logger.info("Job database initialized at %s", job_db.db_path)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    _initialize_app_state()
+    yield
+
+
+app = FastAPI(
+    title="TileRipper",
+    version="0.1.0",
+    description=(
+        "Low-cost API for temporally coherent Sentinel-2 and Landsat basemaps, "
+        "vegetation indices, and water layers — with maps plus values."
+    ),
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan,
+)
+
+# CORS — allow browser access from any origin for the demo
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
+
+# Auth + rate limiting
+app.add_middleware(AuthMiddleware)
+
+# Mount v1 API
+app.include_router(v1_router)
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)

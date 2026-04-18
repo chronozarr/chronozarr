@@ -15,6 +15,20 @@ class GridInfo(BaseModel):
     mosaic_width: int
 
 
+class PyramidLevel(BaseModel):
+    level: int
+    mosaic_height: int
+    mosaic_width: int
+    n_rows: int
+    n_cols: int
+    resolution_m: float
+
+
+class PyramidInfo(BaseModel):
+    n_levels: int
+    levels: list[PyramidLevel]
+
+
 class AOISummary(BaseModel):
     id: str = Field(description="AOI identifier, e.g. 'sahara_tamanrasset'")
     name: str = Field(description="Human-readable label")
@@ -23,6 +37,7 @@ class AOISummary(BaseModel):
     months: list[str] = Field(description="Available months as YYYY-MM strings")
     n_months: int
     grid: GridInfo
+    pyramid: PyramidInfo | None = Field(default=None, description="Multiscale pyramid levels")
     products: list[str] = Field(description="Available product IDs for this AOI")
     bbox_wgs84: list[float] | None = Field(
         default=None,

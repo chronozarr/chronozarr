@@ -105,3 +105,107 @@ def api_client(zarr_store, monkeypatch):
     # Cleanup
     AOI_CATALOG.clear()
     _load_bands.cache_clear()
+
+
+@pytest.fixture()
+def zarr_store_with_pyramid(tmp_path: Path):
+    """Zarr store with pyramid levels for integration testing."""
+    aoi_name = "test_aoi"
+    chunk_size = 512
+    n_rows, n_cols = 1, 1
+    months = ["2024-01"]
+    epsg = 32631
+    transform = [10.0, 0.0, 500000.0, 0.0, -10.0, 2600000.0]
+    mosaic_h, mosaic_w = 8, 8
+
+    store_dir = tmp_path / "stores" / aoi_name / f"cs{chunk_size}"
+    chunk_dir = store_dir / "r000_c000"
+    chunk_dir.mkdir(parents=True)
+
+    rng = np.random.default_rng(42)
+    data = rng.integers(100, 8000, size=(1, 4, mosaic_h, mosaic_w), dtype=np.uint16)
+    z = zarr.open(str(chunk_dir / "stack.zarr"), mode="w", shape=data.shape, dtype="u2")
+    z[:] = data
+
+    from spacetime.pyramid import downsample_2x
+
+    level1_data = downsample_2x(data[0])
+    pyr_dir = store_dir / "pyramid" / "1" / "r000_c000"
+    pyr_dir.mkdir(parents=True)
+    level1_store = np.expand_dims(level1_data, axis=0)
+    z1 = zarr.open(str(pyr_dir / "stack.zarr"), mode="w", shape=level1_store.shape, dtype="u2")
+    z1[:] = level1_store
+
+    pyramid_meta = {
+        "n_levels": 1,
+        "levels": [
+            {
+                "level": 1,
+                "mosaic_height": 4,
+                "mosaic_width": 4,
+                "n_rows": 1,
+                "n_cols": 1,
+                "resolution_m": 20.0,
+                "transform": [20.0, 0.0, 500000.0, 0.0, -20.0, 2600000.0],
+            }
+        ],
+    }
+
+    manifest = {
+        "aoi": aoi_name,
+        "label": "Test AOI",
+        "chunk_size": chunk_size,
+        "n_rows": n_rows,
+        "n_cols": n_cols,
+        "months": months,
+        "epsg": epsg,
+        "transform": transform,
+        "mosaic_height": mosaic_h,
+        "mosaic_width": mosaic_w,
+        "source": "Sentinel-2 L2A",
+        "composite_method": "monthly median, SCL cloud mask",
+        "pyramid": pyramid_meta,
+    }
+    (store_dir / "manifest.json").write_text(json.dumps(manifest))
+
+    return {
+        "stores_root": tmp_path / "stores",
+        "store_dir": store_dir,
+        "aoi_name": aoi_name,
+        "chunk_size": chunk_size,
+        "months": months,
+        "epsg": epsg,
+        "transform": transform,
+        "mosaic_height": mosaic_h,
+        "mosaic_width": mosaic_w,
+        "data": data,
+        "pyramid": pyramid_meta,
+    }
+
+
+@pytest.fixture()
+def api_client_with_pyramid(zarr_store_with_pyramid, monkeypatch):
+    """FastAPI TestClient backed by a synthetic store with pyramid levels."""
+    from fastapi.testclient import TestClient
+
+    import spacetime.api.v1 as v1_mod
+    from spacetime.api.jobs import JobDB
+    from spacetime.api.v1 import AOI_CATALOG, _load_bands
+    from spacetime.serve import _discover_aois, app
+
+    AOI_CATALOG.clear()
+    _load_bands.cache_clear()
+
+    monkeypatch.setattr("spacetime.serve.STORES_ROOT", zarr_store_with_pyramid["stores_root"])
+
+    job_db = JobDB(db_path=zarr_store_with_pyramid["stores_root"].parent / "test_jobs.sqlite")
+    monkeypatch.setattr(v1_mod, "JOB_DB", job_db)
+
+    catalog = _discover_aois()
+    AOI_CATALOG.update(catalog)
+
+    client = TestClient(app, raise_server_exceptions=False)
+    yield client
+
+    AOI_CATALOG.clear()
+    _load_bands.cache_clear()

@@ -57,6 +57,8 @@ from spacetime.api.models import (
     PixelLocation,
     PointQueryResponse,
     ProductInfo,
+    PyramidInfo,
+    PyramidLevel,
     StatsResponse,
     UsageResponse,
 )
@@ -93,9 +95,12 @@ _BAND_CACHE_SIZE = 512
 
 
 @lru_cache(maxsize=_BAND_CACHE_SIZE)
-def _load_bands(store_dir: str, chunk_id: str, month_index: int) -> np.ndarray:
+def _load_bands(store_dir: str, chunk_id: str, month_index: int, level: int = 0) -> np.ndarray:
     """Load raw multiband data for a chunk/month. Cached for product switching."""
-    zarr_path = Path(store_dir) / chunk_id / "stack.zarr"
+    if level == 0:
+        zarr_path = Path(store_dir) / chunk_id / "stack.zarr"
+    else:
+        zarr_path = Path(store_dir) / "pyramid" / str(level) / chunk_id / "stack.zarr"
     z = zarr.open(str(zarr_path), mode="r")
     return np.array(z[month_index])
 
@@ -158,6 +163,45 @@ def _check_product_access(request: Request, product: str) -> None:
         )
 
 
+def _build_pyramid_info(meta: dict) -> PyramidInfo | None:
+    """Convert raw pyramid metadata into the catalog response model."""
+    pyramid = meta.get("pyramid")
+    if not pyramid:
+        return None
+
+    return PyramidInfo(
+        n_levels=pyramid["n_levels"],
+        levels=[
+            PyramidLevel(
+                level=level_meta["level"],
+                mosaic_height=level_meta["mosaic_height"],
+                mosaic_width=level_meta["mosaic_width"],
+                n_rows=level_meta["n_rows"],
+                n_cols=level_meta["n_cols"],
+                resolution_m=level_meta["resolution_m"],
+            )
+            for level_meta in pyramid["levels"]
+        ],
+    )
+
+
+def _validate_chunk_id(meta: dict, chunk_id: str, level: int) -> None:
+    """Validate that a chunk exists at the requested pyramid level."""
+    if level > 0:
+        pyramid = meta.get("pyramid")
+        if not pyramid:
+            raise HTTPException(400, detail="No pyramid levels available for this AOI")
+        max_level = pyramid["n_levels"]
+        if level > max_level:
+            raise HTTPException(400, detail=f"Pyramid level {level} exceeds max {max_level}")
+        level_meta = pyramid["levels"][level - 1]
+        if chunk_id not in level_meta.get("chunk_ids", []):
+            raise HTTPException(404, detail=f"Unknown chunk at level {level}: {chunk_id}")
+    else:
+        if chunk_id not in meta["chunk_ids"]:
+            raise HTTPException(404, detail=f"Unknown chunk: {chunk_id}")
+
+
 @router.get("/")
 def api_info():
     """API root — version and links."""
@@ -203,6 +247,7 @@ def get_catalog(request: Request):
                     mosaic_height=meta["mosaic_height"],
                     mosaic_width=meta["mosaic_width"],
                 ),
+                pyramid=_build_pyramid_info(meta),
                 products=accessible,
                 bbox_wgs84=meta.get("bbox_wgs84"),
             )
@@ -235,6 +280,7 @@ def get_aoi_detail(aoi: str, request: Request):
             mosaic_height=meta["mosaic_height"],
             mosaic_width=meta["mosaic_width"],
         ),
+        pyramid=_build_pyramid_info(meta),
         products=products_for_tier(tier),
         bbox_wgs84=meta.get("bbox_wgs84"),
     )
@@ -272,6 +318,7 @@ def get_tile(
     request: Request,
     product: str = Query(default="true_color", description="Product to render"),
     fmt: str = Query(default="jpeg", description="Image format: jpeg or png"),
+    level: int = Query(default=0, ge=0, description="Pyramid level (0=native resolution)"),
 ):
     """Serve a rendered tile image.
 
@@ -284,14 +331,13 @@ def get_tile(
     aoi_key = _get_aoi_key(aoi)
     meta = AOI_CATALOG[aoi_key]
     month_index = _resolve_month(month, meta)
-    if chunk_id not in meta["chunk_ids"]:
-        raise HTTPException(404, detail=f"Unknown chunk: {chunk_id}")
+    _validate_chunk_id(meta, chunk_id, level)
     render_product_id = product
     if product in ("ndvi", "ndwi"):
         render_product_id = product
     cache_info_before = _load_bands.cache_info()
     t_zarr_start = time.perf_counter()
-    bands = _load_bands(meta["store_dir"], chunk_id, month_index)
+    bands = _load_bands(meta["store_dir"], chunk_id, month_index, level)
     t_zarr_end = time.perf_counter()
     cache_info_after = _load_bands.cache_info()
     cache_miss = (
@@ -325,11 +371,12 @@ def get_tile(
     encode_ms = (t_encode_end - t_encode_start) * 1000
     total_ms = (time.perf_counter() - t0) * 1000
     logger.info(
-        "tile %s/%s/%s product=%s: zarr=%.1fms render=%.1fms encode=%.1fms total=%.1fms",
+        "tile %s/%s/%s product=%s level=%d: zarr=%.1fms render=%.1fms encode=%.1fms total=%.1fms",
         aoi,
         month,
         chunk_id,
         product,
+        level,
         zarr_ms,
         render_ms,
         encode_ms,
@@ -519,7 +566,13 @@ def get_usage(request: Request):
 @router.get(
     "/raw/{aoi}/{month}/{chunk_id}", responses={200: {"content": {"application/octet-stream": {}}}}
 )
-def get_raw_bands(aoi: str, month: str, chunk_id: str, request: Request):
+def get_raw_bands(
+    aoi: str,
+    month: str,
+    chunk_id: str,
+    request: Request,
+    level: int = Query(default=0, ge=0, description="Pyramid level (0=native resolution)"),
+):
     """Serve raw uint16 band data as gzipped binary.
 
     Returns B02, B03, B04, B08 band data in a compact binary format:
@@ -531,9 +584,8 @@ def get_raw_bands(aoi: str, month: str, chunk_id: str, request: Request):
     aoi_key = _get_aoi_key(aoi)
     meta = AOI_CATALOG[aoi_key]
     month_index = _resolve_month(month, meta)
-    if chunk_id not in meta["chunk_ids"]:
-        raise HTTPException(404, detail=f"Unknown chunk: {chunk_id}")
-    bands = _load_bands(meta["store_dir"], chunk_id, month_index)
+    _validate_chunk_id(meta, chunk_id, level)
+    bands = _load_bands(meta["store_dir"], chunk_id, month_index, level)
     n_bands, height, width = bands.shape
     header = np.array([n_bands, height, width, 0], dtype=np.uint16).tobytes()
     data_bytes = bands.astype(np.uint16, copy=False).tobytes()

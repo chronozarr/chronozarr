@@ -59,7 +59,6 @@ def run_pipeline(job: dict) -> str:
     """Run the ingestion pipeline for a job. Returns the store path."""
     from spacetime.catalog import search_scenes_by_month
     from spacetime.chunk import make_chunk_grid
-    from spacetime.encode.baseline_b import encode_b2_chunked_time
     from spacetime.mosaic import build_monthly_mosaics
 
     aoi_name = job["aoi_name"]
@@ -110,10 +109,17 @@ def run_pipeline(job: dict) -> str:
 
     grid = make_chunk_grid(bands.shape[1], bands.shape[2], transform, epsg, chunk_size)
 
-    # Phase 2: Encode B2_chunked
+    # Phase 2: Encode level 0 (flat layout)
     store_dir = DATA / "stores" / aoi_name / f"cs{chunk_size}"
-    logger.info("Encoding B2_chunked to %s", store_dir)
-    encode_b2_chunked_time(mosaics, grid, store_dir)
+    logger.info("Encoding level 0 to %s", store_dir)
+    from spacetime.pyramid import build_pyramid, write_zarr_level
+
+    write_zarr_level(mosaics, grid, store_dir)
+
+    # Phase 3: Build pyramid levels
+    logger.info("Building pyramid levels")
+    pyramid_levels = build_pyramid(mosaics, grid, store_dir, chunk_size)
+    logger.info("Built %d pyramid levels", len(pyramid_levels))
 
     # Write manifest.json
     months = sorted(mosaics.keys())
@@ -131,6 +137,11 @@ def run_pipeline(job: dict) -> str:
         "source": "Sentinel-2 L2A",
         "composite_method": "monthly median, SCL cloud mask",
     }
+    if pyramid_levels:
+        manifest["pyramid"] = {
+            "n_levels": len(pyramid_levels),
+            "levels": pyramid_levels,
+        }
     manifest_path = store_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2))
     logger.info("Wrote manifest to %s", manifest_path)

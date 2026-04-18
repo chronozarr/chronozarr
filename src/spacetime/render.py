@@ -187,7 +187,7 @@ def ndwi_colormap(ndwi_arr: np.ndarray) -> np.ndarray:
         192 + (118 - 192) * (norm - 0.5) / 0.5,
     )
     rgb = np.stack([r, g, b], axis=-1)
-    rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+    rgb = np.nan_to_num(np.clip(rgb, 0, 255), nan=0.0).astype(np.uint8)
     rgb[np.isnan(ndwi_arr)] = 0
     return rgb
 
