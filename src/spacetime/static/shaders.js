@@ -510,16 +510,13 @@ class ShaderRenderer {
      * @param {ArrayBuffer} buffer - Raw binary data with 8-byte header
      */
     loadBandData(buffer) {
-        // Parse 8-byte header: width (2), height (2), bands (2), dtype (2)
+        // Parse 8-byte header: n_bands (2), height (2), width (2), reserved (2)
         const header = new Uint16Array(buffer.slice(0, 8));
-        const width = header[0];
+        const bands = header[0];
         const height = header[1];
-        const bands = header[2];
-        const dtype = header[3];
-        
-        if (dtype !== 1) {  // uint16
-            throw new Error('Unsupported dtype: ' + dtype);
-        }
+        const width = header[2];
+        // header[3] is reserved
+
         if (bands < 4) {
             throw new Error('Expected at least 4 bands, got: ' + bands);
         }
