@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 from spacetime.api.auth import AuthMiddleware
-from spacetime.api.v1 import AOI_CATALOG
+from spacetime.api.v1 import AOI_CATALOG, HAS_PYVIPS
 from spacetime.api.v1 import router as v1_router
 
 logger = logging.getLogger(__name__)
@@ -98,6 +98,8 @@ def _discover_aois() -> dict[str, dict]:
 def startup():
     catalog = _discover_aois()
     AOI_CATALOG.update(catalog)
+    encoder = "pyvips" if HAS_PYVIPS else "PIL"
+    logger.info("TileRipper encoder: %s", encoder)
     logger.info(
         "TileRipper ready — %d store(s): %s",
         len(AOI_CATALOG),
