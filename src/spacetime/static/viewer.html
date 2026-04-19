@@ -159,7 +159,6 @@
     height: 100%;
     background: var(--accent);
     border-radius: 0 1px 1px 0;
-    transition: width 0.1s ease;
     width: 0;
     opacity: 0;
   }
@@ -383,7 +382,6 @@
     background: var(--text-3);
     border-radius: 50%;
     transform: translate(-50%, -50%);
-    transition: all 0.2s ease;
     z-index: 1;
   }
   .timeline-tick:hover {
@@ -747,7 +745,6 @@ function cacheKey(lod, chunkId, monthIndex) { return `${lod}/${chunkId}/${monthI
 
 let requestLog = [];
 const anchorStats = { hits: 0, misses: 0 };
-let prefetchGeneration = 0;
 
 async function fetchChunk(aoi, lod, chunkId, monthIndex, { silent = false } = {}) {
     const key = cacheKey(lod, chunkId, monthIndex);
@@ -879,22 +876,114 @@ function rerenderCurrentFrame() {
 // ---- Frame metrics (console only) ----
 let lastFrame = null;
 
+// Check if all chunks for a month are in cache (synchronous)
+function allChunksCached(gR, gC, lod, monthIndex) {
+    const temporal = manifest.temporal;
+    for (let r = 0; r < gR; r++) {
+        for (let c = 0; c < gC; c++) {
+            const chunkId = `r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`;
+            if (temporal.anchor_indices.includes(monthIndex)) {
+                if (!chunkCache.has(cacheKey(lod, chunkId, monthIndex))) return false;
+            } else {
+                const anchorIdx = temporal.delta_reference[String(monthIndex)];
+                if (!chunkCache.has(cacheKey(lod, chunkId, anchorIdx))) return false;
+                if (!chunkCache.has(cacheKey(lod, chunkId, monthIndex))) return false;
+            }
+        }
+    }
+    return true;
+}
+
+// Fast synchronous render when all chunks are cached
+function renderMonthFromCache(monthIndex) {
+    const t0 = performance.now();
+    const lodMeta = manifest.lods[currentLod];
+    const { grid_rows: gR, grid_cols: gC, chunk_size: cS } = lodMeta;
+    const factor = Math.pow(manifest.lod_factor, currentLod);
+    const mosaicW = Math.ceil(manifest.mosaic_width / factor);
+    const mosaicH = Math.ceil(manifest.mosaic_height / factor);
+
+    if (canvasWidth !== mosaicW || canvasHeight !== mosaicH) {
+        canvasWidth = mosaicW; canvasHeight = mosaicH;
+        canvas.width = canvasWidth; canvas.height = canvasHeight;
+        fitCanvasToContainer();
+    }
+    gl.viewport(0, 0, canvasWidth, canvasHeight);
+
+    const temporal = manifest.temporal;
+    const isAnchor = temporal.anchor_indices.includes(monthIndex);
+    const anchorIdx = isAnchor ? monthIndex : temporal.delta_reference[String(monthIndex)];
+    const cached = [];
+
+    for (let r = 0; r < gR; r++) {
+        for (let c = 0; c < gC; c++) {
+            const chunkId = `r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`;
+            let data;
+            if (isAnchor) {
+                data = chunkCache.get(cacheKey(currentLod, chunkId, monthIndex)).data;
+            } else {
+                const anchorData = chunkCache.get(cacheKey(currentLod, chunkId, anchorIdx)).data;
+                const deltaEntry = chunkCache.get(cacheKey(currentLod, chunkId, monthIndex));
+                const deltaView = new Int16Array(deltaEntry.data.buffer, deltaEntry.data.byteOffset, deltaEntry.data.length);
+                data = new Uint16Array(anchorData.length);
+                for (let i = 0; i < anchorData.length; i++) {
+                    data[i] = Math.max(0, Math.min(65535, anchorData[i] + deltaView[i]));
+                }
+            }
+            const { w, h } = chunkDims(r, c, gR, gC, cS, mosaicW, mosaicH);
+            renderChunkAt(data, w, h, c * cS, mosaicH - (r * cS) - h);
+            cached.push({ chunkId, row: r, col: c, data });
+        }
+    }
+
+    lastFetchResults = cached;
+    const total_ms = performance.now() - t0;
+    lastFrame = {
+        month: manifest.months[monthIndex], lod: currentLod,
+        resolution_m: lodMeta.resolution_m,
+        total_ms: Math.round(total_ms),
+        fetch_ms: 0, decode_ms: 0, reconstruct_ms: 0,
+        upload_ms: Math.round(total_ms), draw_ms: 0,
+        compressed_bytes: 0, raw_bytes: 0,
+        pixels: mosaicW * mosaicH,
+        n_chunks: gR * gC,
+        requests_network: 0,
+        requests_cached: gR * gC,
+        wire_bytes: 0,
+        cache_entries: chunkCache.size,
+        anchor_warm_pct: 100,
+        chunks: [],
+    };
+    setStatus(Math.round(total_ms));
+}
+
 async function loadMonth(monthIndex) {
     hideError();
+
+    // Fast path: fully cached — synchronous render, no async overhead
+    const lodMeta = manifest.lods[currentLod];
+    const { grid_rows: gR, grid_cols: gC, chunk_size: cS } = lodMeta;
+    if (allChunksCached(gR, gC, currentLod, monthIndex)) {
+        renderMonthFromCache(monthIndex);
+        prefetchAdjacent(monthIndex);
+        return;
+    }
+
+    // Slow path: need network fetches
     const t0 = performance.now();
     try {
-        const lodMeta = manifest.lods[currentLod];
-        const { grid_rows: gR, grid_cols: gC, chunk_size: cS } = lodMeta;
         const totalChunks = gR * gC;
         const factor = Math.pow(manifest.lod_factor, currentLod);
         const mosaicW = Math.ceil(manifest.mosaic_width / factor);
         const mosaicH = Math.ceil(manifest.mosaic_height / factor);
 
-        canvasWidth = mosaicW; canvasHeight = mosaicH;
-        canvas.width = canvasWidth; canvas.height = canvasHeight;
-        gl.viewport(0, 0, canvasWidth, canvasHeight);
-        gl.clearColor(0.035, 0.047, 0.071, 1.0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
+        if (canvasWidth !== mosaicW || canvasHeight !== mosaicH) {
+            canvasWidth = mosaicW; canvasHeight = mosaicH;
+            canvas.width = canvasWidth; canvas.height = canvasHeight;
+            gl.viewport(0, 0, canvasWidth, canvasHeight);
+            gl.clearColor(0.035, 0.047, 0.071, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+        }
 
         const chunkJobs = [];
         for (let r = 0; r < gR; r++)
@@ -914,46 +1003,33 @@ async function loadMonth(monthIndex) {
 
         computeStretchFromData(fetchResults);
 
-        // Store for re-render
         lastFetchResults = fetchResults.map(({ chunkId, row, col, result }) => ({
             chunkId, row, col, data: result.data
         }));
 
-        const chunkMetrics = [];
         for (const { chunkId, row, col, result } of fetchResults) {
             const { w, h } = chunkDims(row, col, gR, gC, cS, mosaicW, mosaicH);
-            const gpu = renderChunkAt(result.data, w, h, col * cS, canvasHeight - (row * cS) - h);
-            chunkMetrics.push({ chunkId, row, col, w, h, pixels: w*h,
-                isDelta: result.isDelta, anchorWarm: result.anchorWarm,
-                ...result.timing, ...gpu });
+            renderChunkAt(result.data, w, h, col * cS, canvasHeight - (row * cS) - h);
         }
         const total_ms = performance.now() - t0;
 
-        // Build lastFrame for console inspection
         const sum = (a, k) => a.reduce((s, c) => s + (c[k]||0), 0);
-        const max = (a, k) => Math.max(...a.map(c => c[k]||0));
         const misses = requestLog.filter(r => !r.cache_hit);
-        const fetchTimes = misses.map(r => r.fetch_ms).sort((a, b) => a - b);
         lastFrame = {
             month: manifest.months[monthIndex], lod: currentLod,
             resolution_m: lodMeta.resolution_m,
             total_ms: Math.round(total_ms),
-            fetch_ms: Math.round(max(chunkMetrics, 'fetch_ms')),
-            decode_ms: Math.round(sum(chunkMetrics, 'decode_ms')),
-            reconstruct_ms: Math.round(sum(chunkMetrics, 'reconstruct_ms')),
-            upload_ms: Math.round(sum(chunkMetrics, 'upload_ms')),
-            draw_ms: Math.round(sum(chunkMetrics, 'draw_ms')),
-            compressed_bytes: sum(chunkMetrics, 'compressed_bytes'),
-            raw_bytes: sum(chunkMetrics, 'raw_bytes'),
-            pixels: sum(chunkMetrics, 'pixels'),
+            fetch_ms: 0, decode_ms: 0, reconstruct_ms: 0,
+            upload_ms: 0, draw_ms: 0,
+            compressed_bytes: 0, raw_bytes: 0,
+            pixels: mosaicW * mosaicH,
             n_chunks: totalChunks,
             requests_network: misses.length,
             requests_cached: requestLog.filter(r => r.cache_hit).length,
             wire_bytes: sum(misses, 'compressed_bytes'),
             cache_entries: chunkCache.size,
-            anchor_warm_pct: chunkMetrics.length > 0
-                ? Math.round(chunkMetrics.filter(c => c.anchorWarm).length / chunkMetrics.length * 100) : 0,
-            chunks: chunkMetrics,
+            anchor_warm_pct: 0,
+            chunks: [],
         };
 
         fitCanvasToContainer();
@@ -1166,76 +1242,101 @@ function updateSidebar(data) {
 }
 
 // ---- Prefetch ----
-async function prefetchAdjacent(monthIndex) {
-    const gen = ++prefetchGeneration;
-    const targets = [];
-    if (monthIndex + 1 < manifest.months.length) targets.push(monthIndex + 1);
-    if (monthIndex - 1 >= 0) targets.push(monthIndex - 1);
-    if (!targets.length) return;
-
+function getChunkIds() {
     const lodMeta = manifest.lods[currentLod];
-    const chunkIds = [];
+    const ids = [];
     for (let r = 0; r < lodMeta.grid_rows; r++)
         for (let c = 0; c < lodMeta.grid_cols; c++)
-            chunkIds.push(`r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`);
+            ids.push(`r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`);
+    return ids;
+}
 
+function chunksNeededForMonth(targetMonth, chunkIds, lod) {
     const temporal = manifest.temporal;
-    const CONCURRENCY = 4;
-
-    for (const targetMonth of targets) {
-        const needed = [];
-        if (temporal.anchor_indices.includes(targetMonth)) {
-            for (const id of chunkIds)
-                if (!chunkCache.has(cacheKey(currentLod, id, targetMonth))) needed.push([id, targetMonth]);
-        } else {
-            const anchorIdx = temporal.delta_reference[String(targetMonth)];
-            for (const id of chunkIds) {
-                if (!chunkCache.has(cacheKey(currentLod, id, anchorIdx))) needed.push([id, anchorIdx]);
-                if (!chunkCache.has(cacheKey(currentLod, id, targetMonth))) needed.push([id, targetMonth]);
-            }
+    const needed = [];
+    if (temporal.anchor_indices.includes(targetMonth)) {
+        for (const id of chunkIds)
+            if (!chunkCache.has(cacheKey(lod, id, targetMonth))) needed.push([id, targetMonth]);
+    } else {
+        const anchorIdx = temporal.delta_reference[String(targetMonth)];
+        for (const id of chunkIds) {
+            if (!chunkCache.has(cacheKey(lod, id, anchorIdx))) needed.push([id, anchorIdx]);
+            if (!chunkCache.has(cacheKey(lod, id, targetMonth))) needed.push([id, targetMonth]);
         }
+    }
+    return needed;
+}
+
+async function prefetchRange(monthIndex, count, generationRef) {
+    const gen = ++generationRef.v;
+    const nMonths = manifest.months.length;
+    const chunkIds = getChunkIds();
+    const lod = currentLod;
+
+    const targets = [];
+    for (let i = 1; i <= count; i++) {
+        if (monthIndex + i < nMonths) targets.push(monthIndex + i);
+        if (monthIndex - i >= 0) targets.push(monthIndex - i);
+    }
+    const CONCURRENCY = 6;
+    for (const targetMonth of targets) {
+        if (gen !== generationRef.v) return;
+        const needed = chunksNeededForMonth(targetMonth, chunkIds, lod);
         for (let i = 0; i < needed.length; i += CONCURRENCY) {
-            if (gen !== prefetchGeneration) return;
+            if (gen !== generationRef.v) return;
             await Promise.all(needed.slice(i, i + CONCURRENCY).map(([id, mIdx]) =>
-                fetchChunk(currentAoi, currentLod, id, mIdx, { silent: true }).catch(() => {})
+                fetchChunk(currentAoi, lod, id, mIdx, { silent: true }).catch(() => {})
             ));
         }
     }
 }
+
+// Separate generation counters so scrub prefetch doesn't cancel full preload
+const _prefetchGen = { v: 0 };
+const _preloadGen = { v: 0 };
+
+// Scrub prefetch: ±3 months around current position (cancels previous scrub prefetch only)
+function prefetchAdjacent(monthIndex) { prefetchRange(monthIndex, 3, _prefetchGen); }
+
+// Full preload: all months in background (only cancelled by AOI switch)
+function preloadAll(monthIndex) { prefetchRange(monthIndex, manifest.months.length, _preloadGen); }
 
 // ---- Timeline ----
 function buildTimeline() {
     const track = document.getElementById('timeline-track');
     // Remove old ticks, keep the line
     track.querySelectorAll('.timeline-tick').forEach(t => t.remove());
+    tickElements = [];
     if (!manifest) return;
     const months = manifest.months;
     const n = months.length;
     months.forEach((m, i) => {
         const tick = document.createElement('div');
         tick.className = 'timeline-tick' + (i === currentMonth ? ' active' : '');
-        // Position: leave 8px padding on each side
         tick.style.left = n > 1 ? `calc(8px + ${(i / (n - 1)) * 100}% * (1 - 16px / ${track.clientWidth || 600}))` : '50%';
         tick.dataset.index = i;
         tick.title = formatMonth(m);
         track.appendChild(tick);
+        tickElements.push(tick);
     });
     // Recompute positions after layout
     requestAnimationFrame(() => {
         const trackW = track.clientWidth;
         const pad = 8;
         const usable = trackW - pad * 2;
-        track.querySelectorAll('.timeline-tick').forEach(tick => {
-            const idx = parseInt(tick.dataset.index);
+        tickElements.forEach((tick, idx) => {
             tick.style.left = (pad + (n > 1 ? (idx / (n - 1)) * usable : usable / 2)) + 'px';
         });
     });
+    activeTick = tickElements[currentMonth] || null;
 }
 
+let activeTick = null;
+let tickElements = [];
 function updateTimeline() {
-    document.querySelectorAll('.timeline-tick').forEach(tick => {
-        tick.classList.toggle('active', parseInt(tick.dataset.index) === currentMonth);
-    });
+    if (activeTick) activeTick.classList.remove('active');
+    activeTick = tickElements[currentMonth] || null;
+    if (activeTick) activeTick.classList.add('active');
 }
 
 // Timeline click/drag
@@ -1259,11 +1360,9 @@ function initTimelineInteraction() {
     window.addEventListener('mousemove', (e) => {
         if (!dragging || !manifest) return;
         const idx = monthFromEvent(e);
-        if (idx !== currentMonth) goToMonth(idx, { immediate: false });
+        if (idx !== currentMonth) goToMonth(idx);
     });
-    window.addEventListener('mouseup', () => {
-        if (dragging) { dragging = false; flushPendingLoad(); }
-    });
+    window.addEventListener('mouseup', () => { dragging = false; });
 }
 
 // ---- Product switcher ----
@@ -1288,35 +1387,14 @@ function setProduct(idx) {
 }
 
 // ---- Navigation ----
-let loadDebounce = null;
-
-function goToMonth(idx, { immediate = true } = {}) {
+function goToMonth(idx) {
     if (!manifest) return;
     currentMonth = Math.max(0, Math.min(idx, manifest.months.length - 1));
     monthLabel.textContent = formatMonth(manifest.months[currentMonth]);
     updateTimeline();
 
-    clearTimeout(loadDebounce);
-    if (immediate) {
-        loadDebounce = null;
-        if (currentLod === 0) loadMonth(currentMonth);
-        else loadMonthProgressive(currentMonth);
-    } else {
-        loadDebounce = setTimeout(() => {
-            loadDebounce = null;
-            if (currentLod === 0) loadMonth(currentMonth);
-            else loadMonthProgressive(currentMonth);
-        }, 150);
-    }
-}
-
-function flushPendingLoad() {
-    if (loadDebounce) {
-        clearTimeout(loadDebounce);
-        loadDebounce = null;
-        if (currentLod === 0) loadMonth(currentMonth);
-        else loadMonthProgressive(currentMonth);
-    }
+    if (currentLod === 0) loadMonth(currentMonth);
+    else loadMonthProgressive(currentMonth);
 }
 
 function updateMonthLabel() {
@@ -1329,7 +1407,7 @@ async function switchAoi(aoi) {
     currentAoi = aoi;
     chunkCache.clear();
     anchorStats.hits = 0; anchorStats.misses = 0;
-    prefetchGeneration++; progressiveGen++;
+    _prefetchGen.v++; _preloadGen.v++; progressiveGen++;
     lastFetchResults = null;
     updateSidebar(null);
     clickHint.classList.remove('hidden');
@@ -1347,6 +1425,7 @@ async function switchAoi(aoi) {
     updateMonthLabel();
     buildTimeline();
     await loadMonthProgressive(currentMonth);
+    preloadAll(currentMonth);
 }
 
 // ---- Viewport bundle (for benchmarks) ----
@@ -1491,6 +1570,9 @@ async function init() {
 
     await loadMonthProgressive(currentMonth);
 
+    // Preload all months in background so scrubbing is instant
+    preloadAll(currentMonth);
+
     // Events
     prevBtn.addEventListener('click', () => goToMonth(currentMonth - 1));
     nextBtn.addEventListener('click', () => goToMonth(currentMonth + 1));
@@ -1504,14 +1586,11 @@ async function init() {
     document.addEventListener('keydown', (e) => {
         if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
         switch (e.key) {
-            case 'ArrowLeft': e.preventDefault(); goToMonth(currentMonth - 1, { immediate: !e.repeat }); break;
-            case 'ArrowRight': e.preventDefault(); goToMonth(currentMonth + 1, { immediate: !e.repeat }); break;
+            case 'ArrowLeft': e.preventDefault(); goToMonth(currentMonth - 1); break;
+            case 'ArrowRight': e.preventDefault(); goToMonth(currentMonth + 1); break;
             case '1': case '2': case '3': case '4': case '5':
                 setProduct(parseInt(e.key) - 1); break;
         }
-    });
-    document.addEventListener('keyup', (e) => {
-        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') flushPendingLoad();
     });
 }
 
