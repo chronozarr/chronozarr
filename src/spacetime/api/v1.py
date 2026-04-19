@@ -216,6 +216,26 @@ def _check_product_access(request: Request, product: str) -> None:
         )
 
 
+def _build_grid_info(meta: dict) -> GridInfo:
+    """Build GridInfo from either v0 or v1 store metadata."""
+    if meta.get("version") == "1.0.0":
+        lod0 = meta["lods"][0]
+        return GridInfo(
+            n_rows=lod0["grid_rows"],
+            n_cols=lod0["grid_cols"],
+            chunk_size=lod0["chunk_size"],
+            mosaic_height=meta["mosaic_height"],
+            mosaic_width=meta["mosaic_width"],
+        )
+    return GridInfo(
+        n_rows=meta["n_rows"],
+        n_cols=meta["n_cols"],
+        chunk_size=meta["chunk_size"],
+        mosaic_height=meta["mosaic_height"],
+        mosaic_width=meta["mosaic_width"],
+    )
+
+
 def _build_pyramid_info(meta: dict) -> PyramidInfo | None:
     """Convert raw pyramid metadata into the catalog response model."""
     pyramid = meta.get("pyramid")
@@ -293,13 +313,7 @@ def get_catalog(request: Request):
                 epsg=meta["epsg"],
                 months=meta["months"],
                 n_months=meta["n_months"],
-                grid=GridInfo(
-                    n_rows=meta["n_rows"],
-                    n_cols=meta["n_cols"],
-                    chunk_size=meta["chunk_size"],
-                    mosaic_height=meta["mosaic_height"],
-                    mosaic_width=meta["mosaic_width"],
-                ),
+                grid=_build_grid_info(meta),
                 pyramid=_build_pyramid_info(meta),
                 products=accessible,
                 bbox_wgs84=meta.get("bbox_wgs84"),
@@ -326,13 +340,7 @@ def get_aoi_detail(aoi: str, request: Request):
         epsg=meta["epsg"],
         months=meta["months"],
         n_months=meta["n_months"],
-        grid=GridInfo(
-            n_rows=meta["n_rows"],
-            n_cols=meta["n_cols"],
-            chunk_size=meta["chunk_size"],
-            mosaic_height=meta["mosaic_height"],
-            mosaic_width=meta["mosaic_width"],
-        ),
+        grid=_build_grid_info(meta),
         pyramid=_build_pyramid_info(meta),
         products=products_for_tier(tier),
         bbox_wgs84=meta.get("bbox_wgs84"),

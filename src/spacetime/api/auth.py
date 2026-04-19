@@ -12,9 +12,9 @@ import logging
 import time
 from collections import defaultdict
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 logger = logging.getLogger(__name__)
 
@@ -101,16 +101,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         tier = resolve_tier(key)
         if tier is None:
-            raise HTTPException(
+            return JSONResponse(
                 status_code=401,
-                detail="Invalid API key. Get one at https://tileripper.dev",
+                content={"detail": "Invalid API key. Get one at https://tileripper.dev"},
             )
 
         if not check_rate_limit(key, tier):
             limit = TIERS[tier]["rate_limit"]
-            raise HTTPException(
+            return JSONResponse(
                 status_code=429,
-                detail=f"Rate limit exceeded ({limit} req/min for {tier} tier)",
+                content={"detail": f"Rate limit exceeded ({limit} req/min for {tier} tier)"},
             )
 
         request.state.tier = tier

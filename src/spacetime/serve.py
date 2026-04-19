@@ -196,8 +196,8 @@ app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def index():
-    """Serve the product demo page."""
-    html_path = Path(__file__).parent / "static" / "index.html"
+    """Serve the product demo page (ChronoFabric viewer)."""
+    html_path = Path(__file__).parent / "static" / "viewer.html"
     if not html_path.exists():
         return HTMLResponse("<h1>Demo not found</h1>", status_code=500)
     return HTMLResponse(html_path.read_text())

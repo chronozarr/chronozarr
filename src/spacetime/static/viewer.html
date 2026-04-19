@@ -70,17 +70,7 @@
     max-width: 100%;
     max-height: 100%;
     box-shadow: 0 4px 24px rgba(0,0,0,0.4);
-  }
-  .chunk-note {
-    position: absolute;
-    top: 28px;
-    right: 28px;
-    font-size: 11px;
-    color: var(--text-dim);
-    background: rgba(11, 14, 20, 0.8);
-    padding: 4px 10px;
-    border-radius: 4px;
-    border: 1px solid var(--border);
+    image-rendering: auto; /* smooth upscale during progressive LOD preview */
   }
   .error-overlay {
     position: absolute;
@@ -202,19 +192,117 @@
     letter-spacing: 0.06em;
     margin-bottom: 2px;
   }
+
+  /* Query panel (click-to-query) */
+  .query-panel {
+    position: absolute;
+    bottom: 28px;
+    right: 28px;
+    font-size: 12px;
+    color: var(--text);
+    background: rgba(11, 14, 20, 0.94);
+    padding: 14px 18px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.7;
+    min-width: 220px;
+    display: none;
+    backdrop-filter: blur(8px);
+  }
+  .query-panel.visible { display: block; }
+  .query-panel .qp-title {
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 6px;
+  }
+  .query-panel .qp-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .query-panel .qp-label { color: var(--text-dim); font-size: 11px; }
+  .query-panel .qp-value { color: var(--text); font-weight: 500; }
+  .query-panel .qp-sep {
+    border-top: 1px solid var(--border);
+    margin: 5px 0;
+  }
+  .query-panel .qp-index {
+    font-size: 16px;
+    font-weight: 700;
+    text-align: center;
+    padding: 4px 0;
+  }
+  .query-panel .qp-hint {
+    color: var(--text-dim);
+    font-size: 10px;
+    text-align: center;
+    margin-top: 6px;
+  }
+
+  /* LOD upgrade indicator */
+  .lod-badge {
+    position: absolute;
+    top: 28px;
+    right: 28px;
+    font-size: 11px;
+    color: var(--amber);
+    background: rgba(11, 14, 20, 0.85);
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    display: none;
+  }
+  .lod-badge.visible { display: block; }
+
+  /* Month slider */
+  .month-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 200px;
+    height: 4px;
+    background: var(--surface2);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+  }
+  .month-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+    border: 2px solid var(--bg);
+  }
+  .month-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+    border: 2px solid var(--bg);
+  }
+
+  /* Canvas crosshair on hover */
+  #gl-canvas { cursor: crosshair; }
 </style>
 </head>
 <body>
 
 <header>
   <div class="logo">Tile<span>Ripper</span></div>
-  <div class="tagline">ChronoFabric Viewer — v1 temporal basemap pipeline</div>
+  <div class="tagline">Temporal basemaps with queryable values</div>
 </header>
 
 <div class="canvas-container">
   <canvas id="gl-canvas" width="512" height="512"></canvas>
-  <div class="chunk-note" id="chunk-note"></div>
+  <div class="lod-badge" id="lod-badge">Enhancing...</div>
   <div class="metrics-panel" id="metrics-panel"></div>
+  <div class="query-panel" id="query-panel"></div>
   <div class="error-overlay" id="error-overlay">
     <h3 id="error-title">Error</h3>
     <p id="error-message">Something went wrong</p>
@@ -223,20 +311,23 @@
 
 <div class="controls-bar">
   <div class="control-group">
-    <button id="prev-btn">&larr; Prev</button>
+    <button id="prev-btn">&larr;</button>
     <span id="month-label">—</span>
-    <button id="next-btn">Next &rarr;</button>
+    <button id="next-btn">&rarr;</button>
   </div>
   <div class="control-group">
-    <label>LOD</label>
-    <select id="lod-select"></select>
+    <input type="range" id="month-slider" class="month-slider" min="0" max="0" value="0">
   </div>
   <div class="control-group">
     <label>AOI</label>
     <select id="aoi-select">
-      <option value="sahara_tamanrasset">sahara_tamanrasset</option>
-      <option value="iowa_ames">iowa_ames</option>
+      <option value="sahara_tamanrasset">Sahara (Tamanrasset)</option>
+      <option value="iowa_ames">Iowa (Ames)</option>
     </select>
+  </div>
+  <div class="control-group">
+    <label>LOD</label>
+    <select id="lod-select"></select>
   </div>
   <div class="control-group">
     <button id="metrics-btn">Metrics</button>
@@ -252,13 +343,6 @@ try {
 } catch (e) {
     console.error('fzstd import failed:', e);
 }
-
-// Constants from shaders.js
-const TC_MAX_R = 1.5;
-const TC_MID_R = 0.13;
-const TC_GAMMA = 1.5;
-const TC_SAT = 1.5;
-const TC_G_OFF = 0.01;
 
 // WebGL2 shader sources
 const VERTEX_SHADER = `#version 300 es
@@ -278,85 +362,82 @@ uniform highp usampler2D u_band1;  // B03 (green)
 uniform highp usampler2D u_band2;  // B04 (red)
 uniform highp usampler2D u_band3;  // B08 (NIR)
 uniform vec2 u_resolution;
+uniform float u_stretch_lo;
 out vec4 outColor;
 
-const float TC_MAX_R = 1.5;
-const float TC_MID_R = 0.13;
-const float TC_GAMMA = 1.5;
-const float TC_SAT = 1.5;
-const float TC_G_OFF = 0.01;
+const float GAIN = 5.0;
+const float SAT_BOOST = 1.4;
 
-float toReflectance(float val) {
-    return val / 10000.0;
-}
-
-float highlightCompress(float a) {
-    float ar = clamp(a / TC_MAX_R, 0.0, 1.0);
-    float tx_norm = TC_MID_R / TC_MAX_R;
-    float num = ar * (ar * tx_norm - 1.0);
-    float den = ar * (2.0 * tx_norm - 1.0) - tx_norm;
-    if (abs(den) > 1e-10) {
-        return clamp(num / den, 0.0, 1.0);
-    }
-    return 0.0;
-}
-
-float adjGamma(float b) {
-    float g_off_pow = pow(TC_G_OFF, TC_GAMMA);
-    float g_off_range = pow(1.0 + TC_G_OFF, TC_GAMMA) - g_off_pow;
-    return (pow(b + TC_G_OFF, TC_GAMMA) - g_off_pow) / g_off_range;
-}
-
-float sAdj(float a) {
-    return adjGamma(highlightCompress(a));
-}
-
-vec3 satEnhance(vec3 rgb, float sat) {
-    float avg = (rgb.r + rgb.g + rgb.b) / 3.0 * (1.0 - sat);
-    return clamp(vec3(avg + rgb.r * sat, avg + rgb.g * sat, avg + rgb.b * sat), 0.0, 1.0);
-}
-
-float linearToSrgb(float linear) {
-    if (linear <= 0.0031308) {
-        return 12.92 * linear;
-    }
-    return 1.055 * pow(linear, 1.0 / 2.4) - 0.055;
-}
-
-vec3 linearToSrgb(vec3 linear) {
-    return vec3(linearToSrgb(linear.r), linearToSrgb(linear.g), linearToSrgb(linear.b));
+float linearToSrgb(float v) {
+    return v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1.0/2.4) - 0.055;
 }
 
 void main() {
-    ivec2 texel = ivec2(v_texCoord * u_resolution);
-    
-    float b02 = float(texelFetch(u_band0, texel, 0).r);  // Blue
-    float b03 = float(texelFetch(u_band1, texel, 0).r);  // Green
-    float b04 = float(texelFetch(u_band2, texel, 0).r);  // Red
-    float b08 = float(texelFetch(u_band3, texel, 0).r);  // NIR
-    
-    // Check for nodata (all zeros)
+    ivec2 texel = clamp(
+        ivec2(v_texCoord * u_resolution),
+        ivec2(0),
+        ivec2(u_resolution) - 1
+    );
+
+    float b02 = float(texelFetch(u_band0, texel, 0).r);
+    float b03 = float(texelFetch(u_band1, texel, 0).r);
+    float b04 = float(texelFetch(u_band2, texel, 0).r);
+    float b08 = float(texelFetch(u_band3, texel, 0).r);
+
     if (b02 == 0.0 && b03 == 0.0 && b04 == 0.0 && b08 == 0.0) {
         outColor = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
-    
-    // Convert to reflectance [0, 1]
-    float r = toReflectance(b04);
-    float g = toReflectance(b03);
-    float b = toReflectance(b02);
-    
-    // Highlight compression + gamma
-    vec3 adj = vec3(sAdj(r), sAdj(g), sAdj(b));
-    
-    // Saturation boost
-    vec3 sat = satEnhance(adj, TC_SAT);
-    
-    // sRGB encoding
-    vec3 srgb = linearToSrgb(sat);
-    
-    outColor = vec4(clamp(srgb, 0.0, 1.0), 1.0);
+
+    // Reflectance → Reinhard tone map → sRGB → percentile stretch
+    vec3 scaled = vec3(b04, b03, b02) / 10000.0 * GAIN;
+    vec3 tonemapped = scaled / (scaled + 1.0);
+    vec3 srgb = vec3(linearToSrgb(tonemapped.r), linearToSrgb(tonemapped.g), linearToSrgb(tonemapped.b));
+
+    // Shadow lift: stretch dark end up, leave highlights untouched.
+    // Reinhard already compresses highlights — stretching the top clips snow to white.
+    float headroom = 1.0 - u_stretch_lo;
+    if (headroom > 0.001) {
+        srgb = clamp((srgb - u_stretch_lo) / headroom, 0.0, 1.0);
+    }
+
+    // Saturation boost (median composites desaturate)
+    float lum = dot(srgb, vec3(0.2126, 0.7152, 0.0722));
+    vec3 sat = clamp(mix(vec3(lum), srgb, SAT_BOOST), 0.0, 1.0);
+
+    outColor = vec4(sat, 1.0);
 }`;
+
+// CPU-side Reinhard + sRGB (mirrors the shader, for stretch computation)
+const GAIN = 5.0;
+function reinhardSrgb(refl) {
+    const s = refl * GAIN;
+    const t = s / (s + 1);
+    return t <= 0.0031308 ? 12.92 * t : 1.055 * Math.pow(t, 1/2.4) - 0.055;
+}
+
+let stretchLo = 0;
+
+function computeStretchFromData(fetchResults) {
+    const sample = [];
+    for (const { result } of fetchResults) {
+        const d = result.data;
+        const ppb = d.length / 4;
+        const stride = Math.max(1, Math.floor(ppb / 300));
+        for (let i = 0; i < ppb; i += stride) {
+            const v0 = d[i], v1 = d[ppb + i], v2 = d[2*ppb + i], v3 = d[3*ppb + i];
+            if (v0 === 0 && v1 === 0 && v2 === 0 && v3 === 0) continue;
+            sample.push(
+                reinhardSrgb(v2 / 10000),
+                reinhardSrgb(v1 / 10000),
+                reinhardSrgb(v0 / 10000),
+            );
+        }
+    }
+    if (sample.length < 30) { stretchLo = 0; return; }
+    sample.sort((a, b) => a - b);
+    stretchLo = sample[Math.floor(sample.length * 0.02)];
+}
 
 // State
 let gl = null;
@@ -582,7 +663,8 @@ async function fetchAndDecodeMonth(aoi, lod, chunkId, monthIndex) {
 
     const t0 = performance.now();
     const result = new Uint16Array(anchor.data.length);
-    const deltaView = new Int16Array(delta.data.buffer);
+    // Must use same byteOffset and length as the Uint16Array — buffer may be oversized
+    const deltaView = new Int16Array(delta.data.buffer, delta.data.byteOffset, delta.data.length);
     for (let i = 0; i < anchor.data.length; i++) {
         const val = anchor.data[i] + deltaView[i];
         result[i] = Math.max(0, Math.min(65535, val));
@@ -644,6 +726,7 @@ function renderChunkAt(bandsData, w, h, x, y) {
 
     const resLoc = gl.getUniformLocation(program, 'u_resolution');
     gl.uniform2f(resLoc, w, h);
+    gl.uniform1f(gl.getUniformLocation(program, 'u_stretch_lo'), stretchLo);
 
     gl.viewport(x, y, w, h);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -694,13 +777,23 @@ async function loadMonth(monthIndex) {
         // Reset per-frame request log
         requestLog = [];
 
-        // Fetch all chunks in parallel, collect per-chunk metrics
+        // Phase 1: Fetch all chunks in parallel
         let loaded = 0;
         setStatus(`Loading 0/${totalChunks}...`);
-        const chunkMetrics = [];
 
-        const promises = chunkJobs.map(async ({ chunkId, row, col }) => {
+        const fetchResults = await Promise.all(chunkJobs.map(async ({ chunkId, row, col }) => {
             const result = await fetchAndDecodeMonth(currentAoi, currentLod, chunkId, monthIndex);
+            loaded++;
+            setStatus(`Loading ${loaded}/${totalChunks}...`);
+            return { chunkId, row, col, result };
+        }));
+
+        // Phase 2: Compute p2/p98 stretch from reconstructed data
+        computeStretchFromData(fetchResults);
+
+        // Phase 3: Render all chunks with stretch applied
+        const chunkMetrics = [];
+        for (const { chunkId, row, col, result } of fetchResults) {
             const { w, h } = chunkDims(row, col, gridRows, gridCols, chunkSize, mosaicW, mosaicH);
             const x = col * chunkSize;
             const y = canvasHeight - (row * chunkSize) - h;
@@ -714,12 +807,7 @@ async function loadMonth(monthIndex) {
                 ...result.timing,
                 ...gpu,
             });
-
-            loaded++;
-            setStatus(`Loading ${loaded}/${totalChunks}...`);
-        });
-
-        await Promise.all(promises);
+        }
         const total_ms = performance.now() - t0;
 
         // Aggregate frame metrics
@@ -778,8 +866,7 @@ async function loadMonth(monthIndex) {
         };
 
         // Update UI
-        const note = document.getElementById('chunk-note');
-        note.textContent = `${gridRows}x${gridCols} chunks — LOD ${currentLod}`;
+        fitCanvasToContainer();
         setStatus(`${lastFrame.total_ms}ms — ${manifest.months[monthIndex]}`, true);
         updateMetricsPanel();
 
@@ -793,6 +880,220 @@ async function loadMonth(monthIndex) {
         gl.clearColor(0.0, 0.0, 0.0, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
     }
+}
+
+// --- Progressive LOD ---
+
+// Pick the coarsest LOD where the shortest canvas dimension is >= MIN_PREVIEW_PX.
+// This ensures the preview is recognizable, not a blob of giant pixels.
+const MIN_PREVIEW_PX = 250;
+
+function pickPreviewLod() {
+    const lods = manifest.lods;
+    const factor = manifest.lod_factor || 2;
+    // Walk from coarsest to finest, pick the first that's big enough
+    for (let i = lods.length - 1; i > 0; i--) {
+        const f = Math.pow(factor, i);
+        const w = Math.ceil(manifest.mosaic_width / f);
+        const h = Math.ceil(manifest.mosaic_height / f);
+        if (Math.min(w, h) >= MIN_PREVIEW_PX) return i;
+    }
+    return 0; // no useful preview — go straight to LOD 0
+}
+
+// Fit canvas CSS size within its container, preserving aspect ratio.
+// Always call this after loadMonth to prevent canvas overflow.
+function fitCanvasToContainer() {
+    const container = canvas.parentElement;
+    const maxW = container.clientWidth - 40;
+    const maxH = container.clientHeight - 40;
+    const aspect = canvas.width / canvas.height;
+    let w, h;
+    if (maxW / maxH > aspect) {
+        h = Math.min(maxH, canvas.height);
+        w = Math.round(h * aspect);
+    } else {
+        w = Math.min(maxW, canvas.width);
+        h = Math.round(w / aspect);
+    }
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+}
+
+let progressiveUpgradeGen = 0;
+let isUpgrading = false;
+
+// Load a month with progressive LOD refinement:
+// 1. Instantly render at a coarse LOD (preview)
+// 2. Background-fetch LOD 0 and swap when ready
+async function loadMonthProgressive(monthIndex) {
+    const previewLod = pickPreviewLod();
+    const detailLod = 0;
+    const gen = ++progressiveUpgradeGen;
+
+    if (previewLod === detailLod) {
+        // No useful preview level — just load directly
+        currentLod = detailLod;
+        lodSelect.value = detailLod;
+        await loadMonth(monthIndex);
+        return;
+    }
+
+    // Phase 1: Render coarse preview
+    isUpgrading = true;
+    currentLod = previewLod;
+    lodSelect.value = previewLod;
+    const lodBadge = document.getElementById('lod-badge');
+    const t0 = performance.now();
+    await loadMonth(monthIndex);
+    const previewMs = Math.round(performance.now() - t0);
+
+    // fitCanvasToContainer already called by loadMonth — preview is fitted
+    lodBadge.classList.add('visible');
+    setStatus(`Preview ${previewMs}ms — enhancing...`, true);
+
+    // Phase 2: Background-fetch LOD 0
+    currentLod = detailLod;
+    lodSelect.value = detailLod;
+
+    // Pre-fetch all LOD 0 chunks without rendering
+    const lodMeta = manifest.lods[detailLod];
+    const chunkJobs = [];
+    for (let r = 0; r < lodMeta.grid_rows; r++) {
+        for (let c = 0; c < lodMeta.grid_cols; c++) {
+            const chunkId = `r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`;
+            chunkJobs.push({ chunkId, row: r, col: c });
+        }
+    }
+
+    // Fetch all LOD 0 chunks in parallel (silent — no metrics pollution)
+    const CONCURRENCY = 6;
+    for (let i = 0; i < chunkJobs.length; i += CONCURRENCY) {
+        if (gen !== progressiveUpgradeGen) return; // user navigated away
+        const batch = chunkJobs.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(({ chunkId }) =>
+            fetchAndDecodeMonth(currentAoi, detailLod, chunkId, monthIndex)
+                .catch(() => {})
+        ));
+    }
+
+    if (gen !== progressiveUpgradeGen) return; // user navigated away
+
+    // Phase 3: Render LOD 0 at native resolution
+    await loadMonth(monthIndex);
+    isUpgrading = false;
+    document.getElementById('lod-badge').classList.remove('visible');
+    const totalMs = Math.round(performance.now() - t0);
+    setStatus(`${lastFrame.total_ms}ms (preview: ${previewMs}ms) — ${manifest.months[monthIndex]}`, true);
+}
+
+// --- Click-to-query (client-side band value extraction) ---
+
+function handleCanvasClick(e) {
+    if (!manifest || !lastFrame) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+
+    // Scale click to canvas buffer coordinates
+    const bufX = Math.floor(clickX * canvas.width / rect.width);
+    const bufY = Math.floor(clickY * canvas.height / rect.height);
+
+    // Bounds check
+    if (bufX < 0 || bufX >= canvas.width || bufY < 0 || bufY >= canvas.height) return;
+
+    // Current LOD parameters
+    const lodMeta = manifest.lods[currentLod];
+    const gridRows = lodMeta.grid_rows;
+    const gridCols = lodMeta.grid_cols;
+    const chunkSize = lodMeta.chunk_size;
+    const factor = Math.pow(manifest.lod_factor, currentLod);
+    const mosaicW = Math.ceil(manifest.mosaic_width / factor);
+    const mosaicH = Math.ceil(manifest.mosaic_height / factor);
+
+    // Find chunk and local pixel
+    const chunkCol = Math.min(Math.floor(bufX / chunkSize), gridCols - 1);
+    const chunkRow = Math.min(Math.floor(bufY / chunkSize), gridRows - 1);
+    const chunkId = `r${String(chunkRow).padStart(3,'0')}_c${String(chunkCol).padStart(3,'0')}`;
+
+    const { w: chunkW, h: chunkH } = chunkDims(chunkRow, chunkCol, gridRows, gridCols, chunkSize, mosaicW, mosaicH);
+    const localCol = Math.min(bufX - chunkCol * chunkSize, chunkW - 1);
+    const localRow = Math.min(bufY - chunkRow * chunkSize, chunkH - 1);
+
+    // Look up cached data
+    const key = cacheKey(currentLod, chunkId, currentMonth);
+    const cached = chunkCache.get(key);
+    if (!cached) {
+        showQueryPanel(null, bufX, bufY);
+        return;
+    }
+
+    // Extract band values (data layout: band-interleaved, C-order)
+    const pixelsPerBand = cached.data.length / 4;
+    const pixelIndex = localRow * chunkW + localCol;
+    const b02 = cached.data[0 * pixelsPerBand + pixelIndex];
+    const b03 = cached.data[1 * pixelsPerBand + pixelIndex];
+    const b04 = cached.data[2 * pixelsPerBand + pixelIndex];
+    const b08 = cached.data[3 * pixelsPerBand + pixelIndex];
+
+    // Compute indices
+    const nir = b08 / 10000;
+    const red = b04 / 10000;
+    const green = b03 / 10000;
+    const ndvi = (nir + red) > 0 ? (nir - red) / (nir + red) : null;
+    const ndwi = (green + nir) > 0 ? (green - nir) / (green + nir) : null;
+    const isWater = ndwi !== null && ndwi > 0;
+
+    // LOD 0 pixel coordinates (for display)
+    const mosaicPixelRow = Math.round((chunkRow * chunkSize + localRow) * factor);
+    const mosaicPixelCol = Math.round((chunkCol * chunkSize + localCol) * factor);
+
+    showQueryPanel({
+        month: manifest.months[currentMonth],
+        pixel: { row: mosaicPixelRow, col: mosaicPixelCol },
+        bands: { B02: b02, B03: b03, B04: b04, B08: b08 },
+        ndvi, ndwi, isWater,
+        reflectance: {
+            blue: (b02 / 10000).toFixed(4),
+            green: (b03 / 10000).toFixed(4),
+            red: (b04 / 10000).toFixed(4),
+            nir: (b08 / 10000).toFixed(4),
+        },
+    });
+}
+
+function showQueryPanel(data) {
+    const panel = document.getElementById('query-panel');
+    if (!data) {
+        panel.classList.remove('visible');
+        return;
+    }
+
+    const ndviColor = data.ndvi !== null
+        ? (data.ndvi > 0.3 ? 'var(--green)' : data.ndvi > 0 ? 'var(--amber)' : 'var(--red)')
+        : 'var(--text-dim)';
+    const ndwiColor = data.ndwi !== null
+        ? (data.ndwi > 0 ? 'var(--accent)' : 'var(--text-dim)')
+        : 'var(--text-dim)';
+
+    panel.innerHTML = `
+        <div class="qp-title">Point Query</div>
+        <div class="qp-row"><span class="qp-label">Month</span><span class="qp-value">${data.month}</span></div>
+        <div class="qp-row"><span class="qp-label">Pixel</span><span class="qp-value">${data.pixel.row}, ${data.pixel.col}</span></div>
+        <div class="qp-sep"></div>
+        <div class="qp-row"><span class="qp-label">NDVI</span><span class="qp-value qp-index" style="color:${ndviColor}">${data.ndvi !== null ? data.ndvi.toFixed(3) : '—'}</span></div>
+        <div class="qp-row"><span class="qp-label">NDWI</span><span class="qp-value qp-index" style="color:${ndwiColor}">${data.ndwi !== null ? data.ndwi.toFixed(3) : '—'}</span></div>
+        <div class="qp-row"><span class="qp-label">Water</span><span class="qp-value">${data.isWater ? 'Yes' : 'No'}</span></div>
+        <div class="qp-sep"></div>
+        <div class="qp-title">Reflectance</div>
+        <div class="qp-row"><span class="qp-label">Blue (B02)</span><span class="qp-value">${data.reflectance.blue}</span></div>
+        <div class="qp-row"><span class="qp-label">Green (B03)</span><span class="qp-value">${data.reflectance.green}</span></div>
+        <div class="qp-row"><span class="qp-label">Red (B04)</span><span class="qp-value">${data.reflectance.red}</span></div>
+        <div class="qp-row"><span class="qp-label">NIR (B08)</span><span class="qp-value">${data.reflectance.nir}</span></div>
+        <div class="qp-hint">Click anywhere to query</div>
+    `;
+    panel.classList.add('visible');
 }
 
 // --- Anchor cache introspection ---
@@ -922,10 +1223,12 @@ function updateMetricsPanel() {
     `;
 }
 
-// Update month label
+// Update month label and slider
 function updateMonthLabel() {
     if (!manifest) return;
     monthLabel.textContent = manifest.months[currentMonth] || `Month ${currentMonth}`;
+    const slider = document.getElementById('month-slider');
+    if (slider) slider.value = currentMonth;
 }
 
 // Navigation handlers
@@ -933,14 +1236,23 @@ function prevMonth() {
     if (!manifest || currentMonth <= 0) return;
     currentMonth--;
     updateMonthLabel();
-    loadMonth(currentMonth);
+    // If already at LOD 0, stay there (warm cache). Otherwise, progressive.
+    if (currentLod === 0) {
+        loadMonth(currentMonth);
+    } else {
+        loadMonthProgressive(currentMonth);
+    }
 }
 
 function nextMonth() {
     if (!manifest || currentMonth >= manifest.months.length - 1) return;
     currentMonth++;
     updateMonthLabel();
-    loadMonth(currentMonth);
+    if (currentLod === 0) {
+        loadMonth(currentMonth);
+    } else {
+        loadMonthProgressive(currentMonth);
+    }
 }
 
 function setLod(lod) {
@@ -963,6 +1275,13 @@ function populateLodSelect() {
     const maxLod = lods.length - 1;
     lodSelect.value = maxLod;
     currentLod = maxLod;
+}
+
+// Populate month slider range
+function populateMonthSlider() {
+    const slider = document.getElementById('month-slider');
+    slider.max = manifest.months.length - 1;
+    slider.value = currentMonth;
 }
 
 // --- Bundled viewport fetch (single HTTP request for all chunks) ---
@@ -1240,22 +1559,24 @@ async function switchAoi(aoi) {
     anchorStats.hits = 0;
     anchorStats.misses = 0;
     prefetchGeneration++;
+    progressiveUpgradeGen++;
     prefetchStatus = 'idle';
-
     setStatus('Fetching manifest...');
     const response = await fetch(`/v1/manifest/${aoi}`);
     if (!response.ok) { showError('Manifest fetch failed', `HTTP ${response.status}`); return; }
     manifest = await response.json();
 
     populateLodSelect();
+    populateMonthSlider();
     currentMonth = 0;
     updateMonthLabel();
-    await loadMonth(currentMonth);
+    await loadMonthProgressive(currentMonth);
 }
 
 // Expose to browser console
 window.benchmarkFlows = benchmarkFlows;
 window.switchAoi = switchAoi;
+window.loadMonthProgressive = loadMonthProgressive;
 
 // Initialize
 async function init() {
@@ -1283,29 +1604,53 @@ async function init() {
         return;
     }
     
-    // Populate LOD dropdown
+    // Populate controls
     populateLodSelect();
-    
+    populateMonthSlider();
+
     // Set initial month
     currentMonth = 0;
     updateMonthLabel();
-    
-    // Load initial data
-    await loadMonth(currentMonth);
-    
+
+    // Progressive cold open: show coarse preview instantly, then upgrade
+    await loadMonthProgressive(currentMonth);
+
     // Event listeners
     prevBtn.addEventListener('click', prevMonth);
     nextBtn.addEventListener('click', nextMonth);
+
+    // Month slider — scrub through time
+    const monthSlider = document.getElementById('month-slider');
+    monthSlider.addEventListener('input', (e) => {
+        const idx = parseInt(e.target.value);
+        if (idx === currentMonth) return;
+        currentMonth = idx;
+        updateMonthLabel();
+        // Use direct loadMonth if LOD 0 is warm, otherwise progressive
+        if (currentLod === 0) {
+            loadMonth(currentMonth);
+        } else {
+            loadMonthProgressive(currentMonth);
+        }
+    });
+
     lodSelect.addEventListener('change', (e) => setLod(e.target.value));
+    document.getElementById('aoi-select').addEventListener('change', (e) => switchAoi(e.target.value));
     document.getElementById('metrics-btn').addEventListener('click', () => {
         const panel = document.getElementById('metrics-panel');
         panel.classList.toggle('visible');
         updateMetricsPanel();
     });
-    
+
+    // Click-to-query
+    canvas.addEventListener('click', handleCanvasClick);
+
+    // Refit canvas on window resize
+    window.addEventListener('resize', fitCanvasToContainer);
+
     // Keyboard navigation
     document.addEventListener('keydown', (e) => {
-        if (e.target.tagName === 'SELECT') return;
+        if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
         switch (e.key) {
             case 'ArrowLeft': e.preventDefault(); prevMonth(); break;
             case 'ArrowRight': e.preventDefault(); nextMonth(); break;
