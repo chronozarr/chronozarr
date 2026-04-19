@@ -514,7 +514,6 @@ let playing = false;
 let playTimer = null;
 let gridScale = 1;
 let queryPixel = null; // { row, col }
-let loadDebounceTimer = null;
 let currentAbort = null;  // AbortController for in-flight tile fetches
 
 // --- Product switcher UI ---
@@ -678,7 +677,7 @@ function setProduct(product) {
 }
 
 // --- Month ---
-function setMonth(index, immediate) {
+function setMonth(index) {
   if (!currentAoi) return;
   const meta = catalog[currentAoi];
   currentMonth = Math.max(0, Math.min(index, meta.n_months - 1));
@@ -690,20 +689,17 @@ function setMonth(index, immediate) {
     tileElements[cid].element.classList.add('loading');
   }
 
-  // Cancel any pending debounced load
-  clearTimeout(loadDebounceTimer);
+  loadAllTiles();
+  if (queryPixel) doPointQuery(queryPixel.row, queryPixel.col);
+}
 
-  if (immediate) {
-    // Playback / arrow keys: load right away
-    loadAllTiles();
-    if (queryPixel) doPointQuery(queryPixel.row, queryPixel.col);
-  } else {
-    // Slider drag: debounce so only the final position loads
-    loadDebounceTimer = setTimeout(() => {
-      loadAllTiles();
-      if (queryPixel) doPointQuery(queryPixel.row, queryPixel.col);
-    }, 120);
-  }
+// Label-only update while dragging (no fetches)
+function previewMonth(index) {
+  if (!currentAoi) return;
+  const meta = catalog[currentAoi];
+  currentMonth = Math.max(0, Math.min(index, meta.n_months - 1));
+  monthSlider.value = currentMonth;
+  updateMonthLabel();
 }
 
 function updateMonthLabel() {
@@ -890,7 +886,7 @@ function togglePlay() {
   if (playing) {
     playTimer = setInterval(() => {
       const meta = catalog[currentAoi];
-      setMonth(currentMonth >= meta.n_months - 1 ? 0 : currentMonth + 1, true);
+      setMonth(currentMonth >= meta.n_months - 1 ? 0 : currentMonth + 1);
     }, 700);
   } else {
     clearInterval(playTimer);
@@ -1038,13 +1034,14 @@ function showQueryResults(data, apiUrl) {
 
 // --- Keyboard ---
 aoiSelect.addEventListener('change', () => setAoi(aoiSelect.value));
-monthSlider.addEventListener('input', () => setMonth(parseInt(monthSlider.value)));
+monthSlider.addEventListener('input', () => previewMonth(parseInt(monthSlider.value)));
+monthSlider.addEventListener('change', () => setMonth(parseInt(monthSlider.value)));
 
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   switch (e.key) {
-    case 'ArrowLeft': e.preventDefault(); setMonth(currentMonth - 1, true); break;
-    case 'ArrowRight': e.preventDefault(); setMonth(currentMonth + 1, true); break;
+    case 'ArrowLeft': e.preventDefault(); setMonth(currentMonth - 1); break;
+    case 'ArrowRight': e.preventDefault(); setMonth(currentMonth + 1); break;
     case '1': setProduct('true_color'); break;
     case '2': setProduct('false_color'); break;
     case '3': setProduct('ndvi'); break;
