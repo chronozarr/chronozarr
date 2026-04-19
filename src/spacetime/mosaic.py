@@ -237,7 +237,7 @@ def monthly_composite(
             try:
                 _, (bands, valid) = future.result()
             except Exception as e:
-                logger.warning("Skipping scene %s: %s", scene.id, e)
+                logger.warning("Skipping scene %s: %s", scene.item_id, e)
                 failed += 1
                 continue
             mask_3d = np.broadcast_to(valid[np.newaxis, :, :], bands.shape)
