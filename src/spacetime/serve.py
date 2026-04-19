@@ -85,53 +85,8 @@ def _discover_aois() -> dict[str, dict]:
             }
             continue
 
-        # v0 store (original format)
-        aoi_name = manifest["aoi"]
-        chunk_size = manifest["chunk_size"]
-        n_rows = manifest["n_rows"]
-        n_cols = manifest["n_cols"]
-
-        chunk_ids = sorted(
-            f"r{r:03d}_c{c:03d}"
-            for r in range(n_rows)
-            for c in range(n_cols)
-            if (b2c_dir / f"r{r:03d}_c{c:03d}").is_dir()
-        )
-
-        key = f"{aoi_name}/cs{chunk_size}"
-        aois[key] = {
-            "aoi": aoi_name,
-            "label": manifest.get("label", aoi_name),
-            "chunk_size": chunk_size,
-            "store_dir": str(b2c_dir),
-            "chunk_ids": chunk_ids,
-            "months": manifest["months"],
-            "n_rows": n_rows,
-            "n_cols": n_cols,
-            "n_months": len(manifest["months"]),
-            "epsg": manifest.get("epsg"),
-            "transform": manifest.get("transform"),
-            "mosaic_height": manifest.get("mosaic_height"),
-            "mosaic_width": manifest.get("mosaic_width"),
-            "source": manifest.get("source", "Sentinel-2 L2A"),
-            "composite_method": manifest.get("composite_method", "monthly median, SCL cloud mask"),
-        }
-        pyramid_meta = manifest.get("pyramid")
-        if pyramid_meta:
-            for lvl in pyramid_meta["levels"]:
-                level_dir = b2c_dir / "pyramid" / str(lvl["level"])
-                lvl["chunk_ids"] = (
-                    sorted(
-                        d.name
-                        for d in level_dir.iterdir()
-                        if d.is_dir() and d.name.startswith("r")
-                    )
-                    if level_dir.is_dir()
-                    else []
-                )
-            aois[key]["pyramid"] = pyramid_meta
-        else:
-            aois[key]["pyramid"] = None
+        # Skip unknown manifest versions
+        logger.warning("Skipping unknown store version %s at %s", manifest.get("version"), b2c_dir)
     return aois
 
 

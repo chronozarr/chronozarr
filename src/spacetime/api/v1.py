@@ -53,8 +53,6 @@ from spacetime.api.models import (
     PixelLocation,
     PointQueryResponse,
     ProductInfo,
-    PyramidInfo,
-    PyramidLevel,
     StatsResponse,
     UsageResponse,
 )
@@ -89,10 +87,7 @@ _BAND_CACHE_SIZE = 512
 @lru_cache(maxsize=_BAND_CACHE_SIZE)
 def _load_bands(store_dir: str, chunk_id: str, month_index: int, level: int = 0) -> np.ndarray:
     """Load raw multiband data for a chunk/month. Cached for product switching."""
-    if level == 0:
-        zarr_path = Path(store_dir) / chunk_id / "stack.zarr"
-    else:
-        zarr_path = Path(store_dir) / "pyramid" / str(level) / chunk_id / "stack.zarr"
+    zarr_path = Path(store_dir) / "lod" / str(level) / "chunks" / chunk_id / "stack.zarr"
     z = zarr.open(str(zarr_path), mode="r")
     return np.array(z[month_index])
 
@@ -169,36 +164,23 @@ V1_MANIFEST_CACHE_HEADER = "public, max-age=3600"
 V1_CHUNK_CACHE_HEADER = "public, max-age=86400, immutable"
 
 
-def _aoi_candidates(aoi: str) -> list[tuple[int, str]]:
-    """Return matching AOI catalog keys sorted by chunk size ascending.
-
-    Only includes v0 stores (with chunk_size). v1 stores are excluded
-    from v0 endpoint resolution.
-    """
-    candidates = []
-    for key, meta in AOI_CATALOG.items():
-        if meta["aoi"] == aoi and "chunk_size" in meta:
-            candidates.append((int(meta["chunk_size"]), key))
-    return sorted(candidates)
-
-
 def _get_aoi(aoi: str) -> dict:
     """Look up AOI metadata, raising 404 if not found."""
     if aoi in AOI_CATALOG:
         return AOI_CATALOG[aoi]
-    candidates = _aoi_candidates(aoi)
-    if candidates:
-        return AOI_CATALOG[candidates[0][1]]
+    key = f"{aoi}/v1"
+    if key in AOI_CATALOG:
+        return AOI_CATALOG[key]
     raise HTTPException(404, detail=f"Unknown AOI: {aoi}")
 
 
 def _get_aoi_key(aoi: str) -> str:
-    """Resolve the full AOI key including chunk size."""
+    """Resolve the full AOI catalog key."""
     if aoi in AOI_CATALOG:
         return aoi
-    candidates = _aoi_candidates(aoi)
-    if candidates:
-        return candidates[0][1]
+    key = f"{aoi}/v1"
+    if key in AOI_CATALOG:
+        return key
     raise HTTPException(404, detail=f"Unknown AOI: {aoi}")
 
 
@@ -216,63 +198,35 @@ def _check_product_access(request: Request, product: str) -> None:
         )
 
 
+def _chunk_size(meta: dict) -> int:
+    """Get LOD 0 chunk size from v1 metadata."""
+    return meta["lods"][0]["chunk_size"]
+
+
 def _build_grid_info(meta: dict) -> GridInfo:
-    """Build GridInfo from either v0 or v1 store metadata."""
-    if meta.get("version") == "1.0.0":
-        lod0 = meta["lods"][0]
-        return GridInfo(
-            n_rows=lod0["grid_rows"],
-            n_cols=lod0["grid_cols"],
-            chunk_size=lod0["chunk_size"],
-            mosaic_height=meta["mosaic_height"],
-            mosaic_width=meta["mosaic_width"],
-        )
+    """Build GridInfo from v1 store metadata."""
+    lod0 = meta["lods"][0]
     return GridInfo(
-        n_rows=meta["n_rows"],
-        n_cols=meta["n_cols"],
-        chunk_size=meta["chunk_size"],
+        n_rows=lod0["grid_rows"],
+        n_cols=lod0["grid_cols"],
+        chunk_size=lod0["chunk_size"],
         mosaic_height=meta["mosaic_height"],
         mosaic_width=meta["mosaic_width"],
     )
 
 
-def _build_pyramid_info(meta: dict) -> PyramidInfo | None:
-    """Convert raw pyramid metadata into the catalog response model."""
-    pyramid = meta.get("pyramid")
-    if not pyramid:
-        return None
-
-    return PyramidInfo(
-        n_levels=pyramid["n_levels"],
-        levels=[
-            PyramidLevel(
-                level=level_meta["level"],
-                mosaic_height=level_meta["mosaic_height"],
-                mosaic_width=level_meta["mosaic_width"],
-                n_rows=level_meta["n_rows"],
-                n_cols=level_meta["n_cols"],
-                resolution_m=level_meta["resolution_m"],
-            )
-            for level_meta in pyramid["levels"]
-        ],
-    )
-
-
 def _validate_chunk_id(meta: dict, chunk_id: str, level: int) -> None:
-    """Validate that a chunk exists at the requested pyramid level."""
-    if level > 0:
-        pyramid = meta.get("pyramid")
-        if not pyramid:
-            raise HTTPException(400, detail="No pyramid levels available for this AOI")
-        max_level = pyramid["n_levels"]
-        if level > max_level:
-            raise HTTPException(400, detail=f"Pyramid level {level} exceeds max {max_level}")
-        level_meta = pyramid["levels"][level - 1]
-        if chunk_id not in level_meta.get("chunk_ids", []):
-            raise HTTPException(404, detail=f"Unknown chunk at level {level}: {chunk_id}")
-    else:
+    """Validate that a chunk exists at the requested LOD level."""
+    lod_levels = meta.get("lod_levels", 1)
+    if level >= lod_levels:
+        raise HTTPException(400, detail=f"LOD level {level} exceeds max {lod_levels - 1}")
+    if level == 0:
         if chunk_id not in meta["chunk_ids"]:
             raise HTTPException(404, detail=f"Unknown chunk: {chunk_id}")
+    else:
+        lod_chunk_dir = Path(meta["store_dir"]) / "lod" / str(level) / "chunks" / chunk_id
+        if not lod_chunk_dir.is_dir():
+            raise HTTPException(404, detail=f"Unknown chunk at LOD {level}: {chunk_id}")
 
 
 @router.get("/")
@@ -314,7 +268,7 @@ def get_catalog(request: Request):
                 months=meta["months"],
                 n_months=meta["n_months"],
                 grid=_build_grid_info(meta),
-                pyramid=_build_pyramid_info(meta),
+                pyramid=None,
                 products=accessible,
                 bbox_wgs84=meta.get("bbox_wgs84"),
             )
@@ -341,7 +295,7 @@ def get_aoi_detail(aoi: str, request: Request):
         months=meta["months"],
         n_months=meta["n_months"],
         grid=_build_grid_info(meta),
-        pyramid=_build_pyramid_info(meta),
+        pyramid=None,
         products=products_for_tier(tier),
         bbox_wgs84=meta.get("bbox_wgs84"),
     )
@@ -451,7 +405,7 @@ def point_query(
             lng,
             meta["epsg"],
             meta["transform"],
-            meta["chunk_size"],
+            _chunk_size(meta),
             meta["mosaic_height"],
             meta["mosaic_width"],
         )
@@ -463,7 +417,7 @@ def point_query(
             pixel_col,
             meta["epsg"],
             meta["transform"],
-            meta["chunk_size"],
+            _chunk_size(meta),
             meta["mosaic_height"],
             meta["mosaic_width"],
         )

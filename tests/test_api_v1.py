@@ -96,35 +96,6 @@ def test_tile_png(api_client):
 
 
 @pytest.mark.unit
-def test_unsuffixed_aoi_prefers_smallest_chunk_size(zarr_store_multi_chunk_sizes, monkeypatch):
-    """Unsuffixed AOI resolution should prefer the smallest available chunk size."""
-    import spacetime.api.v1 as v1_mod
-    from spacetime.api.jobs import JobDB
-    from spacetime.api.v1 import AOI_CATALOG, _get_aoi, _get_aoi_key, _load_bands
-    from spacetime.serve import _discover_aois
-
-    AOI_CATALOG.clear()
-    _load_bands.cache_clear()
-    monkeypatch.setattr(
-        "spacetime.serve.STORES_ROOT",
-        zarr_store_multi_chunk_sizes["stores_root"],
-    )
-    monkeypatch.setattr(
-        v1_mod,
-        "JOB_DB",
-        JobDB(db_path=zarr_store_multi_chunk_sizes["stores_root"].parent / "test_jobs.sqlite"),
-    )
-    AOI_CATALOG.update(_discover_aois())
-
-    assert _get_aoi_key("test_aoi") == "test_aoi/cs256"
-    assert _get_aoi("test_aoi")["chunk_size"] == 256
-    assert _get_aoi_key("test_aoi/cs512") == "test_aoi/cs512"
-
-    AOI_CATALOG.clear()
-    _load_bands.cache_clear()
-
-
-@pytest.mark.unit
 def test_profile_tile_render_reports_cold_then_warm(zarr_store, monkeypatch):
     """Tile profiler distinguishes cache misses from warm-cache renders."""
     from spacetime.api.v1 import AOI_CATALOG, _load_bands, profile_tile_render
@@ -135,7 +106,7 @@ def test_profile_tile_render_reports_cold_then_warm(zarr_store, monkeypatch):
     monkeypatch.setattr("spacetime.serve.STORES_ROOT", zarr_store["stores_root"])
     AOI_CATALOG.update(_discover_aois())
 
-    meta = AOI_CATALOG["test_aoi/cs512"]
+    meta = AOI_CATALOG["test_aoi/v1"]
     cold = profile_tile_render(
         meta["store_dir"],
         "r000_c000",

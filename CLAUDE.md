@@ -5,8 +5,8 @@ Product name: TileRipper. Internal package name: spacetime.
 
 ## Architecture
 
-B2_chunked Zarr is the native format. Products derived at serve time.
-Chunk-grid access is the runtime. See ARCHITECTURE_DECISION.md for spec.
+ChronoFabric v1: star-delta temporal encoding with multiscale LOD pyramid.
+Zstd-compressed Zarr stores. Products derived at serve time via band math.
 
 ## Project structure
 
@@ -27,16 +27,12 @@ src/spacetime/
   static/
     index.html     # Product demo (map + click-to-query values panel)
   encode/
-    baseline_b.py  # Multiband Zarr encoder (B2_chunked — v0 format)
-    baseline_a.py  # Per-product PNGs (superseded)
-    experimental.py # Keyframe + delta (optional optimization)
-  access.py        # Access pattern simulation
-  bench.py         # DuckDB-backed metrics
-  qc.py            # Visual comparison panels
+    v1.py          # ChronoFabric v1 encoder (star-delta + LOD pyramid)
 experiments/
-  aois.yaml        # AOI definitions (Sahara + Iowa)
-  run_experiment.py # Full pipeline orchestrator
-data/              # gitignored: raw/, mosaics/, stores/, reports/
+  aois.yaml        # AOI definitions
+scripts/
+  ingest_v1.py     # Generic AOI ingestion (download + v1 encode)
+data/              # gitignored: mosaics/, stores/, reports/
 ```
 
 ## How to run
@@ -45,8 +41,9 @@ data/              # gitignored: raw/, mosaics/, stores/, reports/
 # Tile server + demo (http://localhost:8765)
 uv run --extra serve uvicorn spacetime.serve:app --host 0.0.0.0 --port 8765
 
-# Full ingestion pipeline for one AOI
-uv run python experiments/run_experiment.py --aoi sahara_tamanrasset
+# Ingest an AOI (full Sentinel-2 archive by default)
+uv run python scripts/ingest_v1.py --aoi nile_delta
+uv run python scripts/ingest_v1.py --aoi sahara_tamanrasset --start 2020-01-01 --end 2024-12-31
 ```
 
 ## API endpoints (v1)

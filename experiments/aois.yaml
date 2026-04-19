@@ -16,6 +16,34 @@ aois:
     epsg: 32615  # UTM zone 15N
     expected_behavior: "Stress-test for deltas: large seasonal swings, snow/bare/crop transitions"
 
+  nile_delta:
+    label: "Nile Delta (Kafr El Sheikh, Egypt)"
+    description: "Irrigated agriculture abutting desert, canals, coastal lagoons"
+    bbox: [30.80, 31.00, 31.05, 31.25]
+    epsg: 32636  # UTM zone 36N
+    expected_behavior: "Sharp green/barren boundary, stable irrigation patterns, water features"
+
+  rondonia_brazil:
+    label: "Rondônia Deforestation (Brazil)"
+    description: "Amazon fishbone deforestation frontier, forest vs cleared pasture"
+    bbox: [-62.90, -10.60, -62.65, -10.35]
+    epsg: 32720  # UTM zone 20S
+    expected_behavior: "High NDVI contrast at clearing edges, wet/dry season cloud variation"
+
+  lake_mead:
+    label: "Lake Mead (NV/AZ, USA)"
+    description: "Reservoir with dramatic water level changes in arid landscape"
+    bbox: [-114.85, 36.00, -114.60, 36.25]
+    epsg: 32611  # UTM zone 11N
+    expected_behavior: "Water extent shifts between months, strong water/NDWI signal"
+
+  mekong_delta:
+    label: "Mekong Delta (Vietnam)"
+    description: "Rice paddies with seasonal flooding cycle, river channels"
+    bbox: [105.70, 9.80, 105.95, 10.05]
+    epsg: 32648  # UTM zone 48N
+    expected_behavior: "Wet/dry rice cycle, flooding extent changes, dense channel network"
+
 # Shared parameters
 time_range:
   start: "2023-01-01"
