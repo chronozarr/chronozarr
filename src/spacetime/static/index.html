@@ -514,6 +514,8 @@ let playing = false;
 let playTimer = null;
 let gridScale = 1;
 let queryPixel = null; // { row, col }
+let loadDebounceTimer = null;
+let currentAbort = null;  // AbortController for in-flight tile fetches
 
 // --- Product switcher UI ---
 function buildProductSwitcher() {
@@ -676,17 +678,32 @@ function setProduct(product) {
 }
 
 // --- Month ---
-function setMonth(index) {
+function setMonth(index, immediate) {
   if (!currentAoi) return;
   const meta = catalog[currentAoi];
   currentMonth = Math.max(0, Math.min(index, meta.n_months - 1));
   monthSlider.value = currentMonth;
   updateMonthLabel();
 
-  // Month change requires fetching new raw band data
-  loadAllTiles();
+  // Dim current tiles to signal stale data
+  for (const cid of Object.keys(tileElements)) {
+    tileElements[cid].element.classList.add('loading');
+  }
 
-  if (queryPixel) doPointQuery(queryPixel.row, queryPixel.col);
+  // Cancel any pending debounced load
+  clearTimeout(loadDebounceTimer);
+
+  if (immediate) {
+    // Playback / arrow keys: load right away
+    loadAllTiles();
+    if (queryPixel) doPointQuery(queryPixel.row, queryPixel.col);
+  } else {
+    // Slider drag: debounce so only the final position loads
+    loadDebounceTimer = setTimeout(() => {
+      loadAllTiles();
+      if (queryPixel) doPointQuery(queryPixel.row, queryPixel.col);
+    }, 120);
+  }
 }
 
 function updateMonthLabel() {
@@ -722,6 +739,11 @@ async function loadAllTilesWebGL() {
   const t0 = performance.now();
   const monthStr = meta.months[currentMonth];
 
+  // Abort any in-flight fetches from previous loads
+  if (currentAbort) currentAbort.abort();
+  currentAbort = new AbortController();
+  const signal = currentAbort.signal;
+
   statusEl.textContent = 'Loading band data...';
 
   // Build chunk IDs from grid
@@ -745,7 +767,7 @@ async function loadAllTilesWebGL() {
 
     try {
       const url = rawBandUrl(currentAoi, cid, monthStr);
-      const response = await fetch(url);
+      const response = await fetch(url, { signal });
 
       if (gen !== loadGeneration) return;
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -760,6 +782,7 @@ async function loadAllTilesWebGL() {
         element.classList.remove('loading');
       }
     } catch (e) {
+      if (e.name === 'AbortError') return;  // expected on scrub
       console.warn('Failed to load band data for', cid, e);
       if (gen !== loadGeneration) return;
 
@@ -867,7 +890,7 @@ function togglePlay() {
   if (playing) {
     playTimer = setInterval(() => {
       const meta = catalog[currentAoi];
-      setMonth(currentMonth >= meta.n_months - 1 ? 0 : currentMonth + 1);
+      setMonth(currentMonth >= meta.n_months - 1 ? 0 : currentMonth + 1, true);
     }, 700);
   } else {
     clearInterval(playTimer);
@@ -1020,8 +1043,8 @@ monthSlider.addEventListener('input', () => setMonth(parseInt(monthSlider.value)
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   switch (e.key) {
-    case 'ArrowLeft': e.preventDefault(); setMonth(currentMonth - 1); break;
-    case 'ArrowRight': e.preventDefault(); setMonth(currentMonth + 1); break;
+    case 'ArrowLeft': e.preventDefault(); setMonth(currentMonth - 1, true); break;
+    case 'ArrowRight': e.preventDefault(); setMonth(currentMonth + 1, true); break;
     case '1': setProduct('true_color'); break;
     case '2': setProduct('false_color'); break;
     case '3': setProduct('ndvi'); break;
