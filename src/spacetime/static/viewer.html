@@ -424,10 +424,7 @@
 <nav>
   <div class="brand">Tile<span>Ripper</span></div>
   <div class="nav-sep"></div>
-  <select id="aoi-select">
-    <option value="sahara_tamanrasset">Sahara</option>
-    <option value="iowa_ames">Iowa</option>
-  </select>
+  <select id="aoi-select"></select>
   <div class="products" id="products"></div>
   <div class="nav-right">
     <span class="nav-meta" id="nav-meta">Sentinel-2 · 10m</span>
@@ -1553,6 +1550,26 @@ async function init() {
     createProgram();
     setupGeometry();
     buildProducts();
+
+    // Populate AOI dropdown from catalog
+    try {
+        const catResp = await fetch('/v1/catalog');
+        if (catResp.ok) {
+            const catData = await catResp.json();
+            const select = document.getElementById('aoi-select');
+            select.innerHTML = '';
+            catData.aois.forEach(aoi => {
+                const opt = document.createElement('option');
+                opt.value = aoi.id;
+                opt.textContent = aoi.name;
+                select.appendChild(opt);
+            });
+            if (catData.aois.length > 0) {
+                currentAoi = catData.aois[0].id;
+                select.value = currentAoi;
+            }
+        }
+    } catch (_) {}
 
     try {
         const response = await fetch(`/v1/manifest/${currentAoi}`);
