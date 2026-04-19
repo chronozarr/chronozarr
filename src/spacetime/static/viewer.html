@@ -3,20 +3,25 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TileRipper — ChronoFabric Viewer</title>
+<title>TileRipper</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #0b0e14;
-    --surface: #141820;
-    --surface2: #1a1f2b;
-    --border: #252a38;
-    --text: #e2e4ea;
-    --text-dim: #6b7394;
-    --accent: #4f8ff7;
-    --accent-dim: #2a4a8a;
+    --bg: #090c12;
+    --surface: #111620;
+    --surface-2: #1a2030;
+    --border: #222a3a;
+    --text: #e4e7ef;
+    --text-2: #6e7a99;
+    --text-3: #3e4a63;
+    --accent: #3b82f6;
+    --accent-dim: rgba(59, 130, 246, 0.15);
     --green: #34d399;
-    --red: #f87171;
-    --amber: #fbbf24;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --water: #2563eb;
     --radius: 8px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -24,54 +29,158 @@
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     background: var(--bg);
     color: var(--text);
-    min-height: 100vh;
+    height: 100vh;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    -webkit-font-smoothing: antialiased;
   }
 
-  /* Header */
-  header {
-    padding: 12px 20px;
+  /* ---- Nav ---- */
+  nav {
+    height: 52px;
+    padding: 0 20px;
     border-bottom: 1px solid var(--border);
+    background: var(--surface);
     display: flex;
     align-items: center;
     gap: 16px;
-    background: var(--surface);
+    flex-shrink: 0;
   }
-  .logo {
+  .brand {
     font-size: 15px;
     font-weight: 700;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.03em;
+    white-space: nowrap;
+    margin-right: 4px;
+  }
+  .brand span { color: var(--accent); }
+  .nav-sep {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+  select {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  select option {
+    font-size: 12px;
+    padding: 4px 8px;
+  }
+  select:hover { border-color: var(--text-3); }
+  select:focus { border-color: var(--accent); }
+
+  /* Product pills */
+  .products {
+    display: flex;
+    background: var(--surface-2);
+    border-radius: 6px;
+    padding: 3px;
+    gap: 2px;
+  }
+  .products button {
+    padding: 5px 14px;
+    border-radius: 4px;
+    border: none;
+    background: transparent;
+    color: var(--text-2);
+    font-size: 12px;
+    font-family: inherit;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.12s;
     white-space: nowrap;
   }
-  .logo span { color: var(--accent); }
-  .tagline {
+  .products button:hover { color: var(--text); }
+  .products button.active {
+    background: var(--accent);
+    color: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  }
+  .nav-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .nav-meta {
     font-size: 11px;
-    color: var(--text-dim);
-    border-left: 1px solid var(--border);
-    padding-left: 12px;
+    color: var(--text-3);
+    white-space: nowrap;
   }
 
-  /* Main canvas area */
-  .canvas-container {
+  /* ---- Main ---- */
+  main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  /* Canvas area */
+  .viewport {
     flex: 1;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 20px;
     position: relative;
     overflow: hidden;
+    min-width: 0;
   }
   #gl-canvas {
     background: var(--surface);
-    border: 1px solid var(--border);
     border-radius: var(--radius);
     max-width: 100%;
     max-height: 100%;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.4);
-    image-rendering: auto; /* smooth upscale during progressive LOD preview */
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    cursor: crosshair;
+    image-rendering: auto;
   }
+  .progress-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    z-index: 5;
+    pointer-events: none;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 0 1px 1px 0;
+    transition: width 0.1s ease;
+    width: 0;
+    opacity: 0;
+  }
+  .click-hint {
+    position: absolute;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 12px;
+    color: var(--text-3);
+    background: rgba(17, 22, 32, 0.85);
+    padding: 6px 16px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    pointer-events: none;
+    transition: opacity 0.3s;
+    backdrop-filter: blur(4px);
+  }
+  .click-hint.hidden { opacity: 0; }
+
+  /* Error overlay */
   .error-overlay {
     position: absolute;
     top: 50%;
@@ -83,259 +192,290 @@
     padding: 24px 32px;
     text-align: center;
     display: none;
+    z-index: 10;
   }
   .error-overlay.visible { display: block; }
-  .error-overlay h3 {
-    color: var(--red);
-    font-size: 14px;
-    margin-bottom: 8px;
+  .error-overlay h3 { color: var(--red); font-size: 14px; margin-bottom: 8px; }
+  .error-overlay p { font-size: 12px; color: var(--text-2); }
+
+  /* ---- Sidebar ---- */
+  .sidebar {
+    width: 300px;
+    min-width: 300px;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
   }
-  .error-overlay p {
-    font-size: 12px;
-    color: var(--text-dim);
+  .sidebar-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--text-3);
+    padding: 40px 20px;
+  }
+  .sidebar-empty svg {
+    opacity: 0.4;
+  }
+  .sidebar-empty p {
+    font-size: 13px;
+    text-align: center;
+    line-height: 1.6;
+  }
+  .sidebar-section {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-section:last-child { border-bottom: none; }
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-3);
+    margin-bottom: 12px;
+    letter-spacing: 0.02em;
+  }
+  .meta-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    padding: 3px 0;
+  }
+  .meta-row .label { color: var(--text-2); }
+  .meta-row .value {
+    color: var(--text);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+  .mono { font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace; font-size: 12px; }
+
+  /* Metric (NDVI/NDWI hero values) */
+  .metric {
+    margin-bottom: 16px;
+  }
+  .metric:last-child { margin-bottom: 0; }
+  .metric-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 6px;
+  }
+  .metric-name {
+    font-size: 13px;
+    color: var(--text-2);
+    font-weight: 500;
+  }
+  .metric-value {
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+  .metric-bar {
+    height: 4px;
+    background: var(--surface-2);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .metric-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+  }
+  .water-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .water-badge.yes {
+    background: rgba(37, 99, 235, 0.15);
+    color: var(--water);
+  }
+  .water-badge.no {
+    background: var(--surface-2);
+    color: var(--text-3);
+  }
+  .water-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
   }
 
-  /* Bottom controls bar */
-  .controls-bar {
-    padding: 12px 20px;
+  /* ---- Timeline ---- */
+  .timeline-bar {
+    height: 56px;
     border-top: 1px solid var(--border);
     background: var(--surface);
     display: flex;
     align-items: center;
-    gap: 20px;
-    flex-wrap: wrap;
+    padding: 0 20px;
+    gap: 16px;
+    flex-shrink: 0;
   }
-  .control-group {
+  .month-nav {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-shrink: 0;
   }
-  .control-group label {
-    font-size: 10px;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    font-weight: 600;
-  }
-  button {
-    background: var(--surface2);
-    color: var(--text);
+  .month-nav button {
+    background: none;
     border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 6px 14px;
-    font-size: 12px;
-    cursor: pointer;
-    transition: all 0.12s;
-    font-weight: 500;
-  }
-  button:hover { border-color: var(--accent); }
-  button:active { background: var(--accent-dim); }
-  button:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-    border-color: var(--border);
-  }
-  select {
-    background: var(--surface2);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 5px 10px;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  #month-label {
-    font-size: 13px;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-    min-width: 80px;
-    color: var(--accent);
-    text-align: center;
-  }
-  .status {
-    font-size: 11px;
-    color: var(--text-dim);
-    margin-left: auto;
-    font-variant-numeric: tabular-nums;
-  }
-  .status .timing { color: var(--green); }
-  .status .error { color: var(--red); }
-
-  /* Metrics panel */
-  .metrics-panel {
-    position: absolute;
-    top: 28px;
-    left: 28px;
-    font-size: 11px;
-    color: var(--text-dim);
-    background: rgba(11, 14, 20, 0.92);
-    padding: 10px 14px;
+    color: var(--text-2);
+    width: 30px;
+    height: 30px;
     border-radius: 6px;
-    border: 1px solid var(--border);
-    font-variant-numeric: tabular-nums;
-    line-height: 1.6;
-    min-width: 200px;
-    display: none;
-  }
-  .metrics-panel.visible { display: block; }
-  .metrics-panel .label { color: var(--text-dim); }
-  .metrics-panel .value { color: var(--text); float: right; }
-  .metrics-panel .sep {
-    border-top: 1px solid var(--border);
-    margin: 4px 0;
-  }
-  .metrics-panel .heading {
-    color: var(--accent);
-    font-weight: 600;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin-bottom: 2px;
-  }
-
-  /* Query panel (click-to-query) */
-  .query-panel {
-    position: absolute;
-    bottom: 28px;
-    right: 28px;
-    font-size: 12px;
-    color: var(--text);
-    background: rgba(11, 14, 20, 0.94);
-    padding: 14px 18px;
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    font-variant-numeric: tabular-nums;
-    line-height: 1.7;
-    min-width: 220px;
-    display: none;
-    backdrop-filter: blur(8px);
-  }
-  .query-panel.visible { display: block; }
-  .query-panel .qp-title {
-    color: var(--accent);
-    font-weight: 600;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin-bottom: 6px;
-  }
-  .query-panel .qp-row {
     display: flex;
-    justify-content: space-between;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 16px;
+    font-family: inherit;
+    transition: all 0.12s;
+    flex-shrink: 0;
+  }
+  .month-nav button:hover {
+    border-color: var(--text-2);
+    color: var(--text);
+  }
+  .month-nav button:active { background: var(--surface-2); }
+  #month-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    min-width: 80px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    user-select: none;
+  }
+  .timeline-track {
+    flex: 1;
+    height: 32px;
+    position: relative;
+    cursor: pointer;
+    display: flex;
     align-items: center;
   }
-  .query-panel .qp-label { color: var(--text-dim); font-size: 11px; }
-  .query-panel .qp-value { color: var(--text); font-weight: 500; }
-  .query-panel .qp-sep {
-    border-top: 1px solid var(--border);
-    margin: 5px 0;
-  }
-  .query-panel .qp-index {
-    font-size: 16px;
-    font-weight: 700;
-    text-align: center;
-    padding: 4px 0;
-  }
-  .query-panel .qp-hint {
-    color: var(--text-dim);
-    font-size: 10px;
-    text-align: center;
-    margin-top: 6px;
-  }
-
-  /* LOD upgrade indicator */
-  .lod-badge {
+  .timeline-line {
     position: absolute;
-    top: 28px;
-    right: 28px;
+    top: 50%;
+    left: 4px;
+    right: 4px;
+    height: 2px;
+    background: var(--border);
+    transform: translateY(-50%);
+    border-radius: 1px;
+    pointer-events: none;
+  }
+  .timeline-tick {
+    position: absolute;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    background: var(--text-3);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    transition: all 0.2s ease;
+    z-index: 1;
+  }
+  .timeline-tick:hover {
+    width: 8px;
+    height: 8px;
+    background: var(--text-2);
+  }
+  .timeline-tick.active {
+    width: 12px;
+    height: 12px;
+    background: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-dim);
+  }
+  .timeline-tick.active:hover {
+    width: 12px;
+    height: 12px;
+  }
+  .timeline-status {
     font-size: 11px;
-    color: var(--amber);
-    background: rgba(11, 14, 20, 0.85);
-    padding: 4px 12px;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-    display: none;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: 50px;
+    text-align: right;
   }
-  .lod-badge.visible { display: block; }
+  .timeline-status .fast { color: var(--green); }
 
-  /* Month slider */
-  .month-slider {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 200px;
-    height: 4px;
-    background: var(--surface2);
-    border-radius: 2px;
-    outline: none;
-    cursor: pointer;
+  /* ---- Responsive ---- */
+  @media (max-width: 900px) {
+    .sidebar { display: none; }
+    .products { overflow-x: auto; }
+    nav { gap: 10px; padding: 0 12px; }
+    .timeline-bar { padding: 0 12px; }
   }
-  .month-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 14px;
-    height: 14px;
-    background: var(--accent);
-    border-radius: 50%;
-    cursor: pointer;
-    border: 2px solid var(--bg);
-  }
-  .month-slider::-moz-range-thumb {
-    width: 14px;
-    height: 14px;
-    background: var(--accent);
-    border-radius: 50%;
-    cursor: pointer;
-    border: 2px solid var(--bg);
-  }
-
-  /* Canvas crosshair on hover */
-  #gl-canvas { cursor: crosshair; }
 </style>
 </head>
 <body>
 
-<header>
-  <div class="logo">Tile<span>Ripper</span></div>
-  <div class="tagline">Temporal basemaps with queryable values</div>
-</header>
+<nav>
+  <div class="brand">Tile<span>Ripper</span></div>
+  <div class="nav-sep"></div>
+  <select id="aoi-select">
+    <option value="sahara_tamanrasset">Sahara</option>
+    <option value="iowa_ames">Iowa</option>
+  </select>
+  <div class="products" id="products"></div>
+  <div class="nav-right">
+    <span class="nav-meta" id="nav-meta">Sentinel-2 · 10m</span>
+  </div>
+</nav>
 
-<div class="canvas-container">
-  <canvas id="gl-canvas" width="512" height="512"></canvas>
-  <div class="lod-badge" id="lod-badge">Enhancing...</div>
-  <div class="metrics-panel" id="metrics-panel"></div>
-  <div class="query-panel" id="query-panel"></div>
-  <div class="error-overlay" id="error-overlay">
-    <h3 id="error-title">Error</h3>
-    <p id="error-message">Something went wrong</p>
-  </div>
-</div>
+<main>
+  <section class="viewport">
+    <canvas id="gl-canvas" width="512" height="512"></canvas>
+    <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+    <div class="click-hint" id="click-hint">Click anywhere to inspect</div>
+    <div class="error-overlay" id="error-overlay">
+      <h3 id="error-title">Error</h3>
+      <p id="error-message">Something went wrong</p>
+    </div>
+  </section>
 
-<div class="controls-bar">
-  <div class="control-group">
-    <button id="prev-btn">&larr;</button>
-    <span id="month-label">—</span>
-    <button id="next-btn">&rarr;</button>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-empty" id="sidebar-empty">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+        <circle cx="12" cy="12" r="7"/>
+        <line x1="12" y1="3" x2="12" y2="7"/>
+        <line x1="12" y1="17" x2="12" y2="21"/>
+        <line x1="3" y1="12" x2="7" y2="12"/>
+        <line x1="17" y1="12" x2="21" y2="12"/>
+      </svg>
+      <p>Click on the map to<br>inspect band values</p>
+    </div>
+    <div id="sidebar-content" style="display:none;"></div>
+  </aside>
+</main>
+
+<div class="timeline-bar">
+  <div class="month-nav">
+    <button id="prev-btn" title="Previous month">&#8249;</button>
+    <span id="month-label">&mdash;</span>
+    <button id="next-btn" title="Next month">&#8250;</button>
   </div>
-  <div class="control-group">
-    <input type="range" id="month-slider" class="month-slider" min="0" max="0" value="0">
+  <div class="timeline-track" id="timeline-track">
+    <div class="timeline-line"></div>
   </div>
-  <div class="control-group">
-    <label>AOI</label>
-    <select id="aoi-select">
-      <option value="sahara_tamanrasset">Sahara (Tamanrasset)</option>
-      <option value="iowa_ames">Iowa (Ames)</option>
-    </select>
-  </div>
-  <div class="control-group">
-    <label>LOD</label>
-    <select id="lod-select"></select>
-  </div>
-  <div class="control-group">
-    <button id="metrics-btn">Metrics</button>
-  </div>
-  <div class="status" id="status">Loading...</div>
+  <span class="timeline-status" id="status"></span>
 </div>
 
 <script type="module">
+// ---- Imports ----
 let decompress;
 try {
     const fzstd = await import('/static/fzstd.js');
@@ -344,7 +484,22 @@ try {
     console.error('fzstd import failed:', e);
 }
 
-// WebGL2 shader sources
+// ---- Products ----
+const PRODUCTS = [
+  { id: 0, name: 'True Color', key: '1' },
+  { id: 1, name: 'False Color', key: '2' },
+  { id: 2, name: 'NDVI', key: '3' },
+  { id: 3, name: 'NDWI', key: '4' },
+  { id: 4, name: 'Water', key: '5' },
+];
+
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function formatMonth(s) {
+    const [y, m] = s.split('-');
+    return `${MONTH_NAMES[parseInt(m) - 1]} ${y}`;
+}
+
+// ---- Shaders ----
 const VERTEX_SHADER = `#version 300 es
 in vec2 a_position;
 in vec2 a_texCoord;
@@ -357,58 +512,96 @@ void main() {
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 in vec2 v_texCoord;
-uniform highp usampler2D u_band0;  // B02 (blue)
-uniform highp usampler2D u_band1;  // B03 (green)
-uniform highp usampler2D u_band2;  // B04 (red)
-uniform highp usampler2D u_band3;  // B08 (NIR)
+uniform highp usampler2D u_band0;
+uniform highp usampler2D u_band1;
+uniform highp usampler2D u_band2;
+uniform highp usampler2D u_band3;
 uniform vec2 u_resolution;
 uniform float u_stretch_lo;
+uniform int u_product;
 out vec4 outColor;
 
 const float GAIN = 5.0;
 const float SAT_BOOST = 1.4;
+const vec3 BG = vec3(0.035, 0.047, 0.071);
 
-float linearToSrgb(float v) {
+float toSrgb(float v) {
     return v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1.0/2.4) - 0.055;
 }
 
-void main() {
-    ivec2 texel = clamp(
-        ivec2(v_texCoord * u_resolution),
-        ivec2(0),
-        ivec2(u_resolution) - 1
-    );
+vec3 trueColor(float r, float g, float b, float lo) {
+    vec3 sc = vec3(r, g, b) * GAIN;
+    vec3 tm = sc / (sc + 1.0);
+    vec3 sr = vec3(toSrgb(tm.r), toSrgb(tm.g), toSrgb(tm.b));
+    float hd = 1.0 - lo;
+    if (hd > 0.001) sr = clamp((sr - lo) / hd, 0.0, 1.0);
+    float lum = dot(sr, vec3(0.2126, 0.7152, 0.0722));
+    return clamp(mix(vec3(lum), sr, SAT_BOOST), 0.0, 1.0);
+}
 
+vec3 ndviRamp(float v) {
+    if (v < 0.0) return mix(vec3(0.14, 0.15, 0.19), vec3(0.48, 0.42, 0.36), clamp(v + 1.0, 0.0, 1.0));
+    vec3 c0 = vec3(0.76, 0.70, 0.52);
+    vec3 c1 = vec3(0.50, 0.76, 0.32);
+    vec3 c2 = vec3(0.18, 0.52, 0.16);
+    vec3 c3 = vec3(0.04, 0.28, 0.04);
+    if (v < 0.2) return mix(c0, c1, v / 0.2);
+    if (v < 0.5) return mix(c1, c2, (v - 0.2) / 0.3);
+    return mix(c2, c3, clamp((v - 0.5) / 0.5, 0.0, 1.0));
+}
+
+vec3 ndwiRamp(float v) {
+    if (v < 0.0) return mix(vec3(0.32, 0.26, 0.20), vec3(0.58, 0.52, 0.42), clamp(v + 1.0, 0.0, 1.0));
+    vec3 c0 = vec3(0.62, 0.80, 0.94);
+    vec3 c1 = vec3(0.22, 0.52, 0.84);
+    vec3 c2 = vec3(0.06, 0.22, 0.52);
+    if (v < 0.3) return mix(c0, c1, v / 0.3);
+    return mix(c1, c2, clamp((v - 0.3) / 0.7, 0.0, 1.0));
+}
+
+void main() {
+    ivec2 texel = clamp(ivec2(v_texCoord * u_resolution), ivec2(0), ivec2(u_resolution) - 1);
     float b02 = float(texelFetch(u_band0, texel, 0).r);
     float b03 = float(texelFetch(u_band1, texel, 0).r);
     float b04 = float(texelFetch(u_band2, texel, 0).r);
     float b08 = float(texelFetch(u_band3, texel, 0).r);
 
     if (b02 == 0.0 && b03 == 0.0 && b04 == 0.0 && b08 == 0.0) {
-        outColor = vec4(0.0, 0.0, 0.0, 1.0);
+        outColor = vec4(BG, 1.0);
         return;
     }
 
-    // Reflectance → Reinhard tone map → sRGB → percentile stretch
-    vec3 scaled = vec3(b04, b03, b02) / 10000.0 * GAIN;
-    vec3 tonemapped = scaled / (scaled + 1.0);
-    vec3 srgb = vec3(linearToSrgb(tonemapped.r), linearToSrgb(tonemapped.g), linearToSrgb(tonemapped.b));
+    float blue = b02 / 10000.0, green = b03 / 10000.0, red = b04 / 10000.0, nir = b08 / 10000.0;
 
-    // Shadow lift: stretch dark end up, leave highlights untouched.
-    // Reinhard already compresses highlights — stretching the top clips snow to white.
-    float headroom = 1.0 - u_stretch_lo;
-    if (headroom > 0.001) {
-        srgb = clamp((srgb - u_stretch_lo) / headroom, 0.0, 1.0);
+    if (u_product == 0) {
+        outColor = vec4(trueColor(red, green, blue, u_stretch_lo), 1.0);
+    } else if (u_product == 1) {
+        // False color: NIR → R, Red → G, Green → B
+        vec3 sc = vec3(nir, red, green) * GAIN;
+        vec3 tm = sc / (sc + 1.0);
+        vec3 sr = vec3(toSrgb(tm.r), toSrgb(tm.g), toSrgb(tm.b));
+        float hd = 1.0 - u_stretch_lo;
+        if (hd > 0.001) sr = clamp((sr - u_stretch_lo) / hd, 0.0, 1.0);
+        outColor = vec4(sr, 1.0);
+    } else if (u_product == 2) {
+        float ndvi = (nir + red) > 0.0 ? (nir - red) / (nir + red) : 0.0;
+        outColor = vec4(ndviRamp(ndvi), 1.0);
+    } else if (u_product == 3) {
+        float ndwi = (green + nir) > 0.0 ? (green - nir) / (green + nir) : 0.0;
+        outColor = vec4(ndwiRamp(ndwi), 1.0);
+    } else {
+        float ndwi = (green + nir) > 0.0 ? (green - nir) / (green + nir) : 0.0;
+        if (ndwi > 0.0) {
+            outColor = vec4(0.18, 0.48, 0.84, 1.0);
+        } else {
+            vec3 tc = trueColor(red, green, blue, u_stretch_lo);
+            float lum = dot(tc, vec3(0.2126, 0.7152, 0.0722));
+            outColor = vec4(vec3(lum * 0.65 + 0.06), 1.0);
+        }
     }
-
-    // Saturation boost (median composites desaturate)
-    float lum = dot(srgb, vec3(0.2126, 0.7152, 0.0722));
-    vec3 sat = clamp(mix(vec3(lum), srgb, SAT_BOOST), 0.0, 1.0);
-
-    outColor = vec4(sat, 1.0);
 }`;
 
-// CPU-side Reinhard + sRGB (mirrors the shader, for stretch computation)
+// ---- CPU-side Reinhard (for stretch computation) ----
 const GAIN = 5.0;
 function reinhardSrgb(refl) {
     const s = refl * GAIN;
@@ -427,11 +620,7 @@ function computeStretchFromData(fetchResults) {
         for (let i = 0; i < ppb; i += stride) {
             const v0 = d[i], v1 = d[ppb + i], v2 = d[2*ppb + i], v3 = d[3*ppb + i];
             if (v0 === 0 && v1 === 0 && v2 === 0 && v3 === 0) continue;
-            sample.push(
-                reinhardSrgb(v2 / 10000),
-                reinhardSrgb(v1 / 10000),
-                reinhardSrgb(v0 / 10000),
-            );
+            sample.push(reinhardSrgb(v2/10000), reinhardSrgb(v1/10000), reinhardSrgb(v0/10000));
         }
     }
     if (sample.length < 30) { stretchLo = 0; return; }
@@ -439,7 +628,7 @@ function computeStretchFromData(fetchResults) {
     stretchLo = sample[Math.floor(sample.length * 0.02)];
 }
 
-// State
+// ---- State ----
 let gl = null;
 let program = null;
 let textures = [];
@@ -449,40 +638,31 @@ let manifest = null;
 let currentAoi = 'sahara_tamanrasset';
 let currentLod = 0;
 let currentMonth = 0;
+let currentProductIndex = 0;
 let canvasWidth = 512;
 let canvasHeight = 512;
+let lastFetchResults = null;
 
-// DOM elements
+// DOM
 const canvas = document.getElementById('gl-canvas');
 const statusEl = document.getElementById('status');
 const monthLabel = document.getElementById('month-label');
-const lodSelect = document.getElementById('lod-select');
 const prevBtn = document.getElementById('prev-btn');
 const nextBtn = document.getElementById('next-btn');
 const errorOverlay = document.getElementById('error-overlay');
 const errorTitle = document.getElementById('error-title');
 const errorMessage = document.getElementById('error-message');
+const progressFill = document.getElementById('progress-fill');
+const clickHint = document.getElementById('click-hint');
 
-// Initialize WebGL2
+// ---- WebGL ----
 function initWebGL() {
     gl = canvas.getContext('webgl2', {
-        alpha: false,
-        premultipliedAlpha: false,
-        preserveDrawingBuffer: true,
-        antialias: false,
+        alpha: false, premultipliedAlpha: false,
+        preserveDrawingBuffer: true, antialias: false,
     });
-    
-    if (!gl) {
-        showError('WebGL2 not supported', 'Your browser does not support WebGL2, which is required for rendering.');
-        return false;
-    }
-    
-    // Check for integer texture support
-    const ext = gl.getExtension('EXT_color_buffer_integer');
-    if (!ext) {
-        console.warn('EXT_color_buffer_integer not available, but R16UI should still work for textures');
-    }
-    
+    if (!gl) { showError('WebGL2 not supported', 'Your browser does not support WebGL2.'); return false; }
+    gl.getExtension('EXT_color_buffer_integer');
     return true;
 }
 
@@ -490,50 +670,36 @@ function compileShader(type, source) {
     const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
-    
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
         const info = gl.getShaderInfoLog(shader);
         gl.deleteShader(shader);
-        throw new Error('Shader compilation error: ' + info);
+        throw new Error('Shader compile: ' + info);
     }
-    
     return shader;
 }
 
 function createProgram() {
     const vs = compileShader(gl.VERTEX_SHADER, VERTEX_SHADER);
     const fs = compileShader(gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
-    
     program = gl.createProgram();
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
     gl.linkProgram(program);
-    
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
         const info = gl.getProgramInfoLog(program);
         gl.deleteProgram(program);
-        throw new Error('Program linking error: ' + info);
+        throw new Error('Program link: ' + info);
     }
-    
     gl.deleteShader(vs);
     gl.deleteShader(fs);
 }
 
 function setupGeometry() {
-    const positions = new Float32Array([
-        -1, -1,  1, -1,  -1,  1,
-        -1,  1,  1, -1,   1,  1,
-    ]);
-    
-    const texCoords = new Float32Array([
-        0, 1,  1, 1,  0, 0,
-        0, 0,  1, 1,  1, 0,
-    ]);
-    
+    const positions = new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]);
+    const texCoords = new Float32Array([0,1, 1,1, 0,0, 0,0, 1,1, 1,0]);
     positionBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
-    
     texCoordBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
@@ -550,43 +716,39 @@ function createBandTexture(data, width, height) {
     return texture;
 }
 
+// ---- UI helpers ----
 function showError(title, message) {
     errorTitle.textContent = title;
     errorMessage.textContent = message;
     errorOverlay.classList.add('visible');
-    statusEl.innerHTML = `<span class="error">${title}</span>`;
 }
 
-function hideError() {
-    errorOverlay.classList.remove('visible');
-}
+function hideError() { errorOverlay.classList.remove('visible'); }
 
-function setStatus(msg, isTiming = false) {
-    if (isTiming) {
-        statusEl.innerHTML = `<span class="timing">${msg}</span>`;
+function setProgress(frac) {
+    if (frac <= 0) { progressFill.style.width = '0'; progressFill.style.opacity = '0'; }
+    else if (frac >= 1) {
+        progressFill.style.width = '100%';
+        setTimeout(() => { progressFill.style.opacity = '0'; }, 200);
     } else {
-        statusEl.textContent = msg;
+        progressFill.style.width = (frac * 100) + '%';
+        progressFill.style.opacity = '1';
     }
 }
 
-// --- Chunk cache ---
-// Key: "lod/chunkId/monthIndex" → { data: Uint16Array, compressed_bytes, raw_bytes }
-const chunkCache = new Map();
-
-function cacheKey(lod, chunkId, monthIndex) {
-    return `${lod}/${chunkId}/${monthIndex}`;
+function setStatus(ms) {
+    if (ms !== null) statusEl.innerHTML = `<span class="fast">${ms}ms</span>`;
+    else statusEl.textContent = '';
 }
 
-// Per-frame request log (reset each loadMonth)
-let requestLog = [];
+// ---- Chunk cache ----
+const chunkCache = new Map();
+function cacheKey(lod, chunkId, monthIndex) { return `${lod}/${chunkId}/${monthIndex}`; }
 
-// --- Anchor cache metrics (cumulative, session-wide) ---
+let requestLog = [];
 const anchorStats = { hits: 0, misses: 0 };
 let prefetchGeneration = 0;
-let prefetchStatus = 'idle';
 
-// Fetch raw chunk bytes and decompress, with cache.
-// silent=true skips requestLog (used by prefetch to avoid polluting frame metrics).
 async function fetchChunk(aoi, lod, chunkId, monthIndex, { silent = false } = {}) {
     const key = cacheKey(lod, chunkId, monthIndex);
     const isAnchor = manifest && manifest.temporal.anchor_indices.includes(monthIndex);
@@ -595,21 +757,15 @@ async function fetchChunk(aoi, lod, chunkId, monthIndex, { silent = false } = {}
         if (isAnchor) anchorStats.hits++;
         if (!silent) requestLog.push({ chunkId, monthIndex, cache_hit: true, fetch_ms: 0, decode_ms: 0,
             compressed_bytes: cached.compressed_bytes, raw_bytes: cached.raw_bytes });
-        return {
-            data: cached.data,
-            timing: { fetch_ms: 0, decode_ms: 0,
-                compressed_bytes: cached.compressed_bytes, raw_bytes: cached.raw_bytes }
-        };
+        return { data: cached.data, timing: { fetch_ms: 0, decode_ms: 0,
+            compressed_bytes: cached.compressed_bytes, raw_bytes: cached.raw_bytes } };
     }
-
     if (isAnchor) anchorStats.misses++;
 
     const url = `/v1/chunk/${aoi}/${lod}/${chunkId}/${monthIndex}`;
     const t0 = performance.now();
     const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     const compressed = new Uint8Array(await response.arrayBuffer());
     const fetch_ms = performance.now() - t0;
 
@@ -620,57 +776,39 @@ async function fetchChunk(aoi, lod, chunkId, monthIndex, { silent = false } = {}
     const data = new Uint16Array(raw.buffer, raw.byteOffset, raw.byteLength / 2);
     const compressed_bytes = compressed.byteLength;
     const raw_bytes = raw.byteLength;
-
-    // Cache the decoded chunk
     chunkCache.set(key, { data, compressed_bytes, raw_bytes });
 
     if (!silent) requestLog.push({ chunkId, monthIndex, cache_hit: false, fetch_ms, decode_ms,
         compressed_bytes, raw_bytes });
-
     return { data, timing: { fetch_ms, decode_ms, compressed_bytes, raw_bytes } };
 }
 
-// Compute actual pixel dimensions for a chunk at (row, col) in the grid
 function chunkDims(row, col, gridRows, gridCols, chunkSize, mosaicW, mosaicH) {
     const w = (col < gridCols - 1) ? chunkSize : (mosaicW - (gridCols - 1) * chunkSize);
     const h = (row < gridRows - 1) ? chunkSize : (mosaicH - (gridRows - 1) * chunkSize);
     return { w, h };
 }
 
-// Star-delta decoding — returns { data, timing, isDelta, anchorWarm }
 async function fetchAndDecodeMonth(aoi, lod, chunkId, monthIndex) {
     const temporal = manifest.temporal;
-
-    // Anchor month: just fetch and return
     if (temporal.anchor_indices.includes(monthIndex)) {
         const result = await fetchChunk(aoi, lod, chunkId, monthIndex);
         return { data: result.data, timing: result.timing, isDelta: false, anchorWarm: result.timing.fetch_ms === 0 };
     }
-
-    // Delta: fetch anchor + delta, then reconstruct
     const anchorIndex = temporal.delta_reference[String(monthIndex)];
-    if (anchorIndex === undefined) {
-        throw new Error(`No delta reference found for month ${monthIndex}`);
-    }
-
-    // Check anchor residency BEFORE fetching
+    if (anchorIndex === undefined) throw new Error(`No delta reference for month ${monthIndex}`);
     const anchorWarm = chunkCache.has(cacheKey(lod, chunkId, anchorIndex));
-
     const [anchor, delta] = await Promise.all([
         fetchChunk(aoi, lod, chunkId, anchorIndex),
         fetchChunk(aoi, lod, chunkId, monthIndex)
     ]);
-
     const t0 = performance.now();
     const result = new Uint16Array(anchor.data.length);
-    // Must use same byteOffset and length as the Uint16Array — buffer may be oversized
     const deltaView = new Int16Array(delta.data.buffer, delta.data.byteOffset, delta.data.length);
     for (let i = 0; i < anchor.data.length; i++) {
-        const val = anchor.data[i] + deltaView[i];
-        result[i] = Math.max(0, Math.min(65535, val));
+        result[i] = Math.max(0, Math.min(65535, anchor.data[i] + deltaView[i]));
     }
     const reconstruct_ms = performance.now() - t0;
-
     return {
         data: result,
         timing: {
@@ -680,233 +818,178 @@ async function fetchAndDecodeMonth(aoi, lod, chunkId, monthIndex) {
             compressed_bytes: anchor.timing.compressed_bytes + delta.timing.compressed_bytes,
             raw_bytes: anchor.timing.raw_bytes + delta.timing.raw_bytes,
         },
-        isDelta: true,
-        anchorWarm,
+        isDelta: true, anchorWarm,
     };
 }
 
-// Render a single chunk's band data at a viewport position. Returns { upload_ms, draw_ms }
+// ---- Rendering ----
 function renderChunkAt(bandsData, w, h, x, y) {
     const nBands = 4;
-    const pixelsPerBand = bandsData.length / nBands;
-
-    // Clean up old textures
+    const ppb = bandsData.length / nBands;
     textures.forEach(t => gl.deleteTexture(t));
     textures = [];
 
     const t0 = performance.now();
     for (let b = 0; b < nBands; b++) {
-        const bandOffset = b * pixelsPerBand;
-        const bandData = bandsData.subarray(bandOffset, bandOffset + pixelsPerBand);
-        const texture = createBandTexture(bandData, w, h);
-        textures.push(texture);
+        textures.push(createBandTexture(bandsData.subarray(b * ppb, (b+1) * ppb), w, h));
     }
     const upload_ms = performance.now() - t0;
 
     const t1 = performance.now();
     gl.useProgram(program);
-
-    const positionLoc = gl.getAttribLocation(program, 'a_position');
-    const texCoordLoc = gl.getAttribLocation(program, 'a_texCoord');
-
+    const posLoc = gl.getAttribLocation(program, 'a_position');
+    const texLoc = gl.getAttribLocation(program, 'a_texCoord');
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-    gl.enableVertexAttribArray(positionLoc);
-    gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
-
+    gl.enableVertexAttribArray(posLoc);
+    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
-    gl.enableVertexAttribArray(texCoordLoc);
-    gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(texLoc);
+    gl.vertexAttribPointer(texLoc, 2, gl.FLOAT, false, 0, 0);
 
     for (let i = 0; i < 4; i++) {
-        const loc = gl.getUniformLocation(program, `u_band${i}`);
         gl.activeTexture(gl.TEXTURE0 + i);
         gl.bindTexture(gl.TEXTURE_2D, textures[i]);
-        gl.uniform1i(loc, i);
+        gl.uniform1i(gl.getUniformLocation(program, `u_band${i}`), i);
     }
-
-    const resLoc = gl.getUniformLocation(program, 'u_resolution');
-    gl.uniform2f(resLoc, w, h);
+    gl.uniform2f(gl.getUniformLocation(program, 'u_resolution'), w, h);
     gl.uniform1f(gl.getUniformLocation(program, 'u_stretch_lo'), stretchLo);
+    gl.uniform1i(gl.getUniformLocation(program, 'u_product'), currentProductIndex);
 
     gl.viewport(x, y, w, h);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
-    const draw_ms = performance.now() - t1;
-
-    return { upload_ms, draw_ms };
+    return { upload_ms, draw_ms: performance.now() - t1 };
 }
 
-// Last frame metrics (accessible from console as `lastFrame`)
+// Re-render current frame with new product (no fetch)
+function rerenderCurrentFrame() {
+    if (!lastFetchResults || !manifest) return;
+    const lodMeta = manifest.lods[currentLod];
+    const factor = Math.pow(manifest.lod_factor, currentLod);
+    const mosaicW = Math.ceil(manifest.mosaic_width / factor);
+    const mosaicH = Math.ceil(manifest.mosaic_height / factor);
+    gl.viewport(0, 0, canvasWidth, canvasHeight);
+    gl.clearColor(0.035, 0.047, 0.071, 1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    for (const { row, col, data } of lastFetchResults) {
+        const { w, h } = chunkDims(row, col, lodMeta.grid_rows, lodMeta.grid_cols, lodMeta.chunk_size, mosaicW, mosaicH);
+        renderChunkAt(data, w, h, col * lodMeta.chunk_size, mosaicH - (row * lodMeta.chunk_size) - h);
+    }
+}
+
+// ---- Frame metrics (console only) ----
 let lastFrame = null;
 
-// Load and render a month — all chunks stitched, fully instrumented
 async function loadMonth(monthIndex) {
     hideError();
     const t0 = performance.now();
-
     try {
         const lodMeta = manifest.lods[currentLod];
-        const gridRows = lodMeta.grid_rows;
-        const gridCols = lodMeta.grid_cols;
-        const chunkSize = lodMeta.chunk_size;
-        const totalChunks = gridRows * gridCols;
+        const { grid_rows: gR, grid_cols: gC, chunk_size: cS } = lodMeta;
+        const totalChunks = gR * gC;
         const factor = Math.pow(manifest.lod_factor, currentLod);
-
-        // Compute actual mosaic pixel dimensions at this LOD
         const mosaicW = Math.ceil(manifest.mosaic_width / factor);
         const mosaicH = Math.ceil(manifest.mosaic_height / factor);
 
-        canvasWidth = mosaicW;
-        canvasHeight = mosaicH;
-        canvas.width = canvasWidth;
-        canvas.height = canvasHeight;
-
-        // Clear to black
+        canvasWidth = mosaicW; canvasHeight = mosaicH;
+        canvas.width = canvasWidth; canvas.height = canvasHeight;
         gl.viewport(0, 0, canvasWidth, canvasHeight);
-        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clearColor(0.035, 0.047, 0.071, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
-        // Build chunk fetch list
         const chunkJobs = [];
-        for (let r = 0; r < gridRows; r++) {
-            for (let c = 0; c < gridCols; c++) {
-                const chunkId = `r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`;
-                chunkJobs.push({ chunkId, row: r, col: c });
-            }
-        }
+        for (let r = 0; r < gR; r++)
+            for (let c = 0; c < gC; c++)
+                chunkJobs.push({ chunkId: `r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`, row: r, col: c });
 
-        // Reset per-frame request log
         requestLog = [];
-
-        // Phase 1: Fetch all chunks in parallel
         let loaded = 0;
-        setStatus(`Loading 0/${totalChunks}...`);
+        setProgress(0.01);
 
-        const fetchResults = await Promise.all(chunkJobs.map(async ({ chunkId, row, col }) => {
-            const result = await fetchAndDecodeMonth(currentAoi, currentLod, chunkId, monthIndex);
+        const fetchResults = await Promise.all(chunkJobs.map(async (job) => {
+            const result = await fetchAndDecodeMonth(currentAoi, currentLod, job.chunkId, monthIndex);
             loaded++;
-            setStatus(`Loading ${loaded}/${totalChunks}...`);
-            return { chunkId, row, col, result };
+            setProgress(loaded / totalChunks);
+            return { ...job, result };
         }));
 
-        // Phase 2: Compute p2/p98 stretch from reconstructed data
         computeStretchFromData(fetchResults);
 
-        // Phase 3: Render all chunks with stretch applied
+        // Store for re-render
+        lastFetchResults = fetchResults.map(({ chunkId, row, col, result }) => ({
+            chunkId, row, col, data: result.data
+        }));
+
         const chunkMetrics = [];
         for (const { chunkId, row, col, result } of fetchResults) {
-            const { w, h } = chunkDims(row, col, gridRows, gridCols, chunkSize, mosaicW, mosaicH);
-            const x = col * chunkSize;
-            const y = canvasHeight - (row * chunkSize) - h;
-            const gpu = renderChunkAt(result.data, w, h, x, y);
-
-            chunkMetrics.push({
-                chunkId, row, col, w, h,
-                pixels: w * h,
-                isDelta: result.isDelta,
-                anchorWarm: result.anchorWarm,
-                ...result.timing,
-                ...gpu,
-            });
+            const { w, h } = chunkDims(row, col, gR, gC, cS, mosaicW, mosaicH);
+            const gpu = renderChunkAt(result.data, w, h, col * cS, canvasHeight - (row * cS) - h);
+            chunkMetrics.push({ chunkId, row, col, w, h, pixels: w*h,
+                isDelta: result.isDelta, anchorWarm: result.anchorWarm,
+                ...result.timing, ...gpu });
         }
         const total_ms = performance.now() - t0;
 
-        // Aggregate frame metrics
-        const sum = (arr, key) => arr.reduce((s, c) => s + (c[key] || 0), 0);
-        const max = (arr, key) => Math.max(...arr.map(c => c[key] || 0));
-        const percentile = (arr, key, p) => {
-            const vals = arr.map(c => c[key] || 0).sort((a, b) => a - b);
-            const idx = Math.ceil(vals.length * p / 100) - 1;
-            return vals[Math.max(0, idx)];
-        };
-
-        const totalPixels = sum(chunkMetrics, 'pixels');
-        const totalCompressed = sum(chunkMetrics, 'compressed_bytes');
-        const totalRaw = sum(chunkMetrics, 'raw_bytes');
-        const nDeltas = chunkMetrics.filter(c => c.isDelta).length;
-
-        // Request topology from requestLog
-        const hits = requestLog.filter(r => r.cache_hit);
+        // Build lastFrame for console inspection
+        const sum = (a, k) => a.reduce((s, c) => s + (c[k]||0), 0);
+        const max = (a, k) => Math.max(...a.map(c => c[k]||0));
         const misses = requestLog.filter(r => !r.cache_hit);
         const fetchTimes = misses.map(r => r.fetch_ms).sort((a, b) => a - b);
-
         lastFrame = {
-            month: manifest.months[monthIndex],
-            lod: currentLod,
+            month: manifest.months[monthIndex], lod: currentLod,
             resolution_m: lodMeta.resolution_m,
-            grid: `${gridRows}x${gridCols}`,
-            n_chunks: totalChunks,
-            n_deltas: nDeltas,
             total_ms: Math.round(total_ms),
             fetch_ms: Math.round(max(chunkMetrics, 'fetch_ms')),
             decode_ms: Math.round(sum(chunkMetrics, 'decode_ms')),
             reconstruct_ms: Math.round(sum(chunkMetrics, 'reconstruct_ms')),
             upload_ms: Math.round(sum(chunkMetrics, 'upload_ms')),
             draw_ms: Math.round(sum(chunkMetrics, 'draw_ms')),
-            compressed_bytes: totalCompressed,
-            raw_bytes: totalRaw,
-            compression_ratio: totalRaw > 0 ? (totalRaw / totalCompressed).toFixed(2) : '—',
-            pixels: totalPixels,
-            bytes_per_pixel_month: totalCompressed > 0 ? (totalCompressed / totalPixels).toFixed(2) : '—',
-            canvas: `${canvasWidth}x${canvasHeight}`,
-            // Request topology
-            requests_total: requestLog.length,
+            compressed_bytes: sum(chunkMetrics, 'compressed_bytes'),
+            raw_bytes: sum(chunkMetrics, 'raw_bytes'),
+            pixels: sum(chunkMetrics, 'pixels'),
+            n_chunks: totalChunks,
             requests_network: misses.length,
-            requests_cached: hits.length,
-            cache_entries: chunkCache.size,
-            req_median_ms: fetchTimes.length ? Math.round(fetchTimes[Math.floor(fetchTimes.length / 2)]) : 0,
-            req_p95_ms: fetchTimes.length ? Math.round(fetchTimes[Math.ceil(fetchTimes.length * 0.95) - 1]) : 0,
+            requests_cached: requestLog.filter(r => r.cache_hit).length,
             wire_bytes: sum(misses, 'compressed_bytes'),
-            // Anchor cache state
-            anchor_warm_count: chunkMetrics.filter(c => c.anchorWarm).length,
+            cache_entries: chunkCache.size,
             anchor_warm_pct: chunkMetrics.length > 0
                 ? Math.round(chunkMetrics.filter(c => c.anchorWarm).length / chunkMetrics.length * 100) : 0,
-            anchor_hits_session: anchorStats.hits,
-            anchor_misses_session: anchorStats.misses,
             chunks: chunkMetrics,
         };
 
-        // Update UI
         fitCanvasToContainer();
-        setStatus(`${lastFrame.total_ms}ms — ${manifest.months[monthIndex]}`, true);
-        updateMetricsPanel();
-
-        // Prefetch adjacent months in background
+        setStatus(Math.round(total_ms));
+        setProgress(1);
         prefetchAdjacent(monthIndex);
-
     } catch (err) {
         console.error('Failed to load month:', err);
-        setStatus(`Error: ${err.message}`);
+        setStatus(null);
+        setProgress(0);
         gl.viewport(0, 0, canvas.width, canvas.height);
-        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clearColor(0.035, 0.047, 0.071, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
     }
 }
 
-// --- Progressive LOD ---
-
-// Pick the coarsest LOD where the shortest canvas dimension is >= MIN_PREVIEW_PX.
-// This ensures the preview is recognizable, not a blob of giant pixels.
+// ---- Progressive LOD ----
 const MIN_PREVIEW_PX = 250;
 
 function pickPreviewLod() {
     const lods = manifest.lods;
     const factor = manifest.lod_factor || 2;
-    // Walk from coarsest to finest, pick the first that's big enough
     for (let i = lods.length - 1; i > 0; i--) {
         const f = Math.pow(factor, i);
         const w = Math.ceil(manifest.mosaic_width / f);
         const h = Math.ceil(manifest.mosaic_height / f);
         if (Math.min(w, h) >= MIN_PREVIEW_PX) return i;
     }
-    return 0; // no useful preview — go straight to LOD 0
+    return 0;
 }
 
-// Fit canvas CSS size within its container, preserving aspect ratio.
-// Always call this after loadMonth to prevent canvas overflow.
 function fitCanvasToContainer() {
     const container = canvas.parentElement;
-    const maxW = container.clientWidth - 40;
-    const maxH = container.clientHeight - 40;
+    const pad = 32;
+    const maxW = container.clientWidth - pad;
+    const maxH = container.clientHeight - pad;
     const aspect = canvas.width / canvas.height;
     let w, h;
     if (maxW / maxH > aspect) {
@@ -920,741 +1003,515 @@ function fitCanvasToContainer() {
     canvas.style.height = h + 'px';
 }
 
-let progressiveUpgradeGen = 0;
-let isUpgrading = false;
+let progressiveGen = 0;
 
-// Load a month with progressive LOD refinement:
-// 1. Instantly render at a coarse LOD (preview)
-// 2. Background-fetch LOD 0 and swap when ready
 async function loadMonthProgressive(monthIndex) {
     const previewLod = pickPreviewLod();
     const detailLod = 0;
-    const gen = ++progressiveUpgradeGen;
+    const gen = ++progressiveGen;
 
     if (previewLod === detailLod) {
-        // No useful preview level — just load directly
         currentLod = detailLod;
-        lodSelect.value = detailLod;
         await loadMonth(monthIndex);
         return;
     }
 
-    // Phase 1: Render coarse preview
-    isUpgrading = true;
+    // Phase 1: coarse preview
     currentLod = previewLod;
-    lodSelect.value = previewLod;
-    const lodBadge = document.getElementById('lod-badge');
-    const t0 = performance.now();
     await loadMonth(monthIndex);
-    const previewMs = Math.round(performance.now() - t0);
 
-    // fitCanvasToContainer already called by loadMonth — preview is fitted
-    lodBadge.classList.add('visible');
-    setStatus(`Preview ${previewMs}ms — enhancing...`, true);
-
-    // Phase 2: Background-fetch LOD 0
+    // Phase 2: fetch LOD 0 in background
     currentLod = detailLod;
-    lodSelect.value = detailLod;
-
-    // Pre-fetch all LOD 0 chunks without rendering
     const lodMeta = manifest.lods[detailLod];
     const chunkJobs = [];
-    for (let r = 0; r < lodMeta.grid_rows; r++) {
-        for (let c = 0; c < lodMeta.grid_cols; c++) {
-            const chunkId = `r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`;
-            chunkJobs.push({ chunkId, row: r, col: c });
-        }
-    }
+    for (let r = 0; r < lodMeta.grid_rows; r++)
+        for (let c = 0; c < lodMeta.grid_cols; c++)
+            chunkJobs.push(`r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`);
 
-    // Fetch all LOD 0 chunks in parallel (silent — no metrics pollution)
     const CONCURRENCY = 6;
     for (let i = 0; i < chunkJobs.length; i += CONCURRENCY) {
-        if (gen !== progressiveUpgradeGen) return; // user navigated away
+        if (gen !== progressiveGen) return;
         const batch = chunkJobs.slice(i, i + CONCURRENCY);
-        await Promise.all(batch.map(({ chunkId }) =>
-            fetchAndDecodeMonth(currentAoi, detailLod, chunkId, monthIndex)
-                .catch(() => {})
+        await Promise.all(batch.map(id =>
+            fetchAndDecodeMonth(currentAoi, detailLod, id, monthIndex).catch(() => {})
         ));
     }
+    if (gen !== progressiveGen) return;
 
-    if (gen !== progressiveUpgradeGen) return; // user navigated away
-
-    // Phase 3: Render LOD 0 at native resolution
+    // Phase 3: render LOD 0
     await loadMonth(monthIndex);
-    isUpgrading = false;
-    document.getElementById('lod-badge').classList.remove('visible');
-    const totalMs = Math.round(performance.now() - t0);
-    setStatus(`${lastFrame.total_ms}ms (preview: ${previewMs}ms) — ${manifest.months[monthIndex]}`, true);
 }
 
-// --- Click-to-query (client-side band value extraction) ---
-
+// ---- Click-to-query ----
 function handleCanvasClick(e) {
-    if (!manifest || !lastFrame) return;
+    if (!manifest || !lastFetchResults) return;
+    clickHint.classList.add('hidden');
 
     const rect = canvas.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
-
-    // Scale click to canvas buffer coordinates
-    const bufX = Math.floor(clickX * canvas.width / rect.width);
-    const bufY = Math.floor(clickY * canvas.height / rect.height);
-
-    // Bounds check
+    const bufX = Math.floor((e.clientX - rect.left) * canvas.width / rect.width);
+    const bufY = Math.floor((e.clientY - rect.top) * canvas.height / rect.height);
     if (bufX < 0 || bufX >= canvas.width || bufY < 0 || bufY >= canvas.height) return;
 
-    // Current LOD parameters
     const lodMeta = manifest.lods[currentLod];
-    const gridRows = lodMeta.grid_rows;
-    const gridCols = lodMeta.grid_cols;
-    const chunkSize = lodMeta.chunk_size;
+    const { grid_rows: gR, grid_cols: gC, chunk_size: cS } = lodMeta;
     const factor = Math.pow(manifest.lod_factor, currentLod);
     const mosaicW = Math.ceil(manifest.mosaic_width / factor);
     const mosaicH = Math.ceil(manifest.mosaic_height / factor);
 
-    // Find chunk and local pixel
-    const chunkCol = Math.min(Math.floor(bufX / chunkSize), gridCols - 1);
-    const chunkRow = Math.min(Math.floor(bufY / chunkSize), gridRows - 1);
+    const chunkCol = Math.min(Math.floor(bufX / cS), gC - 1);
+    const chunkRow = Math.min(Math.floor(bufY / cS), gR - 1);
     const chunkId = `r${String(chunkRow).padStart(3,'0')}_c${String(chunkCol).padStart(3,'0')}`;
+    const { w: cW, h: cH } = chunkDims(chunkRow, chunkCol, gR, gC, cS, mosaicW, mosaicH);
+    const localCol = Math.min(bufX - chunkCol * cS, cW - 1);
+    const localRow = Math.min(bufY - chunkRow * cS, cH - 1);
 
-    const { w: chunkW, h: chunkH } = chunkDims(chunkRow, chunkCol, gridRows, gridCols, chunkSize, mosaicW, mosaicH);
-    const localCol = Math.min(bufX - chunkCol * chunkSize, chunkW - 1);
-    const localRow = Math.min(bufY - chunkRow * chunkSize, chunkH - 1);
-
-    // Look up cached data
     const key = cacheKey(currentLod, chunkId, currentMonth);
     const cached = chunkCache.get(key);
-    if (!cached) {
-        showQueryPanel(null, bufX, bufY);
-        return;
-    }
+    if (!cached) { updateSidebar(null); return; }
 
-    // Extract band values (data layout: band-interleaved, C-order)
-    const pixelsPerBand = cached.data.length / 4;
-    const pixelIndex = localRow * chunkW + localCol;
-    const b02 = cached.data[0 * pixelsPerBand + pixelIndex];
-    const b03 = cached.data[1 * pixelsPerBand + pixelIndex];
-    const b04 = cached.data[2 * pixelsPerBand + pixelIndex];
-    const b08 = cached.data[3 * pixelsPerBand + pixelIndex];
+    const ppb = cached.data.length / 4;
+    const px = localRow * cW + localCol;
+    const b02 = cached.data[px], b03 = cached.data[ppb + px];
+    const b04 = cached.data[2*ppb + px], b08 = cached.data[3*ppb + px];
 
-    // Compute indices
-    const nir = b08 / 10000;
-    const red = b04 / 10000;
-    const green = b03 / 10000;
-    const ndvi = (nir + red) > 0 ? (nir - red) / (nir + red) : null;
-    const ndwi = (green + nir) > 0 ? (green - nir) / (green + nir) : null;
+    const nir = b08/10000, red = b04/10000, green = b03/10000;
+    const ndvi = (nir+red) > 0 ? (nir-red)/(nir+red) : null;
+    const ndwi = (green+nir) > 0 ? (green-nir)/(green+nir) : null;
     const isWater = ndwi !== null && ndwi > 0;
 
-    // LOD 0 pixel coordinates (for display)
-    const mosaicPixelRow = Math.round((chunkRow * chunkSize + localRow) * factor);
-    const mosaicPixelCol = Math.round((chunkCol * chunkSize + localCol) * factor);
+    const mosaicRow = Math.round((chunkRow * cS + localRow) * factor);
+    const mosaicCol = Math.round((chunkCol * cS + localCol) * factor);
 
-    showQueryPanel({
+    updateSidebar({
         month: manifest.months[currentMonth],
-        pixel: { row: mosaicPixelRow, col: mosaicPixelCol },
+        pixel: { row: mosaicRow, col: mosaicCol },
         bands: { B02: b02, B03: b03, B04: b04, B08: b08 },
-        ndvi, ndwi, isWater,
         reflectance: {
-            blue: (b02 / 10000).toFixed(4),
-            green: (b03 / 10000).toFixed(4),
-            red: (b04 / 10000).toFixed(4),
-            nir: (b08 / 10000).toFixed(4),
+            Blue: (b02/10000).toFixed(4), Green: (b03/10000).toFixed(4),
+            Red: (b04/10000).toFixed(4), NIR: (b08/10000).toFixed(4),
         },
+        ndvi, ndwi, isWater,
     });
 }
 
-function showQueryPanel(data) {
-    const panel = document.getElementById('query-panel');
-    if (!data) {
-        panel.classList.remove('visible');
-        return;
-    }
+function ndviColor(v) {
+    if (v === null) return 'var(--text-3)';
+    if (v > 0.3) return 'var(--green)';
+    if (v > 0) return 'var(--amber)';
+    return 'var(--red)';
+}
 
-    const ndviColor = data.ndvi !== null
-        ? (data.ndvi > 0.3 ? 'var(--green)' : data.ndvi > 0 ? 'var(--amber)' : 'var(--red)')
-        : 'var(--text-dim)';
-    const ndwiColor = data.ndwi !== null
-        ? (data.ndwi > 0 ? 'var(--accent)' : 'var(--text-dim)')
-        : 'var(--text-dim)';
+function ndwiColor(v) {
+    if (v === null) return 'var(--text-3)';
+    return v > 0 ? 'var(--accent)' : 'var(--text-2)';
+}
 
-    panel.innerHTML = `
-        <div class="qp-title">Point Query</div>
-        <div class="qp-row"><span class="qp-label">Month</span><span class="qp-value">${data.month}</span></div>
-        <div class="qp-row"><span class="qp-label">Pixel</span><span class="qp-value">${data.pixel.row}, ${data.pixel.col}</span></div>
-        <div class="qp-sep"></div>
-        <div class="qp-row"><span class="qp-label">NDVI</span><span class="qp-value qp-index" style="color:${ndviColor}">${data.ndvi !== null ? data.ndvi.toFixed(3) : '—'}</span></div>
-        <div class="qp-row"><span class="qp-label">NDWI</span><span class="qp-value qp-index" style="color:${ndwiColor}">${data.ndwi !== null ? data.ndwi.toFixed(3) : '—'}</span></div>
-        <div class="qp-row"><span class="qp-label">Water</span><span class="qp-value">${data.isWater ? 'Yes' : 'No'}</span></div>
-        <div class="qp-sep"></div>
-        <div class="qp-title">Reflectance</div>
-        <div class="qp-row"><span class="qp-label">Blue (B02)</span><span class="qp-value">${data.reflectance.blue}</span></div>
-        <div class="qp-row"><span class="qp-label">Green (B03)</span><span class="qp-value">${data.reflectance.green}</span></div>
-        <div class="qp-row"><span class="qp-label">Red (B04)</span><span class="qp-value">${data.reflectance.red}</span></div>
-        <div class="qp-row"><span class="qp-label">NIR (B08)</span><span class="qp-value">${data.reflectance.nir}</span></div>
-        <div class="qp-hint">Click anywhere to query</div>
+function updateSidebar(data) {
+    const empty = document.getElementById('sidebar-empty');
+    const content = document.getElementById('sidebar-content');
+    if (!data) { empty.style.display = 'flex'; content.style.display = 'none'; return; }
+    empty.style.display = 'none';
+    content.style.display = 'block';
+
+    const ndviFrac = data.ndvi !== null ? ((data.ndvi + 1) / 2 * 100) : 0;
+    const ndwiFrac = data.ndwi !== null ? ((data.ndwi + 1) / 2 * 100) : 0;
+
+    content.innerHTML = `
+      <div class="sidebar-section">
+        <div class="section-label">Location</div>
+        <div class="meta-row"><span class="label">Month</span><span class="value">${formatMonth(data.month)}</span></div>
+        <div class="meta-row"><span class="label">Pixel</span><span class="value mono">${data.pixel.row}, ${data.pixel.col}</span></div>
+      </div>
+      <div class="sidebar-section">
+        <div class="section-label">Indices</div>
+        <div class="metric">
+          <div class="metric-header">
+            <span class="metric-name">NDVI</span>
+            <span class="metric-value" style="color:${ndviColor(data.ndvi)}">${data.ndvi !== null ? data.ndvi.toFixed(3) : '—'}</span>
+          </div>
+          <div class="metric-bar"><div class="metric-fill" style="width:${ndviFrac}%;background:${ndviColor(data.ndvi)}"></div></div>
+        </div>
+        <div class="metric">
+          <div class="metric-header">
+            <span class="metric-name">NDWI</span>
+            <span class="metric-value" style="color:${ndwiColor(data.ndwi)}">${data.ndwi !== null ? data.ndwi.toFixed(3) : '—'}</span>
+          </div>
+          <div class="metric-bar"><div class="metric-fill" style="width:${ndwiFrac}%;background:${ndwiColor(data.ndwi)}"></div></div>
+        </div>
+        <div class="metric">
+          <div class="metric-header">
+            <span class="metric-name">Water</span>
+            <span class="water-badge ${data.isWater ? 'yes' : 'no'}">
+              <span class="water-dot" style="background:${data.isWater ? 'var(--water)' : 'var(--text-3)'}"></span>
+              ${data.isWater ? 'Detected' : 'None'}
+            </span>
+          </div>
+        </div>
+      </div>
+      <div class="sidebar-section">
+        <div class="section-label">Reflectance</div>
+        ${Object.entries(data.reflectance).map(([k,v]) =>
+          `<div class="meta-row"><span class="label">${k}</span><span class="value mono">${v}</span></div>`
+        ).join('')}
+      </div>
+      <div class="sidebar-section">
+        <div class="section-label">Raw DN</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 16px;">
+          ${Object.entries(data.bands).map(([k,v]) =>
+            `<div class="meta-row"><span class="label">${k}</span><span class="value mono">${v}</span></div>`
+          ).join('')}
+        </div>
+      </div>
     `;
-    panel.classList.add('visible');
 }
 
-// --- Anchor cache introspection ---
-function getAnchorCacheInfo() {
-    let resident = 0, bytes = 0;
-    if (!manifest) return { resident, bytes };
-    const anchors = manifest.temporal.anchor_indices;
-    for (const [key, entry] of chunkCache) {
-        const monthIdx = parseInt(key.split('/')[2]);
-        if (anchors.includes(monthIdx)) {
-            resident++;
-            bytes += entry.compressed_bytes;
-        }
-    }
-    return { resident, bytes };
-}
-
-// --- Adjacent-month prefetch ---
+// ---- Prefetch ----
 async function prefetchAdjacent(monthIndex) {
     const gen = ++prefetchGeneration;
-
     const targets = [];
     if (monthIndex + 1 < manifest.months.length) targets.push(monthIndex + 1);
     if (monthIndex - 1 >= 0) targets.push(monthIndex - 1);
-    if (targets.length === 0) { prefetchStatus = 'idle'; return; }
-
-    prefetchStatus = `month ${targets.map(t => manifest.months[t]).join(', ')}`;
-    updateMetricsPanel();
+    if (!targets.length) return;
 
     const lodMeta = manifest.lods[currentLod];
     const chunkIds = [];
-    for (let r = 0; r < lodMeta.grid_rows; r++) {
-        for (let c = 0; c < lodMeta.grid_cols; c++) {
+    for (let r = 0; r < lodMeta.grid_rows; r++)
+        for (let c = 0; c < lodMeta.grid_cols; c++)
             chunkIds.push(`r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`);
-        }
-    }
 
     const temporal = manifest.temporal;
     const CONCURRENCY = 4;
 
     for (const targetMonth of targets) {
-        // Determine which raw chunks are needed
         const needed = [];
         if (temporal.anchor_indices.includes(targetMonth)) {
-            for (const id of chunkIds) {
-                if (!chunkCache.has(cacheKey(currentLod, id, targetMonth)))
-                    needed.push([id, targetMonth]);
-            }
+            for (const id of chunkIds)
+                if (!chunkCache.has(cacheKey(currentLod, id, targetMonth))) needed.push([id, targetMonth]);
         } else {
             const anchorIdx = temporal.delta_reference[String(targetMonth)];
             for (const id of chunkIds) {
-                if (!chunkCache.has(cacheKey(currentLod, id, anchorIdx)))
-                    needed.push([id, anchorIdx]);
-                if (!chunkCache.has(cacheKey(currentLod, id, targetMonth)))
-                    needed.push([id, targetMonth]);
+                if (!chunkCache.has(cacheKey(currentLod, id, anchorIdx))) needed.push([id, anchorIdx]);
+                if (!chunkCache.has(cacheKey(currentLod, id, targetMonth))) needed.push([id, targetMonth]);
             }
         }
-
-        // Fetch in batches with limited concurrency
         for (let i = 0; i < needed.length; i += CONCURRENCY) {
-            if (gen !== prefetchGeneration) return; // navigation changed, abort
-            const batch = needed.slice(i, i + CONCURRENCY);
-            await Promise.all(batch.map(([id, mIdx]) =>
+            if (gen !== prefetchGeneration) return;
+            await Promise.all(needed.slice(i, i + CONCURRENCY).map(([id, mIdx]) =>
                 fetchChunk(currentAoi, currentLod, id, mIdx, { silent: true }).catch(() => {})
             ));
         }
     }
+}
 
-    if (gen === prefetchGeneration) {
-        prefetchStatus = 'done';
-        updateMetricsPanel();
+// ---- Timeline ----
+function buildTimeline() {
+    const track = document.getElementById('timeline-track');
+    // Remove old ticks, keep the line
+    track.querySelectorAll('.timeline-tick').forEach(t => t.remove());
+    if (!manifest) return;
+    const months = manifest.months;
+    const n = months.length;
+    months.forEach((m, i) => {
+        const tick = document.createElement('div');
+        tick.className = 'timeline-tick' + (i === currentMonth ? ' active' : '');
+        // Position: leave 8px padding on each side
+        tick.style.left = n > 1 ? `calc(8px + ${(i / (n - 1)) * 100}% * (1 - 16px / ${track.clientWidth || 600}))` : '50%';
+        tick.dataset.index = i;
+        tick.title = formatMonth(m);
+        track.appendChild(tick);
+    });
+    // Recompute positions after layout
+    requestAnimationFrame(() => {
+        const trackW = track.clientWidth;
+        const pad = 8;
+        const usable = trackW - pad * 2;
+        track.querySelectorAll('.timeline-tick').forEach(tick => {
+            const idx = parseInt(tick.dataset.index);
+            tick.style.left = (pad + (n > 1 ? (idx / (n - 1)) * usable : usable / 2)) + 'px';
+        });
+    });
+}
+
+function updateTimeline() {
+    document.querySelectorAll('.timeline-tick').forEach(tick => {
+        tick.classList.toggle('active', parseInt(tick.dataset.index) === currentMonth);
+    });
+}
+
+// Timeline click/drag
+function initTimelineInteraction() {
+    const track = document.getElementById('timeline-track');
+    let dragging = false;
+
+    function monthFromEvent(e) {
+        const rect = track.getBoundingClientRect();
+        const pad = 8;
+        const frac = Math.max(0, Math.min(1, (e.clientX - rect.left - pad) / (rect.width - pad * 2)));
+        return Math.round(frac * (manifest.months.length - 1));
+    }
+
+    track.addEventListener('mousedown', (e) => {
+        if (!manifest) return;
+        dragging = true;
+        const idx = monthFromEvent(e);
+        if (idx !== currentMonth) goToMonth(idx);
+    });
+    window.addEventListener('mousemove', (e) => {
+        if (!dragging || !manifest) return;
+        const idx = monthFromEvent(e);
+        if (idx !== currentMonth) goToMonth(idx, { immediate: false });
+    });
+    window.addEventListener('mouseup', () => {
+        if (dragging) { dragging = false; flushPendingLoad(); }
+    });
+}
+
+// ---- Product switcher ----
+function buildProducts() {
+    const container = document.getElementById('products');
+    PRODUCTS.forEach(p => {
+        const btn = document.createElement('button');
+        btn.textContent = p.name;
+        btn.dataset.product = p.id;
+        if (p.id === currentProductIndex) btn.classList.add('active');
+        btn.addEventListener('click', () => setProduct(p.id));
+        container.appendChild(btn);
+    });
+}
+
+function setProduct(idx) {
+    currentProductIndex = idx;
+    document.querySelectorAll('#products button').forEach(b => {
+        b.classList.toggle('active', parseInt(b.dataset.product) === idx);
+    });
+    rerenderCurrentFrame();
+}
+
+// ---- Navigation ----
+let loadDebounce = null;
+
+function goToMonth(idx, { immediate = true } = {}) {
+    if (!manifest) return;
+    currentMonth = Math.max(0, Math.min(idx, manifest.months.length - 1));
+    monthLabel.textContent = formatMonth(manifest.months[currentMonth]);
+    updateTimeline();
+
+    clearTimeout(loadDebounce);
+    if (immediate) {
+        loadDebounce = null;
+        if (currentLod === 0) loadMonth(currentMonth);
+        else loadMonthProgressive(currentMonth);
+    } else {
+        loadDebounce = setTimeout(() => {
+            loadDebounce = null;
+            if (currentLod === 0) loadMonth(currentMonth);
+            else loadMonthProgressive(currentMonth);
+        }, 150);
     }
 }
 
-function formatBytes(bytes) {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+function flushPendingLoad() {
+    if (loadDebounce) {
+        clearTimeout(loadDebounce);
+        loadDebounce = null;
+        if (currentLod === 0) loadMonth(currentMonth);
+        else loadMonthProgressive(currentMonth);
+    }
 }
 
-function updateMetricsPanel() {
-    const panel = document.getElementById('metrics-panel');
-    if (!panel.classList.contains('visible') || !lastFrame) return;
-
-    const f = lastFrame;
-    panel.innerHTML = `
-        <div class="heading">Frame</div>
-        <div><span class="label">Total</span><span class="value">${f.total_ms} ms</span></div>
-        <div><span class="label">Month</span><span class="value">${f.month}</span></div>
-        <div><span class="label">LOD</span><span class="value">${f.lod} (${f.resolution_m}m)</span></div>
-        <div><span class="label">Canvas</span><span class="value">${f.canvas}</span></div>
-        <div class="sep"></div>
-        <div class="heading">Pipeline</div>
-        <div><span class="label">Fetch (wall)</span><span class="value">${f.fetch_ms} ms</span></div>
-        <div><span class="label">Decode (sum)</span><span class="value">${f.decode_ms} ms</span></div>
-        <div><span class="label">Reconstruct</span><span class="value">${f.reconstruct_ms} ms</span></div>
-        <div><span class="label">GPU upload</span><span class="value">${f.upload_ms} ms</span></div>
-        <div><span class="label">GPU draw</span><span class="value">${f.draw_ms} ms</span></div>
-        <div class="sep"></div>
-        <div class="heading">Requests</div>
-        <div><span class="label">Total</span><span class="value">${f.requests_total}</span></div>
-        <div><span class="label">Network</span><span class="value">${f.requests_network}</span></div>
-        <div><span class="label">Cache hits</span><span class="value">${f.requests_cached}</span></div>
-        <div><span class="label">Cache size</span><span class="value">${f.cache_entries}</span></div>
-        <div><span class="label">Req median</span><span class="value">${f.req_median_ms} ms</span></div>
-        <div><span class="label">Req p95</span><span class="value">${f.req_p95_ms} ms</span></div>
-        <div><span class="label">Wire</span><span class="value">${formatBytes(f.wire_bytes)}</span></div>
-        <div class="sep"></div>
-        <div class="heading">Data</div>
-        <div><span class="label">Chunks</span><span class="value">${f.n_chunks} (${f.n_deltas} delta)</span></div>
-        <div><span class="label">Compressed</span><span class="value">${formatBytes(f.compressed_bytes)}</span></div>
-        <div><span class="label">Raw</span><span class="value">${formatBytes(f.raw_bytes)}</span></div>
-        <div><span class="label">Ratio</span><span class="value">${f.compression_ratio}x</span></div>
-        <div><span class="label">Pixels</span><span class="value">${(f.pixels / 1e6).toFixed(2)}M</span></div>
-        <div><span class="label">B/px-month</span><span class="value">${f.bytes_per_pixel_month}</span></div>
-        <div class="sep"></div>
-        <div class="heading">Anchor Cache</div>
-        <div><span class="label">Warm fraction</span><span class="value">${f.anchor_warm_pct}%</span></div>
-        <div><span class="label">Warm chunks</span><span class="value">${f.anchor_warm_count} / ${f.n_chunks}</span></div>
-        <div><span class="label">Hits (session)</span><span class="value">${f.anchor_hits_session}</span></div>
-        <div><span class="label">Misses (session)</span><span class="value">${f.anchor_misses_session}</span></div>
-        <div><span class="label">Resident</span><span class="value">${getAnchorCacheInfo().resident}</span></div>
-        <div><span class="label">Anchor bytes</span><span class="value">${formatBytes(getAnchorCacheInfo().bytes)}</span></div>
-        <div class="sep"></div>
-        <div class="heading">Prefetch</div>
-        <div><span class="label">Status</span><span class="value">${prefetchStatus}</span></div>
-    `;
-}
-
-// Update month label and slider
 function updateMonthLabel() {
     if (!manifest) return;
-    monthLabel.textContent = manifest.months[currentMonth] || `Month ${currentMonth}`;
-    const slider = document.getElementById('month-slider');
-    if (slider) slider.value = currentMonth;
+    monthLabel.textContent = formatMonth(manifest.months[currentMonth]);
 }
 
-// Navigation handlers
-function prevMonth() {
-    if (!manifest || currentMonth <= 0) return;
-    currentMonth--;
+// ---- AOI switch ----
+async function switchAoi(aoi) {
+    currentAoi = aoi;
+    chunkCache.clear();
+    anchorStats.hits = 0; anchorStats.misses = 0;
+    prefetchGeneration++; progressiveGen++;
+    lastFetchResults = null;
+    updateSidebar(null);
+    clickHint.classList.remove('hidden');
+    setProgress(0.01);
+
+    try {
+        const response = await fetch(`/v1/manifest/${aoi}`);
+        if (!response.ok) { showError('Load failed', `HTTP ${response.status}`); return; }
+        manifest = await response.json();
+    } catch (err) {
+        showError('Load failed', err.message); return;
+    }
+
+    currentMonth = 0;
     updateMonthLabel();
-    // If already at LOD 0, stay there (warm cache). Otherwise, progressive.
-    if (currentLod === 0) {
-        loadMonth(currentMonth);
-    } else {
-        loadMonthProgressive(currentMonth);
-    }
+    buildTimeline();
+    await loadMonthProgressive(currentMonth);
 }
 
-function nextMonth() {
-    if (!manifest || currentMonth >= manifest.months.length - 1) return;
-    currentMonth++;
-    updateMonthLabel();
-    if (currentLod === 0) {
-        loadMonth(currentMonth);
-    } else {
-        loadMonthProgressive(currentMonth);
-    }
-}
-
-function setLod(lod) {
-    currentLod = parseInt(lod);
-    loadMonth(currentMonth);
-}
-
-// Populate LOD dropdown
-function populateLodSelect() {
-    lodSelect.innerHTML = '';
-    const lods = manifest.lods || [];
-    for (let i = 0; i < lods.length; i++) {
-        const lod = lods[i];
-        const option = document.createElement('option');
-        option.value = i;
-        option.textContent = `LOD ${i} (${lod.resolution_m}m, ${lod.grid_rows}x${lod.grid_cols})`;
-        lodSelect.appendChild(option);
-    }
-    // Select highest LOD (smallest grid = fastest load)
-    const maxLod = lods.length - 1;
-    lodSelect.value = maxLod;
-    currentLod = maxLod;
-}
-
-// Populate month slider range
-function populateMonthSlider() {
-    const slider = document.getElementById('month-slider');
-    slider.max = manifest.months.length - 1;
-    slider.value = currentMonth;
-}
-
-// --- Bundled viewport fetch (single HTTP request for all chunks) ---
-
+// ---- Viewport bundle (for benchmarks) ----
 async function fetchViewportBundle(aoi, lod, monthIndex) {
     const url = `/v1/viewport/${aoi}/${lod}/${monthIndex}`;
     const t0 = performance.now();
     const response = await fetch(url);
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const buffer = await response.arrayBuffer();
     const fetch_ms = performance.now() - t0;
-
     const view = new DataView(buffer);
     let offset = 0;
-
-    // Parse header: version(u16), lod(u16), monthIndex(u16), nChunks(u16)
-    offset += 2; // version
-    offset += 2; // lod
-    offset += 2; // monthIndex
+    offset += 2; offset += 2; offset += 2;
     const nChunks = view.getUint16(offset, true); offset += 2;
-
     const t1 = performance.now();
     const chunks = [];
-
     for (let i = 0; i < nChunks; i++) {
         const row = view.getUint16(offset, true); offset += 2;
         const col = view.getUint16(offset, true); offset += 2;
         const h = view.getUint16(offset, true); offset += 2;
         const w = view.getUint16(offset, true); offset += 2;
         const compLen = view.getInt32(offset, true); offset += 4;
-
-        const compressed = new Uint8Array(buffer, offset, compLen);
-        offset += compLen;
-
+        const compressed = new Uint8Array(buffer, offset, compLen); offset += compLen;
         const raw = decompress(compressed);
         const data = new Uint16Array(raw.buffer, raw.byteOffset, raw.byteLength / 2);
-
         const chunkId = `r${String(row).padStart(3,'0')}_c${String(col).padStart(3,'0')}`;
-        chunkCache.set(cacheKey(lod, chunkId, monthIndex), {
-            data, compressed_bytes: compLen, raw_bytes: raw.byteLength
-        });
-
+        chunkCache.set(cacheKey(lod, chunkId, monthIndex), { data, compressed_bytes: compLen, raw_bytes: raw.byteLength });
         chunks.push({ chunkId, row, col, data, w, h });
     }
-    const decode_ms = performance.now() - t1;
-
-    return { fetch_ms, decode_ms, total_bytes: buffer.byteLength, chunks };
+    return { fetch_ms, decode_ms: performance.now() - t1, total_bytes: buffer.byteLength, chunks };
 }
 
-// Bundled loadMonth: one request, then render from cache
-async function loadMonthBundled(monthIndex) {
-    hideError();
-    const t0 = performance.now();
+// ---- Benchmarks (console only) ----
+function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes/1024).toFixed(1) + ' KB';
+    return (bytes/1048576).toFixed(2) + ' MB';
+}
 
-    try {
-        const lodMeta = manifest.lods[currentLod];
-        const factor = Math.pow(manifest.lod_factor, currentLod);
-        const mosaicW = Math.ceil(manifest.mosaic_width / factor);
-        const mosaicH = Math.ceil(manifest.mosaic_height / factor);
-
-        canvasWidth = mosaicW;
-        canvasHeight = mosaicH;
-        canvas.width = canvasWidth;
-        canvas.height = canvasHeight;
-
-        gl.viewport(0, 0, canvasWidth, canvasHeight);
-        gl.clearColor(0.0, 0.0, 0.0, 1.0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
-
-        // Single bundled fetch
-        const bundle = await fetchViewportBundle(currentAoi, currentLod, monthIndex);
-
-        // Render each chunk from cache
-        let upload_ms = 0, draw_ms = 0;
-        for (const { data, w, h, row, col } of bundle.chunks) {
-            const chunkSize = lodMeta.chunk_size;
-            const x = col * chunkSize;
-            const y = canvasHeight - (row * chunkSize) - h;
-            const gpu = renderChunkAt(data, w, h, x, y);
-            upload_ms += gpu.upload_ms;
-            draw_ms += gpu.draw_ms;
-        }
-
-        const total_ms = performance.now() - t0;
-        return {
-            total_ms: Math.round(total_ms),
-            fetch_ms: Math.round(bundle.fetch_ms),
-            decode_ms: Math.round(bundle.decode_ms),
-            upload_ms: Math.round(upload_ms),
-            draw_ms: Math.round(draw_ms),
-            wire_bytes: bundle.total_bytes,
-            n_chunks: bundle.chunks.length,
-            requests: 1,
-        };
-    } catch (err) {
-        console.error('Bundled load failed:', err);
-        return { error: err.message };
+function getAnchorCacheInfo() {
+    let resident = 0, bytes = 0;
+    if (!manifest) return { resident, bytes };
+    const anchors = manifest.temporal.anchor_indices;
+    for (const [key, entry] of chunkCache) {
+        if (anchors.includes(parseInt(key.split('/')[2]))) { resident++; bytes += entry.compressed_bytes; }
     }
+    return { resident, bytes };
 }
-
-// A/B cold-open benchmark: bundled vs individual
-async function benchmarkColdOpen() {
-    const nMonths = manifest.months.length;
-    const lods = [manifest.lods.length - 1, 0]; // overview and detail
-
-    console.log('%c=== Cold-Open A/B: Bundled vs Individual ===', 'font-weight:bold;font-size:14px');
-    console.log(`AOI: ${currentAoi} | Months: ${nMonths} | Grid: ${manifest.lods[0].grid_rows}x${manifest.lods[0].grid_cols}`);
-
-    const rows = [];
-
-    for (const lod of lods) {
-        const lodMeta = manifest.lods[lod];
-        const label = `LOD ${lod} (${lodMeta.grid_rows}x${lodMeta.grid_cols})`;
-
-        // --- Individual (current approach) ---
-        chunkCache.clear();
-        anchorStats.hits = 0;
-        anchorStats.misses = 0;
-        currentLod = lod;
-        lodSelect.value = lod;
-
-        const t0 = performance.now();
-        await loadMonth(0);
-        const individual_ms = performance.now() - t0;
-        const indivFrame = { ...lastFrame };
-
-        // --- Bundled ---
-        chunkCache.clear();
-        anchorStats.hits = 0;
-        anchorStats.misses = 0;
-
-        const bundled = await loadMonthBundled(0);
-
-        rows.push({
-            lod: label,
-            method: 'individual',
-            total_ms: Math.round(individual_ms),
-            fetch_ms: indivFrame.fetch_ms,
-            decode_ms: indivFrame.decode_ms,
-            upload_ms: indivFrame.upload_ms,
-            draw_ms: indivFrame.draw_ms,
-            wire_KB: Math.round(indivFrame.wire_bytes / 1024 * 10) / 10,
-            requests: indivFrame.requests_network,
-        });
-        rows.push({
-            lod: label,
-            method: 'bundled',
-            total_ms: bundled.total_ms,
-            fetch_ms: bundled.fetch_ms,
-            decode_ms: bundled.decode_ms,
-            upload_ms: bundled.upload_ms,
-            draw_ms: bundled.draw_ms,
-            wire_KB: Math.round(bundled.wire_bytes / 1024 * 10) / 10,
-            requests: bundled.requests,
-        });
-    }
-
-    console.table(rows);
-    return rows;
-}
-
-window.benchmarkColdOpen = benchmarkColdOpen;
-
-// --- Flow benchmark (callable from browser console) ---
 
 function waitForPrefetch(timeoutMs = 15000) {
-    return new Promise((resolve) => {
+    return new Promise(resolve => {
         const start = performance.now();
         const check = () => {
-            if (prefetchStatus === 'done' || prefetchStatus === 'idle' ||
-                performance.now() - start > timeoutMs) {
-                resolve();
-            } else {
-                setTimeout(check, 50);
-            }
+            if (performance.now() - start > timeoutMs) resolve();
+            else setTimeout(check, 50);
         };
         check();
     });
 }
 
+async function benchmarkColdOpen() {
+    const lods = [manifest.lods.length - 1, 0];
+    console.log('%c=== Cold-Open A/B ===', 'font-weight:bold');
+    const rows = [];
+    for (const lod of lods) {
+        chunkCache.clear(); anchorStats.hits = 0; anchorStats.misses = 0;
+        currentLod = lod;
+        const t0 = performance.now();
+        await loadMonth(0);
+        const ms = performance.now() - t0;
+        rows.push({ lod: `LOD ${lod}`, total_ms: Math.round(ms), wire_KB: Math.round(lastFrame.wire_bytes/1024) });
+    }
+    console.table(rows);
+    return rows;
+}
+
 async function runBenchmarkFlow(name, steps) {
     console.log(`\n%c=== ${name} ===`, 'font-weight:bold');
     const rows = [];
-
     for (let i = 0; i < steps.length; i++) {
         const step = steps[i];
-
-        // Optionally wait for prior prefetch to finish
         if (step.waitForPrefetch) await waitForPrefetch();
-
-        // Apply LOD change if requested
-        if (step.lod !== undefined && step.lod !== currentLod) {
-            currentLod = step.lod;
-            lodSelect.value = step.lod;
-        }
-
+        if (step.lod !== undefined) currentLod = step.lod;
         const month = step.month !== undefined ? step.month : currentMonth;
-        currentMonth = month;
-        updateMonthLabel();
+        currentMonth = month; updateMonthLabel();
         await loadMonth(month);
-
-        rows.push({
-            '#': i,
-            step: step.label,
-            month: lastFrame.month,
-            lod: lastFrame.lod,
-            ms: lastFrame.total_ms,
-            wire_KB: Math.round(lastFrame.wire_bytes / 1024 * 10) / 10,
-            net: lastFrame.requests_network,
-            cached: lastFrame.requests_cached,
-            warm_pct: lastFrame.anchor_warm_pct,
-            a_hits: lastFrame.anchor_hits_session,
-            a_miss: lastFrame.anchor_misses_session,
-            resident: getAnchorCacheInfo().resident,
-        });
+        rows.push({ '#': i, step: step.label, month: lastFrame.month, ms: lastFrame.total_ms,
+            wire_KB: Math.round(lastFrame.wire_bytes/1024), net: lastFrame.requests_network });
     }
-
     console.table(rows);
-
-    const totalWire = rows.reduce((s, r) => s + r.wire_KB, 0);
-    const totalNet = rows.reduce((s, r) => s + r.net, 0);
-    const times = rows.map(r => r.ms).sort((a, b) => a - b);
-    const median = times[Math.floor(times.length / 2)];
-    console.log(`Summary: ${rows.length} steps | ${totalWire.toFixed(1)} KB wire | ${totalNet} net reqs | ${median}ms median frame`);
     return rows;
 }
 
 async function benchmarkFlows() {
     const nMonths = manifest.months.length;
     const maxLod = manifest.lods.length - 1;
-
-    // Clear cache for clean measurement
-    chunkCache.clear();
-    anchorStats.hits = 0;
-    anchorStats.misses = 0;
-
-    console.log('%c=== ChronoFabric Flow Benchmark ===', 'font-weight:bold;font-size:14px');
-    console.log(`AOI: ${currentAoi} | Months: ${nMonths} | LODs: ${maxLod + 1}`);
-
-    // Flow A: linear scrub forward then back (with prefetch warmup)
+    chunkCache.clear(); anchorStats.hits = 0; anchorStats.misses = 0;
     const flowA = [];
     const scrubLen = Math.min(nMonths, 6);
-    for (let i = 0; i < scrubLen; i++) {
+    for (let i = 0; i < scrubLen; i++)
         flowA.push({ label: i === 0 ? 'cold open' : `fwd → ${manifest.months[i]}`, month: i, waitForPrefetch: i > 0 });
-    }
-    if (scrubLen > 2) {
-        flowA.push({ label: `back → ${manifest.months[scrubLen - 3]}`, month: scrubLen - 3, waitForPrefetch: true });
-    }
-
-    // Flow C: LOD switch + month switch
+    const resultA = await runBenchmarkFlow('Linear Scrub', flowA);
+    chunkCache.clear(); anchorStats.hits = 0; anchorStats.misses = 0;
     const flowC = [
-        { label: 'open LOD max', month: 0, lod: maxLod, waitForPrefetch: false },
-        { label: 'zoom → LOD 0', month: 0, lod: 0, waitForPrefetch: true },
-        { label: 'month +1 (LOD 0)', month: Math.min(1, nMonths - 1), waitForPrefetch: true },
-        { label: 'zoom → LOD max', month: Math.min(1, nMonths - 1), lod: maxLod, waitForPrefetch: true },
-        { label: 'month +1 (LOD max)', month: Math.min(2, nMonths - 1), waitForPrefetch: true },
+        { label: 'open LOD max', month: 0, lod: maxLod },
+        { label: 'zoom LOD 0', month: 0, lod: 0, waitForPrefetch: true },
+        { label: 'month+1 LOD 0', month: Math.min(1, nMonths-1), waitForPrefetch: true },
     ];
-
-    // Reset cache between flows for independent measurement
-    const flowAResults = await runBenchmarkFlow('Flow A: Linear Scrub', flowA);
-
-    chunkCache.clear();
-    anchorStats.hits = 0;
-    anchorStats.misses = 0;
-
-    const flowCResults = await runBenchmarkFlow('Flow C: LOD + Month Switch', flowC);
-
-    return { flowA: flowAResults, flowC: flowCResults };
+    const resultC = await runBenchmarkFlow('LOD + Month', flowC);
+    return { flowA: resultA, flowC: resultC };
 }
 
-// Switch AOI: reload manifest and re-render
-async function switchAoi(aoi) {
-    currentAoi = aoi;
-    chunkCache.clear();
-    anchorStats.hits = 0;
-    anchorStats.misses = 0;
-    prefetchGeneration++;
-    progressiveUpgradeGen++;
-    prefetchStatus = 'idle';
-    setStatus('Fetching manifest...');
-    const response = await fetch(`/v1/manifest/${aoi}`);
-    if (!response.ok) { showError('Manifest fetch failed', `HTTP ${response.status}`); return; }
-    manifest = await response.json();
-
-    populateLodSelect();
-    populateMonthSlider();
-    currentMonth = 0;
-    updateMonthLabel();
-    await loadMonthProgressive(currentMonth);
-}
-
-// Expose to browser console
+window.benchmarkColdOpen = benchmarkColdOpen;
 window.benchmarkFlows = benchmarkFlows;
 window.switchAoi = switchAoi;
-window.loadMonthProgressive = loadMonthProgressive;
+window.lastFrame = () => lastFrame;
 
-// Initialize
+// ---- Init ----
 async function init() {
-    // Check for fzstd
     if (typeof decompress !== 'function') {
-        showError('Zstd decoder not available', 'Failed to load fzstd library. Check your internet connection.');
+        showError('Decoder not available', 'Failed to load zstd library.');
         return;
     }
-    
-    // Initialize WebGL
     if (!initWebGL()) return;
     createProgram();
     setupGeometry();
-    
-    // Fetch manifest
-    setStatus('Fetching manifest...');
+    buildProducts();
+
     try {
         const response = await fetch(`/v1/manifest/${currentAoi}`);
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         manifest = await response.json();
     } catch (err) {
-        showError('Manifest fetch failed', err.message);
+        showError('Load failed', err.message);
         return;
     }
-    
-    // Populate controls
-    populateLodSelect();
-    populateMonthSlider();
 
-    // Set initial month
     currentMonth = 0;
     updateMonthLabel();
+    buildTimeline();
+    initTimelineInteraction();
 
-    // Progressive cold open: show coarse preview instantly, then upgrade
     await loadMonthProgressive(currentMonth);
 
-    // Event listeners
-    prevBtn.addEventListener('click', prevMonth);
-    nextBtn.addEventListener('click', nextMonth);
-
-    // Month slider — scrub through time
-    const monthSlider = document.getElementById('month-slider');
-    monthSlider.addEventListener('input', (e) => {
-        const idx = parseInt(e.target.value);
-        if (idx === currentMonth) return;
-        currentMonth = idx;
-        updateMonthLabel();
-        // Use direct loadMonth if LOD 0 is warm, otherwise progressive
-        if (currentLod === 0) {
-            loadMonth(currentMonth);
-        } else {
-            loadMonthProgressive(currentMonth);
-        }
-    });
-
-    lodSelect.addEventListener('change', (e) => setLod(e.target.value));
+    // Events
+    prevBtn.addEventListener('click', () => goToMonth(currentMonth - 1));
+    nextBtn.addEventListener('click', () => goToMonth(currentMonth + 1));
     document.getElementById('aoi-select').addEventListener('change', (e) => switchAoi(e.target.value));
-    document.getElementById('metrics-btn').addEventListener('click', () => {
-        const panel = document.getElementById('metrics-panel');
-        panel.classList.toggle('visible');
-        updateMetricsPanel();
+    canvas.addEventListener('click', handleCanvasClick);
+    window.addEventListener('resize', () => {
+        fitCanvasToContainer();
+        buildTimeline();
     });
 
-    // Click-to-query
-    canvas.addEventListener('click', handleCanvasClick);
-
-    // Refit canvas on window resize
-    window.addEventListener('resize', fitCanvasToContainer);
-
-    // Keyboard navigation
     document.addEventListener('keydown', (e) => {
         if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
         switch (e.key) {
-            case 'ArrowLeft': e.preventDefault(); prevMonth(); break;
-            case 'ArrowRight': e.preventDefault(); nextMonth(); break;
+            case 'ArrowLeft': e.preventDefault(); goToMonth(currentMonth - 1, { immediate: !e.repeat }); break;
+            case 'ArrowRight': e.preventDefault(); goToMonth(currentMonth + 1, { immediate: !e.repeat }); break;
+            case '1': case '2': case '3': case '4': case '5':
+                setProduct(parseInt(e.key) - 1); break;
         }
+    });
+    document.addEventListener('keyup', (e) => {
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') flushPendingLoad();
     });
 }
 
