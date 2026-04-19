@@ -229,14 +229,23 @@ def monthly_composite(
         return idx, load_scene(scene, dst_transform, dst_crs, dst_height, dst_width)
 
     max_workers = min(4, n_scenes)
+    failed = 0
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_load, (i, s)): i for i, s in enumerate(scenes)}
+        futures = {pool.submit(_load, (i, s)): (i, s) for i, s in enumerate(scenes)}
         for future in as_completed(futures):
-            i, (bands, valid) = future.result()
+            i, scene = futures[future]
+            try:
+                _, (bands, valid) = future.result()
+            except Exception as e:
+                logger.warning("Skipping scene %s: %s", scene.id, e)
+                failed += 1
+                continue
             mask_3d = np.broadcast_to(valid[np.newaxis, :, :], bands.shape)
             scene_float = bands.astype(np.float32)
             scene_float[~mask_3d] = np.nan
             stack[i] = scene_float
+    if failed:
+        logger.warning("Dropped %d/%d scenes due to errors", failed, n_scenes)
 
     # Median ignoring NaN
     with np.errstate(all="ignore"):
