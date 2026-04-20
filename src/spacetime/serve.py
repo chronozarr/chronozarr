@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from spacetime.api.auth import AuthMiddleware
 from spacetime.api.jobs import JobDB
+from spacetime.api.naip import router as naip_router
 from spacetime.api.v1 import AOI_CATALOG
 from spacetime.api.v1 import router as v1_router
 
@@ -90,6 +91,40 @@ def _discover_aois() -> dict[str, dict]:
     return aois
 
 
+def _configure_naip_aois() -> None:
+    """Register NAIP AOIs. Discovery is lazy (on first request)."""
+    from spacetime.api.naip import NAIP_CATALOG
+    from spacetime.naip import NaipAoi
+
+    naip_aois = [
+        NaipAoi(
+            name="iowa_ames_naip",
+            label="Iowa Cropland (NAIP 1m)",
+            bbox=(-93.70, 42.00, -93.60, 42.10),
+            epsg=32615,
+            resolution=1.0,
+        ),
+        NaipAoi(
+            name="lake_mead_naip",
+            label="Lake Mead (NAIP 1m)",
+            bbox=(-114.80, 36.05, -114.70, 36.15),
+            epsg=32611,
+            resolution=1.0,
+        ),
+        NaipAoi(
+            name="dc_mall_naip",
+            label="Washington DC Mall (NAIP 0.6m)",
+            bbox=(-77.06, 38.885, -77.00, 38.895),
+            epsg=32618,
+            resolution=0.6,
+        ),
+    ]
+    NAIP_CATALOG.clear()
+    for aoi in naip_aois:
+        NAIP_CATALOG[aoi.name] = aoi
+    logger.info("NAIP connector: %d AOIs configured (lazy discovery)", len(NAIP_CATALOG))
+
+
 def _initialize_app_state() -> None:
     """Initialize shared application state on startup."""
     job_db = JobDB()
@@ -109,6 +144,9 @@ def _initialize_app_state() -> None:
     if not AOI_CATALOG:
         logger.warning("No stores found under %s", STORES_ROOT)
     logger.info("Job database initialized at %s", job_db.db_path)
+
+    # NAIP connector (lazy — no network calls at startup)
+    _configure_naip_aois()
 
 
 @asynccontextmanager
@@ -143,6 +181,10 @@ app.add_middleware(AuthMiddleware)
 
 # Mount v1 API
 app.include_router(v1_router)
+
+# Mount NAIP COG proxy
+
+app.include_router(naip_router)
 
 # Serve static assets (shaders.js, etc.)
 _static_dir = Path(__file__).parent / "static"
