@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -178,8 +178,19 @@ def discover_naip_aoi(aoi: NaipAoi) -> NaipAoi:
 
 # ---- Full-mosaic cache ----
 # Read the entire AOI extent once per year, then slice tiles from RAM.
-# Key: (aoi_name, year) -> (4, H, W) uint8 array
+# Lock prevents duplicate reads when many tile requests arrive at once.
+
 _mosaic_cache: dict[tuple[str, str], np.ndarray] = {}
+_mosaic_locks: dict[tuple[str, str], threading.Lock] = {}
+_mosaic_global_lock = threading.Lock()
+
+
+def _get_mosaic_lock(key: tuple[str, str]) -> threading.Lock:
+    """Get or create a per-key lock for mosaic reads."""
+    with _mosaic_global_lock:
+        if key not in _mosaic_locks:
+            _mosaic_locks[key] = threading.Lock()
+        return _mosaic_locks[key]
 
 
 def _read_naip_item(
@@ -216,54 +227,56 @@ def _read_naip_item(
 def _read_naip_mosaic(aoi: NaipAoi, year: str) -> np.ndarray:
     """Read full AOI mosaic for a year from NAIP COGs. Cached in RAM.
 
-    Reads all items for the year in parallel threads, composites into
-    a single (4, H, W) uint8 array.
+    Uses a per-key lock so only one thread reads a given mosaic.
+    Other requests for the same mosaic wait for the first read to finish.
+    Items are read sequentially to limit peak memory on small VPSes.
     """
     key = (aoi.name, year)
     if key in _mosaic_cache:
         return _mosaic_cache[key]
 
-    items = aoi.items_by_year.get(year, [])
-    if not items:
-        raise ValueError(f"No NAIP data for {aoi.name} year {year}")
+    # Per-key lock: only one thread reads a given mosaic
+    lock = _get_mosaic_lock(key)
+    with lock:
+        # Double-check after acquiring lock (another thread may have finished)
+        if key in _mosaic_cache:
+            return _mosaic_cache[key]
 
-    dst_crs = CRS.from_epsg(aoi.epsg)
-    t0 = time.perf_counter()
+        items = aoi.items_by_year.get(year, [])
+        if not items:
+            raise ValueError(f"No NAIP data for {aoi.name} year {year}")
 
-    mosaic = np.zeros((4, aoi.height, aoi.width), dtype=np.uint8)
+        dst_crs = CRS.from_epsg(aoi.epsg)
+        t0 = time.perf_counter()
 
-    # Read items in parallel — each thread reads one COG
-    def _read(item):
-        return _read_naip_item(item, aoi.transform, dst_crs, aoi.height, aoi.width)
+        mosaic = np.zeros((4, aoi.height, aoi.width), dtype=np.uint8)
 
-    with ThreadPoolExecutor(max_workers=min(4, len(items))) as pool:
-        futures = {pool.submit(_read, item): item for item in items}
-        for future in as_completed(futures):
-            item = futures[future]
+        # Read items sequentially to limit peak memory on small VPSes
+        for item in items:
             try:
-                result = future.result()
-                # Composite: overwrite zeros with data
+                result = _read_naip_item(item, aoi.transform, dst_crs, aoi.height, aoi.width)
                 has_data = result.sum(axis=0) > 0
                 for b in range(4):
                     mosaic[b][has_data] = result[b][has_data]
+                logger.info("NAIP item %s: OK", item.item_id[:40])
             except Exception as e:
                 logger.warning("Failed to read NAIP item %s: %s", item.item_id, e)
 
-    elapsed = time.perf_counter() - t0
-    size_mb = mosaic.nbytes / (1024 * 1024)
-    logger.info(
-        "NAIP mosaic %s/%s: %d items, %dx%d, %.1f MB in %.1fs",
-        aoi.name,
-        year,
-        len(items),
-        aoi.width,
-        aoi.height,
-        size_mb,
-        elapsed,
-    )
+        elapsed = time.perf_counter() - t0
+        size_mb = mosaic.nbytes / (1024 * 1024)
+        logger.info(
+            "NAIP mosaic %s/%s: %d items, %dx%d, %.1f MB in %.1fs",
+            aoi.name,
+            year,
+            len(items),
+            aoi.width,
+            aoi.height,
+            size_mb,
+            elapsed,
+        )
 
-    _mosaic_cache[key] = mosaic
-    return mosaic
+        _mosaic_cache[key] = mosaic
+        return mosaic
 
 
 def read_naip_tile(aoi: NaipAoi, year: str, chunk_id: str) -> np.ndarray:
