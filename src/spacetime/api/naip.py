@@ -25,7 +25,7 @@ from spacetime.naip import (
     CHUNK_SIZE,
     NaipAoi,
     discover_naip_aoi,
-    read_naip_tile_cached,
+    read_naip_tile,
     render_naip_product,
 )
 
@@ -114,7 +114,7 @@ def naip_tile(
     t0 = time.perf_counter()
 
     # Read tile (cached)
-    bands = read_naip_tile_cached(naip_aoi, year, chunk_id)
+    bands = read_naip_tile(naip_aoi, year, chunk_id)
     t_read = time.perf_counter()
 
     # Render product
@@ -202,7 +202,7 @@ def naip_query(
         raise HTTPException(400, detail=f"Point ({lat}, {lng}) falls outside AOI bounds")
 
     # Read tile and extract pixel
-    bands = read_naip_tile_cached(naip_aoi, year, coords.chunk_id)
+    bands = read_naip_tile(naip_aoi, year, coords.chunk_id)
     lr, lc = coords.local_row, coords.local_col
     if lr >= bands.shape[1] or lc >= bands.shape[2]:
         raise HTTPException(400, detail="Pixel outside chunk bounds (edge chunk)")

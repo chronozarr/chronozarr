@@ -100,21 +100,21 @@ def _configure_naip_aois() -> None:
         NaipAoi(
             name="iowa_ames_naip",
             label="Iowa Cropland (NAIP 1m)",
-            bbox=(-93.70, 42.00, -93.60, 42.10),
+            bbox=(-93.66, 42.02, -93.63, 42.05),  # ~3km chip
             epsg=32615,
             resolution=1.0,
         ),
         NaipAoi(
             name="lake_mead_naip",
             label="Lake Mead (NAIP 1m)",
-            bbox=(-114.80, 36.05, -114.70, 36.15),
+            bbox=(-114.77, 36.08, -114.74, 36.11),  # ~3km chip
             epsg=32611,
             resolution=1.0,
         ),
         NaipAoi(
             name="dc_mall_naip",
             label="Washington DC Mall (NAIP 0.6m)",
-            bbox=(-77.06, 38.885, -77.00, 38.895),
+            bbox=(-77.05, 38.888, -77.03, 38.895),  # ~1.5km chip
             epsg=32618,
             resolution=0.6,
         ),
