@@ -146,6 +146,22 @@
     cursor: crosshair;
     image-rendering: auto;
   }
+  #naip-grid {
+    display: none;
+    position: relative;
+    background: var(--surface);
+    border-radius: var(--radius);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    overflow: hidden;
+    cursor: crosshair;
+    image-rendering: auto;
+  }
+  #naip-grid img {
+    position: absolute;
+    display: block;
+    image-rendering: auto;
+  }
+  #naip-grid.loading { opacity: 0.6; }
   .progress-bar {
     position: absolute;
     top: 0;
@@ -434,6 +450,7 @@
 <main>
   <section class="viewport">
     <canvas id="gl-canvas" width="512" height="512"></canvas>
+    <div id="naip-grid"></div>
     <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
     <div class="click-hint" id="click-hint">Click anywhere to inspect</div>
     <div class="error-overlay" id="error-overlay">
@@ -1375,24 +1392,8 @@ function buildProducts() {
     });
 }
 
-function setProduct(idx) {
-    currentProductIndex = idx;
-    document.querySelectorAll('#products button').forEach(b => {
-        b.classList.toggle('active', parseInt(b.dataset.product) === idx);
-    });
-    rerenderCurrentFrame();
-}
-
-// ---- Navigation ----
-function goToMonth(idx) {
-    if (!manifest) return;
-    currentMonth = Math.max(0, Math.min(idx, manifest.months.length - 1));
-    monthLabel.textContent = formatMonth(manifest.months[currentMonth]);
-    updateTimeline();
-
-    if (currentLod === 0) loadMonth(currentMonth);
-    else loadMonthProgressive(currentMonth);
-}
+// setProduct and goToMonth are defined in the NAIP section below
+// to handle both S2 and NAIP modes
 
 function updateMonthLabel() {
     if (!manifest) return;
@@ -1540,63 +1541,318 @@ window.benchmarkFlows = benchmarkFlows;
 window.switchAoi = switchAoi;
 window.lastFrame = () => lastFrame;
 
+// ---- NAIP Mode ----
+let isNaipMode = false;
+let naipMeta = null;  // current NAIP AOI metadata from catalog
+let naipCatalog = []; // all NAIP AOIs
+const naipGrid = document.getElementById('naip-grid');
+const NAIP_PRODUCTS = ['true_color', 'false_color', 'ndvi', 'ndwi'];
+let naipProduct = 'true_color';
+
+// Map product button index to NAIP product key
+const NAIP_PRODUCT_MAP = { 0: 'true_color', 1: 'false_color', 2: 'ndvi', 3: 'ndwi' };
+
+function enterNaipMode() {
+    isNaipMode = true;
+    canvas.style.display = 'none';
+    naipGrid.style.display = 'block';
+    document.getElementById('nav-meta').textContent = `NAIP · ${naipMeta.resolution_m}m`;
+}
+
+function exitNaipMode() {
+    isNaipMode = false;
+    naipGrid.style.display = 'none';
+    naipGrid.innerHTML = '';
+    canvas.style.display = 'block';
+}
+
+function fitNaipGrid() {
+    if (!naipMeta) return;
+    const container = naipGrid.parentElement;
+    const pad = 32;
+    const maxW = container.clientWidth - pad;
+    const maxH = container.clientHeight - pad;
+    const aspect = naipMeta.width / naipMeta.height;
+    let w, h;
+    if (maxW / maxH > aspect) {
+        h = Math.min(maxH, naipMeta.height);
+        w = Math.round(h * aspect);
+    } else {
+        w = Math.min(maxW, naipMeta.width);
+        h = Math.round(w / aspect);
+    }
+    naipGrid.style.width = w + 'px';
+    naipGrid.style.height = h + 'px';
+    naipGrid._scale = w / naipMeta.width;
+}
+
+async function loadNaipYear(yearIndex) {
+    if (!naipMeta) return;
+    const year = naipMeta.years[yearIndex];
+    const chunkSize = 512;
+    const scale = naipGrid._scale || 1;
+
+    naipGrid.classList.add('loading');
+    setProgress(0.01);
+    naipGrid.innerHTML = '';
+
+    const chunks = [];
+    for (let r = 0; r < naipMeta.grid_rows; r++) {
+        for (let c = 0; c < naipMeta.grid_cols; c++) {
+            const chunkId = `r${String(r).padStart(3,'0')}_c${String(c).padStart(3,'0')}`;
+            chunks.push({ r, c, chunkId });
+        }
+    }
+
+    let loaded = 0;
+    const total = chunks.length;
+    const t0 = performance.now();
+
+    await Promise.all(chunks.map(({ r, c, chunkId }) => {
+        return new Promise((resolve) => {
+            const img = document.createElement('img');
+            const tileW = (c < naipMeta.grid_cols - 1) ? chunkSize : (naipMeta.width - (naipMeta.grid_cols - 1) * chunkSize);
+            const tileH = (r < naipMeta.grid_rows - 1) ? chunkSize : (naipMeta.height - (naipMeta.grid_rows - 1) * chunkSize);
+
+            img.style.left = Math.round(c * chunkSize * scale) + 'px';
+            img.style.top = Math.round(r * chunkSize * scale) + 'px';
+            img.style.width = Math.round(tileW * scale) + 'px';
+            img.style.height = Math.round(tileH * scale) + 'px';
+            img.src = `/v1/naip/tiles/${currentAoi}/${year}/${chunkId}?product=${naipProduct}`;
+            img.onload = img.onerror = () => {
+                loaded++;
+                setProgress(loaded / total);
+                resolve();
+            };
+            naipGrid.appendChild(img);
+        });
+    }));
+
+    naipGrid.classList.remove('loading');
+    const ms = Math.round(performance.now() - t0);
+    setStatus(ms);
+    setProgress(1);
+}
+
+async function switchNaipAoi(aoiId) {
+    currentAoi = aoiId;
+    naipMeta = naipCatalog.find(a => a.id === aoiId);
+    if (!naipMeta) { showError('NAIP error', `AOI ${aoiId} not found`); return; }
+
+    enterNaipMode();
+    fitNaipGrid();
+
+    // Build year-based timeline
+    manifest = {
+        months: naipMeta.years,
+        lods: [{ grid_rows: naipMeta.grid_rows, grid_cols: naipMeta.grid_cols, chunk_size: 512 }],
+        mosaic_width: naipMeta.width,
+        mosaic_height: naipMeta.height,
+        temporal: { anchor_indices: [] },
+    };
+    currentMonth = naipMeta.years.length - 1; // Start at most recent year
+    monthLabel.textContent = naipMeta.years[currentMonth];
+    buildTimeline();
+
+    await loadNaipYear(currentMonth);
+}
+
+// Override goToMonth and formatMonth for NAIP
+const _origGoToMonth = goToMonth;
+
+function goToMonth(idx) {
+    if (!manifest) return;
+    currentMonth = Math.max(0, Math.min(idx, manifest.months.length - 1));
+    monthLabel.textContent = isNaipMode ? manifest.months[currentMonth] : formatMonth(manifest.months[currentMonth]);
+    updateTimeline();
+
+    if (isNaipMode) {
+        loadNaipYear(currentMonth);
+    } else {
+        if (currentLod === 0) loadMonth(currentMonth);
+        else loadMonthProgressive(currentMonth);
+    }
+}
+
+// Override setProduct for NAIP
+const _origSetProduct = setProduct;
+function setProduct(idx) {
+    currentProductIndex = idx;
+    document.querySelectorAll('#products button').forEach(b => {
+        b.classList.toggle('active', parseInt(b.dataset.product) === idx);
+    });
+    if (isNaipMode) {
+        naipProduct = NAIP_PRODUCT_MAP[idx] || 'true_color';
+        loadNaipYear(currentMonth);
+    } else {
+        rerenderCurrentFrame();
+    }
+}
+
+// NAIP click-to-query
+naipGrid.addEventListener('click', async (e) => {
+    if (!naipMeta) return;
+    clickHint.classList.add('hidden');
+    const rect = naipGrid.getBoundingClientRect();
+    const scale = naipGrid._scale || 1;
+    const pixelX = Math.floor((e.clientX - rect.left) / scale);
+    const pixelY = Math.floor((e.clientY - rect.top) / scale);
+
+    // Convert pixel to lat/lng via the API
+    const year = naipMeta.years[currentMonth];
+    const bbox = naipMeta.bbox_wgs84;
+    // Approximate lat/lng from pixel position (linear interpolation within bbox)
+    const lng = bbox[0] + (pixelX / naipMeta.width) * (bbox[2] - bbox[0]);
+    const lat = bbox[3] - (pixelY / naipMeta.height) * (bbox[3] - bbox[1]);
+
+    try {
+        const resp = await fetch(`/v1/naip/query/${currentAoi}/${year}?lat=${lat.toFixed(6)}&lng=${lng.toFixed(6)}`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+
+        const empty = document.getElementById('sidebar-empty');
+        const content = document.getElementById('sidebar-content');
+        empty.style.display = 'none';
+        content.style.display = 'block';
+
+        const ndvi = data.values.ndvi;
+        const ndwi = data.values.ndwi;
+        const ndviFrac = ndvi !== null ? ((ndvi + 1) / 2 * 100) : 0;
+        const ndwiFrac = ndwi !== null ? ((ndwi + 1) / 2 * 100) : 0;
+
+        content.innerHTML = `
+          <div class="sidebar-section">
+            <div class="section-label">Location</div>
+            <div class="meta-row"><span class="label">Year</span><span class="value">${year}</span></div>
+            <div class="meta-row"><span class="label">Position</span><span class="value mono">${data.lat.toFixed(4)}, ${data.lng.toFixed(4)}</span></div>
+            <div class="meta-row"><span class="label">Resolution</span><span class="value">${data.resolution_m}m</span></div>
+          </div>
+          <div class="sidebar-section">
+            <div class="section-label">Indices</div>
+            <div class="metric">
+              <div class="metric-header">
+                <span class="metric-name">NDVI</span>
+                <span class="metric-value" style="color:${ndviColor(ndvi)}">${ndvi !== null ? ndvi.toFixed(3) : '\u2014'}</span>
+              </div>
+              <div class="metric-bar"><div class="metric-fill" style="width:${ndviFrac}%;background:${ndviColor(ndvi)}"></div></div>
+            </div>
+            <div class="metric">
+              <div class="metric-header">
+                <span class="metric-name">NDWI</span>
+                <span class="metric-value" style="color:${ndwiColor(ndwi)}">${ndwi !== null ? ndwi.toFixed(3) : '\u2014'}</span>
+              </div>
+              <div class="metric-bar"><div class="metric-fill" style="width:${ndwiFrac}%;background:${ndwiColor(ndwi)}"></div></div>
+            </div>
+          </div>
+          <div class="sidebar-section">
+            <div class="section-label">Bands (DN 0-255)</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 16px;">
+              ${Object.entries(data.bands).map(([k,v]) =>
+                `<div class="meta-row"><span class="label">${k}</span><span class="value mono">${v}</span></div>`
+              ).join('')}
+            </div>
+          </div>
+        `;
+    } catch (_) {}
+});
+
 // ---- Init ----
 async function init() {
-    if (typeof decompress !== 'function') {
-        showError('Decoder not available', 'Failed to load zstd library.');
-        return;
+    let hasWebGL = false;
+    if (typeof decompress === 'function') {
+        hasWebGL = initWebGL();
+        if (hasWebGL) {
+            createProgram();
+            setupGeometry();
+        }
     }
-    if (!initWebGL()) return;
-    createProgram();
-    setupGeometry();
     buildProducts();
 
-    // Populate AOI dropdown from catalog
+    const select = document.getElementById('aoi-select');
+    select.innerHTML = '';
+
+    // Populate S2 AOIs
     try {
         const catResp = await fetch('/v1/catalog');
         if (catResp.ok) {
             const catData = await catResp.json();
-            const select = document.getElementById('aoi-select');
-            select.innerHTML = '';
-            catData.aois.forEach(aoi => {
-                const opt = document.createElement('option');
-                opt.value = aoi.id;
-                opt.textContent = aoi.name;
-                select.appendChild(opt);
-            });
             if (catData.aois.length > 0) {
-                currentAoi = catData.aois[0].id;
-                select.value = currentAoi;
+                const group = document.createElement('optgroup');
+                group.label = 'Sentinel-2 (10m)';
+                catData.aois.forEach(aoi => {
+                    const opt = document.createElement('option');
+                    opt.value = aoi.id;
+                    opt.textContent = aoi.name;
+                    group.appendChild(opt);
+                });
+                select.appendChild(group);
             }
         }
     } catch (_) {}
 
+    // Populate NAIP AOIs
     try {
-        const response = await fetch(`/v1/manifest/${currentAoi}`);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        manifest = await response.json();
-    } catch (err) {
-        showError('Load failed', err.message);
-        return;
+        const naipResp = await fetch('/v1/naip/catalog');
+        if (naipResp.ok) {
+            const naipData = await naipResp.json();
+            naipCatalog = naipData.aois;
+            if (naipCatalog.length > 0) {
+                const group = document.createElement('optgroup');
+                group.label = 'NAIP Aerial';
+                naipCatalog.forEach(aoi => {
+                    const opt = document.createElement('option');
+                    opt.value = 'naip:' + aoi.id;
+                    opt.textContent = aoi.name;
+                    group.appendChild(opt);
+                });
+                select.appendChild(group);
+            }
+        }
+    } catch (_) {}
+
+    // Default to first S2 AOI if available
+    if (select.options.length > 0) {
+        currentAoi = select.options[0].value;
+        select.value = currentAoi;
     }
 
-    currentMonth = 0;
-    updateMonthLabel();
-    buildTimeline();
+    // Load initial AOI
+    if (currentAoi.startsWith('naip:')) {
+        await switchNaipAoi(currentAoi.replace('naip:', ''));
+    } else if (hasWebGL) {
+        try {
+            const response = await fetch(`/v1/manifest/${currentAoi}`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            manifest = await response.json();
+        } catch (err) {
+            showError('Load failed', err.message);
+            return;
+        }
+        currentMonth = 0;
+        updateMonthLabel();
+        buildTimeline();
+        await loadMonthProgressive(currentMonth);
+        preloadAll(currentMonth);
+    }
+
     initTimelineInteraction();
-
-    await loadMonthProgressive(currentMonth);
-
-    // Preload all months in background so scrubbing is instant
-    preloadAll(currentMonth);
 
     // Events
     prevBtn.addEventListener('click', () => goToMonth(currentMonth - 1));
     nextBtn.addEventListener('click', () => goToMonth(currentMonth + 1));
-    document.getElementById('aoi-select').addEventListener('change', (e) => switchAoi(e.target.value));
+    select.addEventListener('change', (e) => {
+        const val = e.target.value;
+        if (val.startsWith('naip:')) {
+            switchNaipAoi(val.replace('naip:', ''));
+        } else {
+            if (isNaipMode) exitNaipMode();
+            switchAoi(val);
+        }
+    });
     canvas.addEventListener('click', handleCanvasClick);
     window.addEventListener('resize', () => {
-        fitCanvasToContainer();
+        if (isNaipMode) { fitNaipGrid(); }
+        else { fitCanvasToContainer(); }
         buildTimeline();
     });
 
