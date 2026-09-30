@@ -13,7 +13,7 @@ Spec: [spec/CHRONOZARR.md](spec/CHRONOZARR.md)
 | Format spec | `spec/CHRONOZARR.md` | Normative layout, attrs, star-delta, pyramid, hosting rules |
 | Python package `chronozarr` | `src/chronozarr/` | `encode()` from an xarray DataArray, `open_store()` reader, CLI `chronozarr encode / validate / info` |
 | JS decoder | `js/chronozarr/decoder.js` | DOM-free reader on top of zarrita: cells by (lod, row, col, t), cache, anchors-first prefetch |
-| TileRipper viewer | `js/tileripper/` | WebGL2 viewer: time scrub, movie playback at 1 to 15 steps per second, GPU product switching, click-to-query values |
+| TileRipper viewer | `js/tileripper/` | WebGL2 viewer: time scrub, looping playback up to 60 steps per second, click for values and a time-series chart, permalinks, WebM and GIF export |
 | Ingest example | `examples/sentinel2_pc/` | Monthly Sentinel-2 median composites from Planetary Computer |
 
 ## Why another format
