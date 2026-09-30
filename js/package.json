@@ -1,0 +1,14 @@
+{
+  "name": "chronozarr-js",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser and Node reader for chronozarr v0.1 stores, plus the TileRipper viewer",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "zarrita": "0.7.5"
+  },
+  "license": "Apache-2.0"
+}

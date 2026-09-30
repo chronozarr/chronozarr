@@ -1,0 +1,746 @@
+// TileRipper viewer: renders a chronozarr store with WebGL2, scrubs through time, switches
+// products on the GPU and shows decoded values on click. Opens ?store=<base url>.
+
+import { chunkKey, openStore } from '../chronozarr/decoder.js';
+import { Renderer } from './renderer.js';
+import { computeStretchLo, describePixel, inputIndices, makeTimeFormatter, resolveProducts } from './products.js';
+
+const SCRUB_DEBOUNCE_MS = 80;
+const PREFETCH_DELAY_MS = 150;
+const POOL_BUDGET_BYTES = 384 * 1024 * 1024;
+const POOL_TIME_WINDOW = 8;
+const GPU_WINDOW = 2;
+const GPU_UPLOADS_PER_TICK = 8;
+const MAX_SCALE = 16;
+const CLICK_SLOP_PX = 4;
+const STRETCH_SAMPLES_PER_CELL = 300;
+
+const $ = (id) => document.getElementById(id);
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+class Viewer {
+  canvas = $('gl-canvas');
+  renderer;
+  store = null;
+  products = [];
+  productIndex = 0;
+  bandChoice = 0;
+  t = 0;
+  camera = { cx: 0, cy: 0, scale: 1 };
+  /** Force one LOD regardless of zoom (benchmarks). */
+  lodOverride = null;
+
+  #formatTime = (t) => String(t);
+  #direction = 1;
+  #stretchLo = null;
+  #paintPartial = true;
+  #paintedLod = 0;
+  #view = { lod: 0, cells: new Set() };
+  #maxVisibleCells = 0;
+  #rafId = 0;
+  #loadTimer = 0;
+  #prefetchTimer = 0;
+  #gpuFillTimer = 0;
+  #prefetchAbort = null;
+  #painted = [];
+  #storeGeneration = 0;
+  #tickElements = [];
+  #loadingChunks = new Set();
+
+  constructor() {
+    this.renderer = new Renderer(this.canvas);
+    this.renderer.evictionScore = (meta) => this.#evictionScore(meta);
+    this.#resizeCanvas();
+    new ResizeObserver(() => {
+      this.#resizeCanvas();
+      this.#paintPartial = true;
+      this.requestRender();
+    }).observe(this.canvas.parentElement);
+    this.#bindInput();
+    setInterval(() => this.#updateCacheStats(), 500);
+  }
+
+  /**
+   * Open a store and resolve after the first complete frame is painted.
+   * @param {string} url
+   * @param {{lod?:number, fetch?:typeof fetch, maxCacheBytes?:number}} [options]
+   */
+  async loadStore(url, options = {}) {
+    this.#abortBackground();
+    const generation = ++this.#storeGeneration;
+    this.#hideError();
+    this.#setProgress(0.02);
+    const started = performance.now();
+    let store;
+    try {
+      store = await openStore(url, { fetch: options.fetch, maxCacheBytes: options.maxCacheBytes });
+      this.#checkUniformChunks(store);
+    } catch (error) {
+      this.#showError('Could not open store', error.message);
+      this.#setProgress(0);
+      throw error;
+    }
+    if (generation !== this.#storeGeneration) return null;
+    const openMs = performance.now() - started;
+
+    this.store = store;
+    this.#configurePool();
+    this.products = resolveProducts(store.bands);
+    this.productIndex = this.products.findIndex((p) => p.available);
+    this.bandChoice = 0;
+    this.t = 0;
+    this.#direction = 1;
+    this.#stretchLo = null;
+    this.lodOverride = options.lod ?? null;
+    this.#formatTime = makeTimeFormatter(store.times);
+    this.#paintPartial = true;
+    this.fit();
+    this.#buildProducts();
+    this.#buildTimeline();
+    this.#updateTimeUi();
+    this.#updateMeta();
+    this.#updateSidebar(null);
+    $('click-hint').classList.remove('hidden');
+
+    const painted = this.whenPainted();
+    this.renderNow();
+    await painted;
+    this.#setProgress(1);
+    return { openMs, firstPaintMs: performance.now() - started };
+  }
+
+  fit() {
+    const level = this.store.levels[0];
+    const { width, height } = this.canvas;
+    const scale = Math.min(width / level.width, height / level.height) * 0.94;
+    this.camera = { cx: level.width / 2, cy: level.height / 2, scale };
+    this.#paintPartial = true;
+    this.requestRender();
+  }
+
+  get fitScale() {
+    const level = this.store.levels[0];
+    return Math.min(this.canvas.width / level.width, this.canvas.height / level.height) * 0.94;
+  }
+
+  goToTime(t) {
+    if (!this.store) return;
+    const next = clamp(t, 0, this.store.times.length - 1);
+    if (next === this.t) return;
+    this.#direction = next > this.t ? 1 : -1;
+    this.t = next;
+    this.#updateTimeUi();
+    this.requestRender();
+  }
+
+  setProduct(index) {
+    if (!this.products[index]?.available) return;
+    this.productIndex = index;
+    this.#updateProductUi();
+    this.#paintPartial = true;
+    this.requestRender();
+  }
+
+  setBandChoice(index) {
+    this.bandChoice = index;
+    this.#paintPartial = true;
+    this.requestRender();
+  }
+
+  requestRender() {
+    if (this.#rafId) return;
+    this.#rafId = requestAnimationFrame(() => {
+      this.#rafId = 0;
+      this.renderNow();
+    });
+  }
+
+  /** Resolves after the next complete frame. */
+  whenPainted() {
+    return new Promise((resolve) => this.#painted.push(resolve));
+  }
+
+  /**
+   * Paint the current view now. A pure time change waits (keeping the previous frame) until every
+   * visible cell for the new timestep is ready; camera, product and resize changes paint whatever is
+   * ready, with cached coarser levels underneath. Returns {complete, ms, lod, cells}.
+   */
+  renderNow() {
+    if (this.#rafId) {
+      cancelAnimationFrame(this.#rafId);
+      this.#rafId = 0;
+    }
+    if (!this.store) return { complete: false, ms: 0, lod: 0, cells: 0 };
+    const started = performance.now();
+    const { store, renderer, canvas, t } = this;
+    const lod = this.#targetLod();
+    const cells = this.#visibleCells(lod);
+    this.#view = { lod, cells: new Set(cells.map(([row, col]) => `${row}/${col}`)) };
+
+    renderer.newFrame();
+    const drawable = [];
+    const missing = [];
+    for (const [row, col] of cells) {
+      const slots = this.#slotsFor(lod, row, col, t);
+      if (slots) drawable.push({ row, col, slots });
+      else missing.push([row, col]);
+    }
+    const complete = missing.length === 0;
+
+    if (complete && this.#stretchLo === null) this.#stretchLo = this.#computeStretch(lod, cells, t);
+    if (complete || this.#paintPartial) {
+      renderer.beginPaint({
+        width: canvas.width,
+        height: canvas.height,
+        ...this.camera,
+        ...this.#productUniforms(),
+        stretchLo: this.#stretchLo ?? 0,
+        nodata: store.nodata,
+      });
+      if (!complete) this.#drawCoarser(lod, t);
+      for (const { row, col, slots } of drawable) this.#drawCell(lod, row, col, slots);
+      this.#paintedLod = lod;
+    }
+
+    if (!complete) {
+      this.#scheduleLoad(lod, missing, t);
+    } else {
+      this.#paintPartial = false;
+      this.#setProgress(1);
+      this.#scheduleGpuFill();
+      this.#schedulePrefetch();
+    }
+    const ms = performance.now() - started;
+    if (complete) {
+      $('status').innerHTML = `<span class="fast">${Math.round(ms)}ms</span>`;
+      for (const resolve of this.#painted.splice(0)) resolve();
+    }
+    return { complete, ms, lod, cells: cells.length };
+  }
+
+  /** Start background prefetch now and resolve with its result when it finishes or is aborted. */
+  prefetchNow() {
+    clearTimeout(this.#prefetchTimer);
+    this.#prefetchAbort?.abort();
+    const abort = new AbortController();
+    this.#prefetchAbort = abort;
+    const lod = this.#view.lod;
+    const cells = [...this.#view.cells].map((k) => k.split('/').map(Number));
+    return this.store
+      .prefetch({
+        lod,
+        cells,
+        t: this.t,
+        direction: this.#direction,
+        signal: abort.signal,
+        onChunk: (l, row, col, t) => this.#uploadInBackground(l, row, col, t),
+      })
+      .then((result) => {
+        for (const { key, error } of result.errors) console.error(`prefetch failed for chunk ${key}:`, error);
+        return result;
+      });
+  }
+
+  #abortBackground() {
+    clearTimeout(this.#loadTimer);
+    clearTimeout(this.#gpuFillTimer);
+    clearTimeout(this.#prefetchTimer);
+    this.#prefetchAbort?.abort();
+    this.#prefetchAbort = null;
+  }
+
+  #checkUniformChunks(store) {
+    const first = store.levels[0];
+    for (const level of store.levels) {
+      if (level.chunkWidth !== first.chunkWidth || level.chunkHeight !== first.chunkHeight) {
+        throw new Error(`level ${level.lod} chunk size ${level.chunkWidth}x${level.chunkHeight} differs from level 0 (${first.chunkWidth}x${first.chunkHeight})`);
+      }
+    }
+  }
+
+  #configurePool() {
+    const { store, renderer } = this;
+    const first = store.levels[0];
+    const wanted = store.levels.reduce((n, l) => n + l.gridRows * l.gridCols * Math.min(l.nTime, POOL_TIME_WINDOW), 0);
+    const slots = renderer.planSlots(first.nBand, first.chunkWidth, first.chunkHeight, POOL_BUDGET_BYTES, wanted);
+    renderer.configure({ nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots });
+    this.#maxVisibleCells = Math.floor(slots / 2);
+  }
+
+  #resizeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = this.canvas.parentElement.getBoundingClientRect();
+    this.canvas.width = Math.max(1, Math.round(rect.width * dpr));
+    this.canvas.height = Math.max(1, Math.round(rect.height * dpr));
+  }
+
+  #targetLod() {
+    if (this.lodOverride !== null) return this.lodOverride;
+    const maxLod = this.store.levels.length - 1;
+    let lod = clamp(Math.floor(Math.log2(1 / this.camera.scale) + 1e-9), 0, maxLod);
+    while (lod < maxLod && this.#visibleCells(lod).length > this.#maxVisibleCells) lod++;
+    return lod;
+  }
+
+  /** Cells of `lod` intersecting the canvas, as [row, col]. */
+  #visibleCells(lod) {
+    const level = this.store.levels[lod];
+    const { cx, cy, scale } = this.camera;
+    const factor = 2 ** lod;
+    const x0 = (cx - this.canvas.width / 2 / scale) / factor;
+    const x1 = (cx + this.canvas.width / 2 / scale) / factor;
+    const y0 = (cy - this.canvas.height / 2 / scale) / factor;
+    const y1 = (cy + this.canvas.height / 2 / scale) / factor;
+    if (x1 < 0 || y1 < 0 || x0 >= level.width || y0 >= level.height) return [];
+    const colMin = Math.max(0, Math.floor(x0 / level.chunkWidth));
+    const colMax = Math.min(level.gridCols - 1, Math.floor(x1 / level.chunkWidth));
+    const rowMin = Math.max(0, Math.floor(y0 / level.chunkHeight));
+    const rowMax = Math.min(level.gridRows - 1, Math.floor(y1 / level.chunkHeight));
+    const cells = [];
+    for (let row = rowMin; row <= rowMax; row++) for (let col = colMin; col <= colMax; col++) cells.push([row, col]);
+    return cells;
+  }
+
+  /** GPU slots for the anchor (and delta) chunk of a cell at t, uploading from the decoded cache if needed. */
+  #slotsFor(lod, row, col, t) {
+    const anchorT = this.store.anchorOf(t);
+    const anchor = this.#slotForChunk(lod, row, col, anchorT);
+    if (anchor < 0) return null;
+    if (anchorT === t) return { anchor, delta: -1 };
+    const delta = this.#slotForChunk(lod, row, col, t);
+    return delta < 0 ? null : { anchor, delta };
+  }
+
+  #slotForChunk(lod, row, col, t) {
+    const key = chunkKey(lod, row, col, t);
+    const resident = this.renderer.slotOf(key);
+    if (resident >= 0) return resident;
+    const data = this.store.peekRaw(lod, row, col, t);
+    return data ? this.renderer.upload(key, { lod, row, col, t }, data) : -1;
+  }
+
+  #scheduleGpuFill() {
+    clearTimeout(this.#gpuFillTimer);
+    this.#gpuFillTimer = setTimeout(() => this.#fillGpuWindow(), 0);
+  }
+
+  /**
+   * Keep the timesteps around t (scrub direction first) resident in the texture pool, uploading from the
+   * decoded cache a few chunks per tick, so the next step is a uniform change instead of an upload.
+   */
+  #fillGpuWindow() {
+    const { lod, cells } = this.#view;
+    const { store, renderer, t } = this;
+    let budget = GPU_UPLOADS_PER_TICK;
+    for (let d = 0; d <= GPU_WINDOW; d++) {
+      for (const tt of d === 0 ? [t] : [t + this.#direction * d, t - this.#direction * d]) {
+        if (tt < 0 || tt >= store.times.length) continue;
+        for (const ct of new Set([store.anchorOf(tt), tt])) {
+          for (const key of cells) {
+            const [row, col] = key.split('/').map(Number);
+            const chunk = chunkKey(lod, row, col, ct);
+            const data = renderer.isResident(chunk) ? null : store.peekRaw(lod, row, col, ct);
+            if (!data || renderer.upload(chunk, { lod, row, col, t: ct }, data, { background: true }) < 0) continue;
+            if (--budget === 0) {
+              this.#gpuFillTimer = setTimeout(() => this.#fillGpuWindow(), 0);
+              return;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  #uploadInBackground(lod, row, col, t) {
+    const data = this.store.peekRaw(lod, row, col, t);
+    if (data) this.renderer.upload(chunkKey(lod, row, col, t), { lod, row, col, t }, data, { background: true });
+  }
+
+  /** Pool eviction order: chunks outside the current view first, then farthest in time. */
+  #evictionScore(meta) {
+    const visible = meta.lod === this.#view.lod && this.#view.cells.has(`${meta.row}/${meta.col}`);
+    return (visible ? 0 : 1e6) + Math.abs(meta.t - this.t);
+  }
+
+  #drawCell(lod, row, col, slots) {
+    const level = this.store.levels[lod];
+    const factor = 2 ** lod;
+    const { width, height } = this.store.cellExtent(lod, row, col);
+    this.renderer.drawCell(
+      { x: col * level.chunkWidth * factor, y: row * level.chunkHeight * factor, w: width * factor, h: height * factor },
+      { w: width, h: height },
+      slots.anchor,
+      slots.delta,
+    );
+  }
+
+  /** Progressive LOD: under a partial frame, paint any already-cached coarser cells, coarsest first. */
+  #drawCoarser(lod, t) {
+    for (let coarse = this.store.levels.length - 1; coarse > lod; coarse--) {
+      for (const [row, col] of this.#visibleCells(coarse)) {
+        const slots = this.#slotsFor(coarse, row, col, t);
+        if (slots) this.#drawCell(coarse, row, col, slots);
+      }
+    }
+  }
+
+  #productUniforms() {
+    const product = this.products[this.productIndex];
+    return { shader: product.shader, inputs: inputIndices(product, this.store.bands, this.bandChoice) };
+  }
+
+  /** 2nd percentile of tone-mapped true-color samples, kept fixed while scrubbing. 0 without B02/B03/B04. */
+  #computeStretch(lod, cells, t) {
+    const { store } = this;
+    const idx = ['B04', 'B03', 'B02'].map((name) => store.bands.indexOf(name));
+    if (idx.some((i) => i < 0)) return 0;
+    const level = store.levels[lod];
+    const samples = [];
+    for (const [row, col] of cells) {
+      const { width, height } = store.cellExtent(lod, row, col);
+      const stride = Math.max(1, Math.floor((width * height) / STRETCH_SAMPLES_PER_CELL));
+      for (let i = 0; i < width * height; i += stride) {
+        const values = store.samplePixel(lod, row, col, t, i % width, Math.floor(i / width));
+        if (values) samples.push(idx.map((b) => values[b]));
+      }
+    }
+    return computeStretchLo(samples);
+  }
+
+  /**
+   * Fetch the missing cells for timestep t. Cells already being fetched are skipped; a pure time
+   * change waits SCRUB_DEBOUNCE_MS so a fast scrub only fetches where it stops.
+   */
+  #scheduleLoad(lod, missing, t) {
+    clearTimeout(this.#loadTimer);
+    const wanted = missing.filter(([row, col]) => !this.#loadingChunks.has(chunkKey(lod, row, col, t)));
+    if (wanted.length === 0) return;
+    const load = async () => {
+      let done = 0;
+      this.#setProgress(0.02);
+      await Promise.all(
+        wanted.map(async ([row, col]) => {
+          const key = chunkKey(lod, row, col, t);
+          const anchorT = this.store.anchorOf(t);
+          this.#loadingChunks.add(key);
+          try {
+            await Promise.all([this.store.getRaw(lod, row, col, anchorT), anchorT === t ? null : this.store.getRaw(lod, row, col, t)]);
+            this.#setProgress((++done / wanted.length) * 0.98);
+            this.renderNow();
+          } catch (error) {
+            console.error(`chunk load failed (lod ${lod}, row ${row}, col ${col}, t ${t}):`, error);
+            this.#showError('Chunk load failed', error.message);
+            this.#setProgress(0);
+          } finally {
+            this.#loadingChunks.delete(key);
+          }
+        }),
+      );
+    };
+    if (this.#paintPartial) load();
+    else this.#loadTimer = setTimeout(load, SCRUB_DEBOUNCE_MS);
+  }
+
+  #schedulePrefetch() {
+    clearTimeout(this.#prefetchTimer);
+    this.#prefetchTimer = setTimeout(() => this.prefetchNow(), PREFETCH_DELAY_MS);
+  }
+
+  // ---- click to query ----
+
+  async #inspect(clientX, clientY) {
+    if (!this.store) return;
+    $('click-hint').classList.add('hidden');
+    const rect = this.canvas.getBoundingClientRect();
+    const px = ((clientX - rect.left) * this.canvas.width) / rect.width;
+    const py = ((clientY - rect.top) * this.canvas.height) / rect.height;
+    const { cx, cy, scale } = this.camera;
+    const worldX = cx + (px - this.canvas.width / 2) / scale;
+    const worldY = cy + (py - this.canvas.height / 2) / scale;
+    const lod = this.#paintedLod;
+    const level = this.store.levels[lod];
+    const factor = 2 ** lod;
+    const x = Math.floor(worldX / factor);
+    const y = Math.floor(worldY / factor);
+    if (x < 0 || y < 0 || x >= level.width || y >= level.height) {
+      this.#updateSidebar(null);
+      return;
+    }
+    const row = Math.floor(y / level.chunkHeight);
+    const col = Math.floor(x / level.chunkWidth);
+    const t = this.t;
+    const anchorT = this.store.anchorOf(t);
+    try {
+      await Promise.all([this.store.getRaw(lod, row, col, anchorT), anchorT === t ? null : this.store.getRaw(lod, row, col, t)]);
+    } catch (error) {
+      this.#showError('Chunk load failed', error.message);
+      return;
+    }
+    const values = this.store.samplePixel(lod, row, col, t, x - col * level.chunkWidth, y - row * level.chunkHeight);
+    this.#updateSidebar({ t, lod, pixel: { x: Math.floor(worldX), y: Math.floor(worldY) }, ...describePixel(values, this.store.bands) });
+  }
+
+  // ---- input ----
+
+  #bindInput() {
+    const canvas = this.canvas;
+    let drag = null;
+    canvas.addEventListener('pointerdown', (e) => {
+      drag = { x: e.clientX, y: e.clientY, moved: 0 };
+      canvas.setPointerCapture(e.pointerId);
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!drag || !this.store) return;
+      const dx = e.clientX - drag.x;
+      const dy = e.clientY - drag.y;
+      drag.moved += Math.abs(dx) + Math.abs(dy);
+      drag.x = e.clientX;
+      drag.y = e.clientY;
+      const scaleToCanvas = canvas.width / canvas.getBoundingClientRect().width;
+      this.camera.cx -= (dx * scaleToCanvas) / this.camera.scale;
+      this.camera.cy -= (dy * scaleToCanvas) / this.camera.scale;
+      this.#paintPartial = true;
+      this.requestRender();
+    });
+    canvas.addEventListener('pointerup', (e) => {
+      const wasClick = drag && drag.moved < CLICK_SLOP_PX;
+      drag = null;
+      if (wasClick) this.#inspect(e.clientX, e.clientY);
+    });
+    canvas.addEventListener('wheel', (e) => {
+      if (!this.store) return;
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const px = ((e.clientX - rect.left) * canvas.width) / rect.width;
+      const py = ((e.clientY - rect.top) * canvas.height) / rect.height;
+      const { cx, cy, scale } = this.camera;
+      const next = clamp(scale * Math.exp(-e.deltaY * 0.0015), this.fitScale * 0.5, MAX_SCALE);
+      const worldX = cx + (px - canvas.width / 2) / scale;
+      const worldY = cy + (py - canvas.height / 2) / scale;
+      this.camera = { cx: worldX - (px - canvas.width / 2) / next, cy: worldY - (py - canvas.height / 2) / next, scale: next };
+      this.#paintPartial = true;
+      this.requestRender();
+    }, { passive: false });
+    canvas.addEventListener('dblclick', () => this.store && this.fit());
+
+    $('prev-btn').addEventListener('click', () => this.goToTime(this.t - 1));
+    $('next-btn').addEventListener('click', () => this.goToTime(this.t + 1));
+    $('band-select').addEventListener('change', (e) => this.setBandChoice(Number(e.target.value)));
+
+    const track = $('timeline-track');
+    let scrubbing = false;
+    const timeFromEvent = (e) => {
+      const rect = track.getBoundingClientRect();
+      const pad = 8;
+      const frac = clamp((e.clientX - rect.left - pad) / (rect.width - pad * 2), 0, 1);
+      return Math.round(frac * (this.store.times.length - 1));
+    };
+    track.addEventListener('pointerdown', (e) => {
+      if (!this.store) return;
+      scrubbing = true;
+      track.setPointerCapture(e.pointerId);
+      this.goToTime(timeFromEvent(e));
+    });
+    track.addEventListener('pointermove', (e) => scrubbing && this.goToTime(timeFromEvent(e)));
+    track.addEventListener('pointerup', () => {
+      scrubbing = false;
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (!this.store || e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        this.goToTime(this.t - 1);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        this.goToTime(this.t + 1);
+      } else if (/^[1-9]$/.test(e.key)) {
+        this.setProduct(Number(e.key) - 1);
+      }
+    });
+  }
+
+  // ---- UI ----
+
+  #buildProducts() {
+    const container = $('products');
+    container.replaceChildren();
+    this.products.forEach((product, index) => {
+      const button = document.createElement('button');
+      button.textContent = product.name;
+      button.dataset.index = index;
+      button.disabled = !product.available;
+      if (!product.available) button.title = `needs bands: ${product.missing.join(', ')}`;
+      button.addEventListener('click', () => this.setProduct(index));
+      container.appendChild(button);
+    });
+    const select = $('band-select');
+    select.replaceChildren(...this.store.bands.map((name, i) => new Option(name, i)));
+    this.#updateProductUi();
+  }
+
+  #updateProductUi() {
+    for (const button of $('products').children) button.classList.toggle('active', Number(button.dataset.index) === this.productIndex);
+    $('band-select').hidden = this.products[this.productIndex].id !== 'band';
+  }
+
+  #buildTimeline() {
+    const track = $('timeline-track');
+    track.querySelectorAll('.timeline-tick').forEach((tick) => tick.remove());
+    const n = this.store.times.length;
+    this.#tickElements = this.store.times.map((_, i) => {
+      const tick = document.createElement('div');
+      tick.className = 'timeline-tick';
+      tick.style.left = n > 1 ? `calc(8px + (100% - 16px) * ${i / (n - 1)})` : '50%';
+      tick.title = this.#formatTime(i);
+      track.appendChild(tick);
+      return tick;
+    });
+  }
+
+  #updateTimeUi() {
+    $('time-label').textContent = this.#formatTime(this.t);
+    this.#tickElements.forEach((tick, i) => tick.classList.toggle('active', i === this.t));
+  }
+
+  #updateMeta() {
+    const level = this.store.levels[0];
+    const name = new URL(this.store.url, location.href).pathname.replace(/\/$/, '').split('/').pop();
+    $('nav-meta').textContent = `${name} · ${this.store.bands.join(' ')} · ${this.store.times.length} steps · ${level.width}×${level.height}`;
+  }
+
+  #updateCacheStats() {
+    if (!this.store) return;
+    const { cache } = this.store.stats;
+    const info = this.store.cacheInfo();
+    $('cache-stats').textContent = `cache ${cache.hits} hit / ${cache.misses} miss · ${(info.bytes / 1048576).toFixed(0)} MB · GPU ${this.renderer.slots} slots`;
+  }
+
+  #setProgress(frac) {
+    const fill = $('progress-fill');
+    if (frac <= 0) {
+      fill.style.opacity = '0';
+      fill.style.width = '0';
+    } else if (frac >= 1) {
+      fill.style.width = '100%';
+      setTimeout(() => {
+        fill.style.opacity = '0';
+      }, 200);
+    } else {
+      fill.style.width = `${frac * 100}%`;
+      fill.style.opacity = '1';
+    }
+  }
+
+  #showError(title, message) {
+    $('error-title').textContent = title;
+    $('error-message').textContent = message;
+    $('error-overlay').classList.add('visible');
+  }
+
+  #hideError() {
+    $('error-overlay').classList.remove('visible');
+  }
+
+  #updateSidebar(info) {
+    const empty = $('sidebar-empty');
+    const content = $('sidebar-content');
+    empty.style.display = info ? 'none' : 'flex';
+    content.style.display = info ? 'block' : 'none';
+    if (!info) return;
+    content.innerHTML = sidebarHtml(info, this.#formatTime(info.t));
+  }
+}
+
+const ndviColor = (v) => (v === null ? 'var(--text-3)' : v > 0.3 ? 'var(--green)' : v > 0 ? 'var(--amber)' : 'var(--red)');
+const ndwiColor = (v) => (v === null ? 'var(--text-3)' : v > 0 ? 'var(--accent)' : 'var(--text-2)');
+
+function metricHtml(name, value, color) {
+  const frac = value === null ? 0 : ((value + 1) / 2) * 100;
+  return `
+    <div class="metric">
+      <div class="metric-header">
+        <span class="metric-name">${name}</span>
+        <span class="metric-value" style="color:${color}">${value === null ? '—' : value.toFixed(3)}</span>
+      </div>
+      <div class="metric-bar"><div class="metric-fill" style="width:${frac}%;background:${color}"></div></div>
+    </div>`;
+}
+
+function sidebarHtml(info, timeLabel) {
+  const indices = [];
+  if (info.hasNdvi) indices.push(metricHtml('NDVI', info.ndvi, ndviColor(info.ndvi)));
+  if (info.hasNdwi) {
+    indices.push(metricHtml('NDWI', info.ndwi, ndwiColor(info.ndwi)));
+    indices.push(`
+      <div class="metric">
+        <div class="metric-header">
+          <span class="metric-name">Water</span>
+          <span class="water-badge ${info.isWater ? 'yes' : 'no'}">
+            <span class="water-dot" style="background:${info.isWater ? 'var(--water)' : 'var(--text-3)'}"></span>
+            ${info.isWater ? 'Detected' : 'None'}
+          </span>
+        </div>
+      </div>`);
+  }
+  const row = (label, value) => `<div class="meta-row"><span class="label">${label}</span><span class="value mono">${value}</span></div>`;
+  return `
+    <div class="sidebar-section">
+      <div class="section-label">Location</div>
+      <div class="meta-row"><span class="label">Time</span><span class="value">${timeLabel}</span></div>
+      ${row('Pixel (x, y)', `${info.pixel.x}, ${info.pixel.y}`)}
+      ${row('Level', info.lod === 0 ? '0 (full resolution)' : `${info.lod} (${2 ** info.lod}× coarser)`)}
+    </div>
+    ${indices.length ? `<div class="sidebar-section"><div class="section-label">Indices</div>${indices.join('')}</div>` : ''}
+    <div class="sidebar-section">
+      <div class="section-label">Reflectance</div>
+      ${info.bands.map((b) => row(b.name, b.reflectance.toFixed(4))).join('')}
+    </div>
+    <div class="sidebar-section">
+      <div class="section-label">Raw DN</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 16px;">
+        ${info.bands.map((b) => row(b.name, b.dn)).join('')}
+      </div>
+    </div>`;
+}
+
+async function loadCatalog() {
+  const url = new URL('catalog.json', location.href);
+  const response = await fetch(url);
+  if (response.status === 404) return [];
+  if (!response.ok) throw new Error(`catalog.json: HTTP ${response.status}`);
+  const entries = await response.json();
+  return entries.map(({ name, url: storeUrl }) => ({ name, url: new URL(storeUrl, url).href }));
+}
+
+async function main() {
+  const viewer = new Viewer();
+  window.tileripper = { viewer, bench: () => import('./bench.js').then((m) => m.runBenchmarks(viewer)) };
+
+  const catalog = await loadCatalog().catch((error) => {
+    console.warn('catalog.json not usable:', error);
+    return [];
+  });
+  const select = $('catalog-select');
+  const open = (url) => {
+    history.replaceState(null, '', `?store=${encodeURIComponent(url)}`);
+    select.value = url;
+    window.tileripper.ready = viewer.loadStore(url).catch((error) => console.error(`loadStore(${url}) failed:`, error));
+  };
+  if (catalog.length > 0) {
+    select.replaceChildren(...catalog.map((entry) => new Option(entry.name, entry.url)));
+    select.hidden = false;
+    select.addEventListener('change', () => open(select.value));
+  }
+
+  const requested = new URLSearchParams(location.search).get('store');
+  if (requested) open(new URL(requested, location.href).href);
+  else if (catalog.length > 0) open(catalog[0].url);
+  else {
+    $('error-title').textContent = 'No store selected';
+    $('error-message').textContent = 'Open this page with ?store=<base URL of a chronozarr store>.';
+    $('error-overlay').classList.add('visible');
+  }
+}
+
+main();

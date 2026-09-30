@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TileRipper</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script type="importmap">
+{ "imports": { "zarrita": "https://cdn.jsdelivr.net/npm/zarrita@0.7.5/+esm" } }
+</script>
+<style>
+  :root {
+    --bg: #090c12;
+    --surface: #111620;
+    --surface-2: #1a2030;
+    --border: #222a3a;
+    --text: #e4e7ef;
+    --text-2: #6e7a99;
+    --text-3: #3e4a63;
+    --accent: #3b82f6;
+    --accent-dim: rgba(59, 130, 246, 0.15);
+    --green: #34d399;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --water: #2563eb;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---- Nav ---- */
+  nav {
+    height: 52px;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  .brand {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    white-space: nowrap;
+    margin-right: 4px;
+  }
+  .brand span { color: var(--accent); }
+  .nav-sep {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+  select {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  select option {
+    font-size: 12px;
+    padding: 4px 8px;
+  }
+  select:hover { border-color: var(--text-3); }
+  select:focus { border-color: var(--accent); }
+
+  /* Product pills */
+  .products {
+    display: flex;
+    background: var(--surface-2);
+    border-radius: 6px;
+    padding: 3px;
+    gap: 2px;
+  }
+  .products button {
+    padding: 5px 14px;
+    border-radius: 4px;
+    border: none;
+    background: transparent;
+    color: var(--text-2);
+    font-size: 12px;
+    font-family: inherit;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.12s;
+    white-space: nowrap;
+  }
+  .products button:hover:not(:disabled) { color: var(--text); }
+  .products button:disabled { opacity: 0.35; cursor: not-allowed; }
+  .products button.active {
+    background: var(--accent);
+    color: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  }
+  .nav-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .nav-meta {
+    font-size: 11px;
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+
+  /* ---- Main ---- */
+  main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  /* Canvas area */
+  .viewport {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    min-width: 0;
+  }
+  #gl-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    background: var(--surface);
+    cursor: crosshair;
+    touch-action: none;
+  }
+  .progress-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    z-index: 5;
+    pointer-events: none;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 0 1px 1px 0;
+    width: 0;
+    opacity: 0;
+  }
+  .click-hint {
+    position: absolute;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 12px;
+    color: var(--text-3);
+    background: rgba(17, 22, 32, 0.85);
+    padding: 6px 16px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    pointer-events: none;
+    transition: opacity 0.3s;
+    backdrop-filter: blur(4px);
+  }
+  .click-hint.hidden { opacity: 0; }
+
+  /* Error overlay */
+  .error-overlay {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--surface);
+    border: 1px solid var(--red);
+    border-radius: var(--radius);
+    padding: 24px 32px;
+    text-align: center;
+    display: none;
+    z-index: 10;
+  }
+  .error-overlay.visible { display: block; }
+  .error-overlay h3 { color: var(--red); font-size: 14px; margin-bottom: 8px; }
+  .error-overlay p { font-size: 12px; color: var(--text-2); }
+
+  /* ---- Sidebar ---- */
+  .sidebar {
+    width: 300px;
+    min-width: 300px;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  .sidebar-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--text-3);
+    padding: 40px 20px;
+  }
+  .sidebar-empty svg {
+    opacity: 0.4;
+  }
+  .sidebar-empty p {
+    font-size: 13px;
+    text-align: center;
+    line-height: 1.6;
+  }
+  .sidebar-section {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-section:last-child { border-bottom: none; }
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-3);
+    margin-bottom: 12px;
+    letter-spacing: 0.02em;
+  }
+  .meta-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    padding: 3px 0;
+  }
+  .meta-row .label { color: var(--text-2); }
+  .meta-row .value {
+    color: var(--text);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+  .mono { font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace; font-size: 12px; }
+
+  /* Metric (NDVI/NDWI hero values) */
+  .metric {
+    margin-bottom: 16px;
+  }
+  .metric:last-child { margin-bottom: 0; }
+  .metric-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 6px;
+  }
+  .metric-name {
+    font-size: 13px;
+    color: var(--text-2);
+    font-weight: 500;
+  }
+  .metric-value {
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+  .metric-bar {
+    height: 4px;
+    background: var(--surface-2);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .metric-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+  }
+  .water-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .water-badge.yes {
+    background: rgba(37, 99, 235, 0.15);
+    color: var(--water);
+  }
+  .water-badge.no {
+    background: var(--surface-2);
+    color: var(--text-3);
+  }
+  .water-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  /* ---- Timeline ---- */
+  .timeline-bar {
+    height: 56px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  .month-nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .month-nav button {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-2);
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 16px;
+    font-family: inherit;
+    transition: all 0.12s;
+    flex-shrink: 0;
+  }
+  .month-nav button:hover {
+    border-color: var(--text-2);
+    color: var(--text);
+  }
+  .month-nav button:active { background: var(--surface-2); }
+  #time-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    min-width: 80px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    user-select: none;
+  }
+  .timeline-track {
+    flex: 1;
+    height: 32px;
+    position: relative;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+  }
+  .timeline-line {
+    position: absolute;
+    top: 50%;
+    left: 4px;
+    right: 4px;
+    height: 2px;
+    background: var(--border);
+    transform: translateY(-50%);
+    border-radius: 1px;
+    pointer-events: none;
+  }
+  .timeline-tick {
+    position: absolute;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    background: var(--text-3);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 1;
+  }
+  .timeline-tick:hover {
+    width: 8px;
+    height: 8px;
+    background: var(--text-2);
+  }
+  .timeline-tick.active {
+    width: 12px;
+    height: 12px;
+    background: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-dim);
+  }
+  .timeline-tick.active:hover {
+    width: 12px;
+    height: 12px;
+  }
+  select[hidden] { display: none; }
+  .timeline-status {
+    font-size: 11px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: 50px;
+    text-align: right;
+  }
+  .timeline-status .fast { color: var(--green); }
+
+  /* ---- Responsive ---- */
+  @media (max-width: 900px) {
+    .sidebar { display: none; }
+    .products { overflow-x: auto; }
+    nav { gap: 10px; padding: 0 12px; }
+    .timeline-bar { padding: 0 12px; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="brand">Tile<span>Ripper</span></div>
+  <div class="nav-sep"></div>
+  <select id="catalog-select" hidden></select>
+  <div class="products" id="products"></div>
+  <select id="band-select" hidden></select>
+  <div class="nav-right">
+    <span class="nav-meta" id="cache-stats"></span>
+    <span class="nav-meta" id="nav-meta"></span>
+  </div>
+</nav>
+
+<main>
+  <section class="viewport">
+    <canvas id="gl-canvas"></canvas>
+    <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+    <div class="click-hint" id="click-hint">Click anywhere to inspect · scroll to zoom · drag to pan</div>
+    <div class="error-overlay" id="error-overlay">
+      <h3 id="error-title">Error</h3>
+      <p id="error-message">Something went wrong</p>
+    </div>
+  </section>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-empty" id="sidebar-empty">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+        <circle cx="12" cy="12" r="7"/>
+        <line x1="12" y1="3" x2="12" y2="7"/>
+        <line x1="12" y1="17" x2="12" y2="21"/>
+        <line x1="3" y1="12" x2="7" y2="12"/>
+        <line x1="17" y1="12" x2="21" y2="12"/>
+      </svg>
+      <p>Click on the map to<br>inspect band values</p>
+    </div>
+    <div id="sidebar-content" style="display:none;"></div>
+  </aside>
+</main>
+
+<div class="timeline-bar">
+  <div class="month-nav">
+    <button id="prev-btn" title="Previous timestep">&#8249;</button>
+    <span id="time-label">&mdash;</span>
+    <button id="next-btn" title="Next timestep">&#8250;</button>
+  </div>
+  <div class="timeline-track" id="timeline-track">
+    <div class="timeline-line"></div>
+  </div>
+  <span class="timeline-status" id="status"></span>
+</div>
+
+<script type="module" src="viewer.js"></script>
+</body>
+</html>

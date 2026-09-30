@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "spike",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--with", "rangehttpserver", "python", "-m", "RangeHTTPServer", "8000"],
+      "port": 8000
+    }
+  ]
+}
