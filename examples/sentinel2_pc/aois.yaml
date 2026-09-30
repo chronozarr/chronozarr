@@ -46,6 +46,13 @@ aois:
     epsg: 32648  # UTM zone 48N
     expected_behavior: "Wet/dry rice cycle, flooding extent changes, dense channel network"
 
+  ucayali_santa_maria:
+    label: "Ucayali River (Santa María reach, Peru)"
+    description: "Fastest-migrating large meandering river, dense Amazon forest banks, 2014-2015 cutoff; ~200 km downstream of Pucallpa"
+    bbox: [-75.13, -7.76, -74.88, -7.51]   # lon_min, lat_min, lon_max, lat_max, centred on 7.635 S 75.0 W
+    epsg: 32718  # UTM zone 18S
+    expected_behavior: "Bank migration of 50-200 m/yr visible month to month; persistent cloud, so expect gap-filled months"
+
 # Bands and cloud mask that catalog.py / mosaic.py request (fixed in code)
 bands:
   - B02  # Blue  (10m)
