@@ -13,7 +13,6 @@ import warnings
 from dataclasses import dataclass, field
 from datetime import date
 
-import planetary_computer as pc
 import pystac
 from pystac_client import Client
 from pystac_client.warnings import DoesNotConformTo
