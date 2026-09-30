@@ -4,7 +4,7 @@ A chronozarr store is a directory of static files. Any host that returns a file 
 
 ## 1. Checklist
 
-`chronozarr doctor <store-url>` runs the HTTP and decode checks below against a live URL (and the decode checks against a local directory). It sends `Origin: https://tileripper.com` by default. The last column is what doctor reports when the requirement is missing (`fail` violates a MUST, `warn` a SHOULD, `info` is reported without judgement), read from `src/chronozarr/doctor.py` on 2026-09-30; if that file changes, it is the authority.
+`chronozarr doctor <store-url>` runs the HTTP and decode checks below against a live URL (and the decode checks against a local directory). It sends `Origin: https://tileripper.com` by default. The last column is what doctor reports when the requirement is missing (`fail` violates a MUST, `warn` a SHOULD, `info` is reported without judgement), read from `src/chronozarr/doctor.py` on 2026-09-30; if that file changes, it is the authority. The `edge cache` and `timing-allow-origin` lines are advice: doctor reports them as `info`, and only `fail` lines make it exit with status 1 (warnings and info do not).
 
 | # | Requirement | doctor check | If missing |
 |---|---|---|---|

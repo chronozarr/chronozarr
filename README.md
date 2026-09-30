@@ -17,7 +17,7 @@ Spec: [spec/CHRONOZARR.md](https://github.com/jameshgrn/tile-ripper/blob/main/sp
 - **Researchers with stacks.** You have a Sentinel-2, Landsat or model time series in xarray, NetCDF or GeoTIFFs. `chronozarr encode` writes a store from an array in memory, `chronozarr convert` streams a COG manifest, a Zarr variable or a NetCDF file into one a timestep at a time, `xarray.open_zarr` or the `chronozarr` engine reads it back, and the viewer scrubs it.
 - **Data publishers.** A store is one immutable prefix in a bucket with byte ranges and CORS, and nothing to run. `chronozarr doctor <url>` checks CORS, ranges, caching and decoding against the live URL. Recipes for S3 with CloudFront, R2, GCS and Source Cooperative are in [docs/hosting.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/hosting.md).
 - **Map libraries integrating the decoder.** `js/chronozarr/` is a DOM-free reader on zarrita: `(lod, row, col, t)` to a typed-array cell, shard index cache, worker-pool decode and prefetch. A MapLibre custom layer built on it is in `js/maplibre/`.
-- **Notebooks.** `chronozarr.open_store(path_or_url).to_xarray()` for arrays, and `from chronozarr.view import view` to look at a local store in the viewer from Jupyter (extra `notebook`).
+- **Notebooks.** `chronozarr.open_store(path_or_url).to_xarray()` for arrays, and `chronozarr.view(store)` to look at a local store in the viewer from Jupyter (extra `notebook`).
 
 ## What is in this repo
 
@@ -48,7 +48,7 @@ uv sync                      # Python package and CLI; add --extra geo for GeoTI
 uv run chronozarr --help
 ```
 
-The JavaScript reader is ES modules under `js/chronozarr/` and depends on `zarrita` 0.7.5 (`cd js && npm install`).
+The JavaScript reader is ES modules under `js/chronozarr/` and depends on `zarrita` 0.7.5 (`cd js && npm install`). The viewer has no runtime third-party host: zarrita and its codecs are vendored under `js/vendor` (zarrita 0.7.5, @zarrita/storage 0.2.0, numcodecs 0.3.2, all MIT), each file header records its version, license and the SHA-256 of the published file, and the page loads no web font. The MapLibre demo page (`js/maplibre/index.html`) is the exception by design: it loads maplibre-gl from a pinned CDN version.
 
 ## Quickstart
 
@@ -83,6 +83,22 @@ Serve the store from any static host that supports GET, byte ranges and CORS (S3
 js/tileripper/index.html?store=https://your-bucket/my_store
 ```
 
+## Command line
+
+`uv run chronozarr <command> --help` lists every option.
+
+| Command | What it does |
+|---------|--------------|
+| `encode INPUT OUT` | Encode a Zarr store or NetCDF file with dims `(time, band, y, x)`, or a quoted glob of GeoTIFFs with the date in the file name, into a store. Options include `--encoding auto\|none\|star-delta`, `--codec`, `--level`, `--chunk-size`, `--shard-time`, `--no-shard`, `--lods`. |
+| `convert SOURCE OUT` | Convert a COG manifest (`.csv` with `uri,datetime[,bands]`, or `.json`), a Zarr store or a NetCDF file into a store one timestep at a time, without loading the whole stack. Warps COGs that are off the target grid (`--crs`, `--transform`, `--shape`, `--resampling`), stages timesteps so `--resume` can continue an interrupted run, and `--dry-run` prints the size and time estimate only. Takes the encode options too (`--encoding`, `--codec`, `--chunk-size`, `--shard-time`, `--read-ahead`). |
+| `validate STORE` | Check a store against the spec. Exit status 1 if it does not conform. |
+| `info STORE` | Summarise a store: times, bands, temporal encoding and pyramid levels. |
+| `doctor TARGET` | Diagnose an https URL or a local store path. A URL is probed as a browser would: root `zarr.json`, byte ranges, CORS, `HEAD` and caching headers. Both kinds then get the layout validated and one cell per level decoded and compared with a plain Zarr read. Exit status 1 only if a check fails; warnings and info lines are advice. `--origin` sets the `Origin` header. |
+| `export-cog STORE OUT_DIR` | Write timesteps as true-value Cloud Optimized GeoTIFFs readable by GDAL and QGIS, one file per timestep. `--level` picks the pyramid level, `--times` picks timesteps (`all`, indices, slices, dates, date ranges). Needs extra `geo`. |
+| `stac STORE --out DIR` | Write a static STAC Collection and Item for a store: the Zarr asset, extent, band metadata, the datacube extension and the recorded provenance. `--href` sets the public store location. Needs extra `geo`. |
+
+`examples/sentinel2_pc/ingest.py` builds a Sentinel-2 store from Planetary Computer with band metadata, a 0/1 coverage plane and provenance recorded in it; `--stac` also writes a static STAC Collection and Item.
+
 ## Measured
 
 Browser decode of one real Sentinel-2 chunk (4 x 512 x 512 uint16, 2 MB raw), median of 15, 2026-09-29:
@@ -93,14 +109,14 @@ Browser decode of one real Sentinel-2 chunk (4 x 512 x 512 uint16, 2 MB raw), me
 | gzip via native DecompressionStream | 1,387,409 | 6.7 ms |
 | zstd via fzstd (pure JS) | 1,284,781 | 14.1 ms |
 
-Four real Ucayali LOD 0 chunks (2,097,152 bytes each), zarrita 0.7.5 in Chromium, 2026-09-30:
+Four real Ucayali LOD 0 chunks (2,097,152 bytes each), zarrita 0.7.5 with vendored codec modules served locally, headless Chrome, median of 20, 2026-09-30, bit-exact in every case:
 
-| Codec | Bytes per chunk | Decode | First decode (WASM startup) |
+| Codec | Bytes per chunk | Decode, steady state | Decode inside a worker |
 |-------|------:|-------:|-------:|
-| zstd level 5 (writer default) | 1,376,469 | 4.3 ms | 21 ms |
-| blosc, zstd level 1, byte shuffle | 1,520,154 (+10.4%) | 3.1 ms | 153 ms |
+| zstd level 5 (writer default) | 1,376,469 | 4.4 ms | 4.4 ms |
+| blosc, zstd level 1, byte shuffle | 1,520,154 (+10.4%) | 3.5 ms | 3.3 ms |
 
-Byte shuffle did not shrink the zstd stream on this data, so zstd level 5 stays the default and blosc is permitted.
+Byte shuffle did not shrink the zstd stream on this data. The 10.4% size penalty alone keeps zstd level 5 as the default; blosc is permitted.
 
 Temporal encoding, compressed bytes of star-delta against plain storage with the same codec: about 25% smaller on arid scenes, about 6% smaller on vegetated ones, and 2.6% smaller (6,285.2 MB against 6,451.9 MB) on the full Ucayali demo store. The writer samples level 0 cells and keeps star-delta only at 0.85 of the plain size or better.
 
