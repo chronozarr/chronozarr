@@ -33,7 +33,8 @@ test('chunkKey and applyDelta', () => {
   const anchor = Uint16Array.of(100, 100, 65535, 0);
   const residual = Int16Array.of(-150, 25, 10, -1);
   const out = applyDelta(anchor, new Uint16Array(residual.buffer));
-  assert.deepEqual([...out], [0, 125, 65535, 0], 'clamps to 0..65535');
+  assert.deepEqual([...out], [65486, 125, 9, 65535], 'modulo 2^16: wraps, never clamps');
+  assert.deepEqual([...applyDelta(Uint8Array.of(250, 3), Uint8Array.of(10, 253))], [4, 0], 'modulo 2^8 for uint8');
 });
 
 for (const name of FIXTURES) {
@@ -221,7 +222,7 @@ test('windowOrder with loop puts the start of the movie right after its end', ()
 test('the prefetch window plan covers the wrap: from the last timestep it fetches t=0, 1, 2 before anything behind', async () => {
   const spec = { nTime: 12, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 4, sharded: true };
   const chunkBytes = 32 * 32 * 2;
-  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 8 });
+  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 8, compressedBytes: 0 });
   const order = [];
   const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 11, direction: 1, behindFactor: 8, loop: true, concurrency: 1, onChunk: (l, r, c, t) => order.push(t) });
   assert.equal(result.planned, 7, 'floor(0.9 x 8 chunks)');
@@ -232,7 +233,7 @@ test('the prefetch window plan covers the wrap: from the last timestep it fetche
 test('a large behindFactor makes the prefetch window run almost entirely ahead (movie playback)', async () => {
   const spec = { nTime: 40, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 8, sharded: true };
   const chunkBytes = 32 * 32 * 2;
-  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 14 });
+  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 14, compressedBytes: 0 });
   const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 20, direction: 1, behindFactor: 50, concurrency: 1 });
   assert.equal(result.planned, 12, 'floor(0.9 x 14 chunks)');
   const cached = [];
@@ -243,7 +244,7 @@ test('a large behindFactor makes the prefetch window run almost entirely ahead (
 test('prefetch window is sized by the cache budget, never anchors everywhere', async () => {
   const spec = { nTime: 40, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 8, sharded: true };
   const chunkBytes = 32 * 32 * 2;
-  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 10 });
+  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 10, compressedBytes: 0 });
   const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 20, concurrency: 1 });
   assert.equal(result.planned, 9, 'floor(0.9 x 10 chunks)');
   assert.equal(result.fetched, 9);
@@ -252,7 +253,7 @@ test('prefetch window is sized by the cache budget, never anchors everywhere', a
   for (let t = 0; t < 40; t++) if (store.peekRaw(0, 0, 0, t)) cached.push(t);
   assert.deepEqual(cached, [16, 18, 19, 20, 21, 22, 23, 24, 25], 'a window around t=20, reaching further ahead (25) than behind (18), with its anchors 16 and 24');
 
-  const everything = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 100 });
+  const everything = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 100, compressedBytes: 0 });
   const full = await everything.prefetch({ lod: 0, cells: [[0, 0]], t: 20, concurrency: 1 });
   assert.equal(full.planned, 40, 'the whole axis when it fits');
 });
@@ -308,7 +309,7 @@ test('eviction is least recently used by default and follows evictionScore when 
 test('a background chunk never displaces a better one', async () => {
   const spec = { nTime: 10, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 3, sharded: true };
   const chunkBytes = 32 * 32 * 2;
-  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 2 });
+  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 2, compressedBytes: 0 });
   store.evictionScore = (entry) => Math.abs(entry.t - 5);
   await store.getRaw(0, 0, 0, 5);
   await store.getRaw(0, 0, 0, 6);
@@ -424,11 +425,16 @@ test('loopFits: whether the whole time axis of some cells fits 90% of the cache 
   assert.equal(store.loopFits(0, 0), true);
 });
 
-test('samplePixelFrom decodes an anchor, a delta and clamps', () => {
+test('samplePixelFrom decodes an anchor and a delta modulo 2^bits', () => {
   const geometry = { nBand: 2, chunkWidth: 2, chunkHeight: 1 };
   const anchor = Uint16Array.of(100, 65000, 7, 9);
   const delta = new Uint16Array(Int16Array.of(-150, 2000, 3, -10).buffer);
   assert.deepEqual([...samplePixelFrom(anchor, null, geometry, 1, 0)], [65000, 9]);
-  assert.deepEqual([...samplePixelFrom(anchor, delta, geometry, 0, 0)], [0, 10], 'clamps below 0');
-  assert.deepEqual([...samplePixelFrom(anchor, delta, geometry, 1, 0)], [65535, 0], 'clamps above 65535 and below 0');
+  const wrapped = samplePixelFrom(anchor, delta, geometry, 0, 0);
+  assert.ok(wrapped instanceof Uint16Array);
+  assert.deepEqual([...wrapped], [65486, 10], '100 - 150 wraps to 65486');
+  assert.deepEqual([...samplePixelFrom(anchor, delta, geometry, 1, 0)], [1464, 65535], '65000 + 2000 wraps to 1464; 9 - 10 wraps to 65535');
+  const bytes = samplePixelFrom(Uint8Array.of(250, 1), Uint8Array.of(10, 255), { nBand: 1, chunkWidth: 2, chunkHeight: 1 }, 0, 0);
+  assert.ok(bytes instanceof Uint8Array);
+  assert.deepEqual([...bytes], [4], 'uint8 wraps at 256');
 });

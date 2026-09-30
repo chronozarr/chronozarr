@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import * as zarrita from 'zarrita';
+import * as zarrita from '../vendor/zarrita/index.js';
 import { createChunkDecoder } from '../chronozarr/codec.js';
 import { crc32c, indexByteLength, parseShardIndex } from '../chronozarr/shard.js';
 
@@ -61,7 +61,7 @@ for (const name of ['synthetic_sharded', 'synthetic_gzip']) {
 
 test('unsupported codecs and layouts are rejected with the reason', async () => {
   const shape = [1, 1, 2, 2];
-  await assert.rejects(createChunkDecoder(zarrita, { dtype: 'float32', shape, codecs: [BYTES_LE] }), /unsupported chunk dtype float32/);
+  await assert.rejects(createChunkDecoder(zarrita, { dtype: 'float64', shape, codecs: [BYTES_LE] }), /unsupported chunk dtype float64/);
   await assert.rejects(createChunkDecoder(zarrita, { dtype: 'uint16', shape, codecs: [{ name: 'bytes', configuration: { endian: 'big' } }] }), /little-endian/);
   await assert.rejects(createChunkDecoder(zarrita, { dtype: 'uint16', shape, codecs: [BYTES_LE, { name: 'transpose', configuration: {} }] }), /unsupported codec "transpose"/);
 });

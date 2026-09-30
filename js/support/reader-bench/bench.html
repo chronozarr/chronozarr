@@ -1,0 +1,151 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>chronozarr reader benchmark</title>
+<!-- The baseline reader (a copy of the pre-0.2 js/chronozarr in data/spike/baseline_chronozarr) imports "zarrita"
+     as a bare specifier; point it at the vendored build so nothing comes from a CDN. -->
+<script type="importmap">
+{ "imports": { "zarrita": "/js/vendor/zarrita/index.js" } }
+</script>
+<pre id="out">idle</pre>
+<script type="module">
+// Reader-level benchmarks, no viewer: requests, bytes and time for a cold open of a grid of cells, decode cost,
+// and how much a prefetch pulls in during the first seconds. Call window.run*(...) from a driver.
+//   impl 'new'      /js/chronozarr/decoder.js
+//   impl 'baseline' /data/spike/baseline_chronozarr/decoder.js (the reader before the v0.2 work)
+const IMPLS = { new: '/js/chronozarr/decoder.js', baseline: '/data/spike/baseline_chronozarr/decoder.js' };
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+const round = (x, digits = 1) => Math.round(x * 10 ** digits) / 10 ** digits;
+const cellsOf = (rows, cols) => Array.from({ length: rows * cols }, (_, i) => [Math.floor(i / cols), i % cols]);
+const mb = (bytes) => round(bytes / 1e6, 2);
+
+const noStore = (request) => fetch(new Request(request, { cache: 'no-store' }));
+
+async function open(impl, url, options = {}) {
+  const { openStore } = await import(IMPLS[impl]);
+  return openStore(url, { fetch: noStore, ...options });
+}
+
+/** Load one timestep of a grid of cells at lod 0 the way a viewer's cold open does, all at once. */
+async function coldOpenOnce(impl, url, { rows, cols, t, workers }) {
+  const started = performance.now();
+  const store = await open(impl, url, { workers });
+  const openedAt = performance.now();
+  await Promise.all(cellsOf(rows, cols).map(([row, col]) => Promise.all([...new Set([store.anchorOf(t), t])].map((ct) => store.getRaw(0, row, col, ct)))));
+  const doneAt = performance.now();
+  const stats = store.stats;
+  const result = {
+    openMs: round(openedAt - started),
+    allCellsMs: round(doneAt - started),
+    requests: stats.network.requests,
+    mb: mb(stats.network.bytes),
+    chunks: stats.loads.count,
+    decodeMsPerChunk: round(stats.loads.decodeMs / stats.loads.count, 2),
+    fetchMsPerChunk: round(stats.loads.fetchMs / stats.loads.count),
+  };
+  store.close();
+  return result;
+}
+
+window.runColdOpen = async ({ impl, url, rows = 6, cols = 6, t = 0, runs = 5, workers }) => {
+  const all = [];
+  for (let i = 0; i < runs; i++) {
+    all.push(await coldOpenOnce(impl, url, { rows, cols, t, workers }));
+    await sleep(200);
+  }
+  const pick = (name) => median(all.map((r) => r[name]));
+  return { impl, url, cells: rows * cols, t, runs, requests: all[0].requests, medians: Object.fromEntries(['openMs', 'allCellsMs', 'mb', 'decodeMsPerChunk', 'fetchMsPerChunk'].map((k) => [k, pick(k)])), all };
+};
+
+/** Open, cold-load the grid, then prefetch; report what arrived after `seconds` (measured from open). */
+window.runFill = async ({ impl, url, rows = 6, cols = 6, t = 0, seconds = 5, workers, budgets = {} }) => {
+  const started = performance.now();
+  const store = await open(impl, url, { workers, ...budgets });
+  const cells = cellsOf(rows, cols);
+  await Promise.all(cells.map(([row, col]) => Promise.all([...new Set([store.anchorOf(t), t])].map((ct) => store.getRaw(0, row, col, ct)))));
+  const coldMs = performance.now() - started;
+  const coldBytes = store.stats.network.bytes;
+  const abort = new AbortController();
+  const samples = [];
+  const sampler = setInterval(() => samples.push({ at: round((performance.now() - started) / 1000, 2), mb: mb(store.stats.network.bytes), requests: store.stats.network.requests }), 500);
+  const prefetching = store.prefetch({ lod: 0, cells, t, signal: abort.signal });
+  await sleep(Math.max(0, seconds * 1000 - (performance.now() - started)));
+  const atCutoff = { mb: mb(store.stats.network.bytes), requests: store.stats.network.requests, info: store.cacheInfo() };
+  abort.abort();
+  clearInterval(sampler);
+  const result = await prefetching;
+  const out = {
+    impl,
+    coldMs: round(coldMs),
+    coldMb: mb(coldBytes),
+    mbAtCutoff: atCutoff.mb,
+    prefetchMbAtCutoff: round(atCutoff.mb - mb(coldBytes), 2),
+    requestsAtCutoff: atCutoff.requests,
+    cacheAtCutoff: atCutoff.info,
+    prefetchResult: { planned: result.planned, fetched: result.fetched, compressedOnly: result.compressedOnly, skipped: result.skipped, errors: result.errors.length },
+    speculativeMb: impl === 'new' ? mb(store.stats.cache.speculativeBytes) : null,
+    bandwidthMBps: impl === 'new' && store.bandwidthEstimate() ? round(store.bandwidthEstimate() / 1e6, 2) : null,
+    samples,
+  };
+  store.close();
+  return out;
+};
+
+/** Open stores one after another: the second and later opens should find the decode workers already running. */
+window.runReopen = async ({ impl = 'new', url, rows = 2, cols = 2, t = 0, opens = 4 }) => {
+  const times = [];
+  for (let i = 0; i < opens; i++) {
+    const started = performance.now();
+    const store = await open(impl, url);
+    await Promise.all(cellsOf(rows, cols).map(([row, col]) => store.getRaw(0, row, col, store.anchorOf(t))));
+    times.push(round(performance.now() - started));
+    store.close();
+  }
+  return { impl, url, openAndFirstFrameMs: times };
+};
+
+/** The decode workers: does a real Worker decode through the vendored modules? */
+window.runWorkerCheck = async ({ url }) => {
+  const store = await open('new', url, { workers: 2 });
+  const raw = await store.getRaw(0, 0, 0, 0);
+  const viaMain = await (async () => {
+    const other = await open('new', url, { workers: 0 });
+    const data = await other.getRaw(0, 0, 0, 0);
+    other.close();
+    return data;
+  })();
+  const same = raw.length === viaMain.length && raw.every((v, i) => v === viaMain[i]);
+  store.close();
+  return { length: raw.length, type: raw.constructor.name, sameAsMainThread: same };
+};
+
+/** A store over the network: open, read a few timesteps of one cell, report a pixel for comparison with zarr-python. */
+window.runLive = async ({ url, cell = [2, 2], pixel = [16, 6], times = [60, 61, 116] }) => {
+  const started = performance.now();
+  const store = await open('new', url);
+  const openMs = performance.now() - started;
+  const pixels = {};
+  const loadStarted = performance.now();
+  for (const t of times) {
+    await Promise.all([...new Set([store.anchorOf(t), t])].map((ct) => store.getRaw(0, cell[0], cell[1], ct)));
+    pixels[t] = Array.from(store.samplePixel(0, cell[0], cell[1], t, pixel[0], pixel[1]));
+  }
+  const out = {
+    openMs: round(openMs),
+    specVersion: store.attrs.spec_version,
+    dtype: store.dtype,
+    encoding: store.encoding,
+    timesteps: store.times.length,
+    requestsAfterOpen: 1,
+    loadMs: round(performance.now() - loadStarted),
+    pixels,
+    stats: store.stats(),
+    bandwidthMBps: store.bandwidthEstimate() ? round(store.bandwidthEstimate() / 1e6, 2) : null,
+  };
+  store.close();
+  return out;
+};
+
+window.benchReady = true;
+document.getElementById('out').textContent = 'ready';
+</script>

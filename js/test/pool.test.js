@@ -132,15 +132,13 @@ test('bytes that are a view into a larger buffer are copied before transfer', as
 });
 
 test('main-thread decoder honours an aborted signal', async () => {
-  const decoder = new MainThreadDecoder(
-    { registry: new Map([['zstd', () => ({ fromConfig: () => ({ decode: async (b) => b }) })]]) },
-    { dtype: 'uint16', shape: [1, 1, 1, 2], codecs: [{ name: 'bytes', configuration: { endian: 'little' } }, { name: 'zstd', configuration: {} }] },
-  );
-  const out = await decoder.decode(new Uint8Array(4));
+  const decoder = new MainThreadDecoder({ registry: new Map([['zstd', () => ({ fromConfig: () => ({ decode: async (b) => b }) })]]) });
+  const spec = { key: 'k', dtype: 'uint16', shape: [1, 1, 1, 2], codecs: [{ name: 'bytes', configuration: { endian: 'little' } }, { name: 'zstd', configuration: {} }] };
+  const out = await decoder.decode(new Uint8Array(4), 0, undefined, spec);
   assert.equal(out.length, 2);
   const abort = new AbortController();
   abort.abort();
-  await assert.rejects(decoder.decode(new Uint8Array(4), 0, abort.signal), { name: 'AbortError' });
+  await assert.rejects(decoder.decode(new Uint8Array(4), 0, abort.signal, spec), { name: 'AbortError' });
 });
 
 test('with a fallback, demand jobs do not wait for workers to start; background jobs do', async () => {

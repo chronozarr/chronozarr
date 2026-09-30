@@ -54,3 +54,15 @@ export function parseShardIndex(bytes, nChunks, hasCrc, where) {
   }
   return entries;
 }
+
+/**
+ * The read that fetches a shard's index: the first bytes for a start-located index; for an end-located one the
+ * exact range when the shard's size is known (`shardBytes`, from the store's shard_bytes: no HEAD needed),
+ * otherwise a suffix range.
+ */
+export function shardIndexRange(nChunks, hasCrc, atStart, shardBytes) {
+  const length = indexByteLength(nChunks, hasCrc);
+  if (atStart) return { offset: 0, length };
+  if (Number.isInteger(shardBytes) && shardBytes >= length) return { offset: shardBytes - length, length };
+  return { suffixLength: length };
+}

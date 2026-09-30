@@ -1,17 +1,27 @@
 // Caps concurrent requests to the store. Lower priority numbers start first (0 = a frame is waiting,
-// 1 = background prefetch); a queued task whose signal aborts is dropped without running.
+// 1 = background prefetch); a queued task whose signal aborts is dropped without running. A background job
+// never takes one of the last `reserve` slots, so a demand request always finds a free one.
+//
+// `priority` is a number or a handle {value}. A handle can be lowered later (a demand request that joins a
+// queued background fetch) followed by reprioritize(), which re-sorts the queue.
 
 export class RequestLimiter {
   #max;
+  #reserve;
   #active = 0;
   #queue = [];
 
-  constructor(max) {
+  constructor(max, { reserve = 0 } = {}) {
     this.#max = max;
+    this.#reserve = Math.min(reserve, max - 1);
   }
 
   get active() {
     return this.#active;
+  }
+
+  get queued() {
+    return this.#queue.length;
   }
 
   run(priority, signal, task) {
@@ -20,21 +30,32 @@ export class RequestLimiter {
         reject(new DOMException('Aborted', 'AbortError'));
         return;
       }
-      const job = { priority, signal, task, resolve, reject };
-      const at = this.#queue.findIndex((queued) => queued.priority > priority);
+      const handle = typeof priority === 'number' ? { value: priority } : priority;
+      const job = { handle, signal, task, resolve, reject };
+      const at = this.#queue.findIndex((queued) => queued.handle.value > handle.value);
       if (at < 0) this.#queue.push(job);
       else this.#queue.splice(at, 0, job);
       this.#drain();
     });
   }
 
+  /** Call after lowering a handle's value: queued jobs are re-sorted (stable) and may now start. */
+  reprioritize() {
+    this.#queue.sort((a, b) => a.handle.value - b.handle.value);
+    this.#drain();
+  }
+
   #drain() {
-    while (this.#active < this.#max && this.#queue.length > 0) {
-      const job = this.#queue.shift();
+    while (this.#queue.length > 0) {
+      const job = this.#queue[0];
       if (job.signal?.aborted) {
+        this.#queue.shift();
         job.reject(new DOMException('Aborted', 'AbortError'));
         continue;
       }
+      const slots = job.handle.value === 0 ? this.#max : this.#max - this.#reserve;
+      if (this.#active >= slots) return;
+      this.#queue.shift();
       this.#active++;
       const finish = () => {
         this.#active--;

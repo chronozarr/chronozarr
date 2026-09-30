@@ -1,6 +1,9 @@
-// In-memory chronozarr v0.1 store built in JS, independent of the Python writer.
-// Sharded (uncompressed inner chunks, crc32c index at "start" or "end") or unsharded.
-// Implements the zarrita AsyncReadable interface and logs every call.
+// In-memory chronozarr store built in JS, independent of the Python writer (spec 0.1 shapes by default,
+// 0.2 features by option). Chunks are stored with the `bytes` codec only (no compression). Sharded (crc32c
+// index at "start" or "end", any shard_time) or unsharded; dtypes uint8, uint16, int16, float32; temporal
+// encoding star-delta (modular residuals) or none; optional mask and coverage variables, band objects, the
+// `levels` mirror, `shard_bytes` and consolidated metadata. Implements the zarrita AsyncReadable interface
+// and logs every call.
 
 const CRC32C_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -20,123 +23,237 @@ export function crc32c(bytes) {
 
 const json = (obj) => new TextEncoder().encode(JSON.stringify(obj));
 
-/** Deterministic source value for (t, band, y, x): smooth in t so int16 residuals never overflow. */
+const ARRAYS = { uint8: Uint8Array, uint16: Uint16Array, int16: Int16Array, float32: Float32Array };
+
+/** Deterministic source value for (t, band, y, x): smooth in t so residuals stay small. */
 export function sourceValue(t, b, y, x) {
   return 1000 + b * 500 + ((y * 7 + x * 13) % 2000) + t * 37 + (x % 5 === 0 ? t * 3 : 0);
 }
 
+/** Default value function per dtype, in the dtype's own range. `lod` subsamples the finest level. */
+export function defaultValues(dtype) {
+  const at = (t, b, y, x, lod) => sourceValue(t, b, y * 2 ** lod, x * 2 ** lod);
+  if (dtype === 'uint8') return (t, b, y, x, lod = 0) => at(t, b, y, x, lod) % 256;
+  if (dtype === 'int16') return (t, b, y, x, lod = 0) => at(t, b, y, x, lod) - 2000;
+  if (dtype === 'float32') return (t, b, y, x, lod = 0) => at(t, b, y, x, lod) * 0.25;
+  return (t, b, y, x, lod = 0) => at(t, b, y, x, lod);
+}
+
+/** Deterministic mask (1 valid, 0 invalid) and coverage (0..6) values. */
+export const maskValue = (t, y, x, lod = 0) => ((t + y * 3 + x * 5 + lod) % 4 === 0 ? 0 : 1);
+export const coverageValue = (t, y, x, lod = 0) => (t * 3 + y + x * 2 + lod) % 7;
+
 /**
- * @param {{nTime:number, nBand:number, height:number, width:number, chunk:number, anchorInterval:number,
- *   sharded:boolean, indexLocation?:'start'|'end', bands?:string[]}} spec
+ * @param {object} spec
+ * @param {number} spec.nTime @param {number} spec.nBand @param {number} spec.height @param {number} spec.width
+ * @param {number} spec.chunk @param {number} spec.anchorInterval @param {boolean} spec.sharded
+ * @param {'start'|'end'} [spec.indexLocation]
+ * @param {number} [spec.nLevels=1]        levels, each half the size of the previous (ceil)
+ * @param {'uint8'|'uint16'|'int16'|'float32'} [spec.dtype='uint16']
+ * @param {'star-delta'|'none'} [spec.encoding='star-delta']
+ * @param {number} [spec.shardTime]        timesteps per shard (default nTime); several shards along time when smaller
+ * @param {string} [spec.specVersion='0.1.0']
+ * @param {string[]} [spec.bands]          band names (default B0, B1, ...)
+ * @param {object[]} [spec.bandObjects]    band objects; writes `bands` as objects plus `band_names`
+ * @param {number|null} [spec.nodata=0]
+ * @param {number[]} [spec.transform]      level-0 affine; written to each level group with its resolution
+ * @param {boolean} [spec.levelsMirror]    write chronozarr.levels
+ * @param {boolean} [spec.shardBytes]      write chronozarr.shard_bytes (data array only)
+ * @param {boolean} [spec.consolidated]    put every array and group in the root's consolidated_metadata
+ * @param {boolean} [spec.mask] @param {boolean} [spec.coverage]   write these variables at every level
+ * @param {object} [spec.provenance]
+ * @param {(t:number,b:number,y:number,x:number,lod:number)=>number} [spec.values]
+ * @param {string[]} [spec.omitShards]     data shard keys ("lod/tShard/row/col") to leave out (answered with 404)
+ * @param {number} [spec.delayMs]
  */
 export function buildSyntheticStore(spec) {
   const { nTime, nBand, height, width, chunk, anchorInterval, sharded, indexLocation = 'end' } = spec;
-  const bands = spec.bands ?? Array.from({ length: nBand }, (_, i) => `B${i}`);
+  const dtype = spec.dtype ?? 'uint16';
+  const Typed = ARRAYS[dtype];
+  const bits = Typed.BYTES_PER_ELEMENT * 8;
+  const encoding = spec.encoding ?? 'star-delta';
+  const nLevels = spec.nLevels ?? 1;
+  const shardTime = sharded ? (spec.shardTime ?? nTime) : 1;
+  const values = spec.values ?? defaultValues(dtype);
+  const nodata = spec.nodata === undefined ? 0 : spec.nodata;
+  const bandNames = spec.bands ?? spec.bandObjects?.map((b) => b.name) ?? Array.from({ length: nBand }, (_, i) => `B${i}`);
   const anchors = [];
   const deltaReference = {};
   for (let t = 0; t < nTime; t++) {
-    if (t % anchorInterval === 0) anchors.push(t);
+    if (encoding === 'none' || t % anchorInterval === 0) anchors.push(t);
     else deltaReference[t] = t - (t % anchorInterval);
   }
   const files = new Map();
-  const gridRows = Math.ceil(height / chunk);
-  const gridCols = Math.ceil(width / chunk);
-  const chunkShape = [1, nBand, chunk, chunk];
   const bytesCodec = { name: 'bytes', configuration: { endian: 'little' } };
+  const auxBytesCodec = { name: 'bytes' };
+  const indexCodecs = () => [{ name: 'bytes', configuration: { endian: 'little' } }, { name: 'crc32c' }];
 
-  const encodeChunk = (t, row, col) => {
-    const out = new Uint16Array(nBand * chunk * chunk);
+  const levels = Array.from({ length: nLevels }, (_, lod) => {
+    const h = Math.ceil(height / 2 ** lod);
+    const w = Math.ceil(width / 2 ** lod);
+    return { lod, height: h, width: w, rows: Math.ceil(h / chunk), cols: Math.ceil(w / chunk) };
+  });
+
+  const arrayMeta = (level, kind) => {
+    const isData = kind === 'data';
+    const shape = isData ? [nTime, nBand, level.height, level.width] : [nTime, level.height, level.width];
+    const inner = isData ? [1, nBand, chunk, chunk] : [1, chunk, chunk];
+    const shardShape = [shardTime, ...inner.slice(1)];
+    const dims = isData ? ['time', 'band', 'y', 'x'] : ['time', 'y', 'x'];
+    const codecs = [isData ? bytesCodec : auxBytesCodec];
+    return {
+      zarr_format: 3,
+      node_type: 'array',
+      shape,
+      data_type: isData ? dtype : 'uint8',
+      chunk_grid: { name: 'regular', configuration: { chunk_shape: sharded ? shardShape : inner } },
+      chunk_key_encoding: { name: 'default', configuration: { separator: '/' } },
+      fill_value: isData ? (nodata ?? 0) : 0,
+      codecs: sharded
+        ? [{ name: 'sharding_indexed', configuration: { chunk_shape: inner, codecs, index_codecs: indexCodecs(), index_location: indexLocation } }]
+        : codecs,
+      dimension_names: dims,
+      attributes: {},
+    };
+  };
+
+  const dataChunk = (level, t, row, col) => {
+    const out = new Typed(nBand * chunk * chunk);
     const anchorT = t in deltaReference ? deltaReference[t] : t;
     for (let b = 0; b < nBand; b++) {
       for (let y = 0; y < chunk; y++) {
         for (let x = 0; x < chunk; x++) {
           const gy = row * chunk + y;
           const gx = col * chunk + x;
-          if (gy >= height || gx >= width) continue;
-          const value = sourceValue(t, b, gy, gx);
-          const stored = anchorT === t ? value : (value - sourceValue(anchorT, b, gy, gx)) & 0xffff;
-          out[(b * chunk + y) * chunk + x] = stored;
+          if (gy >= level.height || gx >= level.width) continue;
+          const value = values(t, b, gy, gx, level.lod);
+          // Typed-array assignment wraps, which is the modular residual.
+          out[(b * chunk + y) * chunk + x] = anchorT === t ? value : value - values(anchorT, b, gy, gx, level.lod);
         }
       }
     }
     return new Uint8Array(out.buffer);
   };
 
-  const arrayMeta = {
-    zarr_format: 3,
-    node_type: 'array',
-    shape: [nTime, nBand, height, width],
-    data_type: 'uint16',
-    chunk_grid: { name: 'regular', configuration: { chunk_shape: sharded ? [nTime, nBand, chunk, chunk] : chunkShape } },
-    chunk_key_encoding: { name: 'default', configuration: { separator: '/' } },
-    fill_value: 0,
-    codecs: sharded
-      ? [
-          {
-            name: 'sharding_indexed',
-            configuration: {
-              chunk_shape: chunkShape,
-              codecs: [bytesCodec],
-              index_codecs: [bytesCodec, { name: 'crc32c' }],
-              index_location: indexLocation,
-            },
-          },
-        ]
-      : [bytesCodec],
-    dimension_names: ['time', 'band', 'y', 'x'],
-    attributes: {},
+  const auxChunk = (level, t, row, col, fn) => {
+    const out = new Uint8Array(chunk * chunk);
+    for (let y = 0; y < chunk; y++) {
+      for (let x = 0; x < chunk; x++) {
+        const gy = row * chunk + y;
+        const gx = col * chunk + x;
+        if (gy < level.height && gx < level.width) out[y * chunk + x] = fn(t, gy, gx, level.lod);
+      }
+    }
+    return out;
   };
-  files.set('/0/data/zarr.json', json(arrayMeta));
-  files.set('/0/zarr.json', json({ zarr_format: 3, node_type: 'group', attributes: {} }));
-  files.set(
-    '/zarr.json',
-    json({
-      zarr_format: 3,
-      node_type: 'group',
-      attributes: {
-        multiscales: [{ datasets: [{ path: '0', pixels_per_tile: chunk, crs: 'EPSG:32631' }], type: 'reduce' }],
-        chronozarr: {
-          spec_version: '0.1.0',
-          variable: 'data',
-          times: Array.from({ length: nTime }, (_, t) => `2024-01-${String(t + 1).padStart(2, '0')}T00:00:00Z`),
-          bands,
-          nodata: 0,
-          crs: 'EPSG:32631',
-          temporal: { encoding: 'star-delta', anchor_interval: anchorInterval, anchor_indices: anchors, delta_reference: deltaReference },
-        },
-      },
-    }),
-  );
 
-  for (let row = 0; row < gridRows; row++) {
-    for (let col = 0; col < gridCols; col++) {
-      const chunks = Array.from({ length: nTime }, (_, t) => encodeChunk(t, row, col));
-      if (!sharded) {
-        chunks.forEach((bytes, t) => files.set(`/0/data/c/${t}/0/${row}/${col}`, bytes));
+  /** Shard bytes from the inner chunks of one shard (missing trailing chunks are empty index entries). */
+  const packShard = (chunks) => {
+    const indexBytes = 16 * shardTime + 4;
+    const view = new DataView(new ArrayBuffer(16 * shardTime));
+    let offset = indexLocation === 'start' ? indexBytes : 0;
+    for (let i = 0; i < shardTime; i++) {
+      const bytes = chunks[i];
+      if (!bytes) {
+        view.setBigUint64(16 * i, 0xffffffffffffffffn, true);
+        view.setBigUint64(16 * i + 8, 0xffffffffffffffffn, true);
         continue;
       }
-      const indexBytes = 16 * nTime + 4;
-      let offset = indexLocation === 'start' ? indexBytes : 0;
-      const index = new DataView(new ArrayBuffer(16 * nTime));
-      chunks.forEach((bytes, t) => {
-        index.setBigUint64(16 * t, BigInt(offset), true);
-        index.setBigUint64(16 * t + 8, BigInt(bytes.length), true);
-        offset += bytes.length;
-      });
-      const indexRaw = new Uint8Array(index.buffer);
-      const indexWithCrc = new Uint8Array(indexBytes);
-      indexWithCrc.set(indexRaw);
-      new DataView(indexWithCrc.buffer).setUint32(indexRaw.length, crc32c(indexRaw), true);
-      const parts = indexLocation === 'start' ? [indexWithCrc, ...chunks] : [...chunks, indexWithCrc];
-      const shard = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-      let at = 0;
-      for (const part of parts) {
-        shard.set(part, at);
-        at += part.length;
-      }
-      files.set(`/0/data/c/0/0/${row}/${col}`, shard);
+      view.setBigUint64(16 * i, BigInt(offset), true);
+      view.setBigUint64(16 * i + 8, BigInt(bytes.length), true);
+      offset += bytes.length;
     }
+    const raw = new Uint8Array(view.buffer);
+    const withCrc = new Uint8Array(indexBytes);
+    withCrc.set(raw);
+    new DataView(withCrc.buffer).setUint32(raw.length, crc32c(raw), true);
+    const parts = indexLocation === 'start' ? [withCrc, ...chunks.filter(Boolean)] : [...chunks.filter(Boolean), withCrc];
+    const shard = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let at = 0;
+    for (const part of parts) {
+      shard.set(part, at);
+      at += part.length;
+    }
+    return shard;
+  };
+
+  const shardBytes = {};
+  const omitted = new Set(spec.omitShards ?? []);
+  const writeArray = (level, kind, name, chunkOf) => {
+    files.set(`/${level.lod}/${name}/zarr.json`, json(arrayMeta(level, kind)));
+    const shardCount = Math.ceil(nTime / shardTime);
+    for (let row = 0; row < level.rows; row++) {
+      for (let col = 0; col < level.cols; col++) {
+        if (!sharded) {
+          for (let t = 0; t < nTime; t++) files.set(`/${level.lod}/${name}/c/${t}/${kind === 'data' ? '0/' : ''}${row}/${col}`, chunkOf(level, t, row, col));
+          continue;
+        }
+        for (let ts = 0; ts < shardCount; ts++) {
+          if (kind === 'data' && omitted.has(`${level.lod}/${ts}/${row}/${col}`)) continue;
+          const chunks = Array.from({ length: Math.min(shardTime, nTime - ts * shardTime) }, (_, i) => chunkOf(level, ts * shardTime + i, row, col));
+          const shard = packShard(chunks);
+          files.set(`/${level.lod}/${name}/c/${ts}/${kind === 'data' ? '0/' : ''}${row}/${col}`, shard);
+          if (kind === 'data') (shardBytes[level.lod] ??= {})[`${ts}/${row}/${col}`] = shard.length;
+        }
+      }
+    }
+  };
+
+  const groupAttrs = (level) =>
+    spec.transform
+      ? {
+          crs: 'EPSG:32631',
+          transform: [spec.transform[0] * 2 ** level.lod, spec.transform[1], spec.transform[2], spec.transform[3], spec.transform[4] * 2 ** level.lod, spec.transform[5]],
+          resolution: Math.abs(spec.transform[0]) * 2 ** level.lod,
+        }
+      : {};
+  for (const level of levels) {
+    writeArray(level, 'data', 'data', (l, t, row, col) => dataChunk(l, t, row, col));
+    if (spec.mask) writeArray(level, 'aux', 'mask', (l, t, row, col) => auxChunk(l, t, row, col, maskValue));
+    if (spec.coverage) writeArray(level, 'aux', 'coverage', (l, t, row, col) => auxChunk(l, t, row, col, coverageValue));
+    files.set(`/${level.lod}/zarr.json`, json({ zarr_format: 3, node_type: 'group', attributes: groupAttrs(level) }));
   }
+
+  const specVersion = spec.specVersion ?? '0.1.0';
+  const chronozarr = {
+    spec_version: specVersion,
+    variable: 'data',
+    times: Array.from({ length: nTime }, (_, t) => `2024-01-${String(t + 1).padStart(2, '0')}T00:00:00Z`),
+    bands: spec.bandObjects ?? bandNames,
+    ...(spec.bandObjects ? { band_names: bandNames } : {}),
+    nodata,
+    crs: 'EPSG:32631',
+    temporal: encoding === 'none' ? { encoding: 'none' } : { encoding: 'star-delta', anchor_interval: anchorInterval, anchor_indices: anchors, delta_reference: deltaReference },
+    ...(spec.mask ? { mask_variable: 'mask' } : {}),
+    ...(spec.coverage ? { coverage_variable: 'coverage' } : {}),
+    ...(spec.provenance ? { provenance: spec.provenance } : {}),
+    ...(spec.levelsMirror
+      ? {
+          levels: levels.map((l) => ({
+            path: String(l.lod),
+            resolution: spec.transform ? Math.abs(spec.transform[0]) * 2 ** l.lod : 10 * 2 ** l.lod,
+            transform: groupAttrs(l).transform ?? [10 * 2 ** l.lod, 0, 0, 0, -10 * 2 ** l.lod, 0],
+            shape: [nTime, nBand, l.height, l.width],
+            grid: [l.rows, l.cols],
+          })),
+        }
+      : {}),
+    ...(spec.shardBytes && sharded ? { shard_bytes: Object.fromEntries(Object.entries(shardBytes).map(([lod, m]) => [String(lod), m])) } : {}),
+  };
+  const root = {
+    zarr_format: 3,
+    node_type: 'group',
+    attributes: {
+      multiscales: [{ datasets: levels.map((l) => ({ path: String(l.lod), pixels_per_tile: chunk, crs: 'EPSG:32631' })), type: 'reduce' }],
+      chronozarr,
+    },
+  };
+  if (spec.consolidated) {
+    const metadata = {};
+    for (const [key, bytes] of files) if (key.endsWith('/zarr.json')) metadata[key.slice(1, -'/zarr.json'.length)] = JSON.parse(new TextDecoder().decode(bytes));
+    root.consolidated_metadata = { kind: 'inline', must_understand: false, metadata };
+  }
+  files.set('/zarr.json', json(root));
 
   return new SyntheticReadable(files, spec.delayMs ?? 0);
 }

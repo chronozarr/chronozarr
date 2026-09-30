@@ -1,0 +1,177 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>chronozarr codec decode benchmark</title>
+<pre id="out">idle</pre>
+<script type="module">
+// Decode time of one 2 MB chunk (4 bands x 512 x 512 uint16) per codec chain, through the vendored zarrita 0.7.5.
+// Stores come from js/support/codec-bench/make_stores.py. Call window.runBench() and read the result.
+import * as zarr from '/js/vendor/zarrita/index.js';
+
+const BASE = '/data/spike/codec_bench/';
+const VARIANTS = ['plain', 'zstd5', 'blosc'];
+const WARMUP = 5;
+const RUNS = 20;
+const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+const round = (x) => Math.round(x * 1000) / 1000;
+
+async function load() {
+  const metas = {};
+  const bytes = {};
+  for (const name of VARIANTS) {
+    metas[name] = await (await fetch(`${BASE}${name}/zarr.json`)).json();
+    bytes[name] = [];
+    for (let i = 0; i < 4; i++) bytes[name].push(new Uint8Array(await (await fetch(`${BASE}${name}/c/${i}/0/0/0`)).arrayBuffer()));
+  }
+  return { metas, bytes };
+}
+
+/** Codec chain after `bytes`, instantiated the way chronozarr's decoder does (registry -> fromConfig -> decode). */
+async function chain(meta, registry) {
+  const [, ...compressors] = meta.codecs;
+  const out = [];
+  for (const { name, configuration } of compressors) {
+    const Codec = await registry.get(name)();
+    out.push(Codec.fromConfig(configuration ?? {}, { dataType: 'uint16', shape: [1, 4, 512, 512], codecs: meta.codecs, fillValue: 0 }));
+  }
+  return out;
+}
+
+async function rawDecode(codecs, bytes) {
+  let data = bytes;
+  for (let i = codecs.length - 1; i >= 0; i--) data = await codecs[i].decode(data);
+  return data;
+}
+
+async function timeRaw(codecs, bytesList) {
+  const perChunk = [];
+  const all = [];
+  for (const bytes of bytesList) {
+    for (let i = 0; i < WARMUP; i++) await rawDecode(codecs, bytes);
+    const times = [];
+    for (let i = 0; i < RUNS; i++) {
+      const t0 = performance.now();
+      const out = await rawDecode(codecs, bytes);
+      times.push(performance.now() - t0);
+      if (out.byteLength !== 2097152) throw new Error(`decoded ${out.byteLength} bytes`);
+    }
+    perChunk.push(round(median(times)));
+    all.push(...times);
+  }
+  return { perChunkMedianMs: perChunk, medianMs: round(median(all)), minMs: round(Math.min(...all)), maxMs: round(Math.max(...all)) };
+}
+
+/** A zarrita store over pre-fetched bytes, so `zarr.get` times decode only. */
+function memoryStore(metas, bytes, name) {
+  const files = new Map();
+  files.set('/zarr.json', new TextEncoder().encode(JSON.stringify(metas[name])));
+  bytes[name].forEach((b, i) => files.set(`/c/${i}/0/0/0`, b));
+  return { get: async (key) => files.get(key), getRange: async () => undefined };
+}
+
+async function timeZarrita(metas, bytes, name) {
+  const store = memoryStore(metas, bytes, name);
+  const array = await zarr.open(store, { kind: 'array' });
+  const perChunk = [];
+  const all = [];
+  for (let c = 0; c < 4; c++) {
+    for (let i = 0; i < WARMUP; i++) await zarr.get(array, [c, null, null, null]);
+    const times = [];
+    for (let i = 0; i < RUNS; i++) {
+      const t0 = performance.now();
+      await zarr.get(array, [c, null, null, null]);
+      times.push(performance.now() - t0);
+    }
+    perChunk.push(round(median(times)));
+    all.push(...times);
+  }
+  return { perChunkMedianMs: perChunk, medianMs: round(median(all)), minMs: round(Math.min(...all)), maxMs: round(Math.max(...all)) };
+}
+
+async function bitExact(metas, bytes) {
+  const plainStore = memoryStore(metas, bytes, 'plain');
+  const plain = await zarr.open(plainStore, { kind: 'array' });
+  const result = {};
+  for (const name of ['zstd5', 'blosc']) {
+    const array = await zarr.open(memoryStore(metas, bytes, name), { kind: 'array' });
+    const codecs = await chain(metas[name], zarr.registry);
+    const checks = [];
+    for (let c = 0; c < 4; c++) {
+      const expected = (await zarr.get(plain, [c, null, null, null])).data;
+      const viaArray = (await zarr.get(array, [c, null, null, null])).data;
+      const viaCodec = new Uint16Array((await rawDecode(codecs, bytes[name][c])).slice().buffer);
+      const same = (a) => a.length === expected.length && a.every((v, k) => v === expected[k]);
+      checks.push({ chunk: c, zarrGet: same(viaArray), rawCodec: same(viaCodec) });
+    }
+    result[name] = checks;
+  }
+  return result;
+}
+
+/** Same raw-codec measurement inside a module worker (the context chronozarr decodes in). */
+async function timeInWorker(bytes, metas) {
+  const source = `
+    const { registry } = await import(${JSON.stringify(new URL('/js/vendor/zarrita/index.js', location.href).href)});
+    self.onmessage = async ({ data }) => {
+      const { meta, bytes, warmup, runs } = data;
+      const out = [];
+      const codecs = [];
+      for (const { name, configuration } of meta.codecs.slice(1)) {
+        const Codec = await registry.get(name)();
+        codecs.push(Codec.fromConfig(configuration ?? {}, { dataType: 'uint16', shape: [1, 4, 512, 512], codecs: meta.codecs, fillValue: 0 }));
+      }
+      const decode = async (b) => { let d = b; for (let i = codecs.length - 1; i >= 0; i--) d = await codecs[i].decode(d); return d; };
+      const all = [];
+      for (const b of bytes) {
+        for (let i = 0; i < warmup; i++) await decode(b.slice());
+        for (let i = 0; i < runs; i++) {
+          const copy = b.slice();
+          const t0 = performance.now();
+          await decode(copy);
+          all.push(performance.now() - t0);
+        }
+      }
+      self.postMessage(all);
+    };
+    self.postMessage('ready');
+  `;
+  const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+  const worker = new Worker(url, { type: 'module' });
+  await new Promise((resolve, reject) => {
+    worker.onmessage = resolve;
+    worker.onerror = (e) => reject(new Error(`worker failed: ${e.message}`));
+  });
+  const result = {};
+  for (const name of ['zstd5', 'blosc']) {
+    const times = await new Promise((resolve, reject) => {
+      worker.onmessage = ({ data }) => resolve(data);
+      worker.onerror = (e) => reject(new Error(`worker failed: ${e.message}`));
+      worker.postMessage({ meta: metas[name], bytes: bytes[name], warmup: WARMUP, runs: RUNS });
+    });
+    result[name] = { medianMs: round(median(times)), minMs: round(Math.min(...times)), maxMs: round(Math.max(...times)) };
+  }
+  worker.terminate();
+  return result;
+}
+
+window.runBench = async () => {
+  const { metas, bytes } = await load();
+  const out = { userAgent: navigator.userAgent, cores: navigator.hardwareConcurrency, bytes: {}, raw: {}, zarritaGet: {} };
+  for (const name of VARIANTS) out.bytes[name] = bytes[name].map((b) => b.length);
+  // Cold: first decode of each codec includes WASM instantiation.
+  for (const name of ['zstd5', 'blosc']) {
+    const t0 = performance.now();
+    const codecs = await chain(metas[name], zarr.registry);
+    await rawDecode(codecs, bytes[name][0]);
+    out[`firstDecodeMs_${name}`] = round(performance.now() - t0);
+  }
+  out.bitExact = await bitExact(metas, bytes);
+  for (const name of ['zstd5', 'blosc']) {
+    out.raw[name] = await timeRaw(await chain(metas[name], zarr.registry), bytes[name]);
+    out.zarritaGet[name] = await timeZarrita(metas, bytes, name);
+  }
+  out.worker = await timeInWorker(bytes, metas);
+  document.getElementById('out').textContent = JSON.stringify(out, null, 1);
+  return out;
+};
+window.benchReady = true;
+</script>
