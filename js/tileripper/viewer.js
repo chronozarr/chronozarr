@@ -810,7 +810,13 @@ async function main() {
   }
 
   const requested = new URLSearchParams(location.search).get('store');
-  if (requested) open(new URL(requested, location.href).href);
+  if (requested) {
+    const url = new URL(requested, location.href).href;
+    if (catalog.length > 0 && !catalog.some((entry) => entry.url === url)) {
+      select.add(new Option(url.replace(/^https?:\/\//, ''), url));
+    }
+    open(url);
+  }
   else if (catalog.length > 0) open(catalog[0].url);
   else {
     $('error-title').textContent = 'No store selected';
