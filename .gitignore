@@ -40,7 +40,7 @@ HANDOVER.md
 
 # Test/bench artifacts
 .playwright-mcp/
-src/spacetime/static/bench/
 
 # Screenshots (development artifacts)
 *.png
+HANDOVER.md
