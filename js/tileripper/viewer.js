@@ -939,10 +939,19 @@ async function main() {
     return [];
   });
   const select = $('catalog-select');
-  const open = (url) => {
-    history.replaceState(null, '', `?store=${encodeURIComponent(url)}`);
+  const inCatalog = (url) => catalog.some((entry) => entry.url === url);
+  const open = (url, { fallback = true } = {}) => {
+    // A catalog store is not pinned in the URL, so an open tab follows catalog changes on reload;
+    // only an external store is shareable via ?store=.
+    history.replaceState(null, '', inCatalog(url) ? location.pathname : `?store=${encodeURIComponent(url)}`);
     select.value = url;
-    window.tileripper.ready = viewer.loadStore(url).catch((error) => console.error(`loadStore(${url}) failed:`, error));
+    window.tileripper.ready = viewer.loadStore(url).catch((error) => {
+      console.error(`loadStore(${url}) failed:`, error);
+      if (fallback && catalog.length > 0 && catalog[0].url !== url) {
+        console.warn(`falling back to the catalog store ${catalog[0].url}`);
+        open(catalog[0].url, { fallback: false });
+      }
+    });
   };
   if (catalog.length > 0) {
     select.replaceChildren(...catalog.map((entry) => new Option(entry.name, entry.url)));
