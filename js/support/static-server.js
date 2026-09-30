@@ -6,6 +6,15 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
+const CONTENT_TYPES = {
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.html': 'text/html',
+  '.css': 'text/css',
+  '.json': 'application/json',
+  '.wasm': 'application/wasm',
+};
+
 export async function startStaticServer(rootDir, port = 0) {
   const requests = [];
   const server = http.createServer(async (req, res) => {
@@ -28,7 +37,12 @@ export async function startStaticServer(rootDir, port = 0) {
           if (match[2] !== '') end = Math.min(size - 1, Number(match[2]));
         }
       }
-      const headers = { 'Content-Length': end - start + 1, 'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes' };
+      const headers = {
+        'Content-Length': end - start + 1,
+        'Content-Type': CONTENT_TYPES[path.extname(file)] ?? 'application/octet-stream',
+        'Access-Control-Allow-Origin': '*',
+        'Accept-Ranges': 'bytes',
+      };
       if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
       res.writeHead(status, headers);
       if (req.method === 'HEAD') return res.end();

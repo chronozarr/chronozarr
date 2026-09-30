@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { openStore, applyDelta, chunkKey } from '../chronozarr/decoder.js';
-import { buildSyntheticStore, sourceValue, crc32c } from '../support/synthetic-store.js';
+import { buildSyntheticStore, sourceValue } from '../support/synthetic-store.js';
 import { startStaticServer } from '../support/static-server.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..');
@@ -34,10 +34,6 @@ test('chunkKey and applyDelta', () => {
   const residual = Int16Array.of(-150, 25, 10, -1);
   const out = applyDelta(anchor, new Uint16Array(residual.buffer));
   assert.deepEqual([...out], [0, 125, 65535, 0], 'clamps to 0..65535');
-});
-
-test('crc32c matches the standard check value', () => {
-  assert.equal(crc32c(new TextEncoder().encode('123456789')), 0xe3069283);
 });
 
 for (const name of FIXTURES) {
@@ -192,40 +188,44 @@ test('concurrent requests for one chunk share one fetch', async () => {
   assert.equal(readable.log.length - before, 1);
 });
 
-test('prefetch: anchors first, then deltas outward from t in the scrub direction', async () => {
+test('prefetch: nearest timesteps first, scrub direction reaches further, anchors pulled in with their deltas', async () => {
   const spec = { nTime: 12, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 4, sharded: true };
   const run = async (direction) => {
     const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec) });
     const order = [];
-    const result = await store.prefetch({
-      lod: 0,
-      cells: [[0, 0]],
-      t: 5,
-      direction,
-      concurrency: 1,
-      onChunk: (lod, row, col, t) => order.push(t),
-    });
+    const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 5, direction, concurrency: 1, onChunk: (lod, row, col, t) => order.push(t) });
     assert.equal(result.errors.length, 0);
+    assert.equal(result.planned, 12);
     return order;
   };
-  const forward = await run(1);
-  assert.deepEqual(forward.slice(0, 3), [4, 8, 0], 'anchors nearest to t=5 first');
-  assert.deepEqual(forward.slice(3), [6, 7, 3, 2, 9, 1, 10, 11], 'forward neighbour first');
-  const backward = await run(-1);
-  assert.deepEqual(backward.slice(0, 3), [4, 8, 0]);
-  assert.deepEqual(backward.slice(3), [6, 3, 7, 2, 1, 9, 10, 11], 'backward neighbour first');
+  assert.deepEqual(await run(1), [4, 5, 6, 7, 8, 0, 3, 9, 10, 2, 11, 1], 'anchor 4 first, then 6, 7 ahead of 4-behind 3');
+  assert.deepEqual(await run(-1), [4, 5, 6, 0, 3, 2, 7, 1, 8, 9, 10, 11], 'backward neighbours come first when scrubbing backward');
 });
 
-test('prefetch: skips cached chunks, honours abort and the cache budget without evicting', async () => {
-  const spec = { nTime: 10, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 3, sharded: true };
+test('prefetch window is sized by the cache budget, never anchors everywhere', async () => {
+  const spec = { nTime: 40, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 8, sharded: true };
   const chunkBytes = 32 * 32 * 2;
-  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 5 });
+  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 10 });
+  const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 20, concurrency: 1 });
+  assert.equal(result.planned, 9, 'floor(0.9 x 10 chunks)');
+  assert.equal(result.fetched, 9);
+  assert.equal(store.stats.cache.evictions, 0);
+  const cached = [];
+  for (let t = 0; t < 40; t++) if (store.peekRaw(0, 0, 0, t)) cached.push(t);
+  assert.deepEqual(cached, [16, 18, 19, 20, 21, 22, 23, 24, 25], 'a window around t=20, reaching further ahead (25) than behind (18), with its anchors 16 and 24');
+
+  const everything = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 100 });
+  const full = await everything.prefetch({ lod: 0, cells: [[0, 0]], t: 20, concurrency: 1 });
+  assert.equal(full.planned, 40, 'the whole axis when it fits');
+});
+
+test('prefetch skips cached chunks and honours abort', async () => {
+  const spec = { nTime: 10, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 3, sharded: true };
+  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec) });
   await store.getRaw(0, 0, 0, 0);
   const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, concurrency: 1 });
   assert.equal(result.skipped, 1, 'the cached anchor 0 is skipped');
-  assert.equal(result.budgetReached, true);
-  assert.equal(store.cacheInfo().entries, 5);
-  assert.equal(store.stats.cache.evictions, 0);
+  assert.equal(result.fetched, 9);
 
   const aborted = new AbortController();
   aborted.abort();
@@ -234,18 +234,129 @@ test('prefetch: skips cached chunks, honours abort and the cache budget without 
   assert.equal(none.fetched, 0);
 });
 
-test('demand loads evict deltas before anchors', async () => {
+test('prefetch waits for demand fetches and demand is never queued behind it', async () => {
+  const spec = { nTime: 6, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 3, sharded: true, delayMs: 15 };
+  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec) });
+  const chunks = [];
+  store.probe = (event) => chunks.push(event);
+  const prefetching = store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, concurrency: 2 });
+  await new Promise((resolve) => setTimeout(resolve, 1));
+  const demand = store.getRaw(0, 0, 0, 5);
+  await Promise.all([demand, prefetching]);
+  const demandEvent = chunks.find((c) => !c.background);
+  const startedAfterDemand = chunks.filter((c) => c.background && c.requestedAt > demandEvent.requestedAt);
+  assert.ok(startedAfterDemand.every((c) => c.requestedAt >= demandEvent.decodedAt), 'no new prefetch fetch starts while demand is in flight');
+});
+
+test('eviction is least recently used by default and follows evictionScore when set', async () => {
   const spec = { nTime: 10, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 3, sharded: true };
   const chunkBytes = 32 * 32 * 2;
-  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 3 });
-  await store.getRaw(0, 0, 0, 0);
+  const lru = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 3 });
+  for (const t of [0, 1, 2]) await lru.getRaw(0, 0, 0, t);
+  lru.peekRaw(0, 0, 0, 0);
+  await lru.getRaw(0, 0, 0, 4);
+  assert.equal(lru.peekRaw(0, 0, 0, 1), undefined, 'least recently used chunk is evicted');
+  assert.ok(lru.peekRaw(0, 0, 0, 0) && lru.peekRaw(0, 0, 0, 2) && lru.peekRaw(0, 0, 0, 4));
+  assert.equal(lru.stats.cache.evictions, 1);
+  assert.ok(lru.cacheInfo().bytes <= chunkBytes * 3);
+
+  const far = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 3 });
+  far.evictionScore = (entry) => Math.abs(entry.t - 5);
+  for (const t of [5, 9, 6]) await far.getRaw(0, 0, 0, t);
+  await far.getRaw(0, 0, 0, 4);
+  assert.equal(far.peekRaw(0, 0, 0, 9), undefined, 'the chunk farthest from t=5 is evicted');
+});
+
+test('a background chunk never displaces a better one', async () => {
+  const spec = { nTime: 10, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 3, sharded: true };
+  const chunkBytes = 32 * 32 * 2;
+  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 2 });
+  store.evictionScore = (entry) => Math.abs(entry.t - 5);
+  await store.getRaw(0, 0, 0, 5);
+  await store.getRaw(0, 0, 0, 6);
+  const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 9, concurrency: 1 });
+  assert.equal(result.budgetReached, true);
+  assert.ok(store.peekRaw(0, 0, 0, 5) && store.peekRaw(0, 0, 0, 6));
+  assert.equal(store.stats.cache.evictions, 0);
+});
+
+test('a caller that aborts is released; the fetch is cancelled when nobody is left', async () => {
+  const spec = { nTime: 4, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 2, sharded: false, delayMs: 30 };
+  const readable = buildSyntheticStore(spec);
+  const store = await openStore('memory://synthetic', { store: readable });
+  const chunkSignals = () => readable.log.filter((c) => c.key.includes('/c/1/')).map((c) => c.signal);
+
+  const first = new AbortController();
+  const second = new AbortController();
+  const a = store.getRaw(0, 0, 0, 1, { signal: first.signal });
+  const b = store.getRaw(0, 0, 0, 1, { signal: second.signal });
+  first.abort();
+  await assert.rejects(a, { name: 'AbortError' });
+  assert.equal(chunkSignals().length, 1, 'both callers share one fetch');
+  assert.equal(chunkSignals()[0].aborted, false, 'one caller is still waiting');
+  assert.ok(await b instanceof Uint16Array);
+
+  const lone = new AbortController();
+  const c = store.getRaw(0, 0, 0, 3, { signal: lone.signal });
+  lone.abort();
+  await assert.rejects(c, { name: 'AbortError' });
+  const fetchSignal = readable.log.find((entry) => entry.key.includes('/c/3/')).signal;
+  assert.equal(fetchSignal.aborted, true, 'the last caller leaving cancels the request');
+  assert.equal(store.peekRaw(0, 0, 0, 3), undefined);
+  assert.ok((await store.getRaw(0, 0, 0, 3)) instanceof Uint16Array, 'the chunk can be requested again');
+});
+
+test('a caller without a signal keeps a fetch alive when other callers abort', async () => {
+  const spec = { nTime: 4, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 2, sharded: false, delayMs: 20 };
+  const readable = buildSyntheticStore(spec);
+  const store = await openStore('memory://synthetic', { store: readable });
+  const abort = new AbortController();
+  const patient = store.getRaw(0, 0, 0, 1);
+  const impatient = store.getRaw(0, 0, 0, 1, { signal: abort.signal });
+  abort.abort();
+  await assert.rejects(impatient, { name: 'AbortError' });
+  assert.ok((await patient) instanceof Uint16Array);
+});
+
+test('close() aborts in-flight requests', async () => {
+  const spec = { nTime: 4, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 2, sharded: false, delayMs: 50 };
+  const readable = buildSyntheticStore(spec);
+  const store = await openStore('memory://synthetic', { store: readable });
+  const pending = store.getRaw(0, 0, 0, 1);
+  store.close();
+  await assert.rejects(pending, { name: 'AbortError' });
+});
+
+test('chunk probe events carry fetch and decode timestamps', async () => {
+  const spec = { nTime: 4, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 2, sharded: true };
+  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec) });
+  const events = [];
+  store.probe = (event) => events.push(event);
   await store.getRaw(0, 0, 0, 1);
-  await store.getRaw(0, 0, 0, 2);
-  await store.getRaw(0, 0, 0, 4);
-  assert.equal(store.peekRaw(0, 0, 0, 0) instanceof Uint16Array, true, 'anchor survives');
-  assert.equal(store.peekRaw(0, 0, 0, 1), undefined, 'oldest delta evicted');
-  assert.equal(store.stats.cache.evictions, 1);
-  assert.ok(store.cacheInfo().bytes <= chunkBytes * 3);
+  assert.equal(events.length, 1);
+  const [event] = events;
+  assert.equal(event.key, '0/0/0/1');
+  assert.equal(event.background, false);
+  assert.ok(event.requestedAt <= event.fetchedAt && event.fetchedAt <= event.decodedAt);
+  assert.ok(event.bytes > 0);
+});
+
+test('a corrupt shard index fails with an actionable message', async () => {
+  const readable = buildSyntheticStore({ nTime: 4, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 2, sharded: true });
+  const shard = readable.files.get('/0/data/c/0/0/0/0');
+  shard[shard.length - 10] ^= 0xff;
+  const store = await openStore('memory://synthetic', { store: readable });
+  await assert.rejects(store.getRaw(0, 0, 0, 1), /shard index checksum mismatch.*index_location/);
+  await assert.rejects(store.getRaw(0, 0, 0, 1), /checksum mismatch/, 'a failed index read is retried, not cached');
+});
+
+test('missing chunks and empty shard entries decode as the fill value', async () => {
+  const readable = buildSyntheticStore({ nTime: 2, nBand: 1, height: 40, width: 40, chunk: 32, anchorInterval: 2, sharded: false });
+  readable.files.delete('/0/data/c/0/0/1/1');
+  const store = await openStore('memory://synthetic', { store: readable });
+  const data = await store.getRaw(0, 1, 1, 0);
+  assert.equal(data.length, 32 * 32);
+  assert.ok(data.every((v) => v === 0));
 });
 
 test('errors carry the store URL and the reason', async () => {

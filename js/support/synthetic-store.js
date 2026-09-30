@@ -138,25 +138,40 @@ export function buildSyntheticStore(spec) {
     }
   }
 
-  return new SyntheticReadable(files);
+  return new SyntheticReadable(files, spec.delayMs ?? 0);
 }
 
 class SyntheticReadable {
-  constructor(files) {
+  constructor(files, delayMs) {
     this.files = files;
+    this.delayMs = delayMs;
     this.log = [];
   }
 
-  async get(key) {
-    this.log.push({ key, range: null });
-    return this.files.get(key);
+  async #respond(key, range, options, read) {
+    this.log.push({ key, range, signal: options?.signal ?? null });
+    if (this.delayMs > 0) {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(resolve, this.delayMs);
+        options?.signal?.addEventListener('abort', () => {
+          clearTimeout(timer);
+          reject(new DOMException('Aborted', 'AbortError'));
+        });
+      });
+    }
+    if (options?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    return read(this.files.get(key));
   }
 
-  async getRange(key, range) {
-    this.log.push({ key, range });
-    const file = this.files.get(key);
-    if (!file) return undefined;
-    if ('suffixLength' in range) return file.slice(file.length - range.suffixLength);
-    return file.slice(range.offset, range.offset + range.length);
+  get(key, options) {
+    return this.#respond(key, null, options, (file) => file);
+  }
+
+  getRange(key, range, options) {
+    return this.#respond(key, range, options, (file) => {
+      if (!file) return undefined;
+      if ('suffixLength' in range) return file.slice(file.length - range.suffixLength);
+      return file.slice(range.offset, range.offset + range.length);
+    });
   }
 }

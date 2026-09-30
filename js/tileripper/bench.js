@@ -10,6 +10,9 @@
 //   product switch  setProduct -> frame finished.
 //   decode          per-chunk zarrita decode time, replayed from recorded bytes (no network).
 //   cpu add         the JS star-delta loop the GPU path replaces, for reference.
+//
+// `await tileripper.scrubBench()` measures what a user feels while stepping and dragging the time
+// slider; see runScrubBenchmarks.
 
 import * as zarr from 'zarrita';
 import { applyDelta, openStore } from '../chronozarr/decoder.js';
@@ -24,6 +27,36 @@ function summarize(values) {
 
 const round = (x) => Math.round(x * 100) / 100;
 const noStoreFetch = (request) => fetch(new Request(request, { cache: 'no-store' }));
+
+function sleepUnlessAborted(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+    const timer = setTimeout(resolve, Math.max(0, ms));
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    }, { once: true });
+  });
+}
+
+/**
+ * A fetch that behaves like a remote bucket behind HTTP/2: every request pays `rttMs` before its first byte,
+ * request concurrency is unlimited, and response bodies share one link of `mbps` megabits per second
+ * (first come, first served). A request aborted mid-transfer still occupies the link, as the bytes are in flight.
+ */
+export function simulatedRemoteFetch({ rttMs, mbps }) {
+  const bytesPerMs = (mbps * 1e6) / 8 / 1000;
+  let linkFreeAt = 0;
+  return async (request) => {
+    await sleepUnlessAborted(rttMs, request.signal);
+    const response = await noStoreFetch(request);
+    if (request.method === 'HEAD') return response;
+    const body = await response.arrayBuffer();
+    linkFreeAt = Math.max(performance.now(), linkFreeAt) + body.byteLength / bytesPerMs;
+    await sleepUnlessAborted(linkFreeAt - performance.now(), request.signal);
+    return new Response(body, { status: response.status, headers: response.headers });
+  };
+}
 
 function withoutConsolidatedMetadata(rootUrl) {
   return async (request) => {
@@ -129,20 +162,21 @@ function recordingStore(inner, records) {
   };
 }
 
+/** Like a real store, hands out fresh bytes on every read (the decode pool takes ownership of what it is given). */
 function replayStore(records) {
   return {
-    get: async (key) => records.get(key),
-    getRange: async (key, range) => records.get(`${key}|${JSON.stringify(range)}`),
+    get: async (key) => records.get(key)?.slice(),
+    getRange: async (key, range) => records.get(`${key}|${JSON.stringify(range)}`)?.slice(),
   };
 }
 
 /** Per-chunk decode (zstd/gzip + bytes codec) replayed from recorded bytes, so the network is out of the loop. */
 async function decodeTimings(url, repeats) {
   const records = new Map();
-  const recorder = await openStore(url, { store: recordingStore(new zarr.FetchStore(url, { fetch: noStoreFetch }), records) });
+  const recorder = await openStore(url, { store: recordingStore(new zarr.FetchStore(url, { fetch: noStoreFetch }), records), workers: 0 });
   const timesteps = Math.min(recorder.times.length, 8);
   for (let t = 0; t < timesteps; t++) await recorder.getRaw(0, 0, 0, t);
-  const replayer = await openStore(url, { store: replayStore(records) });
+  const replayer = await openStore(url, { store: replayStore(records), workers: 0 });
   await replayer.getRaw(0, 0, 0, 0);
 
   const anchors = [];
@@ -156,8 +190,24 @@ async function decodeTimings(url, repeats) {
     }
   }
   const level = replayer.levels[0];
+
+  // The same chunks decoded in parallel by the worker pool versus one after another on this thread.
+  const chunkTimes = Array.from({ length: timesteps }, (_, t) => t);
+  replayer.clearCache();
+  let started = performance.now();
+  for (const t of chunkTimes) await replayer.getRaw(0, 0, 0, t);
+  const mainThreadMs = performance.now() - started;
+  const pooled = await openStore(url, { store: replayStore(records) });
+  await pooled.getRaw(0, 0, 0, 0);
+  await sleep(200);
+  pooled.clearCache();
+  started = performance.now();
+  await Promise.all(chunkTimes.map((t) => pooled.getRaw(0, 0, 0, t)));
+  const poolMs = performance.now() - started;
+  pooled.close();
+
   const format = (values) => (values.length ? Object.fromEntries(Object.entries(summarize(values)).map(([k, v]) => [k, round(v)])) : null);
-  return { chunkRawBytes: level.chunkBytes, anchor: format(anchors), delta: format(deltas) };
+  return { chunkRawBytes: level.chunkBytes, anchor: format(anchors), delta: format(deltas), parallel: { chunks: timesteps, mainThreadMs: round(mainThreadMs), workerPoolMs: round(poolMs) } };
 }
 
 async function cpuAddTimings(store, repeats) {
@@ -217,5 +267,193 @@ export async function runBenchmarks(viewer, { coldRuns = 5, switches = 30 } = {}
 
   console.log(JSON.stringify(results, null, 2));
   window.__benchResults = results;
+  return results;
+}
+
+// ---- perceived scrub latency ----
+
+const TIMEOUT_MS = 6000;
+const OPEN_TIMEOUT_MS = 60000;
+
+/** loadStore with a deadline, so a run that can never paint fails instead of hanging the benchmark. */
+function openWithin(viewer, url, options) {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no complete first frame within ${OPEN_TIMEOUT_MS / 1000} s`)), OPEN_TIMEOUT_MS);
+  });
+  return Promise.race([viewer.loadStore(url, options), deadline]).finally(() => clearTimeout(timer));
+}
+
+function percentile(sorted, q) {
+  return sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] : null;
+}
+
+function distribution(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  return { n: sorted.length, median: round(percentile(sorted, 0.5)), p95: round(percentile(sorted, 0.95)), max: round(sorted.at(-1) ?? null) };
+}
+
+function timelinePoint(viewer, t) {
+  const rect = document.getElementById('timeline-track').getBoundingClientRect();
+  const frac = viewer.store.times.length > 1 ? t / (viewer.store.times.length - 1) : 0;
+  return { x: rect.left + 8 + frac * (rect.width - 16), y: rect.top + rect.height / 2 };
+}
+
+function pointer(target, type, point) {
+  target.dispatchEvent(new PointerEvent(type, { clientX: point.x, clientY: point.y, bubbles: true, pointerId: 1 }));
+}
+
+async function waitUntil(predicate, timeoutMs) {
+  const started = performance.now();
+  while (!predicate()) {
+    if (performance.now() - started > timeoutMs) return false;
+    await sleep(5);
+  }
+  return true;
+}
+
+/** Camera that shows about nine LOD 0 cells (3x3) centred on a cell near the middle of the mosaic. */
+function nineCellCamera(viewer) {
+  const level = viewer.store.levels[0];
+  const row = Math.min(2, level.gridRows - 1);
+  const col = Math.min(2, level.gridCols - 1);
+  return {
+    cx: (col + 0.5) * level.chunkWidth,
+    cy: (row + 0.5) * level.chunkHeight,
+    scale: viewer.canvas.width / (2.9 * level.chunkWidth),
+  };
+}
+
+/** Runs the input script and returns the raw inputs and viewer events. */
+async function driveScrub(viewer, { mode, steps, cadenceMs, startT }) {
+  const events = [];
+  const inputs = [];
+  const longTasks = [];
+  const frameGaps = [];
+  const observer = new PerformanceObserver((list) => longTasks.push(...list.getEntries().map((e) => e.duration)));
+  observer.observe({ type: 'longtask' });
+  let frameLoop = true;
+  let lastFrame = performance.now();
+  const onFrame = (now) => {
+    frameGaps.push(now - lastFrame);
+    lastFrame = now;
+    if (frameLoop) requestAnimationFrame(onFrame);
+  };
+  requestAnimationFrame(onFrame);
+
+  viewer.probe = (event) => events.push(event);
+  const network = viewer.store.stats.network;
+  const before = { requests: network.requests, bytes: network.bytes, misses: viewer.store.stats.cache.misses };
+  const track = document.getElementById('timeline-track');
+  const begin = performance.now();
+  for (let i = 0; i < steps; i++) {
+    const due = begin + i * cadenceMs;
+    const wait = due - performance.now();
+    if (wait > 0) await sleep(wait);
+    const t = startT + 1 + i;
+    inputs.push({ at: performance.now(), t });
+    if (mode === 'keys') {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true }));
+    } else if (i === 0) {
+      pointer(track, 'pointerdown', timelinePoint(viewer, t));
+    } else {
+      pointer(window, 'pointermove', timelinePoint(viewer, t));
+    }
+  }
+  if (mode === 'drag') pointer(window, 'pointerup', timelinePoint(viewer, startT + steps));
+  const finalT = startT + steps;
+  const settled = await waitUntil(() => events.some((e) => e.type === 'paint' && e.complete && e.t === finalT), TIMEOUT_MS);
+  await sleep(50);
+  frameLoop = false;
+  viewer.probe = null;
+  observer.disconnect();
+  return {
+    events, inputs, longTasks, frameGaps, settled,
+    network: { requests: network.requests - before.requests, bytes: network.bytes - before.bytes, misses: viewer.store.stats.cache.misses - before.misses },
+  };
+}
+
+/**
+ * Per-step lag and phase breakdown from the raw events. The lag of a step is the time from its input
+ * event to the first paint that shows that timestep or a later one (a step the viewer skipped over is
+ * satisfied by the later frame that replaced it), so a viewer that falls behind is not flattered by
+ * only counting the frames it managed to show. The phase breakdown covers steps shown exactly.
+ */
+function analyzeScrub(run) {
+  const { events, inputs } = run;
+  const paints = events.filter((e) => e.type === 'paint');
+  const steps = inputs.map((input) => {
+    const later = (p) => p.at >= input.at && p.t >= input.t;
+    const caughtUp = paints.find((p) => later(p) && p.complete);
+    const firstCell = paints.find((p) => later(p) && p.ready > 0);
+    const exact = paints.find((p) => p.at >= input.at && p.t === input.t && p.complete);
+    const row = { t: input.t, shownExactly: Boolean(exact), lagMs: caughtUp ? caughtUp.at - input.at : null, firstCellMs: firstCell ? firstCell.at - input.at : null };
+    if (exact) {
+      const loadStart = events.find((e) => e.type === 'load-start' && e.t === input.t && e.at >= input.at);
+      const lastReady = events.filter((e) => e.type === 'cell-ready' && e.t === input.t && e.at >= input.at).at(-1);
+      row.queueMs = loadStart ? loadStart.at - input.at : 0;
+      row.loadMs = loadStart && lastReady ? lastReady.at - loadStart.at : 0;
+      row.uploadMs = exact.uploadMs;
+      row.renderMs = exact.renderMs;
+      row.otherMs = exact.at - input.at - row.queueMs - row.loadMs - row.uploadMs - row.renderMs;
+    }
+    return row;
+  });
+  const exact = steps.filter((s) => s.shownExactly);
+  const mean = (key) => (exact.length ? round(exact.reduce((n, s) => n + s[key], 0) / exact.length) : null);
+  const lastPaint = paints.at(-1);
+  const finalPaint = paints.findLast((p) => p.complete && p.t === inputs.at(-1).t);
+  const gaps = [...run.frameGaps].sort((a, b) => a - b);
+  return {
+    lod: lastPaint?.lod,
+    visibleCells: lastPaint?.cells,
+    stepsShownExactly: exact.length,
+    stepsNeverCaughtUp: steps.filter((s) => s.lagMs === null).length,
+    settled: run.settled,
+    settleMs: finalPaint ? round(finalPaint.at - inputs.at(-1).at) : null,
+    lagMs: distribution(steps.filter((s) => s.lagMs !== null).map((s) => s.lagMs)),
+    firstCellMs: distribution(steps.filter((s) => s.firstCellMs !== null).map((s) => s.firstCellMs)),
+    meanPhaseMsOfShownSteps: { queue: mean('queueMs'), load: mean('loadMs'), upload: mean('uploadMs'), render: mean('renderMs'), other: mean('otherMs') },
+    mainThread: {
+      longTasks: run.longTasks.length,
+      longTaskMaxMs: round(Math.max(0, ...run.longTasks)),
+      framesOver33ms: run.frameGaps.filter((g) => g > 33).length,
+      maxFrameGapMs: round(gaps.at(-1)),
+    },
+    network: run.network,
+  };
+}
+
+/**
+ * Perceived latency while stepping (ArrowRight every 100 ms) and dragging the timeline slider (one
+ * timestep every 40 ms): input event -> first paint that shows the new timestep (first cell / all
+ * visible cells), with a breakdown and main-thread stall counts. Each run opens the store from
+ * scratch, either scrubs immediately after the first frame ("cold") or after 5 s of idle prefetch,
+ * at the overview zoom fit() picks and zoomed to about nine LOD 0 cells.
+ */
+export async function runScrubBenchmarks(viewer, { steps = 20, startT = 40, idleMs = 5000, network = null, only = null } = {}) {
+  const fetchImpl = network ? simulatedRemoteFetch(network) : noStoreFetch;
+  const url = viewer.store.url.replace(/\/$/, '');
+  await openWithin(viewer, url, { fetch: fetchImpl });
+  const zoomed = nineCellCamera(viewer);
+  const results = { store: url, network: network ?? 'as configured by the page', steps, startT, runs: {} };
+  const zooms = { overview: undefined, zoomed9cells: zoomed };
+
+  for (const [zoomName, camera] of Object.entries(zooms)) {
+    for (const state of ['cold', 'idle']) {
+      for (const [mode, cadenceMs] of [['keys', 100], ['drag', 40]]) {
+        const name = `${zoomName}/${state}/${mode}`;
+        if (only && !only.includes(name)) continue;
+        await openWithin(viewer, url, { fetch: fetchImpl, camera });
+        viewer.goToTime(startT);
+        await waitUntil(() => viewer.paintedT === startT, TIMEOUT_MS);
+        if (state === 'idle') await sleep(idleMs);
+        const run = await driveScrub(viewer, { mode, steps, cadenceMs, startT });
+        results.runs[name] = analyzeScrub(run);
+      }
+    }
+  }
+  console.log(JSON.stringify(results, null, 2));
+  window.__scrubResults = results;
   return results;
 }

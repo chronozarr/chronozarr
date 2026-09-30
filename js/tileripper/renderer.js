@@ -285,12 +285,14 @@ export class Renderer {
     return slot;
   }
 
-  /** Clear the canvas and set the per-frame uniforms. */
-  beginPaint(f) {
+  /** Set the per-frame uniforms, clearing the canvas first unless `clear` is false (paint over the previous frame). */
+  beginPaint(f, { clear }) {
     const gl = this.#gl;
     gl.viewport(0, 0, f.width, f.height);
-    gl.clearColor(...BACKGROUND, 1);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    if (clear) {
+      gl.clearColor(...BACKGROUND, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
     gl.uniform2f(this.#uniforms.u_canvas, f.width, f.height);
     gl.uniform3f(this.#uniforms.u_view, f.cx, f.cy, f.scale);
     gl.uniform1i(this.#uniforms.u_product, f.shader);

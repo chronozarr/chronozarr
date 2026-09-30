@@ -1,18 +1,22 @@
 // TileRipper viewer: renders a chronozarr store with WebGL2, scrubs through time, switches
 // products on the GPU and shows decoded values on click. Opens ?store=<base url>.
 
-import { chunkKey, openStore } from '../chronozarr/decoder.js';
+import { chunkKey, openStore, scrubCost } from '../chronozarr/decoder.js';
 import { Renderer } from './renderer.js';
 import { computeStretchLo, describePixel, inputIndices, makeTimeFormatter, resolveProducts } from './products.js';
 
-const SCRUB_DEBOUNCE_MS = 80;
-const PREFETCH_DELAY_MS = 150;
+const PREFETCH_SETTLE_MS = 30;
 const POOL_BUDGET_BYTES = 384 * 1024 * 1024;
-const POOL_TIME_WINDOW = 8;
-const GPU_WINDOW = 2;
-const GPU_UPLOADS_PER_TICK = 8;
+const GPU_FILL_FRACTION = 0.9;
+const GPU_UPLOAD_SLICE_MS = 4;
+// Pick the coarsest level that still has at least ~0.7 texels per canvas pixel; a bias of 0 would pick
+// the finest level whenever it is even slightly denser than the screen, at 4x the bytes per level.
+const LOD_BIAS = 0.5;
 const MAX_SCALE = 16;
 const CLICK_SLOP_PX = 4;
+const CELL_RETRY_DELAY_MS = 4000;
+const MAX_CELL_RETRIES = 3;
+const TOAST_MS = 12000;
 const STRETCH_SAMPLES_PER_CELL = 300;
 
 const $ = (id) => document.getElementById(id);
@@ -29,6 +33,11 @@ class Viewer {
   camera = { cx: 0, cy: 0, scale: 1 };
   /** Force one LOD regardless of zoom (benchmarks). */
   lodOverride = null;
+  /** Benchmarks set this to receive timestamped events: input, load-start, cell-ready, paint. */
+  probe = null;
+
+  /** Timestep of the last complete frame. */
+  paintedT = -1;
 
   #formatTime = (t) => String(t);
   #direction = 1;
@@ -38,18 +47,18 @@ class Viewer {
   #view = { lod: 0, cells: new Set() };
   #maxVisibleCells = 0;
   #rafId = 0;
-  #loadTimer = 0;
   #prefetchTimer = 0;
   #gpuFillTimer = 0;
   #prefetchAbort = null;
   #painted = [];
   #storeGeneration = 0;
   #tickElements = [];
-  #loadingChunks = new Set();
+  #wave = null;
+  #toastTimer = 0;
 
   constructor() {
     this.renderer = new Renderer(this.canvas);
-    this.renderer.evictionScore = (meta) => this.#evictionScore(meta);
+    this.renderer.evictionScore = (meta) => this.#chunkScore(meta);
     this.#resizeCanvas();
     new ResizeObserver(() => {
       this.#resizeCanvas();
@@ -63,38 +72,45 @@ class Viewer {
   /**
    * Open a store and resolve after the first complete frame is painted.
    * @param {string} url
-   * @param {{lod?:number, fetch?:typeof fetch, maxCacheBytes?:number}} [options]
+   * @param {{lod?:number, fetch?:typeof fetch, maxCacheBytes?:number, workers?:number, camera?:{cx:number,cy:number,scale:number}}} [options]
    */
   async loadStore(url, options = {}) {
     this.#abortBackground();
+    this.store?.close();
     const generation = ++this.#storeGeneration;
     this.#hideError();
     this.#setProgress(0.02);
     const started = performance.now();
     let store;
     try {
-      store = await openStore(url, { fetch: options.fetch, maxCacheBytes: options.maxCacheBytes });
+      store = await openStore(url, { fetch: options.fetch, maxCacheBytes: options.maxCacheBytes, workers: options.workers });
       this.#checkUniformChunks(store);
     } catch (error) {
       this.#showError('Could not open store', error.message);
       this.#setProgress(0);
       throw error;
     }
-    if (generation !== this.#storeGeneration) return null;
+    if (generation !== this.#storeGeneration) {
+      store.close();
+      return null;
+    }
     const openMs = performance.now() - started;
 
     this.store = store;
+    store.evictionScore = (entry) => this.#chunkScore(entry);
     this.#configurePool();
     this.products = resolveProducts(store.bands);
     this.productIndex = this.products.findIndex((p) => p.available);
     this.bandChoice = 0;
     this.t = 0;
+    this.paintedT = -1;
     this.#direction = 1;
     this.#stretchLo = null;
     this.lodOverride = options.lod ?? null;
     this.#formatTime = makeTimeFormatter(store.times);
     this.#paintPartial = true;
-    this.fit();
+    if (options.camera) this.camera = { ...options.camera };
+    else this.fit();
     this.#buildProducts();
     this.#buildTimeline();
     this.#updateTimeUi();
@@ -129,6 +145,7 @@ class Viewer {
     if (next === this.t) return;
     this.#direction = next > this.t ? 1 : -1;
     this.t = next;
+    this.#emit({ type: 'input', t: next });
     this.#updateTimeUi();
     this.requestRender();
   }
@@ -161,9 +178,10 @@ class Viewer {
   }
 
   /**
-   * Paint the current view now. A pure time change waits (keeping the previous frame) until every
-   * visible cell for the new timestep is ready; camera, product and resize changes paint whatever is
-   * ready, with cached coarser levels underneath. Returns {complete, ms, lod, cells}.
+   * Paint the current view now, cell by cell: every visible cell whose chunks for the current timestep are
+   * ready is drawn as soon as it is ready. After a pure time change the previous frame stays underneath
+   * (cells still loading keep showing the previous timestep, or the cached coarser level at the new
+   * one); camera, product and resize changes clear and repaint. Returns {complete, ms, lod, cells}.
    */
   renderNow() {
     if (this.#rafId) {
@@ -178,6 +196,7 @@ class Viewer {
     this.#view = { lod, cells: new Set(cells.map(([row, col]) => `${row}/${col}`)) };
 
     renderer.newFrame();
+    const uploadBefore = renderer.stats.uploadMs;
     const drawable = [];
     const missing = [];
     for (const [row, col] of cells) {
@@ -186,31 +205,47 @@ class Viewer {
       else missing.push([row, col]);
     }
     const complete = missing.length === 0;
+    const clear = this.#paintPartial;
+    const painted = clear || drawable.length > 0;
 
     if (complete && this.#stretchLo === null) this.#stretchLo = this.#computeStretch(lod, cells, t);
-    if (complete || this.#paintPartial) {
-      renderer.beginPaint({
-        width: canvas.width,
-        height: canvas.height,
-        ...this.camera,
-        ...this.#productUniforms(),
-        stretchLo: this.#stretchLo ?? 0,
-        nodata: store.nodata,
-      });
+    if (painted) {
+      renderer.beginPaint(
+        {
+          width: canvas.width,
+          height: canvas.height,
+          ...this.camera,
+          ...this.#productUniforms(),
+          stretchLo: this.#stretchLo ?? 0,
+          nodata: store.nodata,
+        },
+        { clear },
+      );
       if (!complete) this.#drawCoarser(lod, t);
       for (const { row, col, slots } of drawable) this.#drawCell(lod, row, col, slots);
       this.#paintedLod = lod;
+      if (complete) this.paintedT = t;
     }
 
-    if (!complete) {
-      this.#scheduleLoad(lod, missing, t);
-    } else {
+    if (complete) {
+      if ($('error-overlay').classList.contains('toast')) this.#hideError();
       this.#paintPartial = false;
+      this.#wave?.controller.abort();
+      this.#wave = null;
       this.#setProgress(1);
       this.#scheduleGpuFill();
       this.#schedulePrefetch();
+    } else {
+      this.#requestCells(lod, missing, t);
+      // Cells that failed for good no longer hold anything back: keep prefetching for the ones that work.
+      if (missing.every(([row, col]) => this.#wave.failures.has(`${row}/${col}`))) {
+        this.#scheduleGpuFill();
+        this.#schedulePrefetch();
+      }
     }
     const ms = performance.now() - started;
+    const uploadMs = renderer.stats.uploadMs - uploadBefore;
+    if (painted) this.#emit({ type: 'paint', t, lod, complete, cells: cells.length, ready: drawable.length, uploadMs, renderMs: ms - uploadMs });
     if (complete) {
       $('status').innerHTML = `<span class="fast">${Math.round(ms)}ms</span>`;
       for (const resolve of this.#painted.splice(0)) resolve();
@@ -233,7 +268,7 @@ class Viewer {
         t: this.t,
         direction: this.#direction,
         signal: abort.signal,
-        onChunk: (l, row, col, t) => this.#uploadInBackground(l, row, col, t),
+        onChunk: () => this.#scheduleGpuFill(),
       })
       .then((result) => {
         for (const { key, error } of result.errors) console.error(`prefetch failed for chunk ${key}:`, error);
@@ -241,8 +276,13 @@ class Viewer {
       });
   }
 
+  #emit(event) {
+    this.probe?.({ at: performance.now(), ...event });
+  }
+
   #abortBackground() {
-    clearTimeout(this.#loadTimer);
+    this.#wave?.controller.abort();
+    this.#wave = null;
     clearTimeout(this.#gpuFillTimer);
     clearTimeout(this.#prefetchTimer);
     this.#prefetchAbort?.abort();
@@ -261,7 +301,7 @@ class Viewer {
   #configurePool() {
     const { store, renderer } = this;
     const first = store.levels[0];
-    const wanted = store.levels.reduce((n, l) => n + l.gridRows * l.gridCols * Math.min(l.nTime, POOL_TIME_WINDOW), 0);
+    const wanted = store.levels.reduce((n, l) => n + l.gridRows * l.gridCols * l.nTime, 0);
     const slots = renderer.planSlots(first.nBand, first.chunkWidth, first.chunkHeight, POOL_BUDGET_BYTES, wanted);
     renderer.configure({ nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots });
     this.#maxVisibleCells = Math.floor(slots / 2);
@@ -277,7 +317,7 @@ class Viewer {
   #targetLod() {
     if (this.lodOverride !== null) return this.lodOverride;
     const maxLod = this.store.levels.length - 1;
-    let lod = clamp(Math.floor(Math.log2(1 / this.camera.scale) + 1e-9), 0, maxLod);
+    let lod = clamp(Math.floor(Math.log2(1 / this.camera.scale) + LOD_BIAS + 1e-9), 0, maxLod);
     while (lod < maxLod && this.#visibleCells(lod).length > this.#maxVisibleCells) lod++;
     return lod;
   }
@@ -325,41 +365,42 @@ class Viewer {
   }
 
   /**
-   * Keep the timesteps around t (scrub direction first) resident in the texture pool, uploading from the
-   * decoded cache a few chunks per tick, so the next step is a uniform change instead of an upload.
+   * Keep a window of timesteps around t resident in the texture pool, as wide as the pool holds for the
+   * visible cells and reaching further in the scrub direction, so the next steps are uniform changes
+   * instead of uploads. Uploads come from the decoded cache in slices of GPU_UPLOAD_SLICE_MS.
    */
   #fillGpuWindow() {
     const { lod, cells } = this.#view;
     const { store, renderer, t } = this;
-    let budget = GPU_UPLOADS_PER_TICK;
-    for (let d = 0; d <= GPU_WINDOW; d++) {
-      for (const tt of d === 0 ? [t] : [t + this.#direction * d, t - this.#direction * d]) {
-        if (tt < 0 || tt >= store.times.length) continue;
-        for (const ct of new Set([store.anchorOf(tt), tt])) {
-          for (const key of cells) {
-            const [row, col] = key.split('/').map(Number);
-            const chunk = chunkKey(lod, row, col, ct);
-            const data = renderer.isResident(chunk) ? null : store.peekRaw(lod, row, col, ct);
-            if (!data || renderer.upload(chunk, { lod, row, col, t: ct }, data, { background: true }) < 0) continue;
-            if (--budget === 0) {
-              this.#gpuFillTimer = setTimeout(() => this.#fillGpuWindow(), 0);
-              return;
-            }
+    if (cells.size === 0) return;
+    const anchorShare = store.anchorIndices.length / store.times.length;
+    const steps = Math.max(1, Math.floor((renderer.slots * GPU_FILL_FRACTION) / (cells.size * (1 + anchorShare))));
+    const timesteps = Array.from({ length: store.times.length }, (_, i) => i)
+      .sort((a, b) => scrubCost(a - t, this.#direction) - scrubCost(b - t, this.#direction))
+      .slice(0, steps);
+    const started = performance.now();
+    for (const tt of timesteps) {
+      for (const ct of new Set([store.anchorOf(tt), tt])) {
+        for (const key of cells) {
+          const [row, col] = key.split('/').map(Number);
+          const chunk = chunkKey(lod, row, col, ct);
+          const data = renderer.isResident(chunk) ? null : store.peekRaw(lod, row, col, ct);
+          if (!data) continue;
+          renderer.upload(chunk, { lod, row, col, t: ct }, data, { background: true });
+          if (performance.now() - started > GPU_UPLOAD_SLICE_MS) {
+            this.#gpuFillTimer = setTimeout(() => this.#fillGpuWindow(), 0);
+            return;
           }
         }
       }
     }
   }
 
-  #uploadInBackground(lod, row, col, t) {
-    const data = this.store.peekRaw(lod, row, col, t);
-    if (data) this.renderer.upload(chunkKey(lod, row, col, t), { lod, row, col, t }, data, { background: true });
-  }
-
-  /** Pool eviction order: chunks outside the current view first, then farthest in time. */
-  #evictionScore(meta) {
+  /** Eviction order for decoded chunks and texture slots: outside the view first, then by scrub cost from t. */
+  #chunkScore(meta) {
     const visible = meta.lod === this.#view.lod && this.#view.cells.has(`${meta.row}/${meta.col}`);
-    return (visible ? 0 : 1e6) + Math.abs(meta.t - this.t);
+    const cost = scrubCost(meta.t - this.t, this.#direction);
+    return (visible ? 0 : 1e6) + (this.store.isAnchor(meta.t) ? cost / 2 : cost);
   }
 
   #drawCell(lod, row, col, slots) {
@@ -408,42 +449,69 @@ class Viewer {
   }
 
   /**
-   * Fetch the missing cells for timestep t. Cells already being fetched are skipped; a pure time
-   * change waits SCRUB_DEBOUNCE_MS so a fast scrub only fetches where it stops.
+   * Fetch the missing cells for timestep t right away, one wave per (level, timestep). A wave for a
+   * different timestep or level is stale: it is aborted after the new one has claimed the chunks they
+   * share, and requests nobody wants any more are cancelled.
    */
-  #scheduleLoad(lod, missing, t) {
-    clearTimeout(this.#loadTimer);
-    const wanted = missing.filter(([row, col]) => !this.#loadingChunks.has(chunkKey(lod, row, col, t)));
-    if (wanted.length === 0) return;
-    const load = async () => {
-      let done = 0;
+  #requestCells(lod, missing, t) {
+    let wave = this.#wave;
+    const previous = wave && (wave.lod !== lod || wave.t !== t) ? wave : null;
+    if (!wave || previous) wave = { lod, t, controller: new AbortController(), cells: new Set(), failures: new Map() };
+    const wanted = missing.filter(([row, col]) => !wave.cells.has(`${row}/${col}`));
+    this.#wave = wave;
+    if (wanted.length > 0) {
+      for (const [row, col] of wanted) wave.cells.add(`${row}/${col}`);
+      this.#emit({ type: 'load-start', t, cells: wanted.length });
       this.#setProgress(0.02);
-      await Promise.all(
-        wanted.map(async ([row, col]) => {
-          const key = chunkKey(lod, row, col, t);
-          const anchorT = this.store.anchorOf(t);
-          this.#loadingChunks.add(key);
-          try {
-            await Promise.all([this.store.getRaw(lod, row, col, anchorT), anchorT === t ? null : this.store.getRaw(lod, row, col, t)]);
+      let done = 0;
+      const { signal } = wave.controller;
+      const anchorT = this.store.anchorOf(t);
+      for (const [row, col] of wanted) {
+        Promise.all([this.store.getRaw(lod, row, col, anchorT, { signal }), anchorT === t ? null : this.store.getRaw(lod, row, col, t, { signal })]).then(
+          () => {
+            if (signal.aborted) return;
             this.#setProgress((++done / wanted.length) * 0.98);
+            this.#emit({ type: 'cell-ready', t, row, col });
             this.renderNow();
-          } catch (error) {
-            console.error(`chunk load failed (lod ${lod}, row ${row}, col ${col}, t ${t}):`, error);
-            this.#showError('Chunk load failed', error.message);
-            this.#setProgress(0);
-          } finally {
-            this.#loadingChunks.delete(key);
-          }
-        }),
-      );
-    };
-    if (this.#paintPartial) load();
-    else this.#loadTimer = setTimeout(load, SCRUB_DEBOUNCE_MS);
+          },
+          (error) => {
+            if (error.name === 'AbortError') return;
+            this.#chunkFailed(wave, { lod, row, col, t }, error);
+          },
+        );
+      }
+    }
+    previous?.controller.abort();
+  }
+
+  /**
+   * A chunk failed after the decoder's own retries. Not fatal: the cell keeps its coarser level or previous
+   * timestep, the failure is shown as a toast with the URL, status and error, and the cell is requested again
+   * after a growing pause, up to MAX_CELL_RETRIES times or until the view moves to another timestep.
+   */
+  #chunkFailed(wave, { lod, row, col, t }, error) {
+    const cell = `${row}/${col}`;
+    const failures = (wave.failures.get(cell) ?? 0) + 1;
+    wave.failures.set(cell, failures);
+    console.error(`chunk load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}, failure ${failures}):`, error);
+    const outcome = failures > MAX_CELL_RETRIES ? 'Giving up on it until the timestep changes.' : 'Retrying shortly.';
+    this.#showError(
+      'Chunk load failed',
+      `Level ${lod}, cell (${row}, ${col}), ${this.#formatTime(t)}: ${error.name}: ${error.message}. The cell keeps its previous data. ${outcome}`,
+      { toast: true },
+    );
+    this.#setProgress(0);
+    if (failures > MAX_CELL_RETRIES) return;
+    setTimeout(() => {
+      if (this.#wave !== wave) return;
+      wave.cells.delete(cell);
+      this.requestRender();
+    }, CELL_RETRY_DELAY_MS * failures);
   }
 
   #schedulePrefetch() {
     clearTimeout(this.#prefetchTimer);
-    this.#prefetchTimer = setTimeout(() => this.prefetchNow(), PREFETCH_DELAY_MS);
+    this.#prefetchTimer = setTimeout(() => this.prefetchNow(), PREFETCH_SETTLE_MS);
   }
 
   // ---- click to query ----
@@ -538,11 +606,10 @@ class Viewer {
     track.addEventListener('pointerdown', (e) => {
       if (!this.store) return;
       scrubbing = true;
-      track.setPointerCapture(e.pointerId);
       this.goToTime(timeFromEvent(e));
     });
-    track.addEventListener('pointermove', (e) => scrubbing && this.goToTime(timeFromEvent(e)));
-    track.addEventListener('pointerup', () => {
+    window.addEventListener('pointermove', (e) => scrubbing && this.goToTime(timeFromEvent(e)));
+    window.addEventListener('pointerup', () => {
       scrubbing = false;
     });
 
@@ -632,14 +699,19 @@ class Viewer {
     }
   }
 
-  #showError(title, message) {
+  /** A toast is a non-blocking notice that fades on its own; otherwise the box stays until the next load. */
+  #showError(title, message, { toast = false } = {}) {
+    clearTimeout(this.#toastTimer);
     $('error-title').textContent = title;
     $('error-message').textContent = message;
-    $('error-overlay').classList.add('visible');
+    const overlay = $('error-overlay');
+    overlay.classList.add('visible');
+    overlay.classList.toggle('toast', toast);
+    if (toast) this.#toastTimer = setTimeout(() => this.#hideError(), TOAST_MS);
   }
 
   #hideError() {
-    $('error-overlay').classList.remove('visible');
+    $('error-overlay').classList.remove('visible', 'toast');
   }
 
   #updateSidebar(info) {
@@ -715,7 +787,11 @@ async function loadCatalog() {
 
 async function main() {
   const viewer = new Viewer();
-  window.tileripper = { viewer, bench: () => import('./bench.js').then((m) => m.runBenchmarks(viewer)) };
+  window.tileripper = {
+    viewer,
+    bench: () => import('./bench.js').then((m) => m.runBenchmarks(viewer)),
+    scrubBench: (options) => import('./bench.js').then((m) => m.runScrubBenchmarks(viewer, options)),
+  };
 
   const catalog = await loadCatalog().catch((error) => {
     console.warn('catalog.json not usable:', error);
