@@ -2,7 +2,7 @@
 
 Handles:
 - STAC search by AOI bbox + date range
-- SAS token signing for asset access
+- unsigned asset hrefs (signed at read time in mosaic.py)
 - Filtering to required bands (B02/B03/B04/B08 + SCL)
 """
 
@@ -65,7 +65,11 @@ def search_scenes(
     Returns:
         List of SceneRef sorted by datetime ascending.
     """
-    client = Client.open(PC_STAC_URL, modifier=pc.sign_inplace)
+    # Hrefs stay unsigned here. Planetary Computer SAS tokens expire in about an hour, so
+    # mosaic.py signs each href right before opening it (planetary_computer caches and
+    # refreshes tokens per container). Signing at search time broke every month after the
+    # first hour of a full-archive run with HTTP 403.
+    client = Client.open(PC_STAC_URL)
 
     datetime_str = f"{start}/{end}"
     logger.info(

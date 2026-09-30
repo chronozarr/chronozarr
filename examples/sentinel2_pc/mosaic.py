@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 
 import numpy as np
+import planetary_computer as pc
 import rasterio
 from catalog import REQUIRED_BANDS, SceneRef
 from rasterio.crs import CRS  # ty: ignore[unresolved-import]  (compiled module, no stubs)
@@ -90,7 +91,7 @@ def read_band_window(
     """
     dst = np.zeros((dst_height, dst_width), dtype=np.uint16)
 
-    with rasterio.Env(**GDAL_ENV), rasterio.open(href) as src:
+    with rasterio.Env(**GDAL_ENV), rasterio.open(pc.sign(href)) as src:
         reproject(
             source=rasterio.band(src, 1),
             destination=dst,
@@ -119,7 +120,7 @@ def read_scl_mask(
     """
     scl = np.zeros((dst_height, dst_width), dtype=np.uint8)
 
-    with rasterio.Env(**GDAL_ENV), rasterio.open(scl_href) as src:
+    with rasterio.Env(**GDAL_ENV), rasterio.open(pc.sign(scl_href)) as src:
         reproject(
             source=rasterio.band(src, 1),
             destination=scl,
