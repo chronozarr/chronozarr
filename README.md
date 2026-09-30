@@ -75,6 +75,17 @@ Perceived scrub latency, input event to the frame showing the new timestep, 20 s
 | 9 cells at LOD 0, cold, keys | 10 of 20 | 20 of 20 | 90 / 521 ms | 5.6 / 27.8 ms | 4 / 0 |
 | 9 cells at LOD 0, after idle, keys | 20 of 20 | 20 of 20 | 8.3 / 8.8 ms | 2.7 / 3.7 ms | 0 / 0 |
 
+Movie playback, two loops, holds counted separately at the wrap, 2026-09-30:
+
+| Store, view, state | Requested | Achieved | Holds at wrap / elsewhere |
+|---|---:|---:|---:|
+| 36-cell local store, 9 cells, warm | 60 /s | 59.95 /s | 0 / 0 |
+| 36-cell local store, 9 cells, cold | 60 /s | 56.4 /s | 0 / 9 |
+| Ucayali over the internet, 4 cells, warm | 60 /s | 60.03 /s | 0 / 0 |
+| Ucayali over the internet, 9 cells, cold | 60 /s | 6.0 /s | 0 / 155 |
+
+A 9-cell overview of the 117-month store is about 11.7 MB per timestep, so a cold loop is bound by the link (about 55 MB/s here), and the 1 GiB decoded cache holds about 48 of the 117 timesteps at that size. A 4-cell view fits entirely and plays at the display rate.
+
 Star-delta reconstruction runs in the fragment shader; the CPU loop it replaces cost 54 ms per 36-cell frame. Known limits: prefetch is greedy and will pull several hundred MB in the first seconds on any link; cold open of very small stores costs 30 to 40 ms for worker startup.
 
 ## Status

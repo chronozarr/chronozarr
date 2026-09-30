@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { openStore, applyDelta, chunkKey } from '../chronozarr/decoder.js';
+import { openStore, applyDelta, chunkKey, scrubCost, windowOrder } from '../chronozarr/decoder.js';
 import { buildSyntheticStore, sourceValue } from '../support/synthetic-store.js';
 import { startStaticServer } from '../support/static-server.js';
 
@@ -200,6 +200,44 @@ test('prefetch: nearest timesteps first, scrub direction reaches further, anchor
   };
   assert.deepEqual(await run(1), [4, 5, 6, 7, 8, 0, 3, 9, 10, 2, 11, 1], 'anchor 4 first, then 6, 7 ahead of 4-behind 3');
   assert.deepEqual(await run(-1), [4, 5, 6, 0, 3, 2, 7, 1, 8, 9, 10, 11], 'backward neighbours come first when scrubbing backward');
+});
+
+test('scrubCost: behind costs more, and with circular time the first timesteps are just ahead of the last', () => {
+  assert.equal(scrubCost(3, 1), 3);
+  assert.equal(scrubCost(-3, 1), 6);
+  assert.equal(scrubCost(-3, 1, 8), 24);
+  assert.equal(scrubCost(-3, -1), 3, 'scrubbing backward, lower timesteps are ahead');
+  assert.equal(scrubCost(1 - 9, 1, 8, 10), 2, 'from t=9 of 10, t=1 is two steps ahead once time wraps');
+  assert.equal(scrubCost(0 - 9, 1, 8, 10), 1);
+  assert.equal(scrubCost(8 - 9, 1, 8, 10), 8, 'the step just behind stays expensive');
+  assert.equal(scrubCost(0, 1, 8, 10), 0);
+});
+
+test('windowOrder with loop puts the start of the movie right after its end', () => {
+  assert.deepEqual(windowOrder(10, 8, { direction: 1, behindFactor: 8, loop: true }).slice(0, 6), [8, 9, 0, 1, 2, 3]);
+  assert.deepEqual(windowOrder(10, 8, { direction: 1, behindFactor: 8 }).slice(0, 4), [8, 9, 7, 6], 'without loop the wrap is not ahead');
+});
+
+test('the prefetch window plan covers the wrap: from the last timestep it fetches t=0, 1, 2 before anything behind', async () => {
+  const spec = { nTime: 12, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 4, sharded: true };
+  const chunkBytes = 32 * 32 * 2;
+  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 8 });
+  const order = [];
+  const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 11, direction: 1, behindFactor: 8, loop: true, concurrency: 1, onChunk: (l, r, c, t) => order.push(t) });
+  assert.equal(result.planned, 7, 'floor(0.9 x 8 chunks)');
+  assert.deepEqual(order, [8, 11, 0, 1, 2, 3, 4], "t=11's anchor 8, t=11, then the start of the movie in order");
+  assert.equal(store.peekRaw(0, 0, 0, 10), undefined, 'the step just behind is not worth keeping');
+});
+
+test('a large behindFactor makes the prefetch window run almost entirely ahead (movie playback)', async () => {
+  const spec = { nTime: 40, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 8, sharded: true };
+  const chunkBytes = 32 * 32 * 2;
+  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 14 });
+  const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 20, direction: 1, behindFactor: 50, concurrency: 1 });
+  assert.equal(result.planned, 12, 'floor(0.9 x 14 chunks)');
+  const cached = [];
+  for (let t = 0; t < 40; t++) if (store.peekRaw(0, 0, 0, t)) cached.push(t);
+  assert.deepEqual(cached, [16, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30], 'the anchor behind t, then everything ahead');
 });
 
 test('prefetch window is sized by the cache budget, never anchors everywhere', async () => {

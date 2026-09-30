@@ -1,12 +1,16 @@
 // TileRipper viewer: renders a chronozarr store with WebGL2, scrubs through time, switches
 // products on the GPU and shows decoded values on click. Opens ?store=<base url>.
 
-import { chunkKey, openStore, scrubCost } from '../chronozarr/decoder.js';
-import { Playback } from './playback.js';
+import { chunkKey, openStore, scrubCost, windowOrder } from '../chronozarr/decoder.js';
+import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, snapSpeed } from './playback.js';
 import { Renderer } from './renderer.js';
 import { computeStretchLo, describePixel, inputIndices, makeTimeFormatter, resolveProducts } from './products.js';
 
 const PREFETCH_SETTLE_MS = 30;
+const PREFETCH_PLAYBACK_RESTART_MS = 250;
+const BEHIND_FACTOR = 2;
+const BEHIND_FACTOR_PLAYING = 8;
+const GPU_SLICE_FRACTION_OF_FRAME = 0.25;
 const POOL_BUDGET_BYTES = 384 * 1024 * 1024;
 const GPU_FILL_FRACTION = 0.9;
 const GPU_UPLOAD_SLICE_MS = 4;
@@ -18,24 +22,21 @@ const CLICK_SLOP_PX = 4;
 const CELL_RETRY_DELAY_MS = 4000;
 const MAX_CELL_RETRIES = 3;
 const TOAST_MS = 12000;
-const MIN_SPEED = 1;
-const MAX_SPEED = 15;
-const DEFAULT_SPEED = 4;
 const SPEED_KEY = 'tileripper.stepsPerSecond';
 const STRETCH_SAMPLES_PER_CELL = 300;
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
-/** The last playback speed, if localStorage has a valid one (it can be missing or blocked). */
+/** The last playback speed, if localStorage has a usable one (it can be missing or blocked). */
 function loadSpeed() {
   try {
-    const stored = Number(localStorage.getItem(SPEED_KEY));
-    if (Number.isInteger(stored) && stored >= MIN_SPEED && stored <= MAX_SPEED) return stored;
+    const stored = localStorage.getItem(SPEED_KEY);
+    if (stored !== null && Number.isFinite(Number(stored))) return snapSpeed(Number(stored));
   } catch (error) {
     console.warn('could not read the saved playback speed:', error);
   }
-  return DEFAULT_SPEED;
+  return DEFAULT_STEPS_PER_SECOND;
 }
 
 function saveSpeed(stepsPerSecond) {
@@ -72,6 +73,7 @@ class Viewer {
   #maxVisibleCells = 0;
   #rafId = 0;
   #prefetchTimer = 0;
+  #prefetchStartedAt = -Infinity;
   #gpuFillTimer = 0;
   #prefetchAbort = null;
   #painted = [];
@@ -182,7 +184,8 @@ class Viewer {
     this.t = next;
     this.#emit({ type: 'input', t: next });
     this.#updateTimeUi();
-    this.requestRender();
+    if (playing) this.renderNow();
+    else this.requestRender();
   }
 
   get playback() {
@@ -203,7 +206,7 @@ class Viewer {
 
   /** Steps per second for movie playback, kept between visits. */
   setSpeed(stepsPerSecond) {
-    this.#speed = clamp(Math.round(stepsPerSecond), MIN_SPEED, MAX_SPEED);
+    this.#speed = snapSpeed(stepsPerSecond);
     saveSpeed(this.#speed);
     this.#playback?.setSpeed(this.#speed);
     this.#updateSpeedUi();
@@ -328,6 +331,8 @@ class Viewer {
   /** Start background prefetch now and resolve with its result when it finishes or is aborted. */
   prefetchNow() {
     clearTimeout(this.#prefetchTimer);
+    this.#prefetchTimer = 0;
+    this.#prefetchStartedAt = performance.now();
     this.#prefetchAbort?.abort();
     const abort = new AbortController();
     this.#prefetchAbort = abort;
@@ -339,6 +344,8 @@ class Viewer {
         cells,
         t: this.t,
         direction: this.#direction,
+        behindFactor: this.#behindFactor,
+        loop: this.#playing,
         signal: abort.signal,
         onChunk: () => this.#scheduleGpuFill(),
       })
@@ -389,6 +396,7 @@ class Viewer {
     this.#wave = null;
     clearTimeout(this.#gpuFillTimer);
     clearTimeout(this.#prefetchTimer);
+    this.#prefetchTimer = 0;
     this.#prefetchAbort?.abort();
     this.#prefetchAbort = null;
   }
@@ -470,7 +478,7 @@ class Viewer {
 
   /**
    * Keep a window of timesteps around t resident in the texture pool, as wide as the pool holds for the
-   * visible cells and reaching further in the scrub direction, so the next steps are uniform changes
+   * visible cells and reaching further in the scrub direction (wrapping past the last timestep while a movie plays), so the next steps are uniform changes
    * instead of uploads. Uploads come from the decoded cache in slices of GPU_UPLOAD_SLICE_MS.
    */
   #fillGpuWindow() {
@@ -479,9 +487,9 @@ class Viewer {
     if (cells.size === 0) return;
     const anchorShare = store.anchorIndices.length / store.times.length;
     const steps = Math.max(1, Math.floor((renderer.slots * GPU_FILL_FRACTION) / (cells.size * (1 + anchorShare))));
-    const timesteps = Array.from({ length: store.times.length }, (_, i) => i)
-      .sort((a, b) => scrubCost(a - t, this.#direction) - scrubCost(b - t, this.#direction))
-      .slice(0, steps);
+    const timesteps = windowOrder(store.times.length, t, { direction: this.#direction, behindFactor: this.#behindFactor, loop: this.#playing }).slice(0, steps);
+    const frameMs = this.#playback?.frameMs ?? 1000 / 60;
+    const sliceMs = Math.min(GPU_UPLOAD_SLICE_MS, frameMs * GPU_SLICE_FRACTION_OF_FRAME);
     const started = performance.now();
     for (const tt of timesteps) {
       for (const ct of new Set([store.anchorOf(tt), tt])) {
@@ -491,7 +499,7 @@ class Viewer {
           const data = renderer.isResident(chunk) ? null : store.peekRaw(lod, row, col, ct);
           if (!data) continue;
           renderer.upload(chunk, { lod, row, col, t: ct }, data, { background: true });
-          if (performance.now() - started > GPU_UPLOAD_SLICE_MS) {
+          if (performance.now() - started > sliceMs) {
             this.#gpuFillTimer = setTimeout(() => this.#fillGpuWindow(), 0);
             return;
           }
@@ -503,7 +511,7 @@ class Viewer {
   /** Eviction order for decoded chunks and texture slots: outside the view first, then by scrub cost from t. */
   #chunkScore(meta) {
     const visible = meta.lod === this.#view.lod && this.#view.cells.has(`${meta.row}/${meta.col}`);
-    const cost = scrubCost(meta.t - this.t, this.#direction);
+    const cost = scrubCost(meta.t - this.t, this.#direction, this.#behindFactor, this.#playing ? this.store.times.length : null);
     return (visible ? 0 : 1e6) + (this.store.isAnchor(meta.t) ? cost / 2 : cost);
   }
 
@@ -613,9 +621,25 @@ class Viewer {
     }, CELL_RETRY_DELAY_MS * failures);
   }
 
+  /**
+   * Restart background prefetch shortly after a complete frame. A pending restart is kept rather than pushed
+   * back, so frames arriving faster than the settle time (movie playback) cannot starve it, and while playing
+   * the window is only re-planned every PREFETCH_PLAYBACK_RESTART_MS.
+   */
   #schedulePrefetch() {
-    clearTimeout(this.#prefetchTimer);
-    this.#prefetchTimer = setTimeout(() => this.prefetchNow(), PREFETCH_SETTLE_MS);
+    if (this.#prefetchTimer) return;
+    const sinceStart = performance.now() - this.#prefetchStartedAt;
+    const wait = this.#playing ? Math.max(PREFETCH_SETTLE_MS, PREFETCH_PLAYBACK_RESTART_MS - sinceStart) : PREFETCH_SETTLE_MS;
+    this.#prefetchTimer = setTimeout(() => this.prefetchNow(), wait);
+  }
+
+  get #playing() {
+    return this.#playback?.playing ?? false;
+  }
+
+  /** Behind the scrub direction costs more while a movie plays: it never goes back. */
+  get #behindFactor() {
+    return this.#playing ? BEHIND_FACTOR_PLAYING : BEHIND_FACTOR;
   }
 
   // ---- click to query ----
@@ -696,9 +720,9 @@ class Viewer {
     canvas.addEventListener('dblclick', () => this.store && this.fit());
 
     $('play-btn').addEventListener('click', () => this.togglePlay());
-    $('speed').min = String(MIN_SPEED);
-    $('speed').max = String(MAX_SPEED);
-    $('speed').addEventListener('input', (e) => this.setSpeed(Number(e.target.value)));
+    $('speed').min = '0';
+    $('speed').max = String(SPEEDS.length - 1);
+    $('speed').addEventListener('input', (e) => this.setSpeed(SPEEDS[Number(e.target.value)]));
     this.#updateSpeedUi();
     $('prev-btn').addEventListener('click', () => this.goToTime(this.t - 1));
     $('next-btn').addEventListener('click', () => this.goToTime(this.t + 1));
@@ -800,9 +824,11 @@ class Viewer {
     this.#updateSpeedUi();
   }
 
+  /** The slider shows the requested speed; when the display cannot keep up the label adds what is delivered. */
   #updateSpeedUi() {
-    $('speed').value = String(this.#speed);
-    $('speed-label').textContent = `${this.#speed} /s`;
+    $('speed').value = String(SPEEDS.indexOf(this.#speed));
+    const effective = this.#playback?.playing ? Math.round(this.#playback.effectiveStepsPerSecond) : this.#speed;
+    $('speed-label').textContent = effective < this.#speed ? `${this.#speed} /s → ${effective}` : `${this.#speed} /s`;
   }
 
   #updateTimeUi() {

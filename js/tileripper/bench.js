@@ -471,19 +471,53 @@ export async function runScrubBenchmarks(viewer, { steps = 20, startT = 40, idle
 
 // ---- movie playback ----
 
+/** Wait for the window prefetch to finish and the network to stay quiet for `quietMs`. */
+async function settleNetwork(viewer, { timeoutMs = 900000, quietMs = 2000 } = {}) {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`prefetch did not finish within ${timeoutMs / 1000} s`)), timeoutMs);
+  });
+  const prefetch = await Promise.race([viewer.prefetchNow(), deadline]).finally(() => clearTimeout(timer));
+  const network = viewer.store.stats.network;
+  let seen = network.requests;
+  let quietSince = performance.now();
+  while (performance.now() - quietSince < quietMs) {
+    await sleep(100);
+    if (network.requests !== seen) {
+      seen = network.requests;
+      quietSince = performance.now();
+    }
+  }
+  return prefetch;
+}
+
+// Gaps between animation frames above this count as a missed 60 Hz frame (16.7 ms plus timestamp noise).
+const SIXTY_HZ_FRAME_MS = 17;
+
 /**
- * Plays one full loop (every timestep once, from 0 back to 0) at `stepsPerSecond` on the open store and
- * reports what playback actually delivered: the achieved rate between the first and last step, how many
- * steps had to hold because their data was not ready and for how long, how late frames appeared after each
- * step, and main-thread stalls. `cold` reopens the store first (empty caches, HTTP cache bypassed);
- * without it the run is warm by whatever the caches already hold, optionally after `idleMs` of prefetching.
+ * Plays `loops` consecutive full loops (every timestep, wrapping from the last back to the first; two by
+ * default so the second one shows the loop in steady state) at `stepsPerSecond` on the open store and
+ * reports what playback actually delivered, with holds at the wrap reported apart from holds elsewhere: the achieved rate between the first and last step, the display
+ * rate it measured and the effective speed it clamped to, how many steps had to hold because their data was
+ * not ready and for how long, how late frames appeared after each step, time spent uploading textures inside
+ * the frames that painted (uploads that the GPU window did not manage to do ahead of time), and main-thread
+ * stalls. `cold` reopens the store first (empty caches, HTTP cache bypassed); `warm: 'prefetch'` waits for
+ * the window prefetch to finish and the network to go quiet first; `idleMs` just waits. `lod` pins a level
+ * (2 = four cells on the test stores).
  */
-export async function playBench(viewer, { stepsPerSecond = 4, cold = false, idleMs = 0 } = {}) {
+export async function playBench(viewer, { stepsPerSecond = 4, loops = 2, cold = false, warm = null, idleMs = 0, lod = null } = {}) {
   const url = viewer.store.url.replace(/\/$/, '');
-  if (cold) await openWithin(viewer, url, { fetch: noStoreFetch });
+  if (cold) await openWithin(viewer, url, { fetch: noStoreFetch, lod: lod ?? undefined });
   viewer.pause();
+  if (!cold && viewer.lodOverride !== lod) {
+    viewer.lodOverride = lod;
+    const repainted = viewer.whenPainted();
+    viewer.renderNow();
+    await repainted;
+  }
   viewer.goToTime(0);
   await waitUntil(() => viewer.paintedT === 0, TIMEOUT_MS);
+  if (warm === 'prefetch') await settleNetwork(viewer);
   if (idleMs) await sleep(idleMs);
 
   const count = viewer.store.times.length;
@@ -494,8 +528,10 @@ export async function playBench(viewer, { stepsPerSecond = 4, cold = false, idle
   const network = viewer.store.stats.network;
   const before = { requests: network.requests, bytes: network.bytes };
   viewer.play();
-  const expectedMs = (count / stepsPerSecond) * 1000;
-  const finished = await waitUntil(() => viewer.playback.stats.steps >= count, expectedMs * 5 + 30000);
+  const stepsWanted = count * loops;
+  const expectedMs = (stepsWanted / stepsPerSecond) * 1000;
+  const finished = await waitUntil(() => viewer.playback.stats.steps >= stepsWanted, expectedMs * 5 + 60000);
+  const { refreshHz, effectiveStepsPerSecond } = viewer.playback;
   viewer.pause();
   await sleep(100);
   viewer.probe = null;
@@ -509,25 +545,55 @@ export async function playBench(viewer, { stepsPerSecond = 4, cold = false, idle
     const paint = paints.find((p) => p.at >= input.at && p.t === input.t);
     if (paint) lags.push(paint.at - input.at);
   }
+  const uploadMs = paints.map((p) => p.uploadMs);
+  const lastPaint = paints.at(-1);
+
+  // The wrap: steps whose timestep is 0. How long each took to arrive after the step before it, against the
+  // typical gap, and the achieved rate of each loop (first loop: t=1 .. first wrap; then wrap to wrap).
+  const steps = events.filter((e) => e.type === 'input');
+  const gaps = steps.slice(1).map((s, i) => s.at - steps[i].at);
+  const typicalGap = [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)];
+  const wrapIndexes = steps.map((s, i) => (s.t === 0 && i > 0 ? i : -1)).filter((i) => i > 0);
+  const wrapGapsMs = wrapIndexes.map((i) => round(steps[i].at - steps[i - 1].at));
+  const loopBoundaries = [0, ...wrapIndexes];
+  const perLoopStepsPerSecond = loopBoundaries.slice(1).map((end, k) => {
+    const start = loopBoundaries[k];
+    return round(((end - start) / (steps[end].at - steps[start].at)) * 1000);
+  });
   const results = {
     store: url,
-    mode: cold ? 'cold' : idleMs ? `warm after ${idleMs} ms idle` : 'warm',
+    mode: cold ? 'cold' : warm === 'prefetch' ? 'warm (after prefetch)' : idleMs ? `warm after ${idleMs} ms idle` : 'warm',
+    lod: lastPaint?.lod,
+    visibleCells: lastPaint?.cells,
     requestedStepsPerSecond: stepsPerSecond,
+    loops,
+    measuredRefreshHz: refreshHz === null ? null : round(refreshHz),
+    effectiveStepsPerSecond: round(effectiveStepsPerSecond),
     timesteps: count,
-    finishedLoop: finished,
+    finishedLoops: finished,
     stepsTaken: stats.steps,
     achievedStepsPerSecond: round(((stats.steps - 1) / loopMs) * 1000),
     loopMs: round(loopMs),
-    idealLoopMs: round(((count - 1) / stepsPerSecond) * 1000),
+    idealLoopMs: round(((stepsWanted - 1) / Math.min(stepsPerSecond, refreshHz ?? stepsPerSecond)) * 1000),
+    perLoopStepsPerSecond,
     heldFrames: stats.held,
+    heldAtWrap: stats.wrapHeld,
+    heldElsewhere: stats.held - stats.wrapHeld,
     longestHoldMs: round(stats.longestHoldMs),
+    longestWrapHoldMs: round(stats.longestWrapHoldMs),
     totalHoldMs: round(stats.totalHoldMs),
+    wrapGapsMs,
+    typicalStepGapMs: round(typicalGap),
     displayLagMs: distribution(lags),
+    renderUploadMs: { total: round(uploadMs.reduce((n, ms) => n + ms, 0)), max: round(Math.max(0, ...uploadMs)), framesWithUploads: uploadMs.filter((ms) => ms > 0.05).length },
     framesOver33ms: frameGaps.filter((g) => g > 33).length,
+    framesOver16_7ms: frameGaps.filter((g) => g > SIXTY_HZ_FRAME_MS).length,
+    frames: frameGaps.length,
     maxFrameGapMs: round(Math.max(0, ...frameGaps)),
     longTasks: longTasks.length,
     network: { requests: network.requests - before.requests, MB: round((network.bytes - before.bytes) / 1048576) },
   };
+  viewer.lodOverride = null;
   console.log(JSON.stringify(results, null, 2));
   return results;
 }

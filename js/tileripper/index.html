@@ -446,8 +446,9 @@
     font-size: 11px;
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
-    min-width: 32px;
+    min-width: 64px;
     text-align: right;
+    white-space: nowrap;
     user-select: none;
   }
   .timeline-status {
@@ -524,7 +525,7 @@
     <div class="timeline-line"></div>
   </div>
   <div class="speed">
-    <input type="range" id="speed" min="1" max="15" step="1" value="4" title="Playback speed (steps per second)" aria-label="Playback speed">
+    <input type="range" id="speed" min="0" max="20" step="1" value="3" title="Playback speed (steps per second)" aria-label="Playback speed">
     <span id="speed-label">4 /s</span>
   </div>
   <span class="timeline-status" id="status"></span>

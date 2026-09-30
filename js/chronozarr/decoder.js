@@ -29,10 +29,24 @@ export function chunkKey(lod, row, col, t) {
 
 /**
  * How expensive it is to keep or fetch a timestep at signed distance `dt` from the one being viewed:
- * behind the scrub direction counts double. Prefetch order and eviction order both use it.
+ * behind the scrub direction counts `behindFactor` times as much (double by default; movie playback never
+ * goes back, so it uses a much larger factor). Prefetch order and eviction order both use it.
  */
-export function scrubCost(dt, direction) {
-  return dt * direction >= 0 ? Math.abs(dt) : 2 * Math.abs(dt);
+export function scrubCost(dt, direction, behindFactor = 2, period = null) {
+  if (period === null) return dt * direction >= 0 ? Math.abs(dt) : behindFactor * Math.abs(dt);
+  // Circular time (a looping movie): a timestep is ahead by `ahead` steps or behind by the rest of the loop.
+  const ahead = (((dt * direction) % period) + period) % period;
+  return Math.min(ahead, behindFactor * (period - ahead));
+}
+
+/**
+ * Timesteps 0..nTime-1 from cheapest to most expensive to keep around `t` (see scrubCost). With `loop`, time
+ * is circular, so the first timesteps come right after the last ones: what a looping movie needs ahead of it.
+ */
+export function windowOrder(nTime, t, { direction = 1, behindFactor = 2, loop = false } = {}) {
+  const period = loop ? nTime : null;
+  const cost = (step) => scrubCost(step - t, direction, behindFactor, period);
+  return Array.from({ length: nTime }, (_, i) => i).sort((a, b) => cost(a) - cost(b) || Math.abs(a - t) - Math.abs(b - t));
 }
 
 /** decode = clamp(anchor + int16(delta), 0, 65535); both inputs are uint16 arrays of equal length. */
@@ -443,12 +457,12 @@ export class ChronoStore {
    * demand fetch is in flight. A cell whose chunk failed is left alone for PREFETCH_COOLDOWN_MS. Cancel by aborting `signal`; in-flight chunks finish and stay cached.
    * Resolves with counts and per-chunk errors (nothing is thrown or hidden).
    *
-   * @param {{lod:number, cells:Array<[number, number]>, t:number, direction?:1|-1,
+   * @param {{lod:number, cells:Array<[number, number]>, t:number, direction?:1|-1, behindFactor?:number, loop?:boolean,
    *   concurrency?:number, signal?:AbortSignal, onChunk?:(lod,row,col,t)=>void}} job
    */
-  async prefetch({ lod, cells, t, direction = 1, concurrency = DEFAULT_PREFETCH_CONCURRENCY, signal, onChunk }) {
+  async prefetch({ lod, cells, t, direction = 1, behindFactor = 2, loop = false, concurrency = DEFAULT_PREFETCH_CONCURRENCY, signal, onChunk }) {
     const level = this.level(lod);
-    const queue = this.#windowPlan(level, cells, t, direction);
+    const queue = this.#windowPlan(level, cells, t, { direction, behindFactor, loop });
     const result = { planned: queue.length, fetched: 0, skipped: 0, budgetReached: false, errors: [] };
     let next = 0;
     const worker = async () => {
@@ -483,9 +497,9 @@ export class ChronoStore {
   }
 
   /** Chunks [row, col, t] to prefetch, in fetch order. */
-  #windowPlan(level, cells, t, direction) {
+  #windowPlan(level, cells, t, order) {
     const perCellLimit = Math.max(1, Math.floor((this.maxCacheBytes * WINDOW_BUDGET_FRACTION) / level.chunkBytes / Math.max(1, cells.length)));
-    const timesteps = Array.from({ length: level.nTime }, (_, i) => i).sort((a, b) => scrubCost(a - t, direction) - scrubCost(b - t, direction) || Math.abs(a - t) - Math.abs(b - t));
+    const timesteps = windowOrder(level.nTime, t, order);
     const chosen = [];
     const seen = new Set();
     outer: for (const tt of timesteps) {
