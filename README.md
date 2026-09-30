@@ -65,8 +65,18 @@ Viewer on the v0.1 Sahara store (128 months, 4 bands, 6 x 6 cells at LOD 0, 3.9 
 | Product switch | about 1 ms | under 1 ms |
 | Decode per 2 MB chunk | 4.6 ms | 10 ms under load (4.5 ms idle) |
 
-Star-delta reconstruction runs in the fragment shader; the CPU loop it replaces cost 54 ms per 36-cell frame. Known limits: on long time axes the anchors-first prefetch fills the decoded cache with anchors before reaching deltas, and decode still runs on the main thread. Both are open items, not format changes.
+Perceived scrub latency, input event to the frame showing the new timestep, 20 steps, same 36-cell 48-month store and browser before and after the decoder rewrite (worker-pool decode, time-window prefetch, no debounce, per-cell paint), 2026-09-30:
+
+| Scenario | Steps shown, before | Steps shown, after | Lag median / p95, before | Lag median / p95, after | Frames over 33 ms, before / after |
+|---|---:|---:|---:|---:|---:|
+| Overview, cold, arrow keys | 4 of 20 | 20 of 20 | 263 / 527 ms | 3.2 / 15.8 ms | 16 / 0 |
+| Overview, cold, slider drag | 2 of 20 | 20 of 20 | 334 / 693 ms | 5.3 / 16.6 ms | 0 / 0 |
+| Overview, after 5 s idle, keys | 6 of 20 | 20 of 20 | 243 / 543 ms | 4.6 / 5.2 ms | 15 / 0 |
+| 9 cells at LOD 0, cold, keys | 10 of 20 | 20 of 20 | 90 / 521 ms | 5.6 / 27.8 ms | 4 / 0 |
+| 9 cells at LOD 0, after idle, keys | 20 of 20 | 20 of 20 | 8.3 / 8.8 ms | 2.7 / 3.7 ms | 0 / 0 |
+
+Star-delta reconstruction runs in the fragment shader; the CPU loop it replaces cost 54 ms per 36-cell frame. Known limits: prefetch is greedy and will pull several hundred MB in the first seconds on any link; cold open of very small stores costs 30 to 40 ms for worker startup.
 
 ## Status
 
-v0.1 draft. Layout is Zarr v3 groups per level, sharded by default so one file per spatial cell holds the whole time axis and a timestep is one range read. The demo stores (Sahara, arid; Iowa, seasonal cropland) are being re-encoded and published.
+v0.1 draft. Layout is Zarr v3 groups per level, sharded by default so one file per spatial cell holds the whole time axis and a timestep is one range read. The public demo store is the Ucayali River near Santa María, Peru: 117 monthly Sentinel-2 composites from 2015 to 2026 over one of the fastest-migrating meandering reaches on Earth, served from an R2 bucket at data.tileripper.com. Sahara and Iowa remain the benchmark pair and can be re-encoded from the ingest example.
