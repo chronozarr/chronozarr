@@ -1,7 +1,16 @@
-"""chronozarr: Zarr v3 convention and reader for raster time series with star-delta encoding."""
+"""chronozarr: Zarr v3 convention and reader for raster time series (optional star-delta)."""
 
-from chronozarr.decode import ChronoStore, open_store
-from chronozarr.encode import encode
-from chronozarr.schema import SchemaError, validate
+from chronozarr.decode import ChronoStore, HttpStore, open_store
+from chronozarr.encode import EncodeReport, encode
+from chronozarr.schema import Band, SchemaError, validate
 
-__all__ = ["ChronoStore", "SchemaError", "encode", "open_store", "validate"]
+__all__ = [
+    "Band",
+    "ChronoStore",
+    "EncodeReport",
+    "HttpStore",
+    "SchemaError",
+    "encode",
+    "open_store",
+    "validate",
+]

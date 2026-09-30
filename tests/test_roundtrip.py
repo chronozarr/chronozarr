@@ -136,7 +136,7 @@ def _da(**overrides) -> xr.DataArray:
     ("mutate", "message"),
     [
         (lambda da: da.transpose("band", "time", "y", "x"), "expected dims"),
-        (lambda da: da.astype(np.float32), "expected uint16"),
+        (lambda da: da.astype(np.float64), "unsupported dtype float64"),
         (lambda da: da.assign_coords(time=np.arange(2)), "must be datetime64"),
         (lambda da: da.assign_coords(time=da.time.values[::-1]), "strictly increasing"),
         (lambda da: da.assign_coords(band=["B04", "B04"]), "band names must be unique"),

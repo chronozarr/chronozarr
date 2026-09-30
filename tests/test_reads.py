@@ -160,7 +160,7 @@ def test_to_xarray_subset_and_coordinates(synthetic):
     assert np.array_equal(da.x.values, x)
 
 
-def test_reader_clips_reconstruction_to_uint16_range(tmp_path):
+def test_reader_reconstruction_wraps_modulo_the_dtype(tmp_path):
     truth = make_truth(2, 1, 8, 8)
     truth[0] = 100
     build_store(tmp_path / "s", truth, shard=False, anchor_interval=2, chunk_size=8)
@@ -169,7 +169,7 @@ def test_reader_clips_reconstruction_to_uint16_range(tmp_path):
     delta[0, 0, 0] = 30000
     data[1] = delta.view(np.uint16)
     decoded = chronozarr.open_store(tmp_path / "s").read(1)
-    assert decoded[0, 1, 1] == 0  # 100 - 20000 clips at 0
+    assert decoded[0, 1, 1] == 45636  # (100 - 20000) mod 65536, no clamping at 0
     assert decoded[0, 0, 0] == 30100
 
 

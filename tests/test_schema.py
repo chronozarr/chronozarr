@@ -46,14 +46,15 @@ def test_written_attrs_have_the_specified_shape(good_store):
     root = zarr.open_group(str(good_store), mode="r", zarr_format=3)
     attrs = root.attrs.asdict()
     block = attrs["chronozarr"]
-    assert block["spec_version"] == "0.1.0"
+    assert block["spec_version"] == "0.2.0"
     assert block["variable"] == "data"
     assert block["times"] == [
         "2024-01-01T00:00:00Z",
         "2024-02-01T00:00:00Z",
         "2024-03-01T00:00:00Z",
     ]
-    assert block["bands"] == ["B04", "B08"]
+    assert block["bands"] == [{"name": "B04"}, {"name": "B08"}]
+    assert block["band_names"] == ["B04", "B08"]
     assert block["nodata"] == 0
     assert block["crs"] == "EPSG:32631"
     assert block["temporal"] == {
@@ -63,6 +64,15 @@ def test_written_attrs_have_the_specified_shape(good_store):
         "delta_reference": {"1": 0},
     }
     assert block["volatility_path"] == "volatility"
+    assert not {"mask_variable", "coverage_variable", "provenance"} & set(block)
+    assert [lv["path"] for lv in block["levels"]] == ["0", "1"]
+    assert block["levels"][1] == {
+        "path": "1",
+        "resolution": 20.0,
+        "transform": [20.0, 0.0, 746090.0, 0.0, -20.0, 2540440.0],
+        "shape": [3, 2, 350, 300],
+        "grid": [1, 1],
+    }
     (multiscale,) = attrs["multiscales"]
     assert multiscale["datasets"] == [
         {"path": "0", "pixels_per_tile": 512, "crs": "EPSG:32631"},
@@ -71,7 +81,7 @@ def test_written_attrs_have_the_specified_shape(good_store):
     assert multiscale["type"] == "reduce"
     assert multiscale["metadata"] == {
         "method": "block_mean",
-        "version": "chronozarr 0.1.0",
+        "version": "chronozarr 0.2.0",
         "args": [],
     }
     assert "method" not in multiscale
@@ -154,7 +164,7 @@ def test_consolidated_metadata_is_written_and_readable(good_store):
 @pytest.mark.parametrize(
     ("edit", "message"),
     [
-        (lambda b: b.update(spec_version="0.2.0"), "spec_version: unsupported version '0.2.0'"),
+        (lambda b: b.update(spec_version="0.3.0"), "spec_version: unsupported version '0.3.0'"),
         (lambda b: b.pop("times"), "missing required key 'times'"),
         (
             lambda b: b.update(times=["2024-02-01", "2024-01-01", "2024-03-01"]),
@@ -162,10 +172,10 @@ def test_consolidated_metadata_is_written_and_readable(good_store):
         ),
         (lambda b: b.update(times=["not-a-date", "2024-02", "2024-03"]), "not an ISO-8601"),
         (lambda b: b.update(bands=["B04", "B04"]), "must be unique"),
-        (lambda b: b.update(nodata=7), "expected 0 in v0.1"),
+        (lambda b: b.update(nodata="zero"), "expected a finite number or null"),
         (lambda b: b.update(crs=""), "non-empty string"),
         (lambda b: b.update(variable=""), "expected a non-empty array name"),
-        (lambda b: b["temporal"].update(encoding="chain-delta"), "expected 'star-delta'"),
+        (lambda b: b["temporal"].update(encoding="chain-delta"), "expected one of"),
         (lambda b: b["temporal"].update(anchor_interval=0), "expected int >= 1"),
         (lambda b: b["temporal"].update(anchor_indices=[0, 1]), "anchor_indices"),
         (lambda b: b["temporal"].update(delta_reference={"1": 2}), "delta_reference"),
