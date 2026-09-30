@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chronozarr on MapLibre</title>
+<link rel="icon" href="data:,">
+<!-- MapLibre GL JS 6.10.0 (published 2026-09-15) is the only external script. The store reader uses the zarrita copy in js/vendor. -->
+<script type="importmap">
+{
+  "imports": {
+    "maplibre-gl": "https://cdn.jsdelivr.net/npm/maplibre-gl@6.10.0/dist/maplibre-gl.mjs"
+  }
+}
+</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@6.10.0/dist/maplibre-gl.css">
+<style>
+  :root {
+    --bg: #090c12;
+    --surface: rgba(17, 22, 32, 0.92);
+    --border: #222a3a;
+    --text: #e4e7ef;
+    --text-2: #8a96b3;
+    --accent: #3b82f6;
+    --error: #f87171;
+  }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+  #map { position: absolute; inset: 0; }
+  .panel {
+    position: absolute; z-index: 2; top: 12px; left: 12px; width: min(320px, calc(100vw - 24px));
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;
+    backdrop-filter: blur(6px); display: grid; gap: 10px;
+  }
+  h1 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: 0.02em; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .row.between { justify-content: space-between; }
+  .muted { color: var(--text-2); }
+  .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
+  #status { padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); font-size: 11px; }
+  #status[data-state='loading'] { color: #fbbf24; border-color: #fbbf24; }
+  #status[data-state='ready'] { color: #4ade80; border-color: #4ade80; }
+  #time-label { font-size: 15px; font-weight: 600; }
+  input[type='range'] { width: 100%; accent-color: var(--accent); margin: 0; }
+  .buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+  button {
+    background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 10px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button[aria-pressed='true'] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #readout table { border-collapse: collapse; width: 100%; }
+  #readout td, #readout th { text-align: left; padding: 1px 6px 1px 0; font-weight: normal; }
+  #readout td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  #error { color: var(--error); white-space: pre-wrap; word-break: break-word; }
+  #error:empty { display: none; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="panel">
+  <div class="row between">
+    <h1>chronozarr on MapLibre</h1>
+    <span id="status" data-state="loading">opening store</span>
+  </div>
+  <div>
+    <div class="row between"><span id="time-label">&nbsp;</span><span class="muted mono" id="time-index"></span></div>
+    <input id="time" type="range" min="0" max="0" value="0" step="1" disabled aria-label="Timestep">
+  </div>
+  <div class="buttons" id="products" role="group" aria-label="Product"></div>
+  <div class="row"><label for="opacity" class="muted">Opacity</label><input id="opacity" type="range" min="0" max="1" step="0.05" value="1" style="flex: 1"></div>
+  <div id="stats" class="muted mono"></div>
+  <div id="readout" class="muted">Click the map to read the stored values under the pointer.</div>
+  <div id="error" role="alert"></div>
+</div>
+<script type="module" src="./demo.js"></script>
+</body>
+</html>
