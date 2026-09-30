@@ -1,5 +1,7 @@
-# AOI definitions for spacetime chunk experiments
-# Each AOI: ~25 km x 25 km footprint, chosen for contrasting temporal behavior
+# AOI definitions for the Sentinel-2 ingest example (ingest.py).
+# Each AOI: ~25 km x 25 km footprint, chosen for contrasting temporal behavior.
+# ingest.py reads `bbox` (WGS84) and `epsg` (target UTM zone); the other per-AOI fields
+# are descriptive.
 
 aois:
   sahara_tamanrasset:
@@ -44,11 +46,7 @@ aois:
     epsg: 32648  # UTM zone 48N
     expected_behavior: "Wet/dry rice cycle, flooding extent changes, dense channel network"
 
-# Shared parameters
-time_range:
-  start: "2023-01-01"
-  end: "2024-12-31"
-
+# Bands and cloud mask that catalog.py / mosaic.py request (fixed in code)
 bands:
   - B02  # Blue  (10m)
   - B03  # Green (10m)
@@ -56,5 +54,3 @@ bands:
   - B08  # NIR   (10m)
 
 mask_band: SCL  # Scene Classification Layer (20m, resampled to 10m)
-
-chunk_size: 512  # pixels per side at 10m = 5.12 km

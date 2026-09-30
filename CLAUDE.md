@@ -1,75 +1,48 @@
-# TileRipper
+# TileRipper / chronozarr
 
-Low-cost API for temporally coherent EO basemaps with queryable values.
-Product name: TileRipper. Internal package name: spacetime.
+TileRipper is the viewer and the site (tileripper.com). chronozarr is the open format under it:
+a Zarr v3 layout convention for raster time series with star-delta temporal encoding and a
+multiscale pyramid, readable by xarray and any Zarr client, decoded in the browser and rendered
+on the GPU from raw uint16 bands. No server, no pricing, no auth. Static hosting only.
 
-## Architecture
+Read `.napkin.md` first every session.
 
-ChronoFabric v1: star-delta temporal encoding with multiscale LOD pyramid.
-Zstd-compressed Zarr stores. Products derived at serve time via band math.
-
-## Project structure
+## Layout
 
 ```
-src/spacetime/
-  api/
-    v1.py          # v1 API router (catalog, tiles, query, stats, usage)
-    auth.py        # API key auth middleware + rate limiting
-    models.py      # Pydantic response models
-    products.py    # Product catalog + tier gating
-    metering.py    # Usage tracking
-    geo.py         # Coordinate transforms (WGS84 ↔ UTM ↔ pixel)
-  serve.py         # FastAPI app entry point (mounts v1, auth, CORS)
-  render.py        # Band math: true_color, false_color, NDVI, NDWI, water
-  chunk.py         # 512px spatial chunking grid
-  catalog.py       # STAC search (Planetary Computer, S2 L2A)
-  mosaic.py        # Monthly median composite with SCL cloud masking
-  static/
-    index.html     # Product demo (map + click-to-query values panel)
-  encode/
-    v1.py          # ChronoFabric v1 encoder (star-delta + LOD pyramid)
-experiments/
-  aois.yaml        # AOI definitions
-scripts/
-  ingest_v1.py     # Generic AOI ingestion (download + v1 encode)
-data/              # gitignored: mosaics/, stores/, reports/
+spec/CHRONOZARR.md        normative format spec (v0.1)
+src/chronozarr/           Python: encode(), open_store(), validate; CLI `chronozarr encode|validate|info`
+js/chronozarr/decoder.js  DOM-free reader on zarrita: (lod,row,col,t) -> uint16 cell, cache, prefetch
+js/tileripper/            viewer: index.html?store=<url>, viewer.js, renderer.js (WebGL2), products.js, bench.js
+js/test/                  node --test suites (fixtures skip if data/spike is absent)
+tests/                    pytest, marker `unit`
+scripts/reencode_aoi.py   monthly mosaics in data/mosaics/<aoi> -> chronozarr store
+examples/sentinel2_pc/    Sentinel-2 monthly median ingest from Planetary Computer (optional extra `ingest`)
+data/                     gitignored: mosaics/, stores/, spike/ (P0 fixtures)
 ```
 
-## How to run
+## Run
 
 ```bash
-# Tile server + demo (http://localhost:8765)
-uv run --extra serve uvicorn spacetime.serve:app --host 0.0.0.0 --port 8765
-
-# Ingest an AOI (full Sentinel-2 archive by default)
-uv run python scripts/ingest_v1.py --aoi nile_delta
-uv run python scripts/ingest_v1.py --aoi sahara_tamanrasset --start 2020-01-01 --end 2024-12-31
+uv sync --extra dev                # add --extra ingest for the Sentinel-2 example
+uv run pytest -q -m unit
+cd js && node --test
+# dev server with byte ranges (needed for sharded stores), from .claude/launch.json "spike":
+uv run --with rangehttpserver python -m RangeHTTPServer 8000
+# then: http://localhost:8000/js/tileripper/index.html?store=http://localhost:8000/data/spike/synthetic_sharded
 ```
 
-## API endpoints (v1)
+Always `uv run python`, never bare `python`. Never override uv's 7-day release-age quarantine (global uv.toml).
 
-- `GET /v1/catalog` — list AOIs + products
-- `GET /v1/tiles/{aoi}/{month}/{chunk_id}` — rendered tile image
-- `GET /v1/query/{aoi}/{month}?lat=...&lng=...` — point query (maps + values)
-- `GET /v1/stats/{aoi}/{month}?product=ndvi` — AOI summary statistics
-- `GET /v1/products` — product catalog with tier requirements
-- `GET /v1/months/{aoi}` — available months
-- `GET /v1/usage` — current key usage
+## Format decisions (do not relitigate without a measurement)
 
-## Products and tiers
+- Zarr v3 group; levels are groups "0", "1", ... each with `data` (time, band, y, x) uint16 and coords `time` (int64 ms, CF attrs), `band` (str), `x`, `y`. Every array carries `dimension_names` or xarray refuses the store.
+- Sharded by default: shard (T, B, 512, 512), inner chunk (1, B, 512, 512), `index_location: "end"` (zarrita 0.7.5 mis-decodes "start"). Unsharded remains valid.
+- zstd level 5. Measured 4.5 ms per 2 MB chunk via zarrita's WASM codec, vs 6.7 ms native gzip and 14 ms fzstd.
+- Star-delta: anchors every 6 timesteps store true uint16; other timesteps store int16 residuals vs the nearest anchor, viewed as uint16 in the same array. Any timestep = at most 2 chunk reads. Not a Zarr codec; a layout convention plus reader.
+- Root attrs: `multiscales` (ndpyramid nested form) and `chronozarr {spec_version, variable, times, bands, nodata, crs, temporal, volatility_path}`; consolidated metadata written.
+- Native projection (UTM per AOI), never Web Mercator for stored data. Lossless. No server-side rendering; products are band math in the fragment shader.
 
-- Explorer ($3): true_color, false_color, ndvi
-- Builder ($5): + ndwi, water
-- Pro ($7): + weekly Sentinel-2 (future)
-- Dev: all products, no rate limits
+## Speed gates (measure before and after any change to the read path)
 
-## Key design decisions
-
-- B2_chunked Zarr: (n_months, 4, H, W), chunks (1, 4, H, W)
-- Chunk-grid serving is the runtime (mosaic endpoint removed)
-- manifest.json per store — self-describing
-- UTM-per-AOI, never Web Mercator for analysis data
-- 512 px default chunk size, 256 px for low-latency
-- numcodecs <0.15 for zarr 2.x compatibility
-- API key auth via X-API-Key header, Bearer token, or query param
-- Dev mode: no key required, defaults to dev tier
+Cold open ≤ 500 ms at LOD 0 for 36 cells; warm timestep switch ≤ 16 ms; decode ≤ 5 ms per chunk; 0 wire bytes on a warm switch. `await tileripper.bench()` in the viewer console. Numbers live in the README and `.napkin.md`.

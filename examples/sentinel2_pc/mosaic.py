@@ -11,10 +11,10 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
+from catalog import REQUIRED_BANDS, SceneRef
+from rasterio.crs import CRS  # ty: ignore[unresolved-import]  (compiled module, no stubs)
 from rasterio.transform import from_bounds
 from rasterio.warp import Resampling, reproject
-
-from spacetime.catalog import REQUIRED_BANDS, SceneRef
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,6 @@ def compute_target_grid(
     Returns:
         (transform, height, width) for the target grid
     """
-    from rasterio.crs import CRS
     from rasterio.warp import transform_bounds
 
     src_crs = CRS.from_epsg(4326)
@@ -79,7 +78,7 @@ def compute_target_grid(
 def read_band_window(
     href: str,
     dst_transform: rasterio.transform.Affine,
-    dst_crs: rasterio.crs.CRS,
+    dst_crs: CRS,
     dst_height: int,
     dst_width: int,
     resampling: Resampling = Resampling.bilinear,
@@ -107,7 +106,7 @@ def read_band_window(
 def read_scl_mask(
     scl_href: str,
     dst_transform: rasterio.transform.Affine,
-    dst_crs: rasterio.crs.CRS,
+    dst_crs: CRS,
     dst_height: int,
     dst_width: int,
 ) -> np.ndarray:
@@ -138,7 +137,7 @@ def read_scl_mask(
 def load_scene(
     scene: SceneRef,
     dst_transform: rasterio.transform.Affine,
-    dst_crs: rasterio.crs.CRS,
+    dst_crs: CRS,
     dst_height: int,
     dst_width: int,
     max_retries: int = 3,
@@ -187,12 +186,13 @@ def load_scene(
             else:
                 logger.error("Failed after %d retries: %s", max_retries, scene.item_id)
                 raise
+    raise RuntimeError(f"load_scene({scene.item_id}): max_retries must be >= 1, got {max_retries}")
 
 
 def monthly_composite(
     scenes: list[SceneRef],
     dst_transform: rasterio.transform.Affine,
-    dst_crs: rasterio.crs.CRS,
+    dst_crs: CRS,
     dst_height: int,
     dst_width: int,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -292,8 +292,6 @@ def build_monthly_mosaics(
         - epsg: int
         - band_names: string array
     """
-    from rasterio.crs import CRS
-
     output_dir.mkdir(parents=True, exist_ok=True)
     dst_crs = CRS.from_epsg(target_epsg)
     dst_transform, dst_height, dst_width = compute_target_grid(bbox_wgs84, target_epsg)

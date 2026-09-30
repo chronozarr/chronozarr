@@ -9,12 +9,14 @@ Handles:
 from __future__ import annotations
 
 import logging
+import warnings
 from dataclasses import dataclass, field
 from datetime import date
 
 import planetary_computer as pc
 import pystac
 from pystac_client import Client
+from pystac_client.warnings import DoesNotConformTo
 
 logger = logging.getLogger(__name__)
 
@@ -73,12 +75,18 @@ def search_scenes(
         max_cloud_pct,
     )
 
-    search = client.search(
-        collections=[S2_COLLECTION],
-        bbox=bbox,
-        datetime=datetime_str,
-        query={"eo:cloud_cover": {"lt": max_cloud_pct}},
-    )
+    # Planetary Computer applies the CQL2 cloud-cover filter (checked 2026-09-29: thresholds
+    # 0 / 5 / 100 returned 0 / 2 / 6 items) but does not advertise the FILTER conformance
+    # class, so pystac-client warns spuriously. Suppress only that warning, only here.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DoesNotConformTo)
+        search = client.search(
+            collections=[S2_COLLECTION],
+            bbox=bbox,
+            datetime=datetime_str,
+            filter={"op": "<", "args": [{"property": "eo:cloud_cover"}, max_cloud_pct]},
+            filter_lang="cql2-json",
+        )
 
     scenes: list[SceneRef] = []
     for item in search.items():
