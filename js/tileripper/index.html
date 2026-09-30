@@ -411,6 +411,45 @@
     height: 12px;
   }
   select[hidden] { display: none; }
+  .play-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-2);
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.12s;
+  }
+  .play-btn:hover:not(:disabled) { border-color: var(--text-2); color: var(--text); }
+  .play-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .play-btn .icon-pause { display: none; }
+  .play-btn.playing { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .play-btn.playing .icon-play { display: none; }
+  .play-btn.playing .icon-pause { display: block; }
+  .speed {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .speed input[type=range] {
+    width: 84px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  #speed-label {
+    font-size: 11px;
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+    min-width: 32px;
+    text-align: right;
+    user-select: none;
+  }
   .timeline-status {
     font-size: 11px;
     color: var(--text-3);
@@ -472,6 +511,10 @@
 </main>
 
 <div class="timeline-bar">
+  <button id="play-btn" class="play-btn" title="Play (Space)" aria-label="Play (Space)" disabled>
+    <svg class="icon-play" width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M3 1.5v11l9-5.5z"/></svg>
+    <svg class="icon-pause" width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="2.5" y="2" width="3" height="10" rx="0.6"/><rect x="8.5" y="2" width="3" height="10" rx="0.6"/></svg>
+  </button>
   <div class="month-nav">
     <button id="prev-btn" title="Previous timestep">&#8249;</button>
     <span id="time-label">&mdash;</span>
@@ -479,6 +522,10 @@
   </div>
   <div class="timeline-track" id="timeline-track">
     <div class="timeline-line"></div>
+  </div>
+  <div class="speed">
+    <input type="range" id="speed" min="1" max="15" step="1" value="4" title="Playback speed (steps per second)" aria-label="Playback speed">
+    <span id="speed-label">4 /s</span>
   </div>
   <span class="timeline-status" id="status"></span>
 </div>

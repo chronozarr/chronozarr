@@ -12,7 +12,8 @@
 //   cpu add         the JS star-delta loop the GPU path replaces, for reference.
 //
 // `await tileripper.scrubBench()` measures what a user feels while stepping and dragging the time
-// slider; see runScrubBenchmarks.
+// slider; see runScrubBenchmarks. `await tileripper.playBench({ stepsPerSecond: 4 })` plays one movie
+// loop and reports the achieved rate and the holds; see playBench.
 
 import * as zarr from 'zarrita';
 import { applyDelta, openStore } from '../chronozarr/decoder.js';
@@ -312,6 +313,29 @@ async function waitUntil(predicate, timeoutMs) {
   return true;
 }
 
+/** Records long tasks and the gaps between animation frames until stop() is called. */
+function observeMainThread() {
+  const longTasks = [];
+  const frameGaps = [];
+  const observer = new PerformanceObserver((list) => longTasks.push(...list.getEntries().map((e) => e.duration)));
+  observer.observe({ type: 'longtask' });
+  let running = true;
+  let last = performance.now();
+  const onFrame = (now) => {
+    frameGaps.push(now - last);
+    last = now;
+    if (running) requestAnimationFrame(onFrame);
+  };
+  requestAnimationFrame(onFrame);
+  return {
+    stop() {
+      running = false;
+      observer.disconnect();
+      return { longTasks, frameGaps };
+    },
+  };
+}
+
 /** Camera that shows about nine LOD 0 cells (3x3) centred on a cell near the middle of the mosaic. */
 function nineCellCamera(viewer) {
   const level = viewer.store.levels[0];
@@ -328,19 +352,7 @@ function nineCellCamera(viewer) {
 async function driveScrub(viewer, { mode, steps, cadenceMs, startT }) {
   const events = [];
   const inputs = [];
-  const longTasks = [];
-  const frameGaps = [];
-  const observer = new PerformanceObserver((list) => longTasks.push(...list.getEntries().map((e) => e.duration)));
-  observer.observe({ type: 'longtask' });
-  let frameLoop = true;
-  let lastFrame = performance.now();
-  const onFrame = (now) => {
-    frameGaps.push(now - lastFrame);
-    lastFrame = now;
-    if (frameLoop) requestAnimationFrame(onFrame);
-  };
-  requestAnimationFrame(onFrame);
-
+  const monitor = observeMainThread();
   viewer.probe = (event) => events.push(event);
   const network = viewer.store.stats.network;
   const before = { requests: network.requests, bytes: network.bytes, misses: viewer.store.stats.cache.misses };
@@ -364,9 +376,8 @@ async function driveScrub(viewer, { mode, steps, cadenceMs, startT }) {
   const finalT = startT + steps;
   const settled = await waitUntil(() => events.some((e) => e.type === 'paint' && e.complete && e.t === finalT), TIMEOUT_MS);
   await sleep(50);
-  frameLoop = false;
   viewer.probe = null;
-  observer.disconnect();
+  const { longTasks, frameGaps } = monitor.stop();
   return {
     events, inputs, longTasks, frameGaps, settled,
     network: { requests: network.requests - before.requests, bytes: network.bytes - before.bytes, misses: viewer.store.stats.cache.misses - before.misses },
@@ -455,5 +466,68 @@ export async function runScrubBenchmarks(viewer, { steps = 20, startT = 40, idle
   }
   console.log(JSON.stringify(results, null, 2));
   window.__scrubResults = results;
+  return results;
+}
+
+// ---- movie playback ----
+
+/**
+ * Plays one full loop (every timestep once, from 0 back to 0) at `stepsPerSecond` on the open store and
+ * reports what playback actually delivered: the achieved rate between the first and last step, how many
+ * steps had to hold because their data was not ready and for how long, how late frames appeared after each
+ * step, and main-thread stalls. `cold` reopens the store first (empty caches, HTTP cache bypassed);
+ * without it the run is warm by whatever the caches already hold, optionally after `idleMs` of prefetching.
+ */
+export async function playBench(viewer, { stepsPerSecond = 4, cold = false, idleMs = 0 } = {}) {
+  const url = viewer.store.url.replace(/\/$/, '');
+  if (cold) await openWithin(viewer, url, { fetch: noStoreFetch });
+  viewer.pause();
+  viewer.goToTime(0);
+  await waitUntil(() => viewer.paintedT === 0, TIMEOUT_MS);
+  if (idleMs) await sleep(idleMs);
+
+  const count = viewer.store.times.length;
+  viewer.playback.setSpeed(stepsPerSecond);
+  const events = [];
+  viewer.probe = (event) => events.push(event);
+  const monitor = observeMainThread();
+  const network = viewer.store.stats.network;
+  const before = { requests: network.requests, bytes: network.bytes };
+  viewer.play();
+  const expectedMs = (count / stepsPerSecond) * 1000;
+  const finished = await waitUntil(() => viewer.playback.stats.steps >= count, expectedMs * 5 + 30000);
+  viewer.pause();
+  await sleep(100);
+  viewer.probe = null;
+  const { longTasks, frameGaps } = monitor.stop();
+
+  const { stats } = viewer.playback;
+  const loopMs = stats.lastStepAt - stats.firstStepAt;
+  const paints = events.filter((e) => e.type === 'paint' && e.complete);
+  const lags = [];
+  for (const input of events.filter((e) => e.type === 'input')) {
+    const paint = paints.find((p) => p.at >= input.at && p.t === input.t);
+    if (paint) lags.push(paint.at - input.at);
+  }
+  const results = {
+    store: url,
+    mode: cold ? 'cold' : idleMs ? `warm after ${idleMs} ms idle` : 'warm',
+    requestedStepsPerSecond: stepsPerSecond,
+    timesteps: count,
+    finishedLoop: finished,
+    stepsTaken: stats.steps,
+    achievedStepsPerSecond: round(((stats.steps - 1) / loopMs) * 1000),
+    loopMs: round(loopMs),
+    idealLoopMs: round(((count - 1) / stepsPerSecond) * 1000),
+    heldFrames: stats.held,
+    longestHoldMs: round(stats.longestHoldMs),
+    totalHoldMs: round(stats.totalHoldMs),
+    displayLagMs: distribution(lags),
+    framesOver33ms: frameGaps.filter((g) => g > 33).length,
+    maxFrameGapMs: round(Math.max(0, ...frameGaps)),
+    longTasks: longTasks.length,
+    network: { requests: network.requests - before.requests, MB: round((network.bytes - before.bytes) / 1048576) },
+  };
+  console.log(JSON.stringify(results, null, 2));
   return results;
 }

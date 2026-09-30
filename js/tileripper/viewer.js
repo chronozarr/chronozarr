@@ -2,6 +2,7 @@
 // products on the GPU and shows decoded values on click. Opens ?store=<base url>.
 
 import { chunkKey, openStore, scrubCost } from '../chronozarr/decoder.js';
+import { Playback } from './playback.js';
 import { Renderer } from './renderer.js';
 import { computeStretchLo, describePixel, inputIndices, makeTimeFormatter, resolveProducts } from './products.js';
 
@@ -17,10 +18,33 @@ const CLICK_SLOP_PX = 4;
 const CELL_RETRY_DELAY_MS = 4000;
 const MAX_CELL_RETRIES = 3;
 const TOAST_MS = 12000;
+const MIN_SPEED = 1;
+const MAX_SPEED = 15;
+const DEFAULT_SPEED = 4;
+const SPEED_KEY = 'tileripper.stepsPerSecond';
 const STRETCH_SAMPLES_PER_CELL = 300;
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/** The last playback speed, if localStorage has a valid one (it can be missing or blocked). */
+function loadSpeed() {
+  try {
+    const stored = Number(localStorage.getItem(SPEED_KEY));
+    if (Number.isInteger(stored) && stored >= MIN_SPEED && stored <= MAX_SPEED) return stored;
+  } catch (error) {
+    console.warn('could not read the saved playback speed:', error);
+  }
+  return DEFAULT_SPEED;
+}
+
+function saveSpeed(stepsPerSecond) {
+  try {
+    localStorage.setItem(SPEED_KEY, String(stepsPerSecond));
+  } catch (error) {
+    console.warn('could not save the playback speed:', error);
+  }
+}
 
 class Viewer {
   canvas = $('gl-canvas');
@@ -55,6 +79,9 @@ class Viewer {
   #tickElements = [];
   #wave = null;
   #toastTimer = 0;
+  #playback = null;
+  #lookahead = null;
+  #speed = loadSpeed();
 
   constructor() {
     this.renderer = new Renderer(this.canvas);
@@ -75,6 +102,7 @@ class Viewer {
    * @param {{lod?:number, fetch?:typeof fetch, maxCacheBytes?:number, workers?:number, camera?:{cx:number,cy:number,scale:number}}} [options]
    */
   async loadStore(url, options = {}) {
+    this.#playback?.pause();
     this.#abortBackground();
     this.store?.close();
     const generation = ++this.#storeGeneration;
@@ -99,6 +127,7 @@ class Viewer {
     this.store = store;
     store.evictionScore = (entry) => this.#chunkScore(entry);
     this.#configurePool();
+    this.#playback = this.#createPlayback();
     this.products = resolveProducts(store.bands);
     this.productIndex = this.products.findIndex((p) => p.available);
     this.bandChoice = 0;
@@ -114,6 +143,7 @@ class Viewer {
     this.#buildProducts();
     this.#buildTimeline();
     this.#updateTimeUi();
+    this.#updatePlayUi();
     this.#updateMeta();
     this.#updateSidebar(null);
     $('click-hint').classList.remove('hidden');
@@ -139,15 +169,57 @@ class Viewer {
     return Math.min(this.canvas.width / level.width, this.canvas.height / level.height) * 0.94;
   }
 
-  goToTime(t) {
+  /**
+   * Show timestep t. A manual call (keys, buttons, the timeline) pauses playback; playback itself passes
+   * `playing` and keeps its direction forward when it loops from the last timestep to the first.
+   */
+  goToTime(t, { playing = false, direction = null } = {}) {
     if (!this.store) return;
+    if (!playing) this.#playback?.pause();
     const next = clamp(t, 0, this.store.times.length - 1);
     if (next === this.t) return;
-    this.#direction = next > this.t ? 1 : -1;
+    this.#direction = direction ?? (next > this.t ? 1 : -1);
     this.t = next;
     this.#emit({ type: 'input', t: next });
     this.#updateTimeUi();
     this.requestRender();
+  }
+
+  get playback() {
+    return this.#playback;
+  }
+
+  play() {
+    this.#playback?.play();
+  }
+
+  pause() {
+    this.#playback?.pause();
+  }
+
+  togglePlay() {
+    this.#playback?.toggle();
+  }
+
+  /** Steps per second for movie playback, kept between visits. */
+  setSpeed(stepsPerSecond) {
+    this.#speed = clamp(Math.round(stepsPerSecond), MIN_SPEED, MAX_SPEED);
+    saveSpeed(this.#speed);
+    this.#playback?.setSpeed(this.#speed);
+    this.#updateSpeedUi();
+  }
+
+  /** Whether every visible cell has the chunks for timestep t in memory, so showing it needs no fetch. */
+  isTimestepReady(t) {
+    const { lod, cells } = this.#view;
+    const anchorT = this.store.anchorOf(t);
+    for (const key of cells) {
+      const [row, col] = key.split('/').map(Number);
+      for (const ct of new Set([anchorT, t])) {
+        if (!this.renderer.isResident(chunkKey(lod, row, col, ct)) && !this.store.peekRaw(lod, row, col, ct)) return false;
+      }
+    }
+    return true;
   }
 
   setProduct(index) {
@@ -276,11 +348,43 @@ class Viewer {
       });
   }
 
+  #createPlayback() {
+    return new Playback({
+      count: this.store.times.length,
+      stepsPerSecond: this.#speed,
+      getIndex: () => this.t,
+      goTo: (index, direction) => this.goToTime(index, { playing: true, direction }),
+      isReady: (index) => this.isTimestepReady(index),
+      prepare: (index) => this.#prepareTimestep(index),
+      onChange: () => this.#updatePlayUi(),
+    });
+  }
+
+  /** Playback is waiting on timestep t: fetch it for the visible cells now, at demand priority. */
+  #prepareTimestep(t) {
+    this.#lookahead?.abort();
+    const controller = new AbortController();
+    this.#lookahead = controller;
+    const { signal } = controller;
+    const { lod, cells } = this.#view;
+    const anchorT = this.store.anchorOf(t);
+    for (const key of cells) {
+      const [row, col] = key.split('/').map(Number);
+      Promise.all([this.store.getRaw(lod, row, col, anchorT, { signal }), anchorT === t ? null : this.store.getRaw(lod, row, col, t, { signal })]).catch((error) => {
+        if (error.name === 'AbortError') return;
+        console.error(`playback: chunk load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, error);
+        this.#playback?.pause();
+        this.#showError('Playback paused', `${this.#formatTime(t)}: ${error.name}: ${error.message}`, { toast: true });
+      });
+    }
+  }
+
   #emit(event) {
     this.probe?.({ at: performance.now(), ...event });
   }
 
   #abortBackground() {
+    this.#lookahead?.abort();
     this.#wave?.controller.abort();
     this.#wave = null;
     clearTimeout(this.#gpuFillTimer);
@@ -591,6 +695,11 @@ class Viewer {
     }, { passive: false });
     canvas.addEventListener('dblclick', () => this.store && this.fit());
 
+    $('play-btn').addEventListener('click', () => this.togglePlay());
+    $('speed').min = String(MIN_SPEED);
+    $('speed').max = String(MAX_SPEED);
+    $('speed').addEventListener('input', (e) => this.setSpeed(Number(e.target.value)));
+    this.#updateSpeedUi();
     $('prev-btn').addEventListener('click', () => this.goToTime(this.t - 1));
     $('next-btn').addEventListener('click', () => this.goToTime(this.t + 1));
     $('band-select').addEventListener('change', (e) => this.setBandChoice(Number(e.target.value)));
@@ -614,7 +723,15 @@ class Viewer {
     });
 
     document.addEventListener('keydown', (e) => {
-      if (!this.store || e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
+      if (!this.store) return;
+      const typing = e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT';
+      if (e.key === ' ') {
+        if (e.target.tagName === 'SELECT' || (typing && e.target.type !== 'range')) return;
+        e.preventDefault();
+        if (!e.repeat) this.togglePlay();
+        return;
+      }
+      if (typing) return;
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
         this.goToTime(this.t - 1);
@@ -624,6 +741,10 @@ class Viewer {
       } else if (/^[1-9]$/.test(e.key)) {
         this.setProduct(Number(e.key) - 1);
       }
+    });
+    // A focused button would also click on Space; the keydown above has already toggled playback.
+    document.addEventListener('keyup', (e) => {
+      if (e.key === ' ' && e.target.tagName === 'BUTTON') e.preventDefault();
     });
   }
 
@@ -663,6 +784,25 @@ class Viewer {
       track.appendChild(tick);
       return tick;
     });
+  }
+
+  #updatePlayUi() {
+    const playing = this.#playback?.playing ?? false;
+    const button = $('play-btn');
+    button.classList.toggle('playing', playing);
+    button.title = playing ? 'Pause (Space)' : 'Play (Space)';
+    button.setAttribute('aria-label', button.title);
+    button.disabled = !this.store;
+    if (!playing) {
+      this.#lookahead?.abort();
+      this.#lookahead = null;
+    }
+    this.#updateSpeedUi();
+  }
+
+  #updateSpeedUi() {
+    $('speed').value = String(this.#speed);
+    $('speed-label').textContent = `${this.#speed} /s`;
   }
 
   #updateTimeUi() {
@@ -791,6 +931,7 @@ async function main() {
     viewer,
     bench: () => import('./bench.js').then((m) => m.runBenchmarks(viewer)),
     scrubBench: (options) => import('./bench.js').then((m) => m.runScrubBenchmarks(viewer, options)),
+    playBench: (options) => import('./bench.js').then((m) => m.playBench(viewer, options)),
   };
 
   const catalog = await loadCatalog().catch((error) => {
