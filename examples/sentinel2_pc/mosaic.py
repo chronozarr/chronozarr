@@ -160,6 +160,10 @@ def load_scene(
                 href = scene.asset_hrefs[band_name]
                 bands[i] = read_band_window(href, dst_transform, dst_crs, dst_height, dst_width)
 
+            if scene.boa_offset:
+                shifted = bands.astype(np.int32) + scene.boa_offset
+                bands = np.where(bands > 0, np.clip(shifted, 1, 65535), 0).astype(np.uint16)
+
             valid = read_scl_mask(scene.scl_href, dst_transform, dst_crs, dst_height, dst_width)
 
             band_valid = np.all(bands > 0, axis=0)

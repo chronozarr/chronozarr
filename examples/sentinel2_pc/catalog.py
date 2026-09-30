@@ -36,6 +36,7 @@ class SceneRef:
     cloud_cover: float
     epsg: int
     mgrs_tile: str
+    processing_baseline: float
     asset_hrefs: dict[str, str] = field(repr=False)
 
     @property
@@ -45,6 +46,16 @@ class SceneRef:
     @property
     def scl_href(self) -> str:
         return self.asset_hrefs[MASK_BAND]
+
+    @property
+    def boa_offset(self) -> int:
+        """DN offset to add so reflectance = DN / 10000 across processing baselines.
+
+        Baseline 04.00 (25 January 2022) and later store DN + 1000 (BOA_ADD_OFFSET = -1000).
+        Planetary Computer items do not declare it in raster:bands, so it comes from
+        s2:processing_baseline.
+        """
+        return -1000 if self.processing_baseline >= 4.0 else 0
 
 
 def search_scenes(
@@ -150,6 +161,15 @@ def _deduplicate_scenes(scenes: list[SceneRef]) -> list[SceneRef]:
     return sorted(best.values(), key=lambda s: s.datetime)
 
 
+def _processing_baseline(item: pystac.Item) -> float:
+    raw = item.properties.get("s2:processing_baseline")
+    if raw is None:
+        raise ValueError(
+            f"{item.id}: missing s2:processing_baseline; cannot decide the BOA offset"
+        )
+    return float(raw)
+
+
 def _item_to_scene_ref(item: pystac.Item) -> SceneRef | None:
     """Convert a STAC item to a SceneRef, or None if missing assets."""
     # Check all required assets are present
@@ -183,4 +203,5 @@ def _item_to_scene_ref(item: pystac.Item) -> SceneRef | None:
         epsg=epsg,
         mgrs_tile=mgrs_tile,
         asset_hrefs=asset_hrefs,
+        processing_baseline=_processing_baseline(item),
     )
