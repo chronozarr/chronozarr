@@ -1346,13 +1346,26 @@ async function main() {
     viewer.pinnedStore = inCatalog(url) ? null : url;
     history.replaceState(null, '', viewer.pinnedStore ? `?store=${encodeURIComponent(url)}` : location.pathname);
     select.value = url;
-    window.tileripper.ready = viewer.loadStore(url, { viewSearch }).catch((error) => {
-      console.error(`loadStore(${url}) failed:`, error);
-      if (fallback && catalog.length > 0 && catalog[0].url !== url) {
-        console.warn(`falling back to the catalog store ${catalog[0].url}`);
-        open(catalog[0].url, { fallback: false });
-      }
-    });
+    // An external store earns a dropdown entry only once it has loaded, so a dead URL from an old
+    // permalink never lingers as an option.
+    const optionFor = (value) => [...select.options].find((option) => option.value === value);
+    window.tileripper.ready = viewer
+      .loadStore(url, { viewSearch })
+      .then((result) => {
+        if (!inCatalog(url) && catalog.length > 0 && !optionFor(url)) {
+          select.add(new Option(url.replace(/^https?:\/\//, ''), url));
+          select.value = url;
+        }
+        return result;
+      })
+      .catch((error) => {
+        console.error(`loadStore(${url}) failed:`, error);
+        optionFor(url)?.remove();
+        if (fallback && catalog.length > 0 && catalog[0].url !== url) {
+          console.warn(`falling back to the catalog store ${catalog[0].url}`);
+          open(catalog[0].url, { fallback: false });
+        }
+      });
   };
   if (catalog.length > 0) {
     select.replaceChildren(...catalog.map((entry) => new Option(entry.name, entry.url)));
@@ -1362,11 +1375,7 @@ async function main() {
 
   const requested = new URLSearchParams(location.search).get('store');
   if (requested) {
-    const url = new URL(requested, location.href).href;
-    if (catalog.length > 0 && !catalog.some((entry) => entry.url === url)) {
-      select.add(new Option(url.replace(/^https?:\/\//, ''), url));
-    }
-    open(url, { viewSearch: initialSearch });
+    open(new URL(requested, location.href).href, { viewSearch: initialSearch });
   } else if (catalog.length > 0) open(catalog[0].url, { viewSearch: initialSearch });
   else {
     $('error-title').textContent = 'No store selected';
