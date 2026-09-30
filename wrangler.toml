@@ -1,8 +1,13 @@
 # TileRipper viewer: static assets served by a Cloudflare Worker.
-# Deploy with `npx wrangler deploy`. Add the custom domain once the apex DNS record is free:
-#   routes = [{ pattern = "tileripper.com", custom_domain = true }]
+# Deploy with `npx wrangler deploy`. The custom domains below create their DNS records
+# and certificates on deploy; the hostnames must not already have DNS records.
 name = "tileripper"
 compatibility_date = "2026-09-01"
+
+routes = [
+  { pattern = "tileripper.com", custom_domain = true },
+  { pattern = "www.tileripper.com", custom_domain = true },
+]
 
 [assets]
 directory = "./js"
