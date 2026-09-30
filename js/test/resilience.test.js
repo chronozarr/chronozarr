@@ -25,7 +25,7 @@ test('network errors, 5xx and 429 are retried and the chunk then loads', async (
   assert.ok((await store.getRaw(0, 0, 0, 3)) instanceof Uint16Array);
   assert.equal(log.filter((c) => isChunk(c.key, 1)).length, 2);
   assert.equal(log.filter((c) => isChunk(c.key, 3)).length, 3);
-  assert.equal(store.stats.network.requests, 1 + 1 + 2 + 3, 'root + array metadata + every attempt of both chunks');
+  assert.equal(store.stats.network.requests, 1 + 1 + 1 + 2 + 3, 'root + array metadata + level group + every attempt of both chunks');
   assert.equal(warn.mock.callCount(), 3);
   const [message, details] = warn.mock.calls[0].arguments;
   assert.match(message, /retrying/);
@@ -112,7 +112,7 @@ test('at most maxRequests fetches are in flight', async () => {
   const { store, fetchImpl, log } = await open({ maxRequests: 3 }, spec, { delayMs: 5 });
   await Promise.all(Array.from({ length: 30 }, (_, t) => store.getRaw(0, 0, 0, t)));
   assert.equal(fetchImpl.stats.peak, 3);
-  assert.equal(log.length, 32, 'root, array metadata and 30 chunks');
+  assert.equal(log.length, 33, 'root, array metadata, level group and 30 chunks');
 });
 
 test('limiter: priority order, abort before start, failures free the slot', async () => {

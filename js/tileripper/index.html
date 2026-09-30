@@ -319,6 +319,15 @@
     border-radius: 50%;
   }
 
+  /* Chart of the clicked pixel over time */
+  .chart-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; font-weight: 600; margin-bottom: 6px; }
+  .chart-svg { width: 100%; height: auto; display: block; cursor: crosshair; touch-action: none; }
+  .chart-grid { stroke: var(--border); stroke-width: 1; }
+  .chart-axis { fill: var(--text-3); font-size: 9px; font-variant-numeric: tabular-nums; }
+  .chart-marker { stroke: var(--accent); stroke-width: 1.5; }
+  .chart-hover { stroke: var(--text-2); stroke-width: 1; stroke-dasharray: 2 2; }
+  .chart-status { font-size: 11px; color: var(--text-2); margin-top: 6px; font-variant-numeric: tabular-nums; min-height: 14px; }
+
   /* ---- Timeline ---- */
   .timeline-bar {
     height: 56px;
@@ -442,6 +451,11 @@
     accent-color: var(--accent);
     cursor: pointer;
   }
+  #res-hint {
+    font-size: 10px;
+    color: var(--amber);
+    white-space: nowrap;
+  }
   #speed-label {
     font-size: 11px;
     color: var(--text-2);
@@ -451,6 +465,67 @@
     white-space: nowrap;
     user-select: none;
   }
+  .export-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-2);
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 6px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.12s;
+  }
+  .export-btn:hover:not(:disabled) { border-color: var(--text-2); color: var(--text); }
+  .export-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .export-panel {
+    position: fixed;
+    right: 16px;
+    bottom: 68px;
+    width: 300px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    z-index: 20;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+    font-size: 12px;
+  }
+  .export-panel h3 { font-size: 12px; font-weight: 600; margin-bottom: 10px; color: var(--text); }
+  .export-panel label { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; color: var(--text-2); }
+  .export-panel label select { max-width: 170px; }
+  .export-panel .export-rate { color: var(--text-2); margin-bottom: 10px; }
+  .export-actions { display: flex; gap: 8px; margin-top: 4px; }
+  .export-actions button, .export-download {
+    flex: 1;
+    height: 30px;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: #fff;
+    border-radius: 6px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .export-actions button#export-cancel, .export-actions button#export-close { background: none; border-color: var(--border); color: var(--text-2); flex: 0 0 auto; padding: 0 12px; }
+  .export-download {
+    display: block;
+    margin-top: 10px;
+    line-height: 28px;
+    text-align: center;
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 10px;
+  }
+  .export-bar { height: 4px; background: var(--surface-2); border-radius: 2px; margin-top: 12px; overflow: hidden; }
+  #export-fill { height: 100%; width: 0; background: var(--accent); transition: width 0.1s linear; }
+  #export-status { margin-top: 8px; color: var(--text-2); font-variant-numeric: tabular-nums; min-height: 1.4em; word-break: break-word; }
+  .export-panel[hidden], .export-panel [hidden] { display: none; }
+
   .timeline-status {
     font-size: 11px;
     color: var(--text-3);
@@ -527,8 +602,31 @@
   <div class="speed">
     <input type="range" id="speed" min="0" max="20" step="1" value="3" title="Playback speed (steps per second)" aria-label="Playback speed">
     <span id="speed-label">4 /s</span>
+    <span id="res-hint"></span>
   </div>
+  <button id="export-btn" class="export-btn" title="Export the loop as WebM or GIF" disabled>Export</button>
   <span class="timeline-status" id="status"></span>
+</div>
+
+<div id="export-panel" class="export-panel" hidden role="dialog" aria-label="Export loop">
+  <h3>Export loop</h3>
+  <label>Format
+    <select id="export-format"><option value="webm">WebM video</option><option value="gif">GIF</option></select>
+  </label>
+  <label>Size
+    <select id="export-size"><option value="1">Screen</option><option value="0.5">Half</option><option value="0.25">Quarter</option></select>
+  </label>
+  <label>From <select id="export-from"></select></label>
+  <label>To <select id="export-to"></select></label>
+  <div class="export-rate" id="export-rate"></div>
+  <div class="export-actions">
+    <button id="export-start">Export</button>
+    <button id="export-cancel" hidden>Cancel</button>
+    <button id="export-close">Close</button>
+  </div>
+  <div class="export-bar"><div id="export-fill"></div></div>
+  <div id="export-status" role="status"></div>
+  <a id="export-download" class="export-download" hidden>Download</a>
 </div>
 
 <script type="module" src="viewer.js"></script>

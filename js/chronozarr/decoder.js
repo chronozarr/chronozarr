@@ -15,13 +15,21 @@ import { MainThreadDecoder, DecodePool } from './pool.js';
 import { indexByteLength, parseShardIndex } from './shard.js';
 
 const SUPPORTED_SPEC = /^0\.1\./;
-const DEFAULT_MAX_CACHE_BYTES = 1024 * 1024 * 1024;
+const GIB = 1024 * 1024 * 1024;
 const DEFAULT_PREFETCH_CONCURRENCY = 6;
 const WINDOW_BUDGET_FRACTION = 0.9;
 const MAX_DEFAULT_WORKERS = 8;
 const DEFAULT_MAX_REQUESTS = 12;
 const PREFETCH_COOLDOWN_MS = 30000;
 const DEFAULT_RETRY_DELAYS_MS = [200, 600, 1500];
+
+/**
+ * Decoded-chunk cache budget: 2 GiB on machines reporting at least 8 GB of memory (navigator.deviceMemory, which
+ * browsers cap at 8 and which Firefox and Safari do not provide), otherwise 1 GiB.
+ */
+export function defaultCacheBytes(deviceMemoryGb) {
+  return deviceMemoryGb >= 8 ? 2 * GIB : GIB;
+}
 
 export function chunkKey(lod, row, col, t) {
   return `${lod}/${row}/${col}/${t}`;
@@ -47,6 +55,27 @@ export function windowOrder(nTime, t, { direction = 1, behindFactor = 2, loop = 
   const period = loop ? nTime : null;
   const cost = (step) => scrubCost(step - t, direction, behindFactor, period);
   return Array.from({ length: nTime }, (_, i) => i).sort((a, b) => cost(a) - cost(b) || Math.abs(a - t) - Math.abs(b - t));
+}
+
+/**
+ * Decoded per-band values of one pixel from an anchor chunk and, for non-anchor timesteps, its delta chunk
+ * (null for anchors): clamp(anchor + int16(delta), 0, 65535) per band. (x, y) are offsets inside the chunk.
+ */
+export function samplePixelFrom(anchor, delta, { nBand, chunkWidth, chunkHeight }, x, y) {
+  const plane = chunkHeight * chunkWidth;
+  const offset = y * chunkWidth + x;
+  const values = new Uint16Array(nBand);
+  for (let b = 0; b < nBand; b++) {
+    const a = anchor[b * plane + offset];
+    if (!delta) {
+      values[b] = a;
+      continue;
+    }
+    const d = delta[b * plane + offset];
+    const v = a + (d >= 32768 ? d - 65536 : d);
+    values[b] = v < 0 ? 0 : v > 65535 ? 65535 : v;
+  }
+  return values;
 }
 
 /** decode = clamp(anchor + int16(delta), 0, 65535); both inputs are uint16 arrays of equal length. */
@@ -177,7 +206,7 @@ function defaultWorkerCount() {
  * @param {object} [options]
  * @param {typeof fetch} [options.fetch]   fetch implementation (default: globalThis.fetch at call time).
  * @param {object} [options.store]         a zarrita AsyncReadable to use instead of a FetchStore.
- * @param {number} [options.maxCacheBytes] decoded-chunk cache budget (default 1 GiB).
+ * @param {number} [options.maxCacheBytes] decoded-chunk cache budget (default: see defaultCacheBytes).
  * @param {number} [options.maxRequests]   cap on concurrent requests to the store (default 12).
  * @param {number[]} [options.retryDelaysMs] delays before each retry of a failed request (default [200, 600, 1500]).
  * @param {number} [options.workers]       decode workers (default: cores - 1, at most 8, none without Worker).
@@ -207,15 +236,25 @@ export async function openStore(baseUrl, options = {}) {
 
   // One GET for everything when the root carries consolidated metadata, else one GET per level array.
   const consolidated = root.consolidated_metadata?.metadata ?? {};
-  const arrayMetas = await Promise.all(
-    datasets.map(async (ds) => {
-      const path = `${ds.path}/${cz.variable}`;
+  const [arrayMetas, levelGroup] = await Promise.all([
+    Promise.all(
+      datasets.map(async (ds) => {
+        const path = `${ds.path}/${cz.variable}`;
+        if (consolidated[path]) return consolidated[path];
+        const bytes = await readable.get(`/${path}/zarr.json`);
+        requireStore(bytes, baseUrl, `${path}/zarr.json not found`);
+        return JSON.parse(new TextDecoder().decode(bytes));
+      }),
+    ),
+    // The finest level's group carries the affine `transform` (pixel -> projected coordinates), if any.
+    (async () => {
+      const path = datasets[0].path;
       if (consolidated[path]) return consolidated[path];
       const bytes = await readable.get(`/${path}/zarr.json`);
-      requireStore(bytes, baseUrl, `${path}/zarr.json not found`);
-      return JSON.parse(new TextDecoder().decode(bytes));
-    }),
-  );
+      return bytes ? JSON.parse(new TextDecoder().decode(bytes)) : null;
+    })(),
+  ]);
+  const transform = levelGroup?.attributes?.transform;
   const levels = datasets.map((ds, lod) => ({ path: ds.path, meta: arrayMetas[lod], storage: parseStorage(arrayMetas[lod], ds.path, baseUrl) }));
   const codecSignature = JSON.stringify(levels[0].storage.innerCodecs);
   requireStore(levels.every((l) => JSON.stringify(l.storage.innerCodecs) === codecSignature), baseUrl, 'levels use different chunk codecs');
@@ -231,7 +270,7 @@ export async function openStore(baseUrl, options = {}) {
           fallback: new MainThreadDecoder(zarr, spec),
         })
       : new MainThreadDecoder(zarr, spec);
-  return new ChronoStore({ url: baseUrl, attrs: cz, levels, readable, decoder, network, maxCacheBytes: options.maxCacheBytes ?? DEFAULT_MAX_CACHE_BYTES, maxRequests: options.maxRequests ?? DEFAULT_MAX_REQUESTS });
+  return new ChronoStore({ url: baseUrl, attrs: cz, transform: Array.isArray(transform) && transform.length === 6 && transform.every(Number.isFinite) ? transform : null, levels, readable, decoder, network, maxCacheBytes: options.maxCacheBytes ?? defaultCacheBytes(globalThis.navigator?.deviceMemory), maxRequests: options.maxRequests ?? DEFAULT_MAX_REQUESTS });
 }
 
 export class ChronoStore {
@@ -258,13 +297,15 @@ export class ChronoStore {
   /** Called with {type:'chunk', key, background, requestedAt, fetchedAt, decodedAt, bytes} per loaded chunk. */
   probe = null;
 
-  constructor({ url, attrs, levels, readable, decoder, network, maxCacheBytes, maxRequests }) {
+  constructor({ url, attrs, transform, levels, readable, decoder, network, maxCacheBytes, maxRequests }) {
     this.url = url;
     this.variable = attrs.variable;
     this.times = attrs.times;
     this.bands = attrs.bands;
     this.nodata = attrs.nodata;
     this.crs = attrs.crs;
+    /** Affine [a, b, c, d, e, f] from level-0 pixel (col, row) to projected x, y; null if the store declares none. */
+    this.transform = transform;
     this.temporal = attrs.temporal;
     this.maxCacheBytes = maxCacheBytes;
     this.#readable = readable;
@@ -432,20 +473,12 @@ export class ChronoStore {
     const anchor = this.peekRaw(lod, row, col, this.anchorOf(t));
     const delta = this.isAnchor(t) ? null : this.peekRaw(lod, row, col, t);
     if (!anchor || (!this.isAnchor(t) && !delta)) return null;
-    const plane = level.chunkHeight * level.chunkWidth;
-    const offset = y * level.chunkWidth + x;
-    const values = new Uint16Array(level.nBand);
-    for (let b = 0; b < level.nBand; b++) {
-      const a = anchor[b * plane + offset];
-      if (!delta) {
-        values[b] = a;
-        continue;
-      }
-      const d = delta[b * plane + offset];
-      const v = a + (d >= 32768 ? d - 65536 : d);
-      values[b] = v < 0 ? 0 : v > 65535 ? 65535 : v;
-    }
-    return values;
+    return samplePixelFrom(anchor, delta, level, x, y);
+  }
+
+  /** Whether `timesteps` timesteps (default: the whole axis) of `cellCount` cells at `lod` fit the window budget of the decoded cache. */
+  loopFits(lod, cellCount, timesteps = this.level(lod).nTime) {
+    return cellCount * timesteps * this.level(lod).chunkBytes <= this.maxCacheBytes * WINDOW_BUDGET_FRACTION;
   }
 
   /**

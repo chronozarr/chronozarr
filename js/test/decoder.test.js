@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { openStore, applyDelta, chunkKey, scrubCost, windowOrder } from '../chronozarr/decoder.js';
+import { openStore, applyDelta, chunkKey, defaultCacheBytes, samplePixelFrom, scrubCost, windowOrder } from '../chronozarr/decoder.js';
 import { buildSyntheticStore, sourceValue } from '../support/synthetic-store.js';
 import { startStaticServer } from '../support/static-server.js';
 
@@ -404,4 +404,31 @@ test('errors carry the store URL and the reason', async () => {
   await assert.rejects(store.getRaw(0, 5, 0, 0), /cell \(5, 0\) outside 1x1 grid at lod 0/);
   await assert.rejects(store.getRaw(0, 0, 0, 9), /timestep 9 out of range 0\.\.1/);
   await assert.rejects(store.getRaw(3, 0, 0, 0), /lod 3 out of range/);
+});
+
+test('decoded cache budget: 2 GiB from 8 GB of device memory, else 1 GiB', () => {
+  const GIB = 1024 ** 3;
+  assert.equal(defaultCacheBytes(8), 2 * GIB);
+  assert.equal(defaultCacheBytes(16), 2 * GIB);
+  assert.equal(defaultCacheBytes(4), GIB);
+  assert.equal(defaultCacheBytes(0.5), GIB);
+  assert.equal(defaultCacheBytes(undefined), GIB, 'browsers without navigator.deviceMemory');
+});
+
+test('loopFits: whether the whole time axis of some cells fits 90% of the cache budget', async () => {
+  const spec = { nTime: 20, nBand: 2, height: 16, width: 16, chunk: 32, anchorInterval: 4, sharded: true };
+  const chunkBytes = 2 * 32 * 32 * 2;
+  const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 100 });
+  assert.equal(store.loopFits(0, 4), true, '4 cells x 20 timesteps = 80 chunks <= 90');
+  assert.equal(store.loopFits(0, 5), false, '100 chunks > 90');
+  assert.equal(store.loopFits(0, 0), true);
+});
+
+test('samplePixelFrom decodes an anchor, a delta and clamps', () => {
+  const geometry = { nBand: 2, chunkWidth: 2, chunkHeight: 1 };
+  const anchor = Uint16Array.of(100, 65000, 7, 9);
+  const delta = new Uint16Array(Int16Array.of(-150, 2000, 3, -10).buffer);
+  assert.deepEqual([...samplePixelFrom(anchor, null, geometry, 1, 0)], [65000, 9]);
+  assert.deepEqual([...samplePixelFrom(anchor, delta, geometry, 0, 0)], [0, 10], 'clamps below 0');
+  assert.deepEqual([...samplePixelFrom(anchor, delta, geometry, 1, 0)], [65535, 0], 'clamps above 65535 and below 0');
 });

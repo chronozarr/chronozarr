@@ -315,6 +315,19 @@ export class Renderer {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
+  /** The canvas as RGBA bytes, bottom row first (GL order). */
+  readFrame(width, height) {
+    const gl = this.#gl;
+    const pixels = new Uint8Array(width * height * 4);
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    return pixels;
+  }
+
+  /** Release the GL context (an offscreen renderer that is finished with). */
+  dispose() {
+    this.#gl.getExtension('WEBGL_lose_context')?.loseContext();
+  }
+
   /** Block until queued GL work has finished (reads one pixel). For timing only. */
   finish() {
     const gl = this.#gl;

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, snapSpeed } from '../tileripper/playback.js';
+import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, chooseMovieLevel, snapSpeed } from '../tileripper/playback.js';
 
 const FRAME_60 = 1000 / 60;
 
@@ -331,4 +331,14 @@ test('speed table: 1 to 15 in steps of 1, then 20, 24, 30, 40, 48, 60; default 4
   assert.ok(SPEEDS.includes(DEFAULT_STEPS_PER_SECOND));
   assert.equal(DEFAULT_STEPS_PER_SECOND, 4);
   assert.deepEqual([0, 1, 4.4, 16, 18, 22, 35, 59, 61, 500].map(snapSpeed), [1, 1, 4, 15, 20, 20, 30, 60, 60, 60]);
+});
+
+test('movie level: the normal level if the loop fits, else the first coarser level where it does, never past the floor', () => {
+  const fitting = (...levels) => (lod) => levels.includes(lod);
+  assert.equal(chooseMovieLevel({ baseLod: 1, deepestLod: 3, fits: fitting(1, 2, 3) }), 1, 'fits at the normal level: unchanged');
+  assert.equal(chooseMovieLevel({ baseLod: 1, deepestLod: 3, fits: fitting(2, 3) }), 2, 'the first coarser level that fits');
+  assert.equal(chooseMovieLevel({ baseLod: 1, deepestLod: 3, fits: fitting(3) }), 3);
+  assert.equal(chooseMovieLevel({ baseLod: 1, deepestLod: 3, fits: fitting() }), 3, 'nothing fits: the floor (4x zoom-out)');
+  assert.equal(chooseMovieLevel({ baseLod: 3, deepestLod: 3, fits: fitting() }), 3, 'already at the coarsest level');
+  assert.equal(chooseMovieLevel({ baseLod: 2, deepestLod: 1, fits: fitting() }), 2, 'the floor never makes the level finer than normal');
 });

@@ -471,13 +471,13 @@ export async function runScrubBenchmarks(viewer, { steps = 20, startT = 40, idle
 
 // ---- movie playback ----
 
-/** Wait for the window prefetch to finish and the network to stay quiet for `quietMs`. */
+/** Wait for the prefetch for playback (at the movie level) to finish and the network to stay quiet for `quietMs`. */
 async function settleNetwork(viewer, { timeoutMs = 900000, quietMs = 2000 } = {}) {
   let timer;
   const deadline = new Promise((_, reject) => {
     timer = setTimeout(() => reject(new Error(`prefetch did not finish within ${timeoutMs / 1000} s`)), timeoutMs);
   });
-  const prefetch = await Promise.race([viewer.prefetchNow(), deadline]).finally(() => clearTimeout(timer));
+  const prefetch = await Promise.race([viewer.prefetchNow({ movie: true }), deadline]).finally(() => clearTimeout(timer));
   const network = viewer.store.stats.network;
   let seen = network.requests;
   let quietSince = performance.now();
@@ -532,6 +532,8 @@ export async function playBench(viewer, { stepsPerSecond = 4, loops = 2, cold = 
   const expectedMs = (stepsWanted / stepsPerSecond) * 1000;
   const finished = await waitUntil(() => viewer.playback.stats.steps >= stepsWanted, expectedMs * 5 + 60000);
   const { refreshHz, effectiveStepsPerSecond } = viewer.playback;
+  const movie = viewer.movieInfo;
+  const eventsWhilePlaying = events.length;
   viewer.pause();
   await sleep(100);
   viewer.probe = null;
@@ -546,7 +548,7 @@ export async function playBench(viewer, { stepsPerSecond = 4, loops = 2, cold = 
     if (paint) lags.push(paint.at - input.at);
   }
   const uploadMs = paints.map((p) => p.uploadMs);
-  const lastPaint = paints.at(-1);
+  const lastPaint = events.slice(0, eventsWhilePlaying).findLast((e) => e.type === 'paint' && e.complete);
 
   // The wrap: steps whose timestep is 0. How long each took to arrive after the step before it, against the
   // typical gap, and the achieved rate of each loop (first loop: t=1 .. first wrap; then wrap to wrap).
@@ -564,6 +566,8 @@ export async function playBench(viewer, { stepsPerSecond = 4, loops = 2, cold = 
     store: url,
     mode: cold ? 'cold' : warm === 'prefetch' ? 'warm (after prefetch)' : idleMs ? `warm after ${idleMs} ms idle` : 'warm',
     lod: lastPaint?.lod,
+    normalLod: movie.baseLod,
+    resolution: movie.lod > movie.baseLod ? `1/${2 ** (movie.lod - movie.baseLod)}` : 'full',
     visibleCells: lastPaint?.cells,
     requestedStepsPerSecond: stepsPerSecond,
     loops,

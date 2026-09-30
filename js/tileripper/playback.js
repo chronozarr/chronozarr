@@ -220,3 +220,13 @@ export class Playback {
     this.#due = afterHold || late > interval ? now + interval : this.#due + interval;
   }
 }
+
+/**
+ * The level a movie plays at. The normal level `baseLod` if the whole loop for the visible cells fits the decoded
+ * cache there (`fits(lod)`), otherwise the first coarser level where it does, and never coarser than
+ * `deepestLod` (the level the viewer would pick four times further out): if nothing fits, that one.
+ */
+export function chooseMovieLevel({ baseLod, deepestLod, fits }) {
+  for (let lod = baseLod; lod < deepestLod; lod++) if (fits(lod)) return lod;
+  return Math.max(baseLod, deepestLod);
+}
