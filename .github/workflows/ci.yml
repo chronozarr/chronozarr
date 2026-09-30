@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Same 7-day release quarantine as the local uv config; uv.lock records it, so `uv sync
+  # --locked` fails without it.
+  UV_EXCLUDE_NEWER: 7 days
+
+jobs:
+  python:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --locked --all-extras
+      - name: ruff check
+        run: uv run ruff check src tests examples scripts
+      - name: ruff format
+        run: uv run ruff format --check src tests examples scripts
+      - name: ty
+        run: uv run ty check src
+      - name: Unit tests
+        run: uv run pytest -q -m unit
+      - name: Build distributions
+        if: matrix.python-version == '3.11'
+        run: uv build
+
+  js:
+    name: JavaScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: js/package-lock.json
+      - name: Install locked dependencies
+        working-directory: js
+        run: npm ci
+      - name: Node tests
+        working-directory: js
+        run: node --test

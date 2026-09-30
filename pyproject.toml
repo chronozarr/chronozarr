@@ -1,9 +1,34 @@
 [project]
 name = "chronozarr"
-version = "0.1.0"
-description = "Zarr v3 convention and reader for raster time series with star-delta temporal encoding"
+version = "0.2.0"
+description = "Zarr v3 convention and reader for raster time series with optional star-delta temporal encoding"
+readme = "README.md"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "James H. Gearon" }]
 requires-python = ">=3.11"
+keywords = [
+    "zarr",
+    "raster",
+    "time series",
+    "remote sensing",
+    "sentinel-2",
+    "earth observation",
+    "xarray",
+    "cloud-native",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
 dependencies = [
     "numpy>=1.26",
     "zarr>=3.1",
@@ -11,7 +36,21 @@ dependencies = [
     "click>=8.1",
 ]
 
+[project.urls]
+Homepage = "https://tileripper.com"
+Documentation = "https://github.com/jameshgrn/tile-ripper/blob/main/spec/CHRONOZARR.md"
+Repository = "https://github.com/jameshgrn/tile-ripper"
+Issues = "https://github.com/jameshgrn/tile-ripper/issues"
+
 [project.optional-dependencies]
+# rasterio: GeoTIFF/COG input for `convert`, `export-cog`, and the WGS84 extent for `stac`.
+geo = ["rasterio>=1.3"]
+# IPython: `chronozarr.view(store)` in notebooks.
+notebook = ["ipython>=8"]
+# dask: `chunks=` with the xarray backend and dask-backed input to `encode`.
+dask = ["dask>=2024.1"]
+# h5netcdf and h5py: NetCDF input for `convert` and `encode`.
+netcdf = ["h5netcdf>=1.3", "h5py>=3.10"]
 ingest = [
     "pystac>=1.10",
     "pystac-client>=0.8",
@@ -22,17 +61,24 @@ ingest = [
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
+    "ty>=0.0.23",
 ]
 
 [project.scripts]
 chronozarr = "chronozarr.cli:main"
 
+[project.entry-points."xarray.backends"]
+chronozarr = "chronozarr.backend:ChronozarrBackendEntrypoint"
+
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/chronozarr"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/chronozarr", "tests", "spec", "README.md", "LICENSE", "pyproject.toml"]
 
 [tool.ruff]
 src = ["src"]

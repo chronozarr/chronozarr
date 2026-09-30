@@ -1,20 +1,28 @@
-"""Command line interface: `chronozarr encode | validate | info`."""
+"""Command line interface: `chronozarr encode | validate | info | doctor`."""
 
 from __future__ import annotations
 
 import glob
 import re
 import sys
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import click
 import numpy as np
 import xarray as xr
 
 from chronozarr import schema
+from chronozarr.convert import RESAMPLING_METHODS, Plan, convert
 from chronozarr.decode import open_store
-from chronozarr.encode import encode
+from chronozarr.doctor import DEFAULT_ORIGIN, diagnose
+from chronozarr.encode import EncodeReport, encode
+from chronozarr.export import export_cog, select_times
 from chronozarr.schema import SchemaError, validate
+from chronozarr.stac import write_stac
 
 _DATE_IN_NAME = re.compile(r"(?<!\d)(\d{4})-?(\d{2})(?:-?(\d{2}))?(?!\d)")
 _GLOB_CHARS = "*?["
@@ -89,7 +97,7 @@ def _read_xarray(path: str, variable: str | None) -> xr.DataArray:
         names = list(dataset.data_vars)
         if len(names) != 1:
             raise click.ClickException(f"input has variables {names}; choose one with --variable")
-        variable = names[0]
+        variable = str(names[0])
     if variable not in dataset.data_vars:
         raise click.ClickException(
             f"variable '{variable}' not in input: {list(dataset.data_vars)}"
@@ -106,6 +114,109 @@ def _read_xarray(path: str, variable: str | None) -> xr.DataArray:
     return da
 
 
+@contextmanager
+def _command_errors() -> Iterator[None]:
+    """Turn expected failures into one-line CLI errors, with an install hint for rasterio."""
+    try:
+        yield
+    except ImportError as exc:
+        if exc.name == "rasterio":
+            raise click.ClickException(
+                "this command needs rasterio: run `uv sync --extra geo` "
+                "(or `pip install 'chronozarr[geo]'`)"
+            ) from exc
+        raise
+    except (ValueError, OSError, SchemaError) as exc:
+        notes = getattr(exc, "__notes__", [])
+        raise click.ClickException("\n".join([str(exc), *notes])) from exc
+
+
+def _encode_options(command: Any) -> Any:
+    """Options shared by `encode` and `convert`; they map one-to-one onto `encode()` keywords."""
+    options = [
+        click.option(
+            "--chunk-size",
+            type=int,
+            default=512,
+            show_default=True,
+            help="Spatial chunk edge in pixels (256 or 512 per the spec).",
+        ),
+        click.option(
+            "--anchor-interval",
+            type=int,
+            default=6,
+            show_default=True,
+            help="Timesteps between anchors (star-delta only).",
+        ),
+        click.option(
+            "--encoding",
+            type=click.Choice(["auto", "none", "star-delta"]),
+            default="auto",
+            show_default=True,
+            help="Temporal encoding; auto keeps star-delta only when it saves at least 15%.",
+        ),
+        click.option(
+            "--codec",
+            type=click.Choice(["zstd", "blosc-zstd-shuffle"]),
+            default="zstd",
+            show_default=True,
+            help="Chunk compression codec.",
+        ),
+        click.option(
+            "--level",
+            "compression_level",
+            type=int,
+            default=None,
+            help="Compression level (default 5 for zstd, 1 for blosc).",
+        ),
+        click.option("--no-shard", is_flag=True, help="One chunk object per (timestep, cell)."),
+        click.option(
+            "--shard-time",
+            type=int,
+            default=None,
+            help="Timesteps per shard along time (default: all).",
+        ),
+        click.option(
+            "--lods", "n_lods", type=int, default=None, help="Pyramid levels including level 0."
+        ),
+        click.option(
+            "--workers", type=int, default=None, help="Cells encoded concurrently (default 4)."
+        ),
+    ]
+    for option in reversed(options):
+        command = option(command)
+    return command
+
+
+def _encode_kwargs(options: dict[str, Any]) -> dict[str, Any]:
+    """`encode()` keywords from the parsed `_encode_options` values."""
+    return {
+        "chunk_size": options["chunk_size"],
+        "anchor_interval": options["anchor_interval"],
+        "encoding": options["encoding"],
+        "codec": options["codec"],
+        "level": options["compression_level"],
+        "shard": not options["no_shard"],
+        "shard_time": options["shard_time"],
+        "n_lods": options["n_lods"],
+        "workers": options["workers"],
+    }
+
+
+def _encode_summary(out: Path, report: EncodeReport) -> str:
+    encoding = report.encoding
+    if report.selection is not None:
+        encoding += (
+            f" (auto: star-delta/plain = {report.selection.ratio:.2f} "
+            f"on {report.selection.sampled_cells} cells)"
+        )
+    return (
+        f"wrote {out}: {len(report.levels)} levels, {report.n_files} files, "
+        f"{report.total_bytes / 1e6:.1f} MB, encoding {encoding}, "
+        f"{report.codec} level {report.level}"
+    )
+
+
 @click.group()
 @click.version_option(package_name="chronozarr")
 def main() -> None:
@@ -115,23 +226,15 @@ def main() -> None:
 @main.command("encode")
 @click.argument("input", metavar="INPUT")
 @click.argument("out", type=click.Path(path_type=Path))
-@click.option("--chunk-size", default=512, show_default=True, help="Spatial chunk edge in pixels.")
-@click.option("--anchor-interval", default=6, show_default=True, help="Timesteps between anchors.")
-@click.option("--no-shard", is_flag=True, help="One chunk object per (timestep, cell).")
-@click.option("--lods", "n_lods", type=int, default=None, help="Pyramid levels including level 0.")
+@_encode_options
 @click.option("--crs", default=None, help="CRS such as EPSG:32631 (default: from the input).")
 @click.option("--variable", default=None, help="Variable to encode from a Zarr/NetCDF input.")
-@click.option("--workers", type=int, default=None, help="Worker threads (default: CPU count).")
 def encode_command(
     input: str,
     out: Path,
-    chunk_size: int,
-    anchor_interval: int,
-    no_shard: bool,
-    n_lods: int | None,
     crs: str | None,
     variable: str | None,
-    workers: int | None,
+    **options: Any,
 ) -> None:
     """Encode INPUT into a chronozarr store at OUT.
 
@@ -142,29 +245,15 @@ def encode_command(
         da = _read_geotiffs(input)
     else:
         da = _read_xarray(input, variable)
-    try:
-        report = encode(
-            da,
-            out,
-            crs=crs,
-            chunk_size=chunk_size,
-            anchor_interval=anchor_interval,
-            n_lods=n_lods,
-            shard=not no_shard,
-            workers=workers,
-        )
-    except (ValueError, FileExistsError) as exc:
-        raise click.ClickException(str(exc)) from exc
-    click.echo(
-        f"wrote {out}: {len(report.levels)} levels, {report.n_files} files, "
-        f"{report.total_bytes / 1e6:.1f} MB"
-    )
+    with _command_errors():
+        report = encode(da, out, crs=crs, **_encode_kwargs(options))
+    click.echo(_encode_summary(out, report))
 
 
 @main.command("validate")
 @click.argument("store")
 def validate_command(store: str) -> None:
-    """Check STORE against chronozarr v0.1. Exit status 1 if it does not conform."""
+    """Check STORE against the chronozarr spec. Exit status 1 if it does not conform."""
     problems = validate(store)
     if problems:
         for problem in problems:
@@ -178,10 +267,8 @@ def validate_command(store: str) -> None:
 @click.argument("store")
 def info_command(store: str) -> None:
     """Summarise STORE: times, bands, temporal encoding and pyramid levels."""
-    try:
+    with _command_errors():
         opened = open_store(store)
-    except SchemaError as exc:
-        raise click.ClickException(str(exc)) from exc
     attrs = opened.attrs
     temporal = attrs.temporal
     click.echo(f"store:     {store}")
@@ -189,10 +276,31 @@ def info_command(store: str) -> None:
     click.echo(f"crs:       {attrs.crs}")
     click.echo(f"times:     {len(opened.times)} ({attrs.times[0]} .. {attrs.times[-1]})")
     click.echo(f"bands:     {', '.join(opened.bands)}")
-    click.echo(
-        f"temporal:  {schema.ENCODING} every {temporal.anchor_interval}: "
-        f"{len(temporal.anchor_indices)} anchors, {len(temporal.delta_reference)} deltas"
-    )
+    click.echo(f"nodata:    {attrs.nodata}")
+    if temporal.encoding == schema.STAR_DELTA:
+        described = (
+            f"{schema.STAR_DELTA} every {temporal.anchor_interval}: "
+            f"{len(temporal.anchor_indices)} anchors, {len(temporal.delta_reference)} deltas"
+        )
+    else:
+        described = f"{temporal.encoding} (every timestep stored as true values)"
+    if temporal.selection is not None:
+        described += (
+            f"; auto chose it at star-delta/plain = {temporal.selection.ratio:.2f} "
+            f"on {temporal.selection.sampled_cells} cells"
+        )
+    click.echo(f"temporal:  {described}")
+    extras = [
+        name
+        for name, present in (
+            ("mask", attrs.mask_variable),
+            ("coverage", attrs.coverage_variable),
+            ("provenance", attrs.provenance),
+        )
+        if present
+    ]
+    if extras:
+        click.echo(f"extras:    {', '.join(extras)}")
     click.echo("levels:")
     for level in opened.levels:
         layout = f"shards {level.data.shards}" if level.data.shards else "unsharded"
@@ -200,3 +308,268 @@ def info_command(store: str) -> None:
             f"  {level.index}: shape {level.shape}, {level.resolution:g} m/px, "
             f"grid {level.grid[0]}x{level.grid[1]}, chunks {level.data.chunks}, {layout}"
         )
+
+
+_STATUS_LABEL = {"ok": "[ ok ]", "info": "[info]", "warn": "[warn]", "fail": "[FAIL]"}
+
+
+@main.command("doctor")
+@click.argument("target")
+@click.option(
+    "--origin",
+    default=DEFAULT_ORIGIN,
+    show_default=True,
+    help="Origin header sent by the browser-style CORS checks (https URLs only).",
+)
+@click.option(
+    "--full-read-limit-mb",
+    type=float,
+    default=16.0,
+    show_default=True,
+    help="Also compare a cell with a full-level read when one timestep is at most this big.",
+)
+def doctor_command(target: str, origin: str, full_read_limit_mb: float) -> None:
+    """Diagnose TARGET, an https URL or a local store path.
+
+    A URL is probed the way a browser would: root zarr.json, byte ranges, CORS, HEAD and caching
+    headers. Both kinds then get the layout validated and one cell decoded per pyramid level,
+    compared with a plain Zarr read and a full read. Exit status 1 if any check fails; warnings
+    (advice) and info lines do not change the exit status.
+    """
+    checks = diagnose(target, origin=origin, full_read_limit_mb=full_read_limit_mb)
+    width = max(len(c.name) for c in checks)
+    click.echo(f"chronozarr doctor {target}")
+    for check in checks:
+        click.echo(f"{_STATUS_LABEL[check.status]} {check.name.ljust(width)}  {check.detail}")
+        if check.hint and check.status in ("warn", "fail"):
+            click.echo(f"       fix: {check.hint}")
+    counts = {status: sum(c.status == status for c in checks) for status in _STATUS_LABEL}
+    click.echo(
+        f"{counts['ok']} ok, {counts['info']} info, {counts['warn']} warning(s), "
+        f"{counts['fail']} failure(s)"
+    )
+    if counts["fail"]:
+        sys.exit(1)
+
+
+@main.command("export-cog")
+@click.argument("store")
+@click.argument("out_dir", type=click.Path(path_type=Path))
+@click.option("--level", type=int, default=0, show_default=True, help="Pyramid level to export.")
+@click.option(
+    "--times",
+    "times",
+    multiple=True,
+    help="Timesteps: all (default), indices 0,5,-1, slices 0:12:3, dates 2024-03 or 2024-03-15, "
+    "ranges 2020-01..2022-06. Repeatable.",
+)
+def export_cog_command(store: str, out_dir: Path, level: int, times: tuple[str, ...]) -> None:
+    """Export timesteps of STORE as true-value Cloud Optimized GeoTIFFs in OUT_DIR.
+
+    STORE is a local path or https URL. One file per timestep, all bands, named
+    L<level>_<date>.tif, readable by GDAL and QGIS without chronozarr. One timestep of the level
+    is held in memory at a time, so use --level for very large stores.
+    """
+    with _command_errors():
+        opened = open_store(store)
+        chosen = select_times(times, opened.attrs.times)
+        paths = export_cog(opened, out_dir, level=level, times=chosen)
+    total = sum(p.stat().st_size for p in paths)
+    click.echo(f"wrote {len(paths)} COG(s), {total / 1e6:.1f} MB, to {out_dir}")
+
+
+@main.command("stac")
+@click.argument("store")
+@click.option(
+    "--out",
+    "out_dir",
+    required=True,
+    type=click.Path(path_type=Path),
+    help="Directory for collection.json and <id>/<id>.json.",
+)
+@click.option("--href", default=None, help="Public location of the store (default: see below).")
+@click.option("--id", "stac_id", default=None, help="STAC id (default: <parent>-<name> of STORE).")
+@click.option("--title", default=None, help="Human-readable title.")
+@click.option("--description", default=None, help="Collection description.")
+@click.option(
+    "--license",
+    "license_id",
+    default="proprietary",
+    show_default=True,
+    help="SPDX identifier, 'various' or 'proprietary'.",
+)
+def stac_command(
+    store: str,
+    out_dir: Path,
+    href: str | None,
+    stac_id: str | None,
+    title: str | None,
+    description: str | None,
+    license_id: str,
+) -> None:
+    """Write a static STAC Collection and Item for STORE (local path or https URL).
+
+    The Item has the Zarr asset, spatial and temporal extent, band metadata, the datacube
+    extension and the provenance recorded in the store. The asset href defaults to the URL for
+    a remote store, or the relative path from the Item file to a local store; pass --href to
+    publish the catalog next to a store served elsewhere.
+    """
+    with _command_errors():
+        collection_path, item_path = write_stac(
+            store,
+            out_dir,
+            href=href,
+            id=stac_id,
+            title=title,
+            description=description,
+            license=license_id,
+        )
+    click.echo(f"wrote {collection_path}")
+    click.echo(f"wrote {item_path}")
+
+
+def _parse_numbers(text: str | None, count: int, flag: str, kind: type) -> tuple | None:
+    if text is None:
+        return None
+    try:
+        values = tuple(kind(part) for part in text.split(","))
+    except ValueError as exc:
+        raise click.BadParameter(f"{flag} needs {count} comma-separated numbers: {exc}") from exc
+    if len(values) != count:
+        raise click.BadParameter(
+            f"{flag} needs {count} comma-separated numbers, got {len(values)}"
+        )
+    return values
+
+
+def _parse_shape(text: str | None) -> tuple[int, int] | None:
+    numbers = _parse_numbers(text, 2, "--shape", int)
+    return None if numbers is None else (int(numbers[0]), int(numbers[1]))
+
+
+def _parse_nodata(text: str | None) -> float | int | str | None:
+    if text is None:
+        return "auto"
+    if text.lower() == "none":
+        return None
+    try:
+        number = float(text)
+    except ValueError as exc:
+        raise click.BadParameter(f"--nodata must be a number or 'none', got {text!r}") from exc
+    return int(number) if number.is_integer() else number
+
+
+@main.command("convert")
+@click.argument("source")
+@click.argument("out", type=click.Path(path_type=Path))
+@_encode_options
+@click.option("--variable", default=None, help="Variable to convert from a Zarr or NetCDF source.")
+@click.option(
+    "--dims",
+    default=None,
+    help="Dimension names when they are not time/y/x/band or common aliases: "
+    "time=NAME,y=NAME,x=NAME[,band=NAME].",
+)
+@click.option(
+    "--crs",
+    default=None,
+    help="EPSG:xxxxx. Manifest: the target CRS (default: the first COG's). Zarr/NetCDF: the "
+    "CRS of the data when the file does not declare one.",
+)
+@click.option(
+    "--transform",
+    default=None,
+    help="Manifest only: target grid transform a,b,c,d,e,f (north-up). Needs --crs and --shape.",
+)
+@click.option("--shape", default=None, help="Manifest only: target grid height,width in pixels.")
+@click.option(
+    "--resampling",
+    type=click.Choice(RESAMPLING_METHODS),
+    default=None,
+    help="Warp COGs that are not on the target grid with this method (required when any are not).",
+)
+@click.option(
+    "--nodata",
+    default=None,
+    help="Nodata value, or 'none' (default: the source's, else 0 for uint8/uint16).",
+)
+@click.option(
+    "--work-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Where timesteps are staged (default: OUT.convert-work beside OUT).",
+)
+@click.option("--resume", is_flag=True, help="Reuse timesteps staged by an interrupted run.")
+@click.option(
+    "--dry-run", is_flag=True, help="Check the source and print size and time estimates."
+)
+@click.option(
+    "--read-ahead",
+    type=int,
+    default=2,
+    show_default=True,
+    help="Timesteps read concurrently while staging; memory is about this many timesteps.",
+)
+def convert_command(
+    source: str,
+    out: Path,
+    variable: str | None,
+    dims: str | None,
+    crs: str | None,
+    transform: str | None,
+    shape: str | None,
+    resampling: str | None,
+    nodata: str | None,
+    work_dir: Path | None,
+    resume: bool,
+    dry_run: bool,
+    read_ahead: int,
+    **options: Any,
+) -> None:
+    """Convert SOURCE into a chronozarr store at OUT without loading the whole stack.
+
+    SOURCE is a manifest (.csv with columns uri,datetime[,bands] or .json) of COG URIs, a Zarr
+    store (path or URL) or a NetCDF file, the last two with --variable. Each timestep is read,
+    resampled if needed, staged under the work directory and then encoded cell by cell. The
+    size and time estimate is printed first; --dry-run stops there.
+    """
+    last_report = 0.0
+
+    def show_plan(plan: Plan) -> None:
+        for line in plan.lines(read_ahead):
+            click.echo(line)
+
+    def show_progress(done: int, total: int) -> None:
+        nonlocal last_report
+        now = time.monotonic()
+        if done == total or now - last_report >= 2.0:
+            last_report = now
+            click.echo(f"staged {done}/{total} timesteps", err=True)
+
+    with _command_errors():
+        report = convert(
+            source,
+            out,
+            variable=variable,
+            dims=dims,
+            crs=crs,
+            transform=_parse_numbers(transform, 6, "--transform", float),
+            shape=_parse_shape(shape),
+            resampling=resampling,
+            nodata=_parse_nodata(nodata),
+            work_dir=work_dir,
+            resume=resume,
+            dry_run=dry_run,
+            read_ahead=read_ahead,
+            on_plan=show_plan,
+            progress=show_progress,
+            **_encode_kwargs(options),
+        )
+    if report.encode is None:
+        click.echo("dry run: nothing was written")
+        return
+    click.echo(_encode_summary(out, report.encode))
+    click.echo(
+        f"read {report.n_staged} timesteps ({report.n_reused} reused) in {report.read_s:.1f} s, "
+        f"encoded in {report.encode_s:.1f} s, total {report.total_s:.1f} s"
+    )

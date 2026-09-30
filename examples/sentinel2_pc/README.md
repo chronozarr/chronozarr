@@ -14,7 +14,19 @@ example of producing input for `chronozarr.encode`; it is not part of the `chron
    pixel with no earlier valid month stays 0 (nodata). Months that already have an `.npz` are
    skipped, so an interrupted download resumes.
 2. **Encode.** Stacks the monthly `.npz` files into a `(time, band, y, x)` uint16 array (the
-   whole stack is held in memory) and writes it with `chronozarr.encode` using default options.
+   whole stack is held in memory) and writes it with `chronozarr.encode` using default options
+   (the writer picks star-delta or plain storage by measuring a sample of cells). The store also
+   records:
+   - band metadata: name, `common_name` (blue, green, red, nir) and `scale` 0.0001, so
+     reflectance = stored value * 0.0001;
+   - a `coverage` plane, uint8 per pixel and month: 1 where at least one scene was valid, 0 where
+     the value is carried forward from the previous month or missing. The monthly files store
+     the valid fraction, not the scene count, so this is a flag, not a count;
+   - `provenance`: the Planetary Computer collection, `composite` "monthly median", `gap_fill`
+     "carry-forward", and notes on the cloud mask and the baseline 04.00 offset correction.
+3. **STAC (optional, `--stac`).** Writes a static STAC Collection and Item next to the store, the
+   same output as `chronozarr stac`: extent, Zarr asset, bands, the datacube extension and the
+   provenance above.
 
 Planetary Computer asset URLs are signed by `planetary-computer` without an API key.
 
@@ -23,7 +35,8 @@ Planetary Computer asset URLs are signed by `planetary-computer` without an API 
 ```
 <out-dir>/                      default: <repo>/data
   mosaics/<aoi>/YYYY-MM.npz     one file per month
-  stores/<aoi>/chronozarr/      chronozarr v0.1 store
+  stores/<aoi>/chronozarr/      chronozarr store
+  stores/<aoi>/stac/            with --stac: collection.json and <aoi>-sentinel-2-monthly/*.json
 ```
 
 Each `YYYY-MM.npz` holds:
@@ -56,8 +69,11 @@ uv run python examples/sentinel2_pc/ingest.py --aoi sahara_tamanrasset \
 # encode existing mosaics only
 uv run python examples/sentinel2_pc/ingest.py --aoi sahara_tamanrasset --skip-download
 
+# encode existing mosaics and write the STAC catalog beside the store
+uv run python examples/sentinel2_pc/ingest.py --aoi sahara_tamanrasset --skip-download --stac
+
 # check the result
-uv run chronozarr validate data/stores/sahara_tamanrasset/chronozarr
+uv run chronozarr doctor data/stores/sahara_tamanrasset/chronozarr
 ```
 
 AOI names are the keys under `aois:` in `aois.yaml`. A chronozarr store is immutable: if

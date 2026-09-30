@@ -3,6 +3,7 @@
 from chronozarr.decode import ChronoStore, HttpStore, open_store
 from chronozarr.encode import EncodeReport, encode
 from chronozarr.schema import Band, SchemaError, validate
+from chronozarr.view import view
 
 __all__ = [
     "Band",
@@ -13,4 +14,5 @@ __all__ = [
     "encode",
     "open_store",
     "validate",
+    "view",
 ]
