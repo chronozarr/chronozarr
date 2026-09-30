@@ -1,6 +1,8 @@
 # Publishing
 
-Stores live in the R2 bucket `tileripper-stores`; the viewer is a Cloudflare Worker serving `js/` as static assets. All commands need `npx wrangler login` once.
+Stores live in the R2 bucket `tileripper-stores`, served at `https://data.tileripper.com`; the viewer is a Cloudflare Worker serving `js/` as static assets (`wrangler.toml`). All commands need `npx wrangler login` once. The header checklist, the upload order and recipes for other hosts (S3 with CloudFront, GCS, Source Cooperative) are in [docs/hosting.md](../docs/hosting.md).
+
+## Stores
 
 ```bash
 # one-time bucket setup (R2 must be enabled in the dashboard first)
@@ -9,11 +11,33 @@ npx wrangler r2 bucket cors set tileripper-stores --file deploy/r2-cors.json --f
 npx wrangler r2 bucket dev-url enable tileripper-stores --force      # public r2.dev URL
 npx wrangler r2 bucket domain add tileripper-stores --domain data.tileripper.com --zone-id <zone id>
 
-# upload stores (4 parallel puts; re-runnable)
-scripts/upload_stores.sh sahara_tamanrasset iowa_ames
+# upload a store: the three-phase procedure in docs/hosting.md section 2 with the R2 put() of section 3.2
+#   STORE=data/stores/ucayali_santa_maria/chronozarr-3  PREFIX=ucayali_santa_maria/chronozarr-3
 
-# viewer
+# check the live URL: CORS, byte ranges, HEAD, caching, and a decode of every level
+uv run chronozarr doctor https://data.tileripper.com/ucayali_santa_maria/chronozarr-3
+```
+
+`deploy/r2-cors.json` uses wrangler's rule format (`rules[].allowed`, `exposeHeaders`), not the S3 CORS array.
+
+Rules for a store:
+
+- **Immutable.** A re-encode goes under a new prefix, never in place. Objects carry `Cache-Control: public, max-age=31536000, immutable`, so a rewritten object stays stale in browsers for up to a year.
+- **Catalog last.** `js/tileripper/catalog.json` is the commit point. Upload the store, run `chronozarr doctor` on it, then `npx wrangler deploy` with the catalog change. `docs/hosting.md` section 2 has the strict metadata-last upload order. `scripts/upload_stores.sh` (4 parallel puts with `Cache-Control: immutable`, one pass, no ordering) lists `data/stores/<aoi>/chronozarr`, so it does not find a versioned directory such as `chronozarr-3` until it is edited.
+- **Delete old prefixes afterwards** with `scripts/delete_stores.sh` (the bucket is on the 10 GB free tier). It takes its keys from `$ROOT/<aoi>/chronozarr` on disk, so point `ROOT` at a directory that still holds the old store under that name.
+
+Rules on `data.tileripper.com` (Cloudflare dashboard, Rules; both need zone write access, which the wrangler login token lacks):
+
+- A Cache Rule with expression `(http.host eq "data.tileripper.com")`: Eligible for cache, Edge TTL "Ignore cache-control header and use this TTL" 1 year, Browser TTL override 1 year. Verified 2026-09-30: `zarr.json` and a `206` shard range both go MISS then HIT.
+- A Response Header Transform Rule with the same expression, Set static `Timing-Allow-Origin: *`.
+- Put the expression in the expression editor or use the Hostname field. Pasted into a URI wildcard value it matches nothing, and the "may not apply to your traffic" warning for the R2 hostname is a false alarm.
+
+`chronozarr doctor` on the live store reports 15 ok, 2 info, 0 warnings. Settings and the other hosts are in `docs/hosting.md` section 3.
+
+## Viewer
+
+```bash
 npx wrangler deploy
 ```
 
-Stores are immutable: a re-encode goes under a new prefix, never in place.
+`js/_headers` sets `Cache-Control: no-cache` on viewer assets so a deploy applies on the next load.

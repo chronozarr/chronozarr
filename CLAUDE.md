@@ -10,12 +10,27 @@ Read `.napkin.md` first every session.
 ## Layout
 
 ```
-spec/CHRONOZARR.md        normative format spec (v0.1)
-src/chronozarr/           Python: encode(), open_store(), validate; CLI `chronozarr encode|validate|info`
-js/chronozarr/decoder.js  DOM-free reader on zarrita: (lod,row,col,t) -> uint16 cell, cache, prefetch
-js/tileripper/            viewer: index.html?store=<url>, viewer.js, renderer.js (WebGL2), products.js, bench.js
+spec/CHRONOZARR.md        normative format spec (v0.2.0); spec/CHANGES-0.2.md only points to its section 13
+src/chronozarr/           Python package; CLI `chronozarr` (commands: encode | validate | info | doctor | export-cog | stac | convert)
+  schema.py               attribute dataclasses, layout helpers, validate()
+  encode.py               encode(): pyramid, temporal encoding auto|none|star-delta, sharding, shard_bytes, mask/coverage
+  decode.py               open_store() / ChronoStore: lazy reads, to_xarray(); HttpStore (stdlib HTTP range store)
+  backend.py              xarray backend: xr.open_dataset(path_or_url, engine="chronozarr")
+  convert.py              streaming conversion of COG manifests, Zarr variables and NetCDF into a store
+  stac.py                 static STAC Collection and Item JSON for a store (datacube extension)
+  export.py               export_cog(): true-value Cloud Optimized GeoTIFFs for GDAL and QGIS
+  doctor.py               `chronozarr doctor`: CORS, byte range, caching and decode checks against a URL or path
+  view.py                 serve_store(), view(): local range server and notebook viewer iframe
+  cli.py                  CLI entry point
+js/chronozarr/            DOM-free reader on zarrita (spec 0.1 and 0.2): decoder.js (openStore, getCell, prefetch), metadata.js,
+                          http.js, cache.js, bandwidth.js, limiter.js, pool.js + decode-worker.js, codec.js, shard.js
+js/maplibre/              MapLibre custom layer on the reader: layer.js, mesh.js, projection.js, shader.js, slots.js, view.js; demo.js + index.html
+js/tileripper/            viewer: index.html?store=<url>, viewer.js, renderer.js (WebGL2), products.js, playback.js, chart.js, export.js, permalink.js, bench.js
 js/test/                  node --test suites (fixtures skip if data/spike is absent)
+js/support/               static-server.js (byte ranges), synthetic-store.js, test fixtures
 tests/                    pytest, marker `unit`
+docs/                     hosting.md (S3 + CloudFront, R2, GCS, Source Cooperative; doctor checklist), format-comparison.md
+deploy/                   README.md (R2 bucket + Worker publishing), r2-cors.json
 scripts/reencode_aoi.py   monthly mosaics in data/mosaics/<aoi> -> chronozarr store
 examples/sentinel2_pc/    Sentinel-2 monthly median ingest from Planetary Computer (optional extra `ingest`)
 data/                     gitignored: mosaics/, stores/, spike/ (P0 fixtures)
