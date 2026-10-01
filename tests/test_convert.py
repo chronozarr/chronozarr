@@ -1,4 +1,4 @@
-"""`convert`: COG manifests, Zarr and NetCDF sources, resampling, resume, estimates."""
+"""`convert`: COG manifests, PNG frames, Zarr and NetCDF sources, resampling, resume, estimates."""
 
 from __future__ import annotations
 
@@ -11,8 +11,15 @@ import pytest
 import xarray as xr
 
 import chronozarr
-from chronozarr.convert import CogManifestSource, convert, plan_conversion, read_manifest
+from chronozarr.convert import (
+    CogManifestSource,
+    _gdal_env,
+    convert,
+    plan_conversion,
+    read_manifest,
+)
 from tests.fixtures import cog_sources as fx
+from tests.fixtures import png_frames as pf
 from tests.synthetic import CRS, TRANSFORM, make_times, make_truth
 
 pytestmark = pytest.mark.unit
@@ -98,7 +105,9 @@ def test_read_manifest_sorts_resolves_relative_uris_and_converts_offsets(tmp_pat
         "a.tif,2024-01-15,red;nir\n"
         "https://example.org/c.tif,2024-02-01T00:00:00Z,\n"
     )
-    entries, bands = read_manifest(manifest)
+    parsed = read_manifest(manifest)
+    entries, bands = parsed.entries, parsed.bands
+    assert parsed.bounds is None
     assert [str(e.time) for e in entries] == [
         "2024-01-15T00:00:00.000",
         "2024-02-01T00:00:00.000",
@@ -118,8 +127,12 @@ def test_read_manifest_json_forms(tmp_path):
     as_list.write_text(json.dumps(items))
     as_object = tmp_path / "object.json"
     as_object.write_text(json.dumps({"bands": ["r", "g"], "items": items}))
-    assert read_manifest(as_list)[1] is None
-    assert read_manifest(as_object)[1] == ("r", "g")
+    with_bounds = tmp_path / "bounds.json"
+    with_bounds.write_text(json.dumps({"bounds": [1, 2.5, 3, 4], "items": items}))
+    assert read_manifest(as_list).bands is None
+    assert read_manifest(as_list).bounds is None
+    assert read_manifest(as_object).bands == ("r", "g")
+    assert read_manifest(with_bounds).bounds == (1.0, 2.5, 3.0, 4.0)
 
 
 @pytest.mark.parametrize(
@@ -131,6 +144,21 @@ def test_read_manifest_json_forms(tmp_path):
         ("uri,datetime,bands\na,2024-01-01,r;g\nb,2024-02-01,r;n\n", ".csv", "differ from"),
         ("uri,datetime\n", ".csv", "no rows"),
         ('[{"uri": "a.tif"}]', ".json", "needs both 'uri' and 'datetime'"),
+        (
+            '{"bounds": [1, 2, 3], "items": [{"uri": "a", "datetime": "2024-01-01"}]}',
+            ".json",
+            "four",
+        ),
+        (
+            '{"bounds": [5, 2, 3, 4], "items": [{"uri": "a", "datetime": "2024-01-01"}]}',
+            ".json",
+            "west < east",
+        ),
+        (
+            '{"bounds": [1, 2, "x", 4], "items": [{"uri": "a", "datetime": "2024-01-01"}]}',
+            ".json",
+            "four numbers",
+        ),
         ("x", ".txt", "must be .csv or .json"),
     ],
 )
@@ -314,6 +342,307 @@ def test_missing_source_file_is_named(tmp_path, tifs):
         plan_conversion(manifest, sample=False)
 
 
+# --- PNG frames -----------------------------------------------------------------------------
+
+
+def convert_frames(tmp_path, frames, *, bands=None, name="store", **kwargs):
+    out = tmp_path / name
+    manifest = pf.write_manifest(tmp_path / f"{name}.csv", frames, bands)
+    convert(manifest, out, **{**OPTIONS, **kwargs})
+    return chronozarr.open_store(out)
+
+
+def assert_frames_stored(store, frames: pf.FrameSet) -> None:
+    """The bands are the frames' colours, the mask is alpha, the grid is the fixture's."""
+    assert store.bands == ("red", "green", "blue")
+    assert [b.common_name for b in store.attrs.bands] == ["red", "green", "blue"]
+    assert store.dtype == np.uint8
+    assert band_attrs(store) == [(1.0, 0.0, None)] * 3
+    assert store.attrs.nodata is None
+    assert store.attrs.mask_variable == "mask"
+    assert store.attrs.crs == CRS
+    assert store.levels[0].transform == TRANSFORM
+    assert np.array_equal(stored_mask(store), frames.alpha)
+    for t in range(pf.N_TIME):
+        assert np.array_equal(store.read(t), frames.rgb[t])  # values under alpha 0 are kept
+    assert store.read_mask(0)[2, 2] == 1  # alpha 128: partly transparent, still valid
+    assert store.read_mask(0)[3, 4] == 0  # alpha 0 over the colour 200
+    assert store.read_mask(0)[5, 6] == 1  # colour 0 with alpha 255 is a valid zero
+    assert store.read(0)[0, 5, 6] == 0
+
+
+def test_png_frames_with_world_files_and_crs_become_a_masked_rgb_store(tmp_path):
+    frames = pf.rgba_frames(tmp_path, "pgw")
+    store = convert_frames(tmp_path, frames, crs=CRS)
+    assert_frames_stored(store, frames)
+    assert chronozarr.validate(tmp_path / "store") == []
+
+
+def test_a_world_file_has_no_crs_so_it_is_asked_for(tmp_path):
+    manifest = pf.write_manifest(tmp_path / "m.csv", pf.rgba_frames(tmp_path, "pgw"))
+    with pytest.raises(ValueError, match=r"geotransform but no CRS.*--crs EPSG:xxxxx") as error:
+        plan_conversion(manifest, sample=False)
+    assert "frame_0.png" in str(error.value)  # the first frame, named
+
+
+def test_png_frames_with_aux_xml_carry_their_crs_and_transform(tmp_path):
+    frames = pf.rgba_frames(tmp_path, "aux")
+    store = convert_frames(tmp_path, frames)  # no --crs
+    assert_frames_stored(store, frames)
+    assert chronozarr.validate(tmp_path / "store") == []
+
+
+def test_aux_xml_with_a_crs_only_still_needs_a_transform(tmp_path):
+    frames = pf.rgba_frames(tmp_path, "pgw")
+    for png in frames.paths:
+        pf.write_aux_xml(png, transform=None)  # SRS from the .aux.xml, transform from the .pgw
+    store = convert_frames(tmp_path, frames)
+    assert_frames_stored(store, frames)
+
+
+def test_a_world_file_wins_over_the_aux_xml_transform_which_supplies_only_the_crs(tmp_path):
+    frames = pf.rgba_frames(tmp_path, "pgw")
+    for png in frames.paths:
+        pf.write_aux_xml(png, crs=CRS, transform=(20.0, 0.0, 1000.0, 0.0, -20.0, 2000.0))
+    store = convert_frames(tmp_path, frames)  # no --crs: the .aux.xml has it
+    assert_frames_stored(store, frames)  # the grid is the world file's, not the .aux.xml's
+
+
+def test_a_wld_world_file_is_read_like_a_pgw(tmp_path):
+    frames = pf.rgba_frames(tmp_path, "pgw")
+    for png in frames.paths:
+        png.with_suffix(".pgw").rename(png.with_suffix(".wld"))
+    assert_frames_stored(convert_frames(tmp_path, frames, crs=CRS), frames)
+
+
+def test_frames_without_a_sidecar_name_the_ways_to_locate_them(tmp_path):
+    manifest = pf.write_manifest(tmp_path / "m.csv", pf.rgba_frames(tmp_path, "none"))
+    with pytest.raises(
+        ValueError, match=r"no georeferencing.*\.pgw.*\.aux\.xml.*--bounds"
+    ) as error:
+        plan_conversion(manifest, crs=CRS, sample=False)
+    assert "frame_0.png" in str(error.value)
+
+
+def test_bounds_give_frames_without_a_sidecar_their_grid(tmp_path):
+    frames = pf.rgba_frames(tmp_path, "none")
+    store = convert_frames(tmp_path, frames, crs=CRS, bounds=pf.bounds_of())
+    assert_frames_stored(store, frames)
+    assert chronozarr.validate(tmp_path / "store") == []
+
+
+def test_bounds_can_sit_in_a_json_manifest_and_must_not_be_given_twice(tmp_path):
+    frames = pf.rgba_frames(tmp_path, "none")
+    items = [
+        {"uri": str(png), "datetime": date}
+        for png, date in zip(frames.paths, frames.dates(), strict=True)
+    ]
+    manifest = tmp_path / "m.json"
+    manifest.write_text(json.dumps({"bounds": list(pf.bounds_of()), "items": items}))
+    out = tmp_path / "store"
+    convert(manifest, out, crs=CRS, **OPTIONS)
+    assert_frames_stored(chronozarr.open_store(out), frames)
+    with pytest.raises(ValueError, match="give them once"):
+        plan_conversion(manifest, crs=CRS, bounds=pf.bounds_of(), sample=False)
+    with pytest.raises(ValueError, match="bounds need crs"):
+        plan_conversion(manifest, sample=False)
+
+
+def test_bounds_with_non_square_pixels_derive_each_axis_from_the_image_size(tmp_path):
+    frames = pf.rgba_frames(tmp_path, "none")
+    west, south, east, north = pf.bounds_of()
+    plan = plan_conversion(
+        pf.write_manifest(tmp_path / "m.csv", frames),
+        crs=CRS,
+        bounds=(west, south, east + pf.WIDTH * 5.0, north),
+        sample=False,
+    )
+    grid = plan.source.info.grid
+    assert grid.transform == (15.0, 0.0, west, 0.0, -10.0, north)
+    assert (grid.height, grid.width) == (pf.HEIGHT, pf.WIDTH)
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("bad bounds", "west < east"),
+        ("size", r"frame_2.png is 12 x 32 px; .*frame_0.png is 24 x 32 px.*same size"),
+        ("own transform", "carries its own geotransform"),
+        ("other crs", "declares EPSG:32632 but --crs is EPSG:32631"),
+    ],
+)
+def test_bounds_refuse_what_they_cannot_locate(tmp_path, case, message):
+    frames = pf.rgba_frames(tmp_path, "none")
+    bounds = pf.bounds_of()
+    if case == "bad bounds":
+        bounds = (bounds[2], bounds[1], bounds[0], bounds[3])
+    elif case == "size":
+        pf.write_png(frames.paths[2], frames.pixels[2][:12])
+    elif case == "own transform":
+        pf.write_world_file(frames.paths[1])
+    else:
+        pf.write_aux_xml(frames.paths[0], crs="EPSG:32632", transform=None)
+    manifest = pf.write_manifest(tmp_path / "m.csv", frames)
+    with pytest.raises(ValueError, match=message):
+        plan_conversion(manifest, crs=CRS, bounds=bounds, sample=False)
+
+
+def test_png_frames_on_another_grid_are_warped_like_cogs(tmp_path):
+    frames = pf.rgba_frames(tmp_path, "pgw")
+    shifted = list(TRANSFORM)
+    shifted[2] += 5 * 10.0  # five pixels east: same size, different extent
+    pf.write_world_file(frames.paths[2], tuple(shifted))
+    manifest = pf.write_manifest(tmp_path / "m.csv", frames)
+    with pytest.raises(ValueError, match=r"1 of 4 sources are not on the target grid") as error:
+        plan_conversion(manifest, crs=CRS, sample=False)
+    assert "frame_2.png" in str(error.value)
+
+    out = tmp_path / "store"
+    report = convert(manifest, out, crs=CRS, resampling="nearest", encoding="none", **OPTIONS)
+    store = chronozarr.open_store(out)
+    assert report.plan.warped == 1
+    for t in (0, 1, 3):
+        assert np.array_equal(store.read(t), frames.rgb[t])
+    # source column j of the shifted frame lands at column j + 5; the rest is outside its footprint
+    assert np.array_equal(store.read(2)[:, :, 5:], frames.rgb[2][:, :, :-5])
+    expected = np.zeros((pf.HEIGHT, pf.WIDTH), dtype=bool)
+    expected[:, 5:] = frames.alpha[2][:, :-5]
+    assert np.array_equal(stored_mask(store)[2], expected)
+
+
+def test_png_frames_with_their_own_crs_warp_into_another_crs(tmp_path):
+    frames = pf.rgba_frames(tmp_path, "aux")
+    out = tmp_path / "store"
+    report = convert(
+        pf.write_manifest(tmp_path / "m.csv", frames),
+        out,
+        crs="EPSG:32632",
+        resampling="nearest",
+        **OPTIONS,
+    )
+    assert report.plan.warped == pf.N_TIME
+    store = chronozarr.open_store(out)
+    assert store.attrs.crs == "EPSG:32632"
+    assert store.attrs.mask_variable == "mask"
+    assert chronozarr.validate(out) == []
+
+
+def test_frames_located_by_bounds_can_be_cropped_onto_an_explicit_grid(tmp_path):
+    frames = pf.rgba_frames(tmp_path, "none")
+    left = TRANSFORM[2] + 4 * 10.0
+    top = TRANSFORM[5] - 3 * 10.0
+    out = tmp_path / "store"
+    convert(
+        pf.write_manifest(tmp_path / "m.csv", frames),
+        out,
+        crs=CRS,
+        bounds=pf.bounds_of(),
+        transform=(10.0, 0.0, left, 0.0, -10.0, top),
+        shape=(20, 24),
+        resampling="nearest",
+        encoding="none",
+        **OPTIONS,
+    )
+    store = chronozarr.open_store(out)
+    assert np.array_equal(
+        np.stack([store.read(t) for t in range(pf.N_TIME)]), frames.rgb[:, :, 3:23, 4:28]
+    )
+    assert np.array_equal(stored_mask(store), frames.alpha[:, 3:23, 4:28])
+
+
+def test_bounds_apply_to_manifests_only(tmp_path, truth):
+    source = tmp_path / "in.zarr"
+    dataset_from(truth).to_zarr(source, zarr_format=2, consolidated=True)
+    with pytest.raises(ValueError, match="apply to manifests"):
+        plan_conversion(source, crs=CRS, bounds=pf.bounds_of(), sample=False)
+
+
+def test_png_bands_follow_the_colour_interpretation_unless_named(tmp_path):
+    rng = np.random.default_rng(5)
+
+    def stack(channels: int, name: str):
+        folder = tmp_path / f"frames_{name}"
+        folder.mkdir()
+        pixels = rng.integers(
+            0, 256, size=(pf.N_TIME, pf.HEIGHT, pf.WIDTH, channels), dtype=np.uint8
+        )
+        paths = []
+        for t in range(pf.N_TIME):
+            png = pf.write_png(folder / f"f{t}.png", pixels[t])
+            pf.write_world_file(png)
+            paths.append(png)
+        return pf.FrameSet(paths, pixels)
+
+    rgb = convert_frames(tmp_path, stack(3, "rgb"), crs=CRS, name="rgb")
+    assert rgb.bands == ("red", "green", "blue")
+    assert rgb.attrs.mask_variable is None  # no alpha, no mask
+    assert rgb.attrs.nodata is None
+
+    named = convert_frames(tmp_path, stack(3, "named"), crs=CRS, bands="B04;B03;B02", name="named")
+    assert named.bands == ("B04", "B03", "B02")
+    assert [b.common_name for b in named.attrs.bands] == [None, None, None]
+
+    one = convert_frames(tmp_path, stack(1, "gray"), crs=CRS, name="gray")
+    assert one.bands == ("1",)
+    assert one.attrs.mask_variable is None
+
+    gray_alpha = stack(2, "ga")
+    ga = convert_frames(tmp_path, gray_alpha, crs=CRS, name="ga")
+    assert ga.bands == ("1",)
+    assert ga.attrs.mask_variable == "mask"
+    assert np.array_equal(ga.read_mask(0).astype(bool), gray_alpha.pixels[0, :, :, 1] != 0)
+
+
+def test_a_palette_png_is_refused_with_the_way_to_expand_it(tmp_path):
+    folder = tmp_path / "palette"
+    folder.mkdir()
+    palette = np.array([[255, 0, 0], [0, 255, 0], [0, 0, 255]], dtype=np.uint8)
+    indexes = np.arange(pf.HEIGHT * pf.WIDTH, dtype=np.uint8).reshape(pf.HEIGHT, pf.WIDTH) % 3
+    paths = []
+    for t in range(2):
+        png = pf.write_png(folder / f"p{t}.png", indexes, palette=palette)
+        pf.write_world_file(png)
+        paths.append(png)
+    manifest = pf.write_manifest(tmp_path / "m.csv", pf.FrameSet(paths, np.zeros((2, 1, 1, 4))))
+    with pytest.raises(
+        ValueError, match=r"palette \(indexed colour\) PNG.*gdal_translate -expand"
+    ):
+        plan_conversion(manifest, crs=CRS, sample=False)
+
+
+def test_a_palette_geotiff_keeps_its_indexes_as_data(tmp_path):
+    """Only PNG frames are display images; a GeoTIFF colour table usually labels class codes."""
+    classes = (np.arange(HEIGHT * WIDTH, dtype=np.uint8).reshape(1, HEIGHT, WIDTH)) % 3
+    files = []
+    for t in range(2):
+        path = tmp_path / f"class_{t}.tif"
+        write_tif(path, classes, nodata=None)
+        with rasterio.open(path, "r+") as dst:
+            dst.write_colormap(1, {0: (255, 0, 0, 255), 1: (0, 255, 0, 255), 2: (0, 0, 255, 255)})
+        files.append(path)
+    out = tmp_path / "store"
+    convert(write_csv(tmp_path / "m.csv", files, DATES[:2]), out, **OPTIONS)
+    assert np.array_equal(stored(out)[0], classes)
+
+
+def test_sidecars_are_probed_for_png_sources_only():
+    assert _gdal_env("/data/frame.png")["GDAL_DISABLE_READDIR_ON_OPEN"] == "TRUE"
+    assert _gdal_env("https://host/a/frame.PNG?sig=1")["GDAL_DISABLE_READDIR_ON_OPEN"] == "TRUE"
+    assert _gdal_env("/data/scene.tif")["GDAL_DISABLE_READDIR_ON_OPEN"] == "EMPTY_DIR"
+    assert _gdal_env("https://host/scene.tif?sig=1")["GDAL_DISABLE_READDIR_ON_OPEN"] == "EMPTY_DIR"
+
+
+def test_a_png_frame_set_resumes_and_plans_like_any_manifest(tmp_path):
+    frames = pf.rgba_frames(tmp_path, "none")
+    manifest = pf.write_manifest(tmp_path / "m.csv", frames)
+    plan = plan_conversion(manifest, crs=CRS, bounds=pf.bounds_of(), chunk_size=16)
+    text = "\n".join(plan.lines())
+    assert "data:       3 bands (red, green, blue), uint8" in text
+    assert "validity:   mask (alpha band)" in text
+    assert plan.raw_bytes == pf.N_TIME * 3 * pf.HEIGHT * pf.WIDTH
+    assert plan.sample_ratio is not None
+
+
 # --- Zarr and NetCDF sources ----------------------------------------------------------------
 
 
@@ -383,7 +712,7 @@ def test_zarr_source_dimension_names_and_errors(tmp_path, truth):
         two_path = tmp_path / "two.zarr"
         two.to_zarr(two_path, zarr_format=2, consolidated=True)
         plan_conversion(two_path, crs=CRS, sample=False)
-    with pytest.raises(ValueError, match="apply to COG manifests"):
+    with pytest.raises(ValueError, match="apply to manifests of COGs or image frames"):
         plan_conversion(source, resampling="nearest", sample=False)
 
 

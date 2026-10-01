@@ -8,7 +8,8 @@ the unit of `resume`: an interrupted run keeps them, and a rerun reads only the 
 
 Three input kinds are recognised from SOURCE:
 
-* a manifest (`.csv` or `.json`) of COG URIs with timestamps, one URI per timestep;
+* a manifest (`.csv` or `.json`) of COG or image-frame (PNG) URIs with timestamps, one URI per
+  timestep;
 * a Zarr store (local path or http(s) URL) with a chosen variable;
 * a NetCDF file (`.nc`, `.nc4`, `.cdf`) with a chosen variable (needs an xarray NetCDF engine).
 
@@ -62,6 +63,29 @@ mask, or with a `mask` variable shared by all bands (spec 2.3, 2.4).
    through a mask.
 8. Warped COG timesteps use the nearest-neighbour resampling of their validity plane, whatever
    `--resampling` says for the values.
+
+Image frames. A sequence of rendered, georeferenced PNGs (Earth Engine thumbnails, QGIS and
+matplotlib exports, drone pipelines) converts like COGs, with no GeoTIFF step; GDAL reads the
+frames, so every rule above applies to them. A frame is display values, not measurements: nothing
+is rescaled and the store holds exactly the 8-bit (or 16-bit) values of the file.
+
+9. Georeferencing comes from the frame: a `.png.aux.xml` sidecar (CRS and geotransform), or a world
+   file (`.pgw`, else `.wld`) beside it, which holds the transform and no CRS. Sidecars are found
+   next to local and remote PNGs alike; for other formats they are not looked for. A frame whose
+   CRS is missing takes `crs` (`--crs`), which is then both its CRS and the target CRS, so nothing
+   is warped; a frame with a geotransform and no CRS and no `crs` fails.
+10. A frame with no georeferencing at all fails, unless `bounds` (`--bounds west,south,east,north`,
+   in the units of `crs`; or a `"bounds"` entry in a JSON manifest) gives the extent of every
+   frame. The north-up transform is then derived from each frame's pixel size, so all frames must
+   have the same size, and a frame that carries its own geotransform is refused (drop `bounds`, or
+   remove the sidecar). `bounds` needs `crs` and applies to manifests only.
+11. Bands. Red, green and blue colour bands are named red, green and blue and get those common
+   names, so the viewer's True color product works; a band the manifest or the file's band
+   description names keeps that name and gets no common name. Other bands are named by their
+   1-based index. An alpha band is the mask (rule 5): an RGBA frame becomes three bands plus
+   `mask`, 0 where alpha is 0.
+12. A palette (indexed colour) PNG fails: its stored values are palette indices, not colours.
+   Expand it first (`gdal_translate -expand rgba in.png out.png`) or save the frames as RGB.
 """
 
 from __future__ import annotations
@@ -72,14 +96,16 @@ import json
 import math
 import shutil
 import time
+import warnings
 from collections import deque
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import wraps
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 import numpy as np
 import xarray as xr
@@ -95,6 +121,9 @@ GDAL_ENV = {
     "GDAL_HTTP_MAX_RETRY": "3",
     "GDAL_HTTP_RETRY_DELAY": "1",
 }
+# Formats whose georeferencing lives in sidecar files (world file, .aux.xml); GDAL finds them only
+# by probing for each candidate name, which GDAL_ENV switches off for everything else.
+SIDECAR_SUFFIXES = (".png",)
 NETCDF_SUFFIXES = (".nc", ".nc4", ".cdf")
 RESAMPLING_METHODS = ("nearest", "bilinear", "cubic", "average", "mode", "min", "max", "med")
 # Raw input bytes per second through `encode()` (spill, pyramid, zstd level 5, write). Measured
@@ -122,7 +151,21 @@ Validity is either one nodata sentinel (judged per band, no mask) or one mask sh
             --nodata gives one. A pixel invalid in any band is invalid for all.
   NaN is never stored: under a mask it becomes 0. A float source with undeclared NaN fails;
   --nodata nan treats NaN as invalid. --nodata N replaces the declared nodata; none ignores it.
+
+\b
+Image frames (PNG): GDAL reads them like COGs and the rules above apply; the values are stored
+as the file holds them (display values, not measurements).
+  georeferencing  a .png.aux.xml (CRS and transform) or a world file .pgw (transform only)
+                  beside the frame. A frame without a CRS takes --crs.
+  no sidecar      --bounds west,south,east,north (units of --crs) derives the north-up transform
+                  from the image size; every frame must then have the same size and none may
+                  carry its own transform. A JSON manifest can hold "bounds" instead.
+  bands           red, green, blue (common names set); the alpha band becomes the mask.
+  palette PNG     refused: expand it to RGB first (gdal_translate -expand rgba).
 """
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+Bounds = tuple[float, float, float, float]  # west, south, east, north in the units of the CRS
 _DIM_ALIASES = {
     "time": ("time", "t", "datetime", "valid_time"),
     "band": ("band", "bands", "channel", "variable"),
@@ -150,10 +193,20 @@ class Grid:
 
 @dataclass(frozen=True)
 class Entry:
-    """One timestep of a COG manifest."""
+    """One timestep of a manifest."""
 
     uri: str
     time: np.datetime64
+
+
+@dataclass(frozen=True)
+class Manifest:
+    """A parsed manifest: entries sorted by time, the band names it gives (None: take them from
+    the sources) and the `bounds` of a JSON manifest (None: none given)."""
+
+    entries: list[Entry]
+    bands: tuple[str, ...] | None
+    bounds: Bounds | None
 
 
 @dataclass(frozen=True)
@@ -236,17 +289,39 @@ def _split_bands(value: object, where: str) -> tuple[str, ...] | None:
     return tuple(names)
 
 
-def read_manifest(path: Path) -> tuple[list[Entry], tuple[str, ...] | None]:
-    """Entries sorted by time and the optional band names of a CSV or JSON manifest.
+def check_bounds(values: object, where: str) -> Bounds:
+    """`west, south, east, north` as floats; ValueError unless four finite numbers with
+    west < east and south < north."""
+    if not isinstance(values, (list, tuple)) or len(values) != 4:
+        raise ValueError(f"{where}: bounds must be four numbers west,south,east,north")
+    try:
+        west, south, east, north = (float(v) for v in values)
+    except (TypeError, ValueError):
+        raise ValueError(f"{where}: bounds must be four numbers, got {list(values)}") from None
+    if not all(math.isfinite(v) for v in (west, south, east, north)):
+        raise ValueError(f"{where}: bounds must be finite, got {list(values)}")
+    if not (west < east and south < north):
+        raise ValueError(
+            f"{where}: bounds need west < east and south < north, got "
+            f"west={west:g}, south={south:g}, east={east:g}, north={north:g}"
+        )
+    return (west, south, east, north)
+
+
+def read_manifest(path: Path) -> Manifest:
+    """The entries, band names and bounds of a CSV or JSON manifest.
 
     CSV: header `uri,datetime[,bands]`, band names separated by `;`. JSON: a list of
-    `{"uri", "datetime", "bands"?}` objects, or `{"bands"?: [...], "items": [...]}`. Relative
-    URIs are resolved against the manifest's directory. Every row that names bands must agree.
+    `{"uri", "datetime", "bands"?}` objects, or `{"bands"?: [...], "bounds"?: [w, s, e, n],
+    "items": [...]}`; `bounds` is the extent of every frame in the units of the CRS, for frames
+    with no georeferencing (see `convert`). Relative URIs are resolved against the manifest's
+    directory. Every row that names bands must agree.
     """
     if not path.is_file():
         raise FileNotFoundError(f"manifest {path} does not exist")
     rows: list[Mapping[str, Any]]
     top_bands: object = None
+    top_bounds: object = None
     if path.suffix.lower() == ".csv":
         with path.open(newline="", encoding="utf-8") as handle:
             reader = csv.DictReader(handle)
@@ -261,6 +336,7 @@ def read_manifest(path: Path) -> tuple[list[Entry], tuple[str, ...] | None]:
         document = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(document, dict):
             top_bands = document.get("bands")
+            top_bounds = document.get("bounds")
             rows = document.get("items", [])
         else:
             rows = document
@@ -298,7 +374,8 @@ def read_manifest(path: Path) -> tuple[list[Entry], tuple[str, ...] | None]:
                 f"{path}: two rows share the datetime {later.time}: {earlier.uri} and "
                 f"{later.uri}; a store has one timestep per time"
             )
-    return entries, names
+    bounds = None if top_bounds is None else check_bounds(top_bounds, f"{path} bounds")
+    return Manifest(entries, names, bounds)
 
 
 # --- Grids --------------------------------------------------------------------------------------
@@ -312,6 +389,48 @@ def _epsg(crs: Any, where: str) -> str:
             "Pass --crs EPSG:xxxxx"
         )
     return f"EPSG:{code}"
+
+
+def _bounds_grid(bounds: Bounds, crs: str, height: int, width: int) -> Grid:
+    """The north-up grid that `bounds` covers when divided into `height` x `width` pixels."""
+    west, south, east, north = bounds
+    transform = ((east - west) / width, 0.0, west, 0.0, -(north - south) / height, north)
+    return Grid(crs, transform, height, width)
+
+
+def _frame_grid(src: Any, crs: str | None, bounds: Bounds | None) -> Grid:
+    """The grid of one opened frame: its own CRS and geotransform, `crs` standing in for a
+    missing CRS, or the grid `bounds` gives a frame that has no geotransform."""
+    from rasterio.crs import CRS  # ty: ignore[unresolved-import]  # compiled, no stubs
+
+    located = not src.transform.is_identity  # GDAL answers the identity when it finds nothing
+    given = None if crs is None else _epsg(CRS.from_user_input(crs), "--crs")
+    declared = None if src.crs is None else _epsg(src.crs, "the frame")
+    if bounds is not None:
+        if given is None:
+            raise ValueError("--bounds needs --crs, the CRS the bounds are in")
+        if located:
+            raise ValueError(
+                "it carries its own geotransform (a world file or .aux.xml) and --bounds "
+                "was given; drop --bounds, or remove the sidecar of the frames that have one"
+            )
+        if declared is not None and declared != given:
+            raise ValueError(f"it declares {declared} but --crs is {given}")
+        return _bounds_grid(bounds, given, src.height, src.width)
+    if not located:
+        raise ValueError(
+            "it has no georeferencing (no geotransform, no world file next to it, no .aux.xml). "
+            "Add a .pgw world file or a .aux.xml beside the frame, or pass --bounds "
+            "west,south,east,north together with --crs"
+        )
+    frame_crs = declared or given
+    if frame_crs is None:
+        raise ValueError(
+            "it has a geotransform but no CRS (a world file carries none). Pass --crs EPSG:xxxxx"
+        )
+    return Grid(
+        frame_crs, _check_north_up(tuple(src.transform)[:6], "the frame"), src.height, src.width
+    )
 
 
 def _check_north_up(transform: Sequence[float], where: str) -> Transform:
@@ -492,7 +611,9 @@ def _scaling(scale: float, offset: float, where: str) -> tuple[float, float]:
 
 @dataclass(frozen=True)
 class _CogHeader:
+    driver: str  # GDAL driver short name: GTiff, PNG, ...
     grid: Grid
+    own_grid: bool  # the file carries its own CRS and geotransform (else `grid` came from options)
     data_indexes: tuple[int, ...]  # 1-based indexes of the data bands, the alpha band excluded
     alpha: int | None  # 1-based index of the alpha band
     internal_mask: bool  # the data bands share an internal or per-dataset mask (no alpha)
@@ -500,6 +621,7 @@ class _CogHeader:
     nodata: tuple[float | int | str | None, ...]  # declared token per data band
     warp_nodata: float | int | None  # first data band's nodata, for the warper
     descriptions: tuple[str | None, ...]
+    colors: tuple[str | None, ...]  # "red", "green" or "blue" for a band of that colour
     scales: tuple[float, ...]
     offsets: tuple[float, ...]
     units: tuple[str | None, ...]
@@ -509,14 +631,49 @@ class _CogHeader:
         return len(self.data_indexes)
 
 
-def _read_header(uri: str) -> _CogHeader:
+def _gdal_env(uri: str) -> dict[str, str]:
+    """GDAL options for opening `uri`: no directory listing or sidecar probes, which cost a
+    request each over HTTP, except for formats that keep their georeferencing in sidecar files."""
+    if uri.split("?", 1)[0].lower().endswith(SIDECAR_SUFFIXES):
+        return {**GDAL_ENV, "GDAL_DISABLE_READDIR_ON_OPEN": "TRUE"}
+    return GDAL_ENV
+
+
+def _tolerate_unlocated_frames(func: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Run `func` without rasterio's warning for a source that has no geotransform.
+
+    Such a frame is valid input when `bounds` locates it, and an error with its own message
+    otherwise, so the warning (an error under `-W error`) adds nothing. The filter is set once, by
+    the calling thread; the reader threads share it (a filter set per thread would race).
+    """
+
+    @wraps(func)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        from rasterio.errors import NotGeoreferencedWarning
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", NotGeoreferencedWarning)
+            return func(*args, **kwargs)
+
+    return wrapper
+
+
+_COLOR_NAMES = ("red", "green", "blue")
+
+
+def _read_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader:
     import rasterio
     from rasterio.enums import ColorInterp, MaskFlags
 
     try:
-        with rasterio.Env(**GDAL_ENV), rasterio.open(uri) as src:
-            if src.crs is None:
-                raise ValueError("no CRS")
+        with rasterio.Env(**_gdal_env(uri)), rasterio.open(uri) as src:
+            if src.driver == "PNG" and ColorInterp.palette in src.colorinterp:
+                raise ValueError(
+                    "it is a palette (indexed colour) PNG, so its values are palette indices, "
+                    "not colours. Expand it to RGB first, for example "
+                    "`gdal_translate -expand rgba in.png out.png`, or save the frames as RGB"
+                )
+            grid = _frame_grid(src, crs, bounds)
             alphas = [i for i, c in enumerate(src.colorinterp, start=1) if c == ColorInterp.alpha]
             if len(alphas) > 1:
                 raise ValueError(f"it has {len(alphas)} alpha bands; chronozarr reads one")
@@ -537,12 +694,9 @@ def _read_header(uri: str) -> _CogHeader:
                 for i in indexes
             ]
             return _CogHeader(
-                grid=Grid(
-                    _epsg(src.crs, uri),
-                    _check_north_up(tuple(src.transform)[:6], uri),
-                    src.height,
-                    src.width,
-                ),
+                driver=src.driver,
+                grid=grid,
+                own_grid=src.crs is not None and not src.transform.is_identity,
                 data_indexes=indexes,
                 alpha=alpha,
                 internal_mask=internal_mask,
@@ -550,6 +704,10 @@ def _read_header(uri: str) -> _CogHeader:
                 nodata=tokens,
                 warp_nodata=math.nan if isinstance(tokens[0], str) else tokens[0],
                 descriptions=tuple(src.descriptions[i - 1] or None for i in indexes),
+                colors=tuple(
+                    c if (c := src.colorinterp[i - 1].name) in _COLOR_NAMES else None
+                    for i in indexes
+                ),
                 scales=tuple(s for s, _ in scaling),
                 offsets=tuple(o for _, o in scaling),
                 units=tuple(src.units[i - 1] or None for i in indexes),
@@ -584,6 +742,7 @@ class CogManifestSource(Source):
         resampling: str | None,
         nodata: float | int | None | str,
         chunk_size: int,
+        bounds: Bounds | None = None,
     ) -> None:
         self.entries = entries
         self.times = [e.time for e in entries]
@@ -591,12 +750,25 @@ class CogManifestSource(Source):
         self.chunk_size = chunk_size
         workers = min(8, len(entries))
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            headers = list(pool.map(lambda e: _read_header(e.uri), entries))
+            headers = list(pool.map(lambda e: _read_header(e.uri, target_crs, bounds), entries))
         first = headers[0]
+        if all(h.driver == "PNG" for h in headers):
+            self.kind = "manifest of PNG frames"
+        if bounds is not None:
+            self._check_same_size(headers)
         self.grid = self._target_grid(first, target_crs, target_transform, target_shape)
-        self._check_consistent(headers, compare_descriptions=band_names is None)
+        self._check_consistent(headers, compare_labels=band_names is None)
         self._headers = headers
-        names = band_names or tuple(d or str(i + 1) for i, d in enumerate(first.descriptions))
+        if band_names is None:
+            # a description names the band; else a colour band is named by its colour and says so
+            labels = [
+                (d, None) if d else (c, c) if c else (str(i + 1), None)
+                for i, (d, c) in enumerate(zip(first.descriptions, first.colors, strict=True))
+            ]
+        else:
+            labels = [(n, None) for n in band_names]
+        names = tuple(name for name, _ in labels)
+        common_names = tuple(common for _, common in labels)
         if len(names) != first.count:
             raise ValueError(
                 f"{entries[0].uri} has {first.count} bands but {len(names)} band names were "
@@ -636,7 +808,13 @@ class CogManifestSource(Source):
             nodata=validity.nodata,
             band_names=names,
             bands=tuple(
-                Band(name=n, scale=first.scales[i], offset=first.offsets[i], units=first.units[i])
+                Band(
+                    name=n,
+                    common_name=common_names[i],
+                    scale=first.scales[i],
+                    offset=first.offsets[i],
+                    units=first.units[i],
+                )
                 for i, n in enumerate(names)
             ),
             mask=validity.mask,
@@ -678,7 +856,20 @@ class CogManifestSource(Source):
             width,
         )
 
-    def _check_consistent(self, headers: list[_CogHeader], *, compare_descriptions: bool) -> None:
+    def _check_same_size(self, headers: list[_CogHeader]) -> None:
+        """With `bounds` every frame covers the same extent, so a different size is a different
+        pixel size: refuse it rather than guess."""
+        first = headers[0].grid
+        for entry, header in zip(self.entries, headers, strict=True):
+            grid = header.grid
+            if (grid.height, grid.width) != (first.height, first.width):
+                raise ValueError(
+                    f"{entry.uri} is {grid.height} x {grid.width} px; {self.entries[0].uri} is "
+                    f"{first.height} x {first.width} px. With bounds every frame covers the "
+                    "same extent, so all frames must have the same size"
+                )
+
+    def _check_consistent(self, headers: list[_CogHeader], *, compare_labels: bool) -> None:
         first = headers[0]
         first_uri = self.entries[0].uri
         for entry, header in zip(self.entries, headers, strict=True):
@@ -696,8 +887,9 @@ class CogManifestSource(Source):
                 ("offsets", header.offsets, first.offsets),
                 ("units", header.units, first.units),
             ]
-            if compare_descriptions:
+            if compare_labels:
                 fields.append(("band descriptions", header.descriptions, first.descriptions))
+                fields.append(("band colours", header.colors, first.colors))
             for what, found, wanted in fields:
                 if found != wanted:
                     raise ValueError(
@@ -747,7 +939,7 @@ class CogManifestSource(Source):
         data = np.empty((info.n_band, grid.height, grid.width), dtype=info.dtype)
         valid = np.empty((grid.height, grid.width), dtype=np.uint8) if info.mask else None
         try:
-            with rasterio.Env(**GDAL_ENV), rasterio.open(entry.uri) as src:
+            with rasterio.Env(**_gdal_env(entry.uri)), rasterio.open(entry.uri) as src:
                 if t in self.warped:
                     self._read_warped(src, header, data, valid)
                 else:
@@ -787,6 +979,15 @@ class CogManifestSource(Source):
         (row0, row1), (col0, col1) = window
         return np.ones((row1 - row0, col1 - col0), dtype=bool)
 
+    @staticmethod
+    def _source_grid(src: Any, header: _CogHeader) -> dict[str, Any]:
+        """`reproject` keywords for the source grid: the file's own or the one from options."""
+        from rasterio.transform import Affine
+
+        if header.own_grid:
+            return {"src_transform": src.transform, "src_crs": src.crs}
+        return {"src_transform": Affine(*header.grid.transform), "src_crs": header.grid.crs}
+
     def _read_warped(
         self, src: Any, header: _CogHeader, data: np.ndarray, valid: np.ndarray | None
     ) -> None:
@@ -803,10 +1004,18 @@ class CogManifestSource(Source):
             src_nodata = header.warp_nodata
         else:
             src_nodata = self._sentinels[0] if self._sentinels else None
+        # A frame whose CRS or transform came from --crs, a world file or --bounds has them only in
+        # `header.grid`, so its pixels are handed over with that grid instead of as a dataset band.
+        source_grid = self._source_grid(src, header)
+        if header.own_grid:
+            source, source_options = rasterio.band(src, list(header.data_indexes)), {}
+        else:
+            source, source_options = src.read(list(header.data_indexes)), source_grid
         reproject(
-            source=rasterio.band(src, list(header.data_indexes)),
+            source=source,
             destination=data,
             src_nodata=src_nodata,
+            **source_options,
             dst_transform=Affine(*grid.transform),
             dst_crs=grid.crs,
             dst_nodata=fill,
@@ -818,8 +1027,7 @@ class CogManifestSource(Source):
             reproject(
                 source=self._declared_valid(src, header, None).astype(np.uint8),
                 destination=warped,
-                src_transform=src.transform,
-                src_crs=src.crs,
+                **source_grid,
                 src_nodata=None,
                 dst_transform=Affine(*grid.transform),
                 dst_crs=grid.crs,
@@ -1173,6 +1381,7 @@ def _sample_indices(n: int) -> list[int]:
     return sorted({0, n // 2, n - 1})[:SAMPLE_TIMESTEPS]
 
 
+@_tolerate_unlocated_frames
 def plan_conversion(
     source_path: str | Path,
     *,
@@ -1184,6 +1393,7 @@ def plan_conversion(
     resampling: str | None = None,
     nodata: float | int | str | None = "auto",
     mask_var: str | None = None,
+    bounds: Sequence[float] | None = None,
     chunk_size: int = 512,
     n_lods: int | None = None,
     sample: bool = True,
@@ -1201,10 +1411,17 @@ def plan_conversion(
             raise ValueError(
                 "--variable, --dims and --mask-var apply to Zarr and NetCDF input, not manifests"
             )
-        entries, names = read_manifest(Path(text))
+        manifest = read_manifest(Path(text))
+        if bounds is not None and manifest.bounds is not None:
+            raise ValueError(
+                f"{text} has bounds and bounds were also passed (--bounds); give them once"
+            )
+        frame_bounds = manifest.bounds if bounds is None else check_bounds(bounds, "--bounds")
+        if frame_bounds is not None and crs is None:
+            raise ValueError("bounds need crs (--crs EPSG:xxxxx), the CRS they are in")
         source = CogManifestSource(
-            entries,
-            names,
+            manifest.entries,
+            manifest.bands,
             target_crs=crs,
             target_transform=None
             if transform is None
@@ -1213,12 +1430,14 @@ def plan_conversion(
             resampling=resampling,
             nodata=nodata,
             chunk_size=chunk_size,
+            bounds=frame_bounds,
         )
     else:
-        if transform is not None or shape is not None or resampling is not None:
+        if transform is not None or shape is not None or resampling is not None or bounds:
             raise ValueError(
-                "--transform, --shape and --resampling apply to COG manifests; a Zarr or NetCDF "
-                "input keeps the grid of its x/y coordinates (--crs only declares its CRS)"
+                "--transform, --shape, --bounds and --resampling apply to manifests of COGs or "
+                "image frames; a Zarr or NetCDF input keeps the grid of its x/y coordinates "
+                "(--crs only declares its CRS)"
             )
         source = XarraySource(text, variable, _parse_dims(dims), crs, nodata, mask_var)
 
@@ -1391,6 +1610,7 @@ def _staged_masks(plan: Plan, work: Path) -> Iterator[np.ndarray]:
         yield np.load(_staged_mask_path(work, t))
 
 
+@_tolerate_unlocated_frames
 def convert(
     source: str | Path,
     out: str | Path,
@@ -1403,6 +1623,7 @@ def convert(
     resampling: str | None = None,
     nodata: float | int | str | None = "auto",
     mask_var: str | None = None,
+    bounds: Sequence[float] | None = None,
     work_dir: str | Path | None = None,
     resume: bool = False,
     dry_run: bool = False,
@@ -1417,6 +1638,12 @@ def convert(
     module docstring. The grid comes from the first source (manifests) or the x/y coordinates
     (Zarr, NetCDF) unless `crs`, `transform` and `shape` override it for a manifest, in which
     case sources off the grid are warped with the explicit `resampling`.
+
+    Image frames (PNG) are manifest sources. `crs` names the CRS of frames that carry none (a
+    world file has none). `bounds` is `(west, south, east, north)` in the units of `crs`, the
+    extent of every frame, for frames with no geotransform (no world file, no `.aux.xml`): the
+    transform is derived from the pixel size, all frames must have the same size, and a frame
+    with its own geotransform is refused. A JSON manifest can hold `"bounds"` instead.
 
     Scale, offset, units and validity follow the fidelity rules of the module docstring.
     `nodata` is "auto" (what the sources declare; none declared means no nodata, not 0), a
@@ -1448,6 +1675,7 @@ def convert(
         resampling=resampling,
         nodata=nodata,
         mask_var=mask_var,
+        bounds=bounds,
         chunk_size=encode_options.get("chunk_size", 512),
         n_lods=encode_options.get("n_lods"),
     )

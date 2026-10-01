@@ -531,8 +531,9 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
 @click.option(
     "--crs",
     default=None,
-    help="EPSG:xxxxx. Manifest: the target CRS (default: the first COG's). Zarr/NetCDF: the "
-    "CRS of the data when the file does not declare one.",
+    help="EPSG:xxxxx. Manifest: the target CRS (default: the first source's) and the CRS of "
+    "sources that declare none (a PNG with a world file). Zarr/NetCDF: the CRS of the data "
+    "when the file does not declare one.",
 )
 @click.option(
     "--transform",
@@ -540,6 +541,12 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     help="Manifest only: target grid transform a,b,c,d,e,f (north-up). Needs --crs and --shape.",
 )
 @click.option("--shape", default=None, help="Manifest only: target grid height,width in pixels.")
+@click.option(
+    "--bounds",
+    default=None,
+    help="Manifest only: west,south,east,north of every frame in the units of --crs, for PNG "
+    "frames with no world file or .aux.xml. Needs --crs; all frames must have one size.",
+)
 @click.option(
     "--resampling",
     type=click.Choice(RESAMPLING_METHODS),
@@ -583,6 +590,7 @@ def convert_command(
     crs: str | None,
     transform: str | None,
     shape: str | None,
+    bounds: str | None,
     resampling: str | None,
     nodata: str | None,
     mask_var: str | None,
@@ -594,10 +602,10 @@ def convert_command(
 ) -> None:
     """Convert SOURCE into a chronozarr store at OUT without loading the whole stack.
 
-    SOURCE is a manifest (.csv with columns uri,datetime[,bands] or .json) of COG URIs, a Zarr
-    store (path or URL) or a NetCDF file, the last two with --variable. Each timestep is read,
-    resampled if needed, staged under the work directory and then encoded cell by cell. The
-    size and time estimate is printed first; --dry-run stops there.
+    SOURCE is a manifest (.csv with columns uri,datetime[,bands] or .json) of COG or PNG frame
+    URIs, a Zarr store (path or URL) or a NetCDF file, the last two with --variable. Each
+    timestep is read, resampled if needed, staged under the work directory and then encoded
+    cell by cell. The size and time estimate is printed first; --dry-run stops there.
     """
     last_report = 0.0
 
@@ -621,6 +629,7 @@ def convert_command(
             crs=crs,
             transform=_parse_numbers(transform, 6, "--transform", float),
             shape=_parse_shape(shape),
+            bounds=_parse_numbers(bounds, 4, "--bounds", float),
             resampling=resampling,
             nodata=_parse_nodata(nodata),
             mask_var=mask_var,
