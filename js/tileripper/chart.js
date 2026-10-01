@@ -8,7 +8,8 @@
 
 import { isReflectance, ndvi, ndwi, toPhysical } from './products.js';
 
-const COLORS = { red: '#ef4444', green: '#34d399', blue: '#3b82f6', amber: '#f59e0b', grey: '#c5cbd9' };
+// Custom properties of index.html (--series-*), so the lines and the legend follow the palette of the page: bright on the dark chrome, darker on the light one.
+const COLORS = { red: 'var(--series-red)', green: 'var(--series-green)', blue: 'var(--series-blue)', amber: 'var(--series-amber)', grey: 'var(--series-grey)' };
 
 /** Window (x, y) offsets around the clicked pixel, clicked pixel first, clipped to a width x height cell. */
 export function windowPixels(x, y, width, height, radius) {

@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Embedding TileRipper</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+  :root { --ink: #141a29; --muted: #5b6784; --line: #d9deea; --paper: #fbfcfe; --accent: #2563eb; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding-inline: 16px;
+    padding-block: 24px 48px;
+    background: var(--paper);
+    color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
+  }
+  main { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 22px; letter-spacing: -0.02em; margin: 0 0 4px; }
+  p { margin: 0 0 12px; color: var(--muted); }
+  code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: #eef1f7; padding: 1px 5px; border-radius: 4px; }
+  a { color: var(--accent); }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 16px 0 10px; }
+  .bar label { display: flex; flex: 1 1 280px; align-items: center; gap: 10px; min-width: 0; }
+  #date { min-width: 7.5em; font-variant-numeric: tabular-nums; font-weight: 600; }
+  #slider { flex: 1; min-width: 0; accent-color: var(--accent); }
+  button, select { font: inherit; padding: 5px 12px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); cursor: pointer; }
+  button:disabled, select:disabled, input:disabled { opacity: 0.45; cursor: not-allowed; }
+  iframe { display: block; width: 100%; height: min(560px, 70vh); min-height: 320px; border: 1px solid var(--line); border-radius: 8px; background: #111620; }
+  .readout { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: #fff; min-height: 5em; }
+  .readout h2 { font-size: 13px; margin: 0 0 6px; color: var(--muted); font-weight: 600; letter-spacing: 0.02em; }
+  .readout dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; margin: 0; font-variant-numeric: tabular-nums; }
+  .readout dt { color: var(--muted); }
+  .readout dd { margin: 0; }
+  .empty { color: var(--muted); }
+  .links { margin-top: 14px; font-size: 13px; color: var(--muted); }
+  details { margin-top: 14px; font-size: 13px; }
+  details summary { cursor: pointer; color: var(--muted); }
+  #log { margin: 8px 0 0; padding: 10px 12px; max-height: 14em; overflow: auto; background: #0f1420; color: #cfd6e6; border-radius: 8px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Embedding TileRipper</h1>
+  <p>The viewer below is an iframe of <code>tileripper/index.html?embed=1</code>. This page drives it with <code>postMessage</code> and reads what you click from the messages it sends back. Reference: <a href="https://github.com/jameshgrn/tile-ripper/blob/main/docs/embedding.md">docs/embedding.md</a>.</p>
+
+  <div class="bar">
+    <label>
+      <span id="date" aria-live="polite">loading…</span>
+      <input id="slider" type="range" min="0" max="0" value="0" step="1" disabled aria-label="Date">
+    </label>
+    <select id="product" disabled aria-label="Product"></select>
+    <button id="play" disabled>Play</button>
+    <button id="pause" disabled>Pause</button>
+  </div>
+
+  <iframe id="viewer" title="TileRipper viewer"></iframe>
+
+  <div class="readout" aria-live="polite">
+    <h2>Last click</h2>
+    <div id="click" class="empty">Click the map to read the values under the pointer.</div>
+  </div>
+
+  <p class="links">
+    Try <a href="?theme=light">theme=light</a>, <a href="?controls=0">controls=0</a>, or <code>?store=&lt;your store URL&gt;</code> (the store must allow CORS reads and byte ranges).
+  </p>
+
+  <details>
+    <summary>Messages</summary>
+    <pre id="log"></pre>
+  </details>
+</main>
+
+<script>
+  'use strict';
+  const DEFAULT_STORE = 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-3';
+
+  const params = new URLSearchParams(location.search);
+  const frame = document.getElementById('viewer');
+  const slider = document.getElementById('slider');
+  const dateLabel = document.getElementById('date');
+  const productSelect = document.getElementById('product');
+  const playButton = document.getElementById('play');
+  const pauseButton = document.getElementById('pause');
+  const clickBox = document.getElementById('click');
+  const log = document.getElementById('log');
+
+  // The iframe URL: the store, the origin of this page (the only origin the viewer will talk to), and the look.
+  const viewerUrl = new URL('../tileripper/index.html', location.href);
+  const query = new URLSearchParams({ embed: '1', store: params.get('store') || DEFAULT_STORE, origin: location.origin });
+  if (params.get('theme') === 'light') query.set('theme', 'light');
+  if (params.get('controls') === '0') query.set('controls', '0');
+  viewerUrl.search = query.toString();
+
+  let times = [];
+
+  const note = (direction, message) => {
+    const line = `${direction} ${JSON.stringify(message, (key, value) => (key === 'times' ? `[${value.length} times]` : value))}`;
+    log.textContent = `${line}\n${log.textContent}`.split('\n').slice(0, 40).join('\n');
+  };
+  const send = (message) => {
+    note('->', message);
+    frame.contentWindow.postMessage(message, viewerUrl.origin);
+  };
+  const shortDate = (iso) => iso.slice(0, 10);
+  const showTime = (t) => {
+    slider.value = String(t);
+    dateLabel.textContent = shortDate(times[t]);
+  };
+
+  function showClick(click) {
+    const rows = [
+      ['Time', shortDate(click.time)],
+      ['Pixel', `${click.pixel.x}, ${click.pixel.y}`],
+      ['Lon, lat', click.lon === null ? 'not georeferenced' : `${click.lon.toFixed(5)}, ${click.lat.toFixed(5)}`],
+      ...Object.entries(click.values).map(([band, value]) => [band, value === null ? 'no data' : String(Number(value.toPrecision(5)))]),
+    ];
+    clickBox.className = '';
+    clickBox.replaceChildren();
+    const list = document.createElement('dl');
+    for (const [name, value] of rows) {
+      const dt = document.createElement('dt');
+      dt.textContent = name;
+      const dd = document.createElement('dd');
+      dd.textContent = value;
+      list.append(dt, dd);
+    }
+    clickBox.append(list);
+  }
+
+  window.addEventListener('message', (event) => {
+    // Only the viewer iframe, and only from the origin it was loaded from.
+    if (event.source !== frame.contentWindow || event.origin !== viewerUrl.origin) return;
+    const message = event.data;
+    if (!message || message.v !== 1 || typeof message.type !== 'string') return;
+    note('<-', message);
+    if (message.type === 'tileripper:ready') {
+      times = message.times;
+      slider.max = String(times.length - 1);
+      slider.disabled = false;
+      playButton.disabled = false;
+      pauseButton.disabled = false;
+      showTime(message.state.t);
+      productSelect.replaceChildren(...message.products.filter((p) => p.available).map((p) => new Option(p.name, p.id)));
+      productSelect.value = message.state.product;
+      productSelect.disabled = false;
+    } else if (message.type === 'tileripper:time') {
+      showTime(message.t);
+    } else if (message.type === 'tileripper:click') {
+      showClick(message);
+    } else if (message.type === 'tileripper:error') {
+      dateLabel.textContent = 'error';
+      clickBox.className = 'empty';
+      clickBox.textContent = `${message.code}: ${message.message}`;
+    }
+  });
+
+  slider.addEventListener('input', () => {
+    dateLabel.textContent = shortDate(times[Number(slider.value)]);
+    send({ v: 1, type: 'tileripper:set', t: Number(slider.value) });
+  });
+  productSelect.addEventListener('change', () => send({ v: 1, type: 'tileripper:set', product: productSelect.value }));
+  playButton.addEventListener('click', () => send({ v: 1, type: 'tileripper:set', playing: true, speed: 4 }));
+  pauseButton.addEventListener('click', () => send({ v: 1, type: 'tileripper:set', playing: false }));
+
+  if (location.origin === 'null') {
+    dateLabel.textContent = 'serve this page over http(s)';
+  } else {
+    frame.src = viewerUrl.href;
+  }
+</script>
+</body>
+</html>

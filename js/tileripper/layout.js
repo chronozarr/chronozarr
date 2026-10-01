@@ -9,7 +9,7 @@ export const DRAWER_BELOW = 900;
 /** Below this width the product buttons give way to one select (CSS only), so the header keeps room for the catalog and the stretch controls. */
 export const COMPACT_BELOW = 700;
 
-/** 'drawer' or 'panel': how the inspector is shown at this viewport width. */
-export function inspectorLayout(width) {
-  return width < DRAWER_BELOW ? 'drawer' : 'panel';
+/** 'drawer' or 'panel': how the inspector is shown at this viewport width. An embedded viewer (?embed=1) always uses the drawer. */
+export function inspectorLayout(width, { embedded = false } = {}) {
+  return embedded || width < DRAWER_BELOW ? 'drawer' : 'panel';
 }

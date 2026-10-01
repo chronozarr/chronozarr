@@ -6,6 +6,7 @@ import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeF
 import { ASSUMED_BANDWIDTH, ancestorCells, planCoarseStages, stageLeadMs } from './coarse.js';
 import { chooseFrame } from './frames.js';
 import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, chooseMovieLevel, describeReason, linkAllows, snapSpeed, wireRatio } from './playback.js';
+import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
 import { toggleExportPanel } from './export.js';
@@ -96,6 +97,12 @@ function saveSpeed(stepsPerSecond) {
   }
 }
 
+/** `?a&b` from the non-empty query parts, or the bare path when there are none. */
+function composeQuery(...parts) {
+  const query = parts.filter(Boolean).join('&');
+  return query ? `?${query}` : location.pathname;
+}
+
 class Viewer {
   canvas = $('gl-canvas');
   renderer;
@@ -113,6 +120,18 @@ class Viewer {
   lodOverride = null;
   /** Benchmarks set this to receive timestamped events: input, load-start, cell-ready, paint. */
   probe = null;
+  /**
+   * What the embed bridge listens to (embed.js): ready() when a store has opened, time({t}) on a timestep change,
+   * view() on a camera change, click({pixel, t, lod, info}) on a click inside the store, error({code, title, message}).
+   * Empty outside an embed.
+   */
+  hooks = {};
+  /** The viewer runs in an iframe of another page (?embed=1): the inspector is always a drawer. */
+  embedded = false;
+  /** Whether a click opens the inspector (the sidebar and the chart of the clicked pixel); off for an embed with controls=0. */
+  inspectorUi = true;
+  /** The embed parameters to keep in the address bar next to the store and the view (embed.js parseEmbedParams().query). */
+  extraQuery = '';
 
   /** Timestep of the last complete frame. */
   paintedT = -1;
@@ -187,6 +206,7 @@ class Viewer {
     }).observe(this.canvas.parentElement);
     this.#bindInput();
     this.#bindChart();
+    this.#bindWordmark();
     this.#trackTimelineHeight();
     // Crossing the breakpoint either way starts the drawer closed rather than reopening one left open at the other width.
     window.matchMedia(`(width < ${DRAWER_BELOW}px)`).addEventListener('change', () => this.closeInspector());
@@ -214,7 +234,7 @@ class Viewer {
       store = await openStore(url, { fetch: options.fetch, maxCacheBytes: options.maxCacheBytes, workers: options.workers });
       this.#checkUniformChunks(store);
     } catch (error) {
-      this.#showError('Could not open store', error.message);
+      this.#showError('Could not open store', error.message, { code: 'store_open_failed' });
       this.#setProgress(0);
       throw error;
     }
@@ -268,6 +288,7 @@ class Viewer {
     this.closeInspector();
     $('click-hint').classList.remove('hidden');
     this.#updateGapToggle();
+    this.#hook('ready');
 
     const painted = this.whenPainted();
     this.#beginView('open');
@@ -291,7 +312,10 @@ class Viewer {
    */
   #beginView(kind) {
     this.#viewTiming = { kind, startedAt: performance.now(), coarseAt: null, fullAt: null };
-    if (kind === 'camera') this.#dropSpeculativeFetches();
+    if (kind === 'camera') {
+      this.#dropSpeculativeFetches();
+      this.#hook('view');
+    }
   }
 
   /** How long the last view change took to show a frame covering the whole view (`coarseMs`) and a complete one (`fullMs`); null while pending. */
@@ -327,6 +351,30 @@ class Viewer {
     };
   }
 
+  /** Zoom as the permalink states it: CSS pixels per level-0 data pixel (3 significant digits). */
+  get zoom() {
+    return Number((this.camera.scale / (window.devicePixelRatio || 1)).toPrecision(3));
+  }
+
+  /**
+   * Move the camera: `zoom` (see the zoom getter) and `center` ({col, row} in level-0 pixels), either one alone to keep
+   * the other as it is. The same limits as the mouse: zoomed out to half the fitted view at most, in to 16 canvas pixels per data pixel.
+   */
+  setView({ zoom, center } = {}) {
+    if (!this.store) return;
+    const level = this.store.levels[0];
+    const scale = zoom === undefined ? this.camera.scale : clamp(zoom * (window.devicePixelRatio || 1), this.fitScale * 0.5, MAX_SCALE);
+    this.camera = {
+      cx: center ? clamp(center.col, 0, level.width) : this.camera.cx,
+      cy: center ? clamp(center.row, 0, level.height) : this.camera.cy,
+      scale,
+    };
+    this.#beginView('camera');
+    this.#dirty = true;
+    this.requestRender();
+    this.#scheduleUrlSync();
+  }
+
   get fitScale() {
     const level = this.store.levels[0];
     return Math.min(this.canvas.width / level.width, this.canvas.height / level.height) * 0.94;
@@ -355,6 +403,7 @@ class Viewer {
     this.#direction = direction ?? (next > this.t ? 1 : -1);
     this.t = next;
     this.#emit({ type: 'input', t: next });
+    this.#hook('time', { t: next });
     this.#updateTimeUi();
     if (playing) this.renderNow();
     else {
@@ -379,11 +428,15 @@ class Viewer {
     }
   }
 
-  /** The address bar keeps the store (when not from the catalog) and whatever differs from the default view. */
-  syncUrl() {
-    clearTimeout(this.#urlTimer);
-    this.#urlTimer = 0;
-    if (!this.store || this.#playing) return;
+  /** `store=<url>` when the store is not from the catalog, else nothing. */
+  #storeQuery() {
+    return this.pinnedStore ? `store=${encodeURIComponent(this.pinnedStore)}` : '';
+  }
+
+  /** The query of the view as it is now: the store when it is not from the catalog, then whatever differs from the default view. */
+  #viewQuery() {
+    const store = this.#storeQuery();
+    if (!this.store) return store;
     const { cx, cy, scale } = this.camera;
     const atFit = this.#atFit();
     const product = this.products[this.productIndex];
@@ -397,8 +450,36 @@ class Viewer {
       },
       { transform: this.store.transform },
     );
-    const query = [this.pinnedStore ? `store=${encodeURIComponent(this.pinnedStore)}` : '', view].filter(Boolean).join('&');
-    history.replaceState(null, '', query ? `?${query}` : location.pathname);
+    return [store, view].filter(Boolean).join('&');
+  }
+
+  /** The address bar keeps the store (when not from the catalog), whatever differs from the default view, and the embed parameters. */
+  syncUrl() {
+    clearTimeout(this.#urlTimer);
+    this.#urlTimer = 0;
+    if (!this.store || this.#playing) return;
+    history.replaceState(null, '', composeQuery(this.#viewQuery(), this.extraQuery));
+  }
+
+  /** The address bar for a store that is about to open: the store (if pinned) and the embed parameters, no view. */
+  resetUrl() {
+    history.replaceState(null, '', composeQuery(this.#storeQuery(), this.extraQuery));
+  }
+
+  /**
+   * The wordmark of an embed links to the full viewer on the same store and view. Its address is written when the link
+   * is about to be used (pointer over it, focus, press), so it is current whatever happened since the last address bar sync.
+   */
+  #bindWordmark() {
+    const link = $('embed-wordmark');
+    const update = () => {
+      const url = new URL(location.href);
+      url.search = this.#viewQuery();
+      url.hash = '';
+      link.href = url.href;
+    };
+    for (const type of ['pointerenter', 'focus', 'pointerdown']) link.addEventListener(type, update);
+    update();
   }
 
   #scheduleUrlSync() {
@@ -517,6 +598,7 @@ class Viewer {
 
   setBandChoice(index) {
     this.bandChoice = index;
+    $('band-select').value = String(index);
     this.#linear = { range: null, manual: false };
     this.#updateStretchUi();
     this.#renderChart();
@@ -857,7 +939,7 @@ class Viewer {
     if (failed) {
       console.error('playback: could not fill the buffer:', failed);
       this.#playback?.pause();
-      this.#showError('Playback paused', `${failed.name}: ${failed.message}`, { toast: true });
+      this.#showError('Playback paused', `${failed.name}: ${failed.message}`, { toast: true, code: 'playback_failed' });
     }
   }
 
@@ -873,6 +955,15 @@ class Viewer {
 
   #emit(event) {
     this.probe?.({ at: performance.now(), ...event });
+  }
+
+  /** Tell the embed bridge (if there is one). Its failure must not break the viewer. */
+  #hook(name, payload) {
+    try {
+      this.hooks[name]?.(payload);
+    } catch (error) {
+      console.error(`embed hook "${name}" failed:`, error);
+    }
   }
 
   #abortBackground() {
@@ -1358,7 +1449,7 @@ class Viewer {
     this.#showError(
       'Chunk load failed',
       `Level ${lod}, cell (${row}, ${col}), ${this.#formatTime(t)}: ${error.name}: ${error.message}. The cell keeps its previous data. ${outcome}`,
-      { toast: true },
+      { toast: true, code: 'chunk_load_failed' },
     );
     this.#setProgress(0);
     if (failures > MAX_CELL_RETRIES) return;
@@ -1412,7 +1503,7 @@ class Viewer {
 
   /** Show the drawer; the side panel of a wide window is always shown. */
   openInspector() {
-    if (inspectorLayout(window.innerWidth) === 'drawer') $('sidebar').classList.add('open');
+    if (inspectorLayout(window.innerWidth, { embedded: this.embedded }) === 'drawer') $('sidebar').classList.add('open');
   }
 
   closeInspector() {
@@ -1461,13 +1552,16 @@ class Viewer {
     try {
       [, , mask] = await Promise.all([this.store.getRaw(lod, row, col, anchorT), anchorT === t ? null : this.store.getRaw(lod, row, col, t), this.#maskRead(lod, row, col, t)]);
     } catch (error) {
-      this.#showError('Chunk load failed', error.message);
+      this.#showError('Chunk load failed', error.message, { code: 'chunk_load_failed' });
       return;
     }
     const observed = await this.#observedAt(lod, row, col, t, cellX, cellY);
     const values = this.store.samplePixel(lod, row, col, t, cellX, cellY);
     const maskValue = mask ? mask[cellY * level.chunkWidth + cellX] : null;
-    this.#updateSidebar({ t, lod, pixel: { x: Math.floor(worldX), y: Math.floor(worldY) }, observed, masked: maskValue === 0, ...describePixel(values, this.bands, this.#nodata, maskValue) });
+    const info = { t, lod, pixel: { x: Math.floor(worldX), y: Math.floor(worldY) }, observed, masked: maskValue === 0, ...describePixel(values, this.bands, this.#nodata, maskValue) };
+    this.#hook('click', { pixel: info.pixel, t, lod, info });
+    if (!this.inspectorUi) return;
+    this.#updateSidebar(info);
     this.openInspector();
     this.#startChart({ lod, row, col, x: cellX, y: cellY });
   }
@@ -1848,6 +1942,8 @@ class Viewer {
     const canvas = this.canvas;
     let drag = null;
     canvas.addEventListener('pointerdown', (e) => {
+      // No text selection or native drag from a press on the map.
+      e.preventDefault();
       drag = { x: e.clientX, y: e.clientY, moved: 0 };
       canvas.setPointerCapture(e.pointerId);
     });
@@ -1870,6 +1966,9 @@ class Viewer {
       const wasClick = drag && drag.moved < CLICK_SLOP_PX;
       drag = null;
       if (wasClick) this.#inspect(e.clientX, e.clientY);
+    });
+    canvas.addEventListener('pointercancel', () => {
+      drag = null;
     });
     canvas.addEventListener('wheel', (e) => {
       if (!this.store) return;
@@ -1914,14 +2013,19 @@ class Viewer {
       return Math.round(frac * (this.store.times.length - 1));
     };
     track.addEventListener('pointerdown', (e) => {
+      // Without these a press on the track starts a text selection that the pointer, drifting off the control, extends over the page.
+      e.preventDefault();
       if (!this.store) return;
+      track.setPointerCapture(e.pointerId);
       scrubbing = true;
       this.goToTime(timeFromEvent(e));
     });
-    window.addEventListener('pointermove', (e) => scrubbing && this.goToTime(timeFromEvent(e)));
-    window.addEventListener('pointerup', () => {
+    const endScrub = () => {
       scrubbing = false;
-    });
+    };
+    window.addEventListener('pointermove', (e) => scrubbing && this.goToTime(timeFromEvent(e)));
+    window.addEventListener('pointerup', endScrub);
+    window.addEventListener('pointercancel', endScrub);
 
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && this.inspectorOpen) {
@@ -2098,7 +2202,8 @@ class Viewer {
   }
 
   /** A toast is a non-blocking notice that fades on its own; otherwise the box stays until the next load. */
-  #showError(title, message, { toast = false } = {}) {
+  #showError(title, message, { toast = false, code = 'error' } = {}) {
+    this.#hook('error', { code, title, message });
     clearTimeout(this.#toastTimer);
     $('error-title').textContent = title;
     $('error-message').textContent = message;
@@ -2210,7 +2315,14 @@ async function loadCatalog() {
 }
 
 async function main() {
+  // The embed layout is CSS on attributes of <html>; the inline script of index.html has set them already, this makes sure.
+  const embed = parseEmbedParams(location.search, document.referrer);
+  applyEmbedAttributes(document.documentElement, embed);
   const viewer = new Viewer();
+  viewer.embedded = embed.embed;
+  viewer.inspectorUi = embed.controls;
+  viewer.extraQuery = embed.query;
+  const bridge = embed.embed ? connectEmbed(viewer, embed) : null;
   window.tileripper = {
     viewer,
     bench: () => import('./bench.js').then((m) => m.runBenchmarks(viewer)),
@@ -2221,10 +2333,13 @@ async function main() {
 
   $('export-btn').addEventListener('click', () => toggleExportPanel(viewer));
 
-  const catalog = await loadCatalog().catch((error) => {
-    console.warn('catalog.json not usable:', error);
-    return [];
-  });
+  // An embed has no catalog selector and must never show another store than the one asked for, so it does not fetch the catalog.
+  const catalog = embed.embed
+    ? []
+    : await loadCatalog().catch((error) => {
+        console.warn('catalog.json not usable:', error);
+        return [];
+      });
   const select = $('catalog-select');
   const inCatalog = (url) => catalog.some((entry) => entry.url === url);
   const initialSearch = location.search;
@@ -2233,7 +2348,7 @@ async function main() {
     // only an external store is shareable via ?store=. The view (t, p, z, c) in the URL is restored
     // when the page first opens; opening another store starts from its default view.
     viewer.pinnedStore = inCatalog(url) ? null : url;
-    history.replaceState(null, '', viewer.pinnedStore ? `?store=${encodeURIComponent(url)}` : location.pathname);
+    viewer.resetUrl();
     select.value = url;
     // An external store earns a dropdown entry only once it has loaded, so a dead URL from an old
     // permalink never lingers as an option.
@@ -2270,6 +2385,7 @@ async function main() {
     $('error-title').textContent = 'No store selected';
     $('error-message').textContent = 'Open this page with ?store=<base URL of a chronozarr store>.';
     $('error-overlay').classList.add('visible');
+    bridge?.post('error', { code: 'no_store', message: 'No store selected: the iframe URL needs ?store=<base URL of a chronozarr store>.' });
   }
 }
 
