@@ -66,7 +66,7 @@ A chronozarr store is a Zarr v3 hierarchy. Zarr v3 arrays are leaf nodes, so eac
 | `dimension_names` | `["time", "band", "y", "x"]` |
 | `attributes` | `_ARRAY_DIMENSIONS: ["time","band","y","x"]`; `nodata` (same value as `chronozarr.nodata`) present only when that value is a number |
 
-- `cs` (chunk size) MUST be identical at every level and even. Writers SHOULD use 256 or 512 (default 512; 256 suits low-latency stores). Readers MUST take `cs` from `multiscales[0].datasets[].pixels_per_tile`, MUST NOT assume either value, and MUST NOT reject another even value (the reference writer accepts smaller even sizes for test fixtures).
+- `cs` (chunk size) MUST be identical at every level and even. Writers SHOULD use 256 or 512 (default 512; 256 suits low-latency stores). Readers MUST take `cs` from the data array's spatial inner chunk size, `chunk_shape[2]` (of the `sharding_indexed` codec's `chunk_shape` when sharded; `chunk_shape[3]` is equal), MUST NOT assume either value, and MUST NOT reject another even value (the reference writer accepts smaller even sizes for test fixtures). Readers MUST NOT take `cs` from `multiscales`, which carries no tile size (§3.4).
 - The band chunk index is always 0: one chunk holds every band of one timestep of one cell.
 - Cell `(r, c)` at level `k` is array slice `[:, :, r*cs:(r+1)*cs, c*cs:(c+1)*cs]`; row 0 is the top (north) edge. `grid_rows_k = ceil(H_k / cs)`, `grid_cols_k = ceil(W_k / cs)`.
 - **Edge chunks** are ordinary Zarr chunks: stored at full `cs x cs`; elements outside `shape` equal `fill_value`. Readers MUST discard elements beyond `shape`. There is no edge-size formula and no per-chunk size metadata. Padding is `fill_value` in anchors and 0 in residuals, so it costs almost nothing after compression.
@@ -164,10 +164,11 @@ The data array SHOULD additionally carry `proj:code`, `spatial:dimensions` (`["y
 
 One entry with `datasets[]`, `type` and `metadata` (instance in §3.9).
 
-- `datasets[i].path` is the level group name; `pixels_per_tile` equals `cs`; `crs` equals `chronozarr.crs`.
+- `datasets[i].path` is the level group name; `crs` equals `chronozarr.crs`. Writers emit only `path` and `crs` in an entry.
+- Writers MUST NOT write `pixels_per_tile`. Readers MUST ignore it if present: stores written before this rule carry it, and it is never the source of `cs` (§2.1). CarbonPlan zarr-layer 0.10.0 reads the key as the marker of a global Web Mercator slippy-map pyramid; with it present a native-CRS store opens as a blank map, and without it zarr-layer takes the extent from `proj:code`, `spatial:transform` and `spatial:bbox` (§3.3). The cell size is carried by the chunk shape of each level's data array (§2.1) and the cell grid by `chronozarr.levels` (§3.7), so nothing is lost. A validator MUST accept a store with or without the key.
 - Levels MUST be listed in order `"0"`, `"1"`, ... with no gaps.
 - `type` and `metadata.{method, version, args}` follow the ndpyramid schema page verbatim; `method` is nested under `metadata`, not top-level. `metadata.version` is `chronozarr 0.2.0` for new stores.
-- The zarr-conventions `multiscales` (object with `layout[]`) uses the same key with a different shape; a store cannot carry both. v0.2 keeps the ndpyramid list form because zarr-layer reads it and the GeoZarr layout is still a proposal. Revisit when GeoZarr's multiscale layout is stable.
+- The zarr-conventions `multiscales` (object with `layout[]`) uses the same key with a different shape; a store cannot carry both. v0.2 keeps the ndpyramid list form, without `pixels_per_tile`, because zarr-layer reads it that way and the GeoZarr layout is still a proposal. Revisit when GeoZarr's multiscale layout is stable.
 
 ### 3.5 Mirrors
 
@@ -230,8 +231,8 @@ Store: 5 monthly timesteps, 2 bands, 700 x 600 pixels, `cs = 512`, EPSG:32631 at
   "attributes": {
     "multiscales": [{
       "datasets": [
-        { "path": "0", "pixels_per_tile": 512, "crs": "EPSG:32631" },
-        { "path": "1", "pixels_per_tile": 512, "crs": "EPSG:32631" }
+        { "path": "0", "crs": "EPSG:32631" },
+        { "path": "1", "crs": "EPSG:32631" }
       ],
       "type": "reduce",
       "metadata": { "method": "block_mean", "version": "chronozarr 0.2.0", "args": [] }
@@ -400,7 +401,7 @@ The writer option `encoding` takes `auto` (default), `none` or `star-delta`.
 - `auto` applies to `uint8` and `uint16` only. For `int16` and `float32` the writer uses `none` and writes no `selection`.
 - `auto` encodes a sample of LOD 0 cells both ways with the codec the store will use, at least 3 cells or all cells when there are fewer, and keeps `star-delta` only if its total compressed bytes are at most 0.85 times the plain total. It records `selection = { "mode": "auto", "sampled_cells": n, "ratio": r }`, where `r` is star-delta compressed bytes divided by plain compressed bytes over the sampled cells.
 - `none` and `star-delta` MAY be forced; a forced choice writes no `selection`.
-- Basis for the threshold: star-delta reduced compressed size by about 25% on arid scenes and about 6% on vegetated scenes (2026-09-30). A plain store reads correctly in xarray, zarrita and zarr-layer without an adapter, so the extra decode path is worth carrying only where the saving is material.
+- Basis for the threshold: star-delta reduced compressed size by about 25% on arid scenes and about 6% on vegetated scenes (2026-09-30). A plain store reads correctly in xarray and zarrita without an adapter, and in zarr-layer too when it carries no `pixels_per_tile` (§3.4, §12), so the extra decode path is worth carrying only where the saving is material.
 
 ## 5. Volatility
 
@@ -524,7 +525,7 @@ A chronozarr store is served by any HTTP server or object store that returns fil
 A conforming reader MUST:
 
 1. `GET {store}/zarr.json`. Reject the store if `attributes.chronozarr.spec_version` is not `0.1.x` or `0.2.x`, or if `temporal.encoding` is not `"none"` or `"star-delta"` (a v0.1 store is `star-delta`). Take timestamps from `chronozarr.times`, band objects from `chronozarr.bands` (strings read as `{ name }`), the data array name from `chronozarr.variable`, and the validity rule inputs from `chronozarr.nodata`, `mask_variable` and `coverage_variable`.
-2. Enumerate levels from `chronozarr.levels` when present; otherwise from `multiscales[0].datasets[].path`, reading each level's `zarr.json` (`transform`, `resolution`). Read `{variable}/zarr.json` (`shape`, `data_type`, `chunk_grid`, `codecs`) for each level, or take them from consolidated metadata when present. Fail with an error naming any unsupported `data_type` or codec.
+2. Enumerate levels from `chronozarr.levels` when present; otherwise from `multiscales[0].datasets[].path`, reading each level's `zarr.json` (`transform`, `resolution`). Read `{variable}/zarr.json` (`shape`, `data_type`, `chunk_grid`, `codecs`; `cs` is the spatial inner chunk size, §2.1) for each level, or take them from consolidated metadata when present. Fail with an error naming any unsupported `data_type` or codec.
 3. Select a level: the largest `k` whose `resolution` does not exceed the requested output ground sample distance; `k = 0` if none.
 4. For timestep `t` and cell `(r, c)`: under `none`, or when `t` is in `anchor_indices`, read one chunk. Otherwise read the chunk at `delta_reference[str(t)]` and the chunk at `t`. Never more than two reads (Invariant 2).
 5. Reconstruct per §4.2: unsigned wraparound add in the stored dtype, no clamp. Discard elements beyond `shape` (§2.1).
@@ -553,7 +554,7 @@ A row-by-row comparison with guidance on when to choose each tool is in `docs/fo
 
 - **PMTiles** (Protomaps): single-file archive of z/x/y tiles for static hosting. The hosting model (one bucket, range reads, no server) is the same. Tiles are images; per-tile values are whatever the image encoding carries, and there is no native time axis.
 - **Mapbox raster-array (MRT)**: multi-band numeric raster tiles with a time-like band dimension, decoded client-side. The decoder code is published in mapbox-gl-js (`src/data/mrt`); the format is produced by the Mapbox Tiling Service and consumed by Mapbox's renderer, so using it means using that service and renderer. chronozarr is a Zarr-based alternative that a static bucket serves.
-- **carbonplan ndpyramid + zarr-layer**: Zarr pyramids rendered in MapLibre with a time selector. chronozarr writes the same `multiscales` attribute and level/variable shape, so zarr-layer can read a `none` store as-is. zarr-layer reads the `proj` and `spatial` attributes and supports arbitrary CRS through proj4 reprojection. A `star-delta` store needs an adapter that reconstructs the residuals before zarr-layer renders it; stock zarr-layer does not. chronozarr stores stay in a projected per-AOI CRS and declare it via `proj`/`spatial` attributes.
+- **carbonplan ndpyramid + zarr-layer**: Zarr pyramids rendered in MapLibre with a time selector. chronozarr writes the same `multiscales` attribute and level/variable shape, without `pixels_per_tile`: zarr-layer reads that key as the marker of a global Web Mercator pyramid (§3.4). A `none` store written without it opens in zarr-layer 0.10.0 unmodified (verified on the Ucayali store at level 1; point values equal to a direct Zarr read, `docs/comparisons.md`). A store written earlier carries the key and opens with zarr-layer's `crs` and `bounds` constructor options. zarr-layer reads the `proj` and `spatial` attributes and supports arbitrary CRS through proj4 reprojection. A `star-delta` store needs an adapter that reconstructs the residuals before zarr-layer renders it; stock zarr-layer does not. chronozarr stores stay in a projected per-AOI CRS and declare it via `proj`/`spatial` attributes.
 - **GeoZarr** and the zarr-conventions `proj`/`spatial`/`multiscales` drafts: CRS and affine conventions chronozarr aligns with (`crs`, `transform`, `proj:code`, `spatial:*`). GeoZarr's multiscale layout is still a proposal. chronozarr adds the temporal block, the band objects, the `times`/`band_names`/`levels` mirrors, `mask`, `coverage` and the volatility array on top.
 - **COG + TiTiler**: single-timestep GeoTIFFs rendered by a tile server. It needs a running server and one request path per timestep; chronozarr needs neither.
 
@@ -573,6 +574,7 @@ A row-by-row comparison with guidance on when to choose each tool is in `docs/fo
 - **Prior art** (§12). Corrected statements about Mapbox raster-array and zarr-layer; COG + TiTiler added.
 - **Delta references are the recorded map** (§4.2). A reference is valid when it names an anchor at distance `0 < d < anchor_interval`; the nearest-anchor schedule is the writer's default for new timesteps, not a validity rule, so an append can keep every published reference. `spec_version` stays `0.2.0`: every store written under the earlier rule (nearest anchor for `n_time`) is valid under this one, and readers already decoded through the recorded map.
 - **Appending** (§14). A store may grow at the end of its time axis.
+- **`pixels_per_tile` is no longer written** (§2.1, §3.4). Writers MUST NOT write `multiscales[0].datasets[].pixels_per_tile`; readers MUST ignore it if present; a validator accepts stores with or without it. Reason: CarbonPlan zarr-layer 0.10.0 reads the key as the marker of a global Web Mercator slippy-map pyramid, so a native-CRS store that carries it opens as a blank map; with the key removed from the root `zarr.json` the Ucayali store opens georegistered within 1 px (`docs/comparisons.md`). The cell size was already the chunk shape of the data arrays and the grid is in `chronozarr.levels`, so no information is lost. `spec_version` stays `0.2.0`: stores written earlier carry the key and remain valid, and for zarr-layer they need its `crs` and `bounds` constructor options or a root `zarr.json` rewritten without the key. An append (§14) leaves `multiscales` as it found it, key included.
 - **Unchanged.** Zarr v3 groups per level, `multiscales` in the ndpyramid form, `dimension_names` everywhere, consolidated metadata, native CRS, sharded default with the index at the end, the anchor positions, the pyramid geometry.
 
 ## 14. Appending

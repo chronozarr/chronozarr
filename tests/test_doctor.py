@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
+import shutil
 import threading
 import urllib.error
 import urllib.request
@@ -148,6 +150,27 @@ def test_http_store_passes_browser_checks(sharded_store):
     assert checks["timing-allow-origin"].detail == "*"
     assert checks["cache-control"].status == "info"  # no-cache, and the prefix is unversioned
     assert checks["decode level 0"].status == "ok"
+
+
+def test_pixels_per_tile_is_mentioned_only_when_the_store_still_carries_it(
+    sharded_store, tmp_path
+):
+    with serving(StoreRequestHandler, sharded_store) as url:
+        current = diagnose(url)
+    assert "pixels_per_tile" not in by_name(current)
+
+    old = tmp_path / "old"
+    shutil.copytree(sharded_store, old)
+    document = json.loads((old / "zarr.json").read_text())
+    for dataset in document["attributes"]["multiscales"][0]["datasets"]:
+        dataset["pixels_per_tile"] = 16
+    (old / "zarr.json").write_text(json.dumps(document))
+    with serving(StoreRequestHandler, old) as url:
+        checks = diagnose(url)
+    assert not failures(checks), failures(checks)
+    (line,) = [c for c in checks if c.name == "pixels_per_tile"]
+    assert line.status == "info"
+    assert "crs and bounds" in line.detail
 
 
 def test_missing_content_range_exposure_fails(sharded_store):

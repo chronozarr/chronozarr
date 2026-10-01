@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import numpy as np
@@ -219,6 +220,30 @@ def test_unsharded_append_writes_only_the_new_chunks(tmp_path, truth):
     assert all(mtimes(store)[k] == stamps[k] for k in old_chunks)
     assert all(key in after for key in before)
     assert all(after[k] == before[k] for k in before if not is_metadata(k))
+
+
+def test_append_leaves_multiscales_alone(tmp_path, truth):
+    """A store published with `pixels_per_tile` keeps it; one without never gains it (spec 14)."""
+
+    def multiscales(path: Path) -> list:
+        return json.loads((path / "zarr.json").read_text())["attributes"]["multiscales"]
+
+    old, new = tmp_path / "old", tmp_path / "new"
+    for store in (old, new):
+        encode_head(truth, store, 8)
+    root = json.loads((old / "zarr.json").read_text())
+    for dataset in root["attributes"]["multiscales"][0]["datasets"]:
+        dataset["pixels_per_tile"] = CHUNK
+    (old / "zarr.json").write_text(json.dumps(root))
+    before = {store: multiscales(store) for store in (old, new)}
+
+    for store in (old, new):
+        append(store, window(truth, 8, 10))
+        assert chronozarr.validate(store) == []
+        assert np.array_equal(decoded(store), truth[:10])
+    assert {store: multiscales(store) for store in (old, new)} == before
+    assert all(d["pixels_per_tile"] == CHUNK for d in multiscales(old)[0]["datasets"])
+    assert all("pixels_per_tile" not in d for d in multiscales(new)[0]["datasets"])
 
 
 def test_shard_bytes_describe_the_shards_after_an_append(tmp_path, truth):

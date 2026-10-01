@@ -963,7 +963,7 @@ def _write_store(
         levels=summaries,
         shard_bytes=_shard_bytes(out, len(layout.shapes)) if layout.shard else None,
     )
-    datasets = tuple(LevelRef(str(k), cs, layout.crs) for k in range(len(layout.shapes)))
+    datasets = tuple(LevelRef(str(k), layout.crs) for k in range(len(layout.shapes)))
     root.attrs.update(RootAttrs(meta, datasets).to_attrs())
     with warnings.catch_warnings():
         # zarr-python warns that consolidated metadata is outside the Zarr v3 spec. chronozarr

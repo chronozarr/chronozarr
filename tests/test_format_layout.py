@@ -149,8 +149,9 @@ def test_spec_chunk_sizes_write_a_conforming_store(tmp_path, chunk_size):
     assert store.levels[0].data.chunks == (1, 1, chunk_size, chunk_size)
     assert np.array_equal(store.to_xarray().values, truth)
     assert chronozarr.validate(tmp_path / "s") == []
+    assert {level.chunk_size for level in store.levels} == {chunk_size}
     multiscale = zarr.open_group(str(tmp_path / "s"), mode="r").attrs["multiscales"][0]
-    assert {d["pixels_per_tile"] for d in multiscale["datasets"]} == {chunk_size}
+    assert all("pixels_per_tile" not in d for d in multiscale["datasets"])
 
 
 @pytest.mark.parametrize("chunk_size", [0, 1, 7, -4])

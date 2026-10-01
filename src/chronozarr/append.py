@@ -56,7 +56,7 @@ from chronozarr.encode import (
     _spill_timesteps,
     _write_time_coord,
 )
-from chronozarr.schema import Band, Chronozarr, LevelRef, RootAttrs, Temporal, Transform
+from chronozarr.schema import Band, Chronozarr, LevelRef, Temporal, Transform
 
 # A `none` store does not record the nominal schedule its volatility was computed against
 # (spec 5); appended timesteps use the writer default.
@@ -106,7 +106,7 @@ class _Target:
 
     @property
     def chunk_size(self) -> int:
-        return self.datasets[0].pixels_per_tile
+        return schema.cell_size(self.arrays[0].data, "level 0/data")
 
     @property
     def shapes(self) -> list[tuple[int, int]]:
@@ -453,7 +453,9 @@ def _commit_metadata(
         levels=levels,
         shard_bytes=shard_bytes,
     )
-    target.root.attrs.update(RootAttrs(updated, target.datasets).to_attrs())
+    # `multiscales` is not rewritten: it stays byte-identical (spec 14), so a store published
+    # with `pixels_per_tile` keeps it.
+    target.root.attrs.update({"chronozarr": updated.to_attrs()})
     with warnings.catch_warnings():
         # Consolidated metadata is deliberate (spec 3.1); see encode._write_store.
         warnings.simplefilter("ignore", ZarrUserWarning)

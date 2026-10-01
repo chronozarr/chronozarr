@@ -65,8 +65,7 @@ class ChronoStore:
             level_group = schema.get_group(group, dataset.path, "store")
             data = schema.get_array(level_group, root.chronozarr.variable, where)
             level_attrs = schema.parse_level_attrs(level_group.attrs.asdict(), where)
-            if len(data.shape) != 4:
-                raise SchemaError(f"{where}/data: expected 4 dimensions, got shape {data.shape}")
+            cs = schema.cell_size(data, f"{where}/data")
             shape = (data.shape[0], data.shape[1], data.shape[2], data.shape[3])
             levels.append(
                 Level(
@@ -74,8 +73,8 @@ class ChronoStore:
                     shape=shape,
                     transform=level_attrs.transform,
                     resolution=level_attrs.resolution,
-                    chunk_size=dataset.pixels_per_tile,
-                    grid=schema.grid_shape(shape[2], shape[3], dataset.pixels_per_tile),
+                    chunk_size=cs,
+                    grid=schema.grid_shape(shape[2], shape[3], cs),
                     data=data,
                     mask=_plane(level_group, root.chronozarr.mask_variable, where),
                     coverage=_plane(level_group, root.chronozarr.coverage_variable, where),

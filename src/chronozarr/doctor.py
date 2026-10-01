@@ -150,7 +150,8 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
     try:
         document = json.loads(root.body)
         meta = document["attributes"]["chronozarr"]
-        first_level = document["attributes"]["multiscales"][0]["datasets"][0]["path"]
+        datasets = document["attributes"]["multiscales"][0]["datasets"]
+        first_level = datasets[0]["path"]
         variable = meta.get("variable", "data")
     except (ValueError, KeyError, IndexError, TypeError) as exc:
         return [
@@ -184,6 +185,18 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
                 "absent: a reader needs one GET per array to open the store",
                 "Write the store with consolidated metadata (chronozarr encode does this); cold "
                 "opens are 1 to 3 s slower without it on a remote host.",
+            )
+        )
+
+    if any(isinstance(d, dict) and "pixels_per_tile" in d for d in datasets):
+        checks.append(
+            Check(
+                "pixels_per_tile",
+                "info",
+                "present in multiscales datasets: zarr-layer needs the crs and bounds options",
+                "zarr-layer reads the key as a global Web Mercator pyramid marker and shows a "
+                "blank map without those options. Readers of this package ignore it; stores "
+                "written by this version omit it.",
             )
         )
 

@@ -405,8 +405,7 @@ export class ChronoStore {
       requireStore(levelTime === nTime, url, `level ${lod} has ${levelTime} timesteps, times attr has ${nTime}`);
       requireStore(nBand === bands.length, url, `level ${lod} has ${nBand} bands, bands attr has ${bands.length}`);
       requireStore(chunkB === nBand, url, `level ${lod} chunks must hold all ${nBand} bands, got ${chunkB}`);
-      const tile = datasets[lod].pixels_per_tile;
-      requireStore(tile === undefined || (tile === chunkWidth && tile === chunkHeight), url, `level ${lod} pixels_per_tile is ${tile}, but its chunks are ${chunkHeight}x${chunkWidth}`);
+      // `pixels_per_tile` is ignored whatever its value (spec 3.4): the cell size is the array's chunk shape.
       for (const kind of ['mask', 'coverage']) {
         const aux = storage[kind]?.[lod];
         if (aux) requireStore(aux.innerShape[1] === chunkHeight && aux.innerShape[2] === chunkWidth, url, `level ${lod} ${names[kind]} chunks are ${aux.innerShape.slice(1)}, data chunks are ${chunkHeight}x${chunkWidth}`);

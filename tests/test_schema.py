@@ -75,8 +75,8 @@ def test_written_attrs_have_the_specified_shape(good_store):
     }
     (multiscale,) = attrs["multiscales"]
     assert multiscale["datasets"] == [
-        {"path": "0", "pixels_per_tile": 512, "crs": "EPSG:32631"},
-        {"path": "1", "pixels_per_tile": 512, "crs": "EPSG:32631"},
+        {"path": "0", "crs": "EPSG:32631"},
+        {"path": "1", "crs": "EPSG:32631"},
     ]
     assert multiscale["type"] == "reduce"
     assert multiscale["metadata"] == {
@@ -203,7 +203,6 @@ def test_bad_chronozarr_block_is_rejected_by_reader_and_validator(store_copy, ed
         (lambda ms: ms.clear(), "exactly one entry"),
         (lambda ms: ms[0]["datasets"].reverse(), "listed as '0', '1'"),
         (lambda ms: ms[0]["datasets"][1].update(crs="EPSG:4326"), "expected 'EPSG:32631'"),
-        (lambda ms: ms[0]["datasets"][1].update(pixels_per_tile=256), "identical at every level"),
     ],
 )
 def test_bad_multiscales_is_rejected(store_copy, edit, message):
@@ -211,6 +210,81 @@ def test_bad_multiscales_is_rejected(store_copy, edit, message):
     with pytest.raises(schema.SchemaError, match=message):
         chronozarr.open_store(store_copy)
     assert any(message in p for p in chronozarr.validate(store_copy))
+
+
+def test_writer_never_emits_pixels_per_tile(good_store):
+    """zarr-layer reads the key as a global Web Mercator pyramid marker (spec 3.4)."""
+    root_json = (good_store / "zarr.json").read_text()
+    assert (
+        "pixels_per_tile" not in root_json
+    )  # not in the attributes, not in the consolidated copy
+    assert chronozarr.open_store(good_store).levels[0].chunk_size == 512
+
+
+@pytest.mark.parametrize("value", [512, 256, "not a number"], ids=["same", "stale", "garbage"])
+def test_pixels_per_tile_from_an_earlier_writer_is_ignored(store_copy, value):
+    """Stores written before the key was dropped carry it; reader and validator ignore it."""
+    before = chronozarr.open_store(store_copy)
+    expected, grid = before.read(1), before.levels[0].grid
+
+    def add_key(key, attrs):
+        if key == "multiscales":
+            for dataset in attrs[0]["datasets"]:
+                dataset["pixels_per_tile"] = value
+
+    _edit_root(store_copy, add_key)
+    assert "pixels_per_tile" in (store_copy / "zarr.json").read_text()
+    assert chronozarr.validate(store_copy) == []
+    after = chronozarr.open_store(store_copy)
+    assert after.levels[0].chunk_size == 512
+    assert after.levels[0].grid == grid
+    assert np.array_equal(after.read(1), expected)
+
+
+def test_cell_size_is_the_chunk_size_of_the_data_array():
+    memory = zarr.storage.MemoryStore()
+    plain = zarr.create_array(
+        memory, name="a", shape=(3, 2, 20, 20), chunks=(1, 2, 8, 8), dtype="u2"
+    )
+    sharded = zarr.create_array(
+        memory,
+        name="b",
+        shape=(3, 2, 20, 20),
+        chunks=(1, 2, 4, 4),
+        shards=(3, 2, 8, 8),
+        dtype="u2",
+    )
+    assert schema.cell_size(plain, "level 0/data") == 8
+    assert schema.cell_size(sharded, "level 0/data") == 4
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "message"),
+    [
+        ((3, 2, 20, 20), (1, 2, 8, 4), r"chunks must be \(1, 2, cs, cs\), got \(1, 2, 8, 4\)"),
+        ((3, 2, 20, 20), (1, 1, 8, 8), r"chunks must be \(1, 2, cs, cs\), got \(1, 1, 8, 8\)"),
+        ((3, 2, 20, 20), (2, 2, 8, 8), r"chunks must be"),
+        ((3, 20, 20), (1, 8, 8), "expected 4 dimensions"),
+    ],
+)
+def test_cell_size_rejects_a_layout_that_is_not_one_cell_per_chunk(shape, chunks, message):
+    array = zarr.create_array(
+        zarr.storage.MemoryStore(), name="a", shape=shape, chunks=chunks, dtype="u2"
+    )
+    with pytest.raises(schema.SchemaError, match=message):
+        schema.cell_size(array, "level 0/data")
+
+
+def test_validator_reports_levels_with_a_different_cell_size(tmp_path):
+    path = tmp_path / "store"
+    build_store(path, make_truth(3, 2, 70, 60), shard=False, chunk_size=16)
+    assert chronozarr.validate(path) == []
+    level1 = path / "1" / "data" / "zarr.json"
+    document = json.loads(level1.read_text())
+    document["chunk_grid"]["configuration"]["chunk_shape"] = [1, 2, 8, 8]
+    level1.write_text(json.dumps(document))
+    problems = chronozarr.validate(path)
+    assert any("1/data: chunks must be (1, 2, 16, 16), got (1, 2, 8, 8)" in p for p in problems)
 
 
 def test_validator_reports_structural_problems(store_copy):

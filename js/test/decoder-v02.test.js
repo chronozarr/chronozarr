@@ -134,12 +134,14 @@ test('an unknown temporal encoding or spec version is rejected with the reason',
   assert.ok(await change((cz) => (cz.spec_version = '0.2.7')), '0.2.x is accepted');
 });
 
-test('pixels_per_tile must agree with the chunk shape of the arrays', async () => {
+test('pixels_per_tile is ignored whatever its value; the cell size is the chunk shape', async () => {
   const readable = buildSyntheticStore({ ...base, chunk: 32 });
   const root = JSON.parse(new TextDecoder().decode(readable.files.get('/zarr.json')));
   root.attributes.multiscales[0].datasets[0].pixels_per_tile = 256;
   readable.files.set('/zarr.json', new TextEncoder().encode(JSON.stringify(root)));
-  await assert.rejects(openStore('memory://tile', { store: readable, workers: 0 }), /level 0 pixels_per_tile is 256, but its chunks are 32x32/);
+  const store = await openStore('memory://tile', { store: readable, workers: 0 });
+  assert.equal(store.levels[0].chunkWidth, 32);
+  assert.equal(store.levels[0].chunkHeight, 32);
 });
 
 // ---- bands ----

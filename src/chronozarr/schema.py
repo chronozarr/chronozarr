@@ -302,10 +302,14 @@ class Chronozarr:
 
 @dataclass(frozen=True)
 class LevelRef:
-    """One entry of `multiscales[0].datasets`."""
+    """One entry of `multiscales[0].datasets`.
+
+    Writers emit only `path` and `crs`. A `pixels_per_tile` key left by an earlier writer is
+    ignored (spec 3.4): zarr-layer reads its presence as "global Web Mercator pyramid", and the
+    cell size is the chunk shape of the data arrays (`cell_size`).
+    """
 
     path: str
-    pixels_per_tile: int
     crs: str
 
 
@@ -318,10 +322,7 @@ class RootAttrs:
         return {
             "multiscales": [
                 {
-                    "datasets": [
-                        {"path": d.path, "pixels_per_tile": d.pixels_per_tile, "crs": d.crs}
-                        for d in self.datasets
-                    ],
+                    "datasets": [{"path": d.path, "crs": d.crs} for d in self.datasets],
                     "type": "reduce",
                     "metadata": {
                         "method": "block_mean",
@@ -694,15 +695,10 @@ def _parse_multiscales(attrs: Mapping[str, Any], crs: str) -> tuple[LevelRef, ..
             raise _fail(
                 where, f"levels must be listed as '0', '1', ... in order; got path {path!r}"
             )
-        tile = _require(entry, "pixels_per_tile", where)
-        if not _is_int(tile) or tile < 1:
-            raise _fail(f"{where}.pixels_per_tile", f"expected int >= 1, got {tile!r}")
         entry_crs = _require(entry, "crs", where)
         if entry_crs != crs:
             raise _fail(f"{where}.crs", f"expected '{crs}' (chronozarr.crs), got {entry_crs!r}")
-        datasets.append(LevelRef(path, tile, entry_crs))
-    if len({d.pixels_per_tile for d in datasets}) != 1:
-        raise _fail("multiscales[0].datasets", "pixels_per_tile must be identical at every level")
+        datasets.append(LevelRef(path, entry_crs))
     return tuple(datasets)
 
 
@@ -746,6 +742,23 @@ def get_array(parent: zarr.Group, name: str, where: str) -> zarr.Array:
     return member
 
 
+def cell_size(data: zarr.Array, where: str) -> int:
+    """Cell edge `cs` in pixels: the spatial chunk size of a level's data array.
+
+    A sharded array's inner chunks count, so the chunk shape must be `(1, n_band, cs, cs)`.
+    The cell size is read from the arrays and never from `pixels_per_tile` (spec 2.1).
+    """
+    if data.ndim != 4:
+        raise SchemaError(
+            f"{where}: expected 4 dimensions (time, band, y, x), got shape {data.shape}"
+        )
+    chunks = tuple(data.chunks)
+    cs = chunks[2]
+    if chunks != (1, data.shape[1], cs, cs):
+        raise SchemaError(f"{where}: chunks must be (1, {data.shape[1]}, cs, cs), got {chunks}")
+    return int(cs)
+
+
 # --- Store validation -----------------------------------------------------------------------
 
 
@@ -783,6 +796,7 @@ class _LevelState:
 
     attrs: LevelAttrs | None = None
     shape: tuple[int, int] | None = None
+    cs: int | None = None
     shard_time: int | None = None
     sharded: bool | None = None
 
@@ -868,7 +882,6 @@ def _check_data_array(
     data: zarr.Array,
     where: str,
     meta: Chronozarr,
-    dataset: LevelRef,
     base_shape: tuple[int, int] | None,
     index: int,
     state: _LevelState,
@@ -897,7 +910,9 @@ def _check_data_array(
     if index == 0:
         state.sharded = data.shards is not None
         state.shard_time = data.shards[0] if data.shards is not None else None
-    _check_layout(data, where, (n_band,), dataset.pixels_per_tile, state, problems)
+    if state.cs is None:
+        state.cs = int(data.chunks[2])  # the cell size is the chunk size of the first level read
+    _check_layout(data, where, (n_band,), state.cs, state, problems)
     names = _codec_names(data)
     if len(names) != 2 or names[0] != "bytes" or names[1] not in CODECS:
         problems.append(f"{where}: codecs must be bytes plus one of {list(CODECS)}, got {names}")
@@ -950,10 +965,10 @@ def _check_level(
 
     data = members[meta.variable]
     where = f"{prefix}/data"
-    shape = _check_data_array(data, where, meta, dataset, state.shape, index, state, problems)
+    shape = _check_data_array(data, where, meta, state.shape, index, state, problems)
     if index == 0:
         state.attrs, state.shape = attrs, (shape if shape is not None else None)
-    if shape is None:
+    if shape is None or state.cs is None:
         return
     height, width = shape
     n_time = data.shape[0]
@@ -963,7 +978,7 @@ def _check_level(
                 group,
                 variable,
                 (n_time, height, width),
-                dataset.pixels_per_tile,
+                state.cs,
                 meta.crs,
                 state,
                 prefix,
@@ -1027,7 +1042,6 @@ def _check_levels_attr(root: zarr.Group, attrs: RootAttrs, problems: list[str]) 
             f"{len(attrs.datasets)} levels"
         )
         return
-    cs = attrs.datasets[0].pixels_per_tile
     for summary, dataset in zip(summaries, attrs.datasets, strict=True):
         where = f"chronozarr.levels[{summary.path}]"
         try:
@@ -1044,7 +1058,7 @@ def _check_levels_attr(root: zarr.Group, attrs: RootAttrs, problems: list[str]) 
             problems.append(
                 f"{where}: shape {list(summary.shape)} differs from {list(data.shape)}"
             )
-        elif summary.grid != grid_shape(summary.shape[2], summary.shape[3], cs):
+        elif summary.grid != grid_shape(summary.shape[2], summary.shape[3], int(data.chunks[2])):
             problems.append(f"{where}: grid {list(summary.grid)} does not match shape and chunks")
 
 
@@ -1134,8 +1148,8 @@ def validate(store: Any) -> list[str]:
         _check_dims(volatility, ("row", "col"), path, problems)
         if volatility.dtype != np.dtype("float32"):
             problems.append(f"{path}: dtype must be float32, got {volatility.dtype}")
-        if state.shape is not None:
-            expected_grid = grid_shape(*state.shape, attrs.datasets[0].pixels_per_tile)
+        if state.shape is not None and state.cs is not None:
+            expected_grid = grid_shape(*state.shape, state.cs)
             if volatility.shape != expected_grid:
                 problems.append(
                     f"{path}: shape {volatility.shape} should equal the level-0 cell grid "
