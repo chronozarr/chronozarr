@@ -221,12 +221,54 @@ export class Playback {
   }
 }
 
+/** A cold loop may use this share of the measured bandwidth; the rest is headroom for other traffic and for the estimate being off. */
+export const LINK_HEADROOM = 0.7;
+
+/** Compressed bytes per decoded byte assumed until the caches say otherwise (Sentinel-2 composites compress to 0.6 to 0.9). */
+export const DEFAULT_WIRE_RATIO = 0.8;
+const MIN_RATIO_SAMPLE_BYTES = 8 * 1024 * 1024;
+
+/** Bytes on the wire per decoded byte: what the caches hold, compressed over decoded, once there is enough of it to tell. */
+export function wireRatio({ compressedBytes, decodedBytes }) {
+  if (compressedBytes === null || decodedBytes === null || decodedBytes < MIN_RATIO_SAMPLE_BYTES) return DEFAULT_WIRE_RATIO;
+  return Math.min(1.2, Math.max(0.2, compressedBytes / decodedBytes));
+}
+
 /**
- * The level a movie plays at. The normal level `baseLod` if the whole loop for the visible cells fits the decoded
- * cache there (`fits(lod)`), otherwise the first coarser level where it does, and never coarser than
- * `deepestLod` (the level the viewer would pick four times further out): if nothing fits, that one.
+ * Whether a movie at `stepsPerSecond` can be fed by the link: the bytes of one step, times the speed, times the
+ * share of the loop that is not in memory yet (`coldFraction`, 0 to 1), must stay under LINK_HEADROOM of the
+ * measured `bandwidth` (bytes per second). Yes when nothing has to be fetched or no bandwidth has been measured.
  */
-export function chooseMovieLevel({ baseLod, deepestLod, fits }) {
-  for (let lod = baseLod; lod < deepestLod; lod++) if (fits(lod)) return lod;
-  return Math.max(baseLod, deepestLod);
+export function linkAllows({ bytesPerStep, stepsPerSecond, coldFraction, bandwidth, headroom = LINK_HEADROOM }) {
+  if (bandwidth === null || bandwidth === undefined || !(bandwidth > 0) || coldFraction <= 0) return true;
+  return bytesPerStep * stepsPerSecond * coldFraction < headroom * bandwidth;
+}
+
+const REASON_LABELS = { memory: 'fits memory', link: 'link', 'memory+link': 'fits memory + link' };
+
+/** The hint text for a `reason` from chooseMovieLevel. */
+export function describeReason(reason) {
+  return REASON_LABELS[reason] ?? '';
+}
+
+/**
+ * The level a movie plays at, and why. The normal level `baseLod` if the whole loop for the visible cells fits
+ * the decoded cache there (`fits(lod)`) and, for a loop that still has to be fetched, the link can feed it
+ * (`linkOk(lod)`); otherwise the first coarser level where both hold, and never coarser than `deepestLod` (the
+ * level the viewer would pick four times further out): if nothing does, that one. `reason` is null at the normal
+ * level, else 'memory', 'link' or 'memory+link' for the rules that ruled out the levels passed over.
+ * @returns {{lod: number, reason: null | 'memory' | 'link' | 'memory+link'}}
+ */
+export function chooseMovieLevel({ baseLod, deepestLod, fits, linkOk = () => true }) {
+  const floor = Math.max(baseLod, deepestLod);
+  const failed = new Set();
+  const reasonOf = () => (failed.size === 0 ? null : [...failed].sort().reverse().join('+'));
+  for (let lod = baseLod; lod <= floor; lod++) {
+    const memory = fits(lod);
+    const link = linkOk(lod);
+    if (memory && link) return { lod, reason: lod === baseLod ? null : reasonOf() };
+    if (!memory) failed.add('memory');
+    if (!link) failed.add('link');
+  }
+  return { lod: floor, reason: floor === baseLod ? null : reasonOf() };
 }

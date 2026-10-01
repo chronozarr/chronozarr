@@ -13,10 +13,13 @@
 //
 // `await tileripper.scrubBench()` measures what a user feels while stepping and dragging the time
 // slider; see runScrubBenchmarks. `await tileripper.playBench({ stepsPerSecond: 4 })` plays one movie
-// loop and reports the achieved rate and the holds; see playBench.
+// loop and reports the achieved rate and the holds; see playBench. `await tileripper.interactionBench()`
+// replays one scripted sequence (scrub, jump, pan, zoom, play) and reports the performance overlay's numbers
+// per phase, for before/after comparisons; see interactionBench.
 
-import * as zarr from 'zarrita';
+import * as zarr from '../vendor/zarrita/index.js';
 import { applyDelta, openStore } from '../chronozarr/decoder.js';
+import { FrameMonitor, analyzeLatency, emptyStats, formatPhaseTable, readStats, statsDelta } from './perf.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -601,3 +604,212 @@ export async function playBench(viewer, { stepsPerSecond = 4, loops = 2, cold = 
   console.log(JSON.stringify(results, null, 2));
   return results;
 }
+
+// ---- interaction benchmark ----
+
+function canvasPoint(viewer, fx = 0.5, fy = 0.5) {
+  const rect = viewer.canvas.getBoundingClientRect();
+  return { x: rect.left + rect.width * fx, y: rect.top + rect.height * fy };
+}
+
+/** A drag on the canvas through the viewer's own pointer handlers; resolves with the time of the last event. */
+async function drag(viewer, { dx, dy, moves = 4, everyMs = 16 }) {
+  const { canvas } = viewer;
+  // Synthetic pointer ids are not active pointers, so setPointerCapture would throw NotFoundError; capture is irrelevant here.
+  canvas.setPointerCapture = () => {};
+  try {
+    const start = canvasPoint(viewer);
+    pointer(canvas, 'pointerdown', start);
+    for (let i = 1; i <= moves; i++) {
+      await sleep(everyMs);
+      pointer(canvas, 'pointermove', { x: start.x + (dx * i) / moves, y: start.y + (dy * i) / moves });
+    }
+    const at = performance.now();
+    pointer(canvas, 'pointerup', { x: start.x + dx, y: start.y + dy });
+    return at;
+  } finally {
+    delete canvas.setPointerCapture;
+  }
+}
+
+/** Wheel ticks at the canvas center through the viewer's own wheel handler; resolves with the time of the last tick. */
+async function wheel(viewer, { ticks, deltaY, everyMs = 30 }) {
+  const at = canvasPoint(viewer);
+  let lastAt = 0;
+  for (let i = 0; i < ticks; i++) {
+    lastAt = performance.now();
+    viewer.canvas.dispatchEvent(new WheelEvent('wheel', { deltaY, clientX: at.x, clientY: at.y, bubbles: true, cancelable: true }));
+    if (i < ticks - 1) await sleep(everyMs);
+  }
+  return lastAt;
+}
+
+/**
+ * Replays one scripted sequence on a cold store and reports, per phase, the numbers of the performance overlay
+ * (key "d"): time to the first complete coarse frame and to the complete frame at the target level, cache hits and
+ * misses, bytes in the decoded and compressed caches, peak in-flight and deduped requests, bytes transferred, the
+ * bandwidth estimate, and frames over 16.7 and 33 ms. Fields the store's reader does not have are null ("–").
+ *
+ *   open                 loadStore from empty caches (HTTP cache bypassed) to the first complete frame
+ *   scrub forward 20     ArrowRight every 100 ms
+ *   scrub reverse 10     ArrowLeft every 100 ms
+ *   big jump             a timeline click about half the time axis away
+ *   pan                  a fast drag of 40 % of the canvas width (at the overview nothing new comes into view)
+ *   zoom in              one wheel event of about 8x, at the canvas center
+ *   pan (zoomed in)      the same drag, now with cells coming into view
+ *   zoom out             one wheel event of about 1/8x
+ *   play                 `loops` loops at `stepsPerSecond`
+ *
+ * Coarse and full times are measured from the last input of a phase (for the scrub phases, per step). From the page
+ * console: `await tileripper.interactionBench()`; `network: {rttMs, mbps}` simulates a remote link.
+ */
+export async function interactionBench(viewer, { network = null, stepsPerSecond = 10, loops = 2, cadenceMs = 100, playCapMs = 180000, settleMs = 60000 } = {}) {
+  const fetchImpl = network ? simulatedRemoteFetch(network) : noStoreFetch;
+  const url = viewer.store.url.replace(/\/$/, '');
+  const events = [];
+  const phases = [];
+  const results = { store: url, network: network ?? 'as configured by the page', userAgent: navigator.userAgent, canvas: null, stepsPerSecond, loops };
+
+  // A running phase: stats and frame counters from its start, peak in-flight requests sampled every 50 ms.
+  // `fresh`: the phase opens the store, so its counters start from zero on the new store.
+  const beginPhase = (name, { fresh = false } = {}) => {
+    const frames = new FrameMonitor();
+    const before = fresh ? emptyStats() : readStats(viewer.store);
+    let peakInflight = before.inflight;
+    const sampler = setInterval(() => {
+      const { inflight } = readStats(viewer.store);
+      if (inflight !== null) peakInflight = Math.max(peakInflight ?? 0, inflight);
+    }, 50);
+    frames.start();
+    return {
+      first: events.length,
+      end(extra = {}) {
+        frames.stop();
+        clearInterval(sampler);
+        const phase = { name, stats: statsDelta(before, readStats(viewer.store)), frames: frames.snapshot(), peakInflight, ...extra };
+        phases.push(phase);
+        return phase;
+      },
+    };
+  };
+  const reachedAfter = (direction) => (paint, input) => (direction > 0 ? paint.t >= input.t : direction < 0 ? paint.t <= input.t : paint.t === input.t);
+  const completePaint = (from, predicate) => waitUntil(() => events.slice(from).some((e) => e.type === 'paint' && e.complete && predicate(e)), settleMs);
+  const press = (name) => document.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true }));
+
+  viewer.probe = (event) => events.push(event);
+  try {
+    {
+      const phase = beginPhase('open', { fresh: true });
+      const started = performance.now();
+      const { openMs, firstPaintMs } = await openWithin(viewer, url, { fetch: fetchImpl });
+      await sleep(50);
+      const paints = events.slice(phase.first).filter((e) => e.type === 'paint');
+      const reportsCoverage = paints.some((p) => p.covered !== undefined);
+      const covered = reportsCoverage ? paints.find((p) => p.covered === true || p.complete) : null;
+      const full = paints.find((p) => p.complete);
+      const firstCell = paints.find((p) => p.ready > 0);
+      results.open = {
+        metadataMs: Math.round(openMs),
+        firstCellMs: firstCell ? Math.round(firstCell.at - started) : null,
+        coarseMs: covered ? Math.round(covered.at - started) : null,
+        coarseAfterMetadataMs: covered ? Math.round(covered.at - started - openMs) : null,
+        fullMs: Math.round(firstPaintMs),
+        fullAfterMetadataMs: full ? Math.round(full.at - started - openMs) : null,
+        lod: full?.lod ?? null,
+        cells: full?.cells ?? null,
+      };
+      results.canvas = { width: viewer.canvas.width, height: viewer.canvas.height };
+      const single = (ms) => ({ n: 1, median: ms, p95: ms, max: ms });
+      phase.end({ coarse: results.open.coarseMs === null ? null : single(results.open.coarseMs), full: single(results.open.fullMs) });
+    }
+
+    const count = viewer.store.times.length;
+    const scrub = async (name, keyName, steps, direction) => {
+      const phase = beginPhase(name);
+      const begin = performance.now();
+      const inputs = [];
+      const from = viewer.t;
+      for (let i = 0; i < steps; i++) {
+        const wait = begin + i * cadenceMs - performance.now();
+        if (wait > 0) await sleep(wait);
+        inputs.push({ at: performance.now(), t: clamp01(from + direction * (i + 1), count) });
+        press(keyName);
+      }
+      const finalT = inputs.at(-1).t;
+      const settled = await completePaint(phase.first, (e) => e.t === finalT);
+      await sleep(50);
+      const latency = analyzeLatency(events.slice(phase.first), inputs, reachedAfter(direction));
+      phase.end({ coarse: latency.coarse, full: latency.full, settled, neverCompleted: latency.neverCompleted });
+    };
+    // `run` performs the gesture and resolves with the time of its last input event; `restore` (not measured, and
+    // finished before the next phase starts) puts the camera back.
+    const gesture = async (name, run, restore = null) => {
+      const phase = beginPhase(name);
+      const last = { at: await run(), t: viewer.t };
+      const settled = await completePaint(phase.first, (e) => e.at >= last.at);
+      await sleep(50);
+      const latency = analyzeLatency(events.slice(phase.first), [last], reachedAfter(0));
+      phase.end({ coarse: latency.coarse, full: latency.full, settled, neverCompleted: latency.neverCompleted });
+      if (restore) {
+        const from = events.length;
+        const at = await restore();
+        await completePaint(from, (e) => e.at >= at);
+        await sleep(50);
+      }
+    };
+
+    await waitUntil(() => viewer.paintedT === viewer.t, settleMs);
+    await scrub('scrub forward 20', 'ArrowRight', Math.min(20, count - 1 - viewer.t), 1);
+    await scrub('scrub reverse 10', 'ArrowLeft', Math.min(10, viewer.t), -1);
+    await gesture('big jump', async () => {
+      const point = timelinePoint(viewer, (viewer.t + Math.round(count / 2)) % count);
+      const at = performance.now();
+      pointer(document.getElementById('timeline-track'), 'pointerdown', point);
+      pointer(window, 'pointerup', point);
+      return at;
+    });
+    const panDx = -0.4 * viewer.canvas.getBoundingClientRect().width;
+    await gesture('pan', () => drag(viewer, { dx: panDx, dy: 0 }), () => drag(viewer, { dx: -panDx, dy: 0 }));
+    await gesture('zoom in', () => wheel(viewer, { ticks: 1, deltaY: -ZOOM_STEP_DELTA }));
+    await gesture('pan (zoomed in)', () => drag(viewer, { dx: panDx, dy: 0 }), () => drag(viewer, { dx: -panDx, dy: 0 }));
+    await gesture('zoom out', () => wheel(viewer, { ticks: 1, deltaY: ZOOM_STEP_DELTA }));
+
+    {
+      const phase = beginPhase('play');
+      viewer.playback.setSpeed(stepsPerSecond);
+      viewer.play();
+      const finished = await waitUntil(() => viewer.playback.stats.steps >= count * loops, playCapMs);
+      const { stats } = viewer.playback;
+      const movie = viewer.movieInfo;
+      const achieved = stats.lastStepAt > stats.firstStepAt ? ((stats.steps - 1) / (stats.lastStepAt - stats.firstStepAt)) * 1000 : null;
+      viewer.pause();
+      await sleep(100);
+      results.play = {
+        requestedStepsPerSecond: stepsPerSecond,
+        achievedStepsPerSecond: achieved === null ? null : round(achieved),
+        finished,
+        steps: stats.steps,
+        held: stats.held,
+        totalHoldMs: round(stats.totalHoldMs),
+        longestHoldMs: round(stats.longestHoldMs),
+        normalLod: movie.baseLod,
+        movieLod: movie.lod,
+        movieReason: movie.reason ?? null,
+        movieDetail: movie.detail ?? null,
+      };
+      phase.end({ coarse: null, full: null });
+    }
+  } finally {
+    viewer.probe = null;
+  }
+
+  results.phases = phases;
+  results.table = formatPhaseTable(phases);
+  console.log(`${JSON.stringify({ ...results, phases: undefined, table: undefined }, null, 2)}\n${results.table}`);
+  window.__interactionResults = results;
+  return results;
+}
+
+// The viewer zooms by exp(-deltaY * 0.0015): 1400 is a factor of about 8.2.
+const ZOOM_STEP_DELTA = 1400;
+const clamp01 = (t, count) => Math.max(0, Math.min(count - 1, t));

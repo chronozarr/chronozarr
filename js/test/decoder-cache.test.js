@@ -136,29 +136,51 @@ test('with no allowance and no measured bandwidth nothing speculative is fetched
   assert.equal((await done).fetched, 0);
 });
 
-test('the allowance grows with measured bandwidth: a fast link prefetches much more in the same time', async () => {
+test('the allowance grows with measured bandwidth: a fast link prefetches much more in the same fake time', async (t) => {
+  // Nothing here waits on real time. The prefetch loop sleeps with setTimeout while it waits for allowance, so
+  // setTimeout is faked, and the store's clock is the link's simulated clock. The test advances both together,
+  // one step at a time, and lets the store run to quiet before the next step.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const settle = async () => {
+    for (let i = 0; i < 3; i++) await new Promise((resolve) => setImmediate(resolve));
+  };
+  const STEP_MS = 100;
+  const STEPS = 50;
+  const SHARE = 0.5;
+  /** The allowance is spent at the *estimated* compressed size of a chunk (0.7 of decoded until chunks have been seen, rising toward the observed ratio), so real bytes can exceed what was earned by at most 1 / 0.7. */
+  const MIN_ESTIMATE_RATIO = 0.7;
+
   const run = async (rate) => {
     const readable = buildSyntheticStore({ ...LARGE, nTime: 100 });
     const link = simulatedLink(readable, rate);
     const store = await openStore('memory://growth', { store: link.store, workers: 0, clock: link.clock, speculativeBytesInitial: 0, maxCacheBytes: 1e9, compressedBytes: 1e9 });
+    const opened = link.now;
     await store.getRaw(0, 0, 0, 0);
     await store.getRaw(0, 0, 0, 1);
+    assert.ok(Math.abs(store.bandwidthEstimate() - rate) / rate < 1e-9, `sequential transfers on the simulated link measure its rate: ${store.bandwidthEstimate()} vs ${rate}`);
     store.resetStats();
-    const start = link.now;
-    const ticker = setInterval(() => (link.now += 100), 5);
     const abort = new AbortController();
     const done = store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, concurrency: 1, signal: abort.signal });
-    await sleep(250);
+    await settle();
+    for (let step = 0; step < STEPS; step++) {
+      link.now += STEP_MS;
+      t.mock.timers.tick(STEP_MS);
+      await settle();
+    }
     abort.abort();
-    clearInterval(ticker);
-    await done;
-    const granted = 0.5 * rate * ((link.now - start) / 1000);
-    return { bytes: store.stats.cache.speculativeBytes, granted };
+    const result = await done;
+    // Everything earned since the store was created (the allowance starts at 0 and earns once bandwidth is known).
+    const earned = SHARE * rate * ((link.now - opened) / 1000);
+    return { bytes: store.stats.cache.speculativeBytes, earned, fetched: result.fetched, planned: result.planned };
   };
+
   const slow = await run(400_000);
   const fast = await run(8_000_000);
-  assert.ok(slow.bytes <= slow.granted + LARGE_CHUNK, `slow link stays within its allowance: ${slow.bytes} <= ${slow.granted}`);
-  assert.ok(fast.bytes <= fast.granted + LARGE_CHUNK, `fast link stays within its allowance: ${fast.bytes} <= ${fast.granted}`);
+  assert.ok(slow.bytes > 0, 'a measured link earns allowance even though it started with none');
+  assert.ok(slow.bytes <= slow.earned / MIN_ESTIMATE_RATIO, `slow link stays within what it earned: ${slow.bytes} <= ${slow.earned} / ${MIN_ESTIMATE_RATIO}`);
+  assert.ok(fast.bytes <= fast.earned / MIN_ESTIMATE_RATIO, `fast link stays within what it earned: ${fast.bytes} <= ${fast.earned} / ${MIN_ESTIMATE_RATIO}`);
+  assert.ok(slow.fetched < slow.planned - 2, `the slow link is still throttled at the end (${slow.fetched} of ${slow.planned})`);
+  assert.ok(fast.fetched >= fast.planned - 2, `the fast link has earned its whole window (${fast.fetched} of ${fast.planned}; 2 were already cached)`);
   assert.ok(fast.bytes > 3 * slow.bytes, `fast ${fast.bytes} vs slow ${slow.bytes}`);
 });
 

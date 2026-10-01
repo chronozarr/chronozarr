@@ -4,12 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TileRipper</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script type="importmap">
-{ "imports": { "zarrita": "https://cdn.jsdelivr.net/npm/zarrita@0.7.5/+esm" } }
-</script>
+<link rel="icon" href="data:,">
 <style>
   :root {
     --bg: #090c12;
@@ -29,7 +24,7 @@
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;
     background: var(--bg);
     color: var(--text);
     height: 100vh;
@@ -179,6 +174,32 @@
     backdrop-filter: blur(4px);
   }
   .click-hint.hidden { opacity: 0; }
+  #gap-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+  }
+  .perf-overlay {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 6;
+    margin: 0;
+    padding: 8px 12px;
+    background: rgba(17, 22, 32, 0.9);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-2);
+    font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 11px;
+    line-height: 1.55;
+    white-space: pre;
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+  }
+  .perf-overlay[hidden] { display: none; }
 
   /* Error overlay */
   .error-overlay {
@@ -326,6 +347,8 @@
   .chart-axis { fill: var(--text-3); font-size: 9px; font-variant-numeric: tabular-nums; }
   .chart-marker { stroke: var(--accent); stroke-width: 1.5; }
   .chart-hover { stroke: var(--text-2); stroke-width: 1; stroke-dasharray: 2 2; }
+  .chart-gap-key { color: var(--text-2); font-weight: 500; display: inline-flex; align-items: center; gap: 4px; }
+  .chart-gap-key i { width: 7px; height: 7px; border: 1.3px solid var(--text-2); border-radius: 50%; display: inline-block; }
   .chart-status { font-size: 11px; color: var(--text-2); margin-top: 6px; font-variant-numeric: tabular-nums; min-height: 14px; }
 
   /* ---- Timeline ---- */
@@ -456,6 +479,37 @@
     color: var(--amber);
     white-space: nowrap;
   }
+  .stretch {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-2);
+  }
+  .stretch[hidden] { display: none; }
+  .stretch input {
+    width: 76px;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: inherit;
+    font-variant-numeric: tabular-nums;
+    outline: none;
+  }
+  .stretch input:focus { border-color: var(--accent); }
+  .stretch button {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-2);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font: inherit;
+    cursor: pointer;
+  }
+  .stretch button:hover { border-color: var(--text-2); color: var(--text); }
   #speed-label {
     font-size: 11px;
     color: var(--text-2);
@@ -480,6 +534,8 @@
   }
   .export-btn:hover:not(:disabled) { border-color: var(--text-2); color: var(--text); }
   .export-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .export-btn[hidden] { display: none; }
+  .export-btn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--text); }
   .export-panel {
     position: fixed;
     right: 16px;
@@ -554,6 +610,12 @@
   <select id="catalog-select" hidden></select>
   <div class="products" id="products"></div>
   <select id="band-select" hidden></select>
+  <div class="stretch" id="stretch" hidden>
+    <input id="stretch-min" type="number" step="any" title="Stretch minimum" aria-label="Stretch minimum">
+    <span>–</span>
+    <input id="stretch-max" type="number" step="any" title="Stretch maximum" aria-label="Stretch maximum">
+    <button id="stretch-auto" title="Fit the stretch to the data on screen">Auto</button>
+  </div>
   <div class="nav-right">
     <span class="nav-meta" id="cache-stats"></span>
     <span class="nav-meta" id="nav-meta"></span>
@@ -563,6 +625,8 @@
 <main>
   <section class="viewport">
     <canvas id="gl-canvas"></canvas>
+    <canvas id="gap-canvas"></canvas>
+    <pre class="perf-overlay" id="perf-overlay" hidden aria-label="Performance overlay"></pre>
     <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
     <div class="click-hint" id="click-hint">Click anywhere to inspect · scroll to zoom · drag to pan</div>
     <div class="error-overlay" id="error-overlay">
@@ -604,6 +668,7 @@
     <span id="speed-label">4 /s</span>
     <span id="res-hint"></span>
   </div>
+  <button id="gap-toggle" class="export-btn" title="Hatch the pixels no scene observed this timestep (their value is carried over)" aria-pressed="false" hidden>Gaps</button>
   <button id="export-btn" class="export-btn" title="Export the loop as WebM or GIF" disabled>Export</button>
   <span class="timeline-status" id="status"></span>
 </div>

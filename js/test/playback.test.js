@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, chooseMovieLevel, snapSpeed } from '../tileripper/playback.js';
+import { DEFAULT_STEPS_PER_SECOND, DEFAULT_WIRE_RATIO, LINK_HEADROOM, Playback, SPEEDS, chooseMovieLevel, describeReason, linkAllows, snapSpeed, wireRatio } from '../tileripper/playback.js';
 
 const FRAME_60 = 1000 / 60;
 
@@ -335,10 +335,54 @@ test('speed table: 1 to 15 in steps of 1, then 20, 24, 30, 40, 48, 60; default 4
 
 test('movie level: the normal level if the loop fits, else the first coarser level where it does, never past the floor', () => {
   const fitting = (...levels) => (lod) => levels.includes(lod);
-  assert.equal(chooseMovieLevel({ baseLod: 1, deepestLod: 3, fits: fitting(1, 2, 3) }), 1, 'fits at the normal level: unchanged');
-  assert.equal(chooseMovieLevel({ baseLod: 1, deepestLod: 3, fits: fitting(2, 3) }), 2, 'the first coarser level that fits');
-  assert.equal(chooseMovieLevel({ baseLod: 1, deepestLod: 3, fits: fitting(3) }), 3);
-  assert.equal(chooseMovieLevel({ baseLod: 1, deepestLod: 3, fits: fitting() }), 3, 'nothing fits: the floor (4x zoom-out)');
-  assert.equal(chooseMovieLevel({ baseLod: 3, deepestLod: 3, fits: fitting() }), 3, 'already at the coarsest level');
-  assert.equal(chooseMovieLevel({ baseLod: 2, deepestLod: 1, fits: fitting() }), 2, 'the floor never makes the level finer than normal');
+  const level = (options) => chooseMovieLevel(options).lod;
+  assert.equal(level({ baseLod: 1, deepestLod: 3, fits: fitting(1, 2, 3) }), 1, 'fits at the normal level: unchanged');
+  assert.equal(level({ baseLod: 1, deepestLod: 3, fits: fitting(2, 3) }), 2, 'the first coarser level that fits');
+  assert.equal(level({ baseLod: 1, deepestLod: 3, fits: fitting(3) }), 3);
+  assert.equal(level({ baseLod: 1, deepestLod: 3, fits: fitting() }), 3, 'nothing fits: the floor (4x zoom-out)');
+  assert.equal(level({ baseLod: 3, deepestLod: 3, fits: fitting() }), 3, 'already at the coarsest level');
+  assert.equal(level({ baseLod: 2, deepestLod: 1, fits: fitting() }), 2, 'the floor never makes the level finer than normal');
+});
+
+test('movie level: the link rule drops a level the cache could hold, and the reason says which rule did it', () => {
+  const only = (...levels) => (lod) => levels.includes(lod);
+  const choose = (memory, link) => chooseMovieLevel({ baseLod: 1, deepestLod: 3, fits: only(...memory), linkOk: only(...link) });
+  assert.deepEqual(choose([1, 2, 3], [1, 2, 3]), { lod: 1, reason: null }, 'both rules hold at the normal level');
+  assert.deepEqual(choose([1, 2, 3], [2, 3]), { lod: 2, reason: 'link' }, 'fits memory, link too slow');
+  assert.deepEqual(choose([2, 3], [1, 2, 3]), { lod: 2, reason: 'memory' }, 'link fine, cache too small');
+  assert.deepEqual(choose([1, 2, 3], [3]), { lod: 3, reason: 'link' }, 'several levels dropped for the link');
+  assert.deepEqual(choose([3], [2, 3]), { lod: 3, reason: 'memory+link' }, 'each rule ruled out a level on the way');
+  assert.deepEqual(choose([], []), { lod: 3, reason: 'memory+link' }, 'nothing qualifies: the floor');
+  assert.deepEqual(chooseMovieLevel({ baseLod: 3, deepestLod: 3, fits: only(), linkOk: only() }), { lod: 3, reason: null }, 'no level to drop to: no reason');
+  assert.deepEqual(chooseMovieLevel({ baseLod: 1, deepestLod: 3, fits: only(1, 2, 3) }), { lod: 1, reason: null }, 'linkOk is optional');
+});
+
+test('link rule: bytes per step x speed x share still to fetch must stay under 70 % of the measured bandwidth', () => {
+  const MB = 1024 * 1024;
+  const base = { bytesPerStep: 3 * MB, stepsPerSecond: 10, coldFraction: 1, bandwidth: 50 * MB };
+  assert.equal(linkAllows(base), true, '30 MB/s of 50 MB/s is 60 %');
+  assert.equal(linkAllows({ ...base, bandwidth: 40 * MB }), false, '30 of 40 MB/s is 75 %');
+  assert.equal(linkAllows({ ...base, bandwidth: 30 * MB / LINK_HEADROOM }), false, 'exactly at the limit is not under it');
+  assert.equal(linkAllows({ ...base, bandwidth: 30 * MB / LINK_HEADROOM + 1 }), true);
+  assert.equal(linkAllows({ ...base, bandwidth: 5 * MB, coldFraction: 0 }), true, 'a loop already in memory needs no link');
+  assert.equal(linkAllows({ ...base, bandwidth: 40 * MB, coldFraction: 0.5 }), true, 'half the loop in memory halves the need');
+  assert.equal(linkAllows({ ...base, bandwidth: null }), true, 'no measurement: no objection');
+  assert.equal(linkAllows({ ...base, bandwidth: 0 }), true);
+  assert.equal(linkAllows({ ...base, stepsPerSecond: 60, bandwidth: 100 * MB }), false, 'a faster movie needs more');
+});
+
+test('wire ratio: compressed over decoded from the caches once they hold enough, a default before, clamped', () => {
+  const MB = 1024 * 1024;
+  assert.equal(wireRatio({ compressedBytes: null, decodedBytes: 100 * MB }), DEFAULT_WIRE_RATIO);
+  assert.equal(wireRatio({ compressedBytes: 1 * MB, decodedBytes: 2 * MB }), DEFAULT_WIRE_RATIO, 'too little to tell');
+  assert.equal(wireRatio({ compressedBytes: 70 * MB, decodedBytes: 100 * MB }), 0.7);
+  assert.equal(wireRatio({ compressedBytes: 500 * MB, decodedBytes: 100 * MB }), 1.2);
+  assert.equal(wireRatio({ compressedBytes: 1 * MB, decodedBytes: 100 * MB }), 0.2);
+});
+
+test('hint text names the rule: fits memory, link, or both', () => {
+  assert.equal(describeReason('memory'), 'fits memory');
+  assert.equal(describeReason('link'), 'link');
+  assert.equal(describeReason('memory+link'), 'fits memory + link');
+  assert.equal(describeReason(null), '');
 });

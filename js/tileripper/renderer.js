@@ -1,13 +1,44 @@
 // WebGL2 renderer for chronozarr cells.
 //
-// All chunks live as raw uint16 in one R16UI TEXTURE_2D_ARRAY. A chunk (band, y, x) occupies
-// n_band consecutive layers ("slot"), so uploading one is a single texSubImage3D from the decoded
-// array. The fragment shader reads the anchor slot and, for delta timesteps, the delta slot and
-// adds them per pixel, so switching timesteps or products never runs a CPU loop over pixels.
+// All chunks live as raw values of the store's data type in one TEXTURE_2D_ARRAY (R8UI, R16UI, R16I or R32F,
+// see TEXTURE_FORMATS). A chunk (band, y, x) occupies n_band consecutive layers ("slot"), so uploading one is a
+// single texSubImage3D from the decoded array. The fragment shader reads the anchor slot and, for delta
+// timesteps, the delta slot and adds them per pixel, so switching timesteps or products never runs a CPU loop
+// over pixels. The product colors come from products-glsl.js.
 
-import { GAIN, REFLECTANCE_SCALE } from './products.js';
+import { PRODUCT_GLSL } from './products-glsl.js';
 
 const BACKGROUND = [0.035, 0.047, 0.071];
+
+/**
+ * How each stored data type lives on the GPU: texture format, upload types, and the GLSL that reads a value as a
+ * float. The 8- and 16-bit unsigned types add the delta to the anchor modulo 2^bits (chronozarr v0.2 residuals).
+ */
+export const TEXTURE_FORMATS = {
+  uint8: { internal: 'R8UI', format: 'RED_INTEGER', type: 'UNSIGNED_BYTE', Array: Uint8Array, sampler: 'usampler2DArray', delta: 255 },
+  uint16: { internal: 'R16UI', format: 'RED_INTEGER', type: 'UNSIGNED_SHORT', Array: Uint16Array, sampler: 'usampler2DArray', delta: 65535 },
+  int16: { internal: 'R16I', format: 'RED_INTEGER', type: 'SHORT', Array: Int16Array, sampler: 'isampler2DArray', delta: null },
+  float32: { internal: 'R32F', format: 'RED', type: 'FLOAT', Array: Float32Array, sampler: 'sampler2DArray', delta: null },
+};
+
+function valueGlsl({ sampler, delta }, dtype) {
+  if (delta === null) {
+    return `
+float value(ivec2 texel, int band) {
+  if (band < 0) return 0.0;
+  return float(texelFetch(u_data, ivec3(texel, u_anchorBase + band), 0).r);
+}`;
+  }
+  return `
+// star-delta: value = (anchor + residual) mod 2^bits
+float value(ivec2 texel, int band) {
+  if (band < 0) return 0.0;
+  uint a = texelFetch(u_data, ivec3(texel, u_anchorBase + band), 0).r;
+  if (u_deltaBase < 0) return float(a);
+  uint d = texelFetch(u_data, ivec3(texel, u_deltaBase + band), 0).r;
+  return float((a + d) & ${delta}u);
+}`;
+}
 
 const VERTEX_SHADER = `#version 300 es
 uniform vec2 u_canvas;
@@ -23,110 +54,59 @@ void main() {
   v_texel = corner * u_extent;
 }`;
 
-const FRAGMENT_SHADER = `#version 300 es
+export function fragmentShader(dtype) {
+  const format = TEXTURE_FORMATS[dtype];
+  const isFloat = dtype === 'float32';
+  return `#version 300 es
 precision highp float;
 precision highp int;
-precision highp usampler2DArray;
+precision highp ${format.sampler};
 in vec2 v_texel;
-uniform usampler2DArray u_data;
+uniform ${format.sampler} u_data;
 uniform vec2 u_extent;
 uniform int u_anchorBase;   // first layer of the anchor slot
 uniform int u_deltaBase;    // first layer of the delta slot; -1 when the timestep is itself an anchor
 uniform ivec3 u_inputs;     // band index per product input, -1 = unused
 uniform int u_product;
+uniform int u_display;      // 0 = tone-mapped reflectance, 1 = linear stretch of u_range
+uniform vec2 u_range;
 uniform float u_stretch_lo;
-uniform int u_nodata;
+uniform int u_hasNodata;
+uniform float u_nodata;
+uniform vec3 u_scale;       // per input: physical = stored * scale + offset ...
+uniform vec3 u_divisor;     // ... or stored / divisor + offset where the divisor is above zero
+uniform vec3 u_offset;
 out vec4 outColor;
 
-const float SCALE = ${REFLECTANCE_SCALE.toFixed(1)};
-const float GAIN = ${GAIN.toFixed(1)};
-const float SAT_BOOST = 1.4;
 const vec3 BG = vec3(${BACKGROUND.join(', ')});
+${valueGlsl(format, dtype)}
 
-// star-delta: value = clamp(anchor + int16(delta), 0, 65535)
-int value(ivec2 texel, int band) {
-  if (band < 0) return 0;
-  int a = int(texelFetch(u_data, ivec3(texel, u_anchorBase + band), 0).r);
-  if (u_deltaBase < 0) return a;
-  int d = int(texelFetch(u_data, ivec3(texel, u_deltaBase + band), 0).r);
-  if (d >= 32768) d -= 65536;
-  return clamp(a + d, 0, 65535);
+bool isNodata(float v) {
+  return (u_hasNodata != 0 && v == u_nodata)${isFloat ? ' || isnan(v)' : ''};
 }
 
-float toSrgb(float v) {
-  return v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1.0 / 2.4) - 0.055;
+vec3 toPhysical(vec3 v) {
+  vec3 scaled = vec3(
+    u_divisor.x > 0.0 ? v.x / u_divisor.x : v.x * u_scale.x,
+    u_divisor.y > 0.0 ? v.y / u_divisor.y : v.y * u_scale.y,
+    u_divisor.z > 0.0 ? v.z / u_divisor.z : v.z * u_scale.z);
+  return scaled + u_offset;
 }
-
-vec3 tone(vec3 refl, float lo) {
-  vec3 sc = refl * GAIN;
-  vec3 tm = sc / (sc + 1.0);
-  vec3 sr = vec3(toSrgb(tm.r), toSrgb(tm.g), toSrgb(tm.b));
-  float headroom = 1.0 - lo;
-  if (headroom > 0.001) sr = clamp((sr - lo) / headroom, 0.0, 1.0);
-  return sr;
-}
-
-vec3 trueColor(vec3 rgb, float lo) {
-  vec3 sr = tone(rgb, lo);
-  float lum = dot(sr, vec3(0.2126, 0.7152, 0.0722));
-  return clamp(mix(vec3(lum), sr, SAT_BOOST), 0.0, 1.0);
-}
-
-vec3 ndviRamp(float v) {
-  if (v < 0.0) return mix(vec3(0.14, 0.15, 0.19), vec3(0.48, 0.42, 0.36), clamp(v + 1.0, 0.0, 1.0));
-  vec3 c0 = vec3(0.76, 0.70, 0.52);
-  vec3 c1 = vec3(0.50, 0.76, 0.32);
-  vec3 c2 = vec3(0.18, 0.52, 0.16);
-  vec3 c3 = vec3(0.04, 0.28, 0.04);
-  if (v < 0.2) return mix(c0, c1, v / 0.2);
-  if (v < 0.5) return mix(c1, c2, (v - 0.2) / 0.3);
-  return mix(c2, c3, clamp((v - 0.5) / 0.5, 0.0, 1.0));
-}
-
-vec3 ndwiRamp(float v) {
-  if (v < 0.0) return mix(vec3(0.32, 0.26, 0.20), vec3(0.58, 0.52, 0.42), clamp(v + 1.0, 0.0, 1.0));
-  vec3 c0 = vec3(0.62, 0.80, 0.94);
-  vec3 c1 = vec3(0.22, 0.52, 0.84);
-  vec3 c2 = vec3(0.06, 0.22, 0.52);
-  if (v < 0.3) return mix(c0, c1, v / 0.3);
-  return mix(c1, c2, clamp((v - 0.3) / 0.7, 0.0, 1.0));
-}
-
+${PRODUCT_GLSL}
 void main() {
   ivec2 texel = ivec2(min(floor(v_texel), u_extent - 1.0));
-  int v0 = value(texel, u_inputs.x);
-  int v1 = value(texel, u_inputs.y);
-  int v2 = value(texel, u_inputs.z);
-  bool empty = (u_inputs.x < 0 || v0 == u_nodata) && (u_inputs.y < 0 || v1 == u_nodata) && (u_inputs.z < 0 || v2 == u_nodata);
+  float v0 = value(texel, u_inputs.x);
+  float v1 = value(texel, u_inputs.y);
+  float v2 = value(texel, u_inputs.z);
+  bool empty = (u_inputs.x < 0 || isNodata(v0)) && (u_inputs.y < 0 || isNodata(v1)) && (u_inputs.z < 0 || isNodata(v2));
   if (empty) {
     outColor = vec4(BG, 1.0);
     return;
   }
-  vec3 x = vec3(float(v0), float(v1), float(v2)) / SCALE;
-
-  if (u_product == 0) {
-    outColor = vec4(trueColor(x, u_stretch_lo), 1.0);            // inputs: red, green, blue
-  } else if (u_product == 1) {
-    outColor = vec4(tone(x, u_stretch_lo), 1.0);                 // inputs: nir, red, green -> R, G, B
-  } else if (u_product == 2) {
-    float nir = x.x, red = x.y;                                  // inputs: nir, red
-    outColor = vec4(ndviRamp((nir + red) > 0.0 ? (nir - red) / (nir + red) : 0.0), 1.0);
-  } else if (u_product == 3) {
-    float green = x.x, nir = x.y;                                // inputs: green, nir
-    outColor = vec4(ndwiRamp((green + nir) > 0.0 ? (green - nir) / (green + nir) : 0.0), 1.0);
-  } else if (u_product == 4) {
-    float green = x.x, nir = x.y;
-    float ndwi = (green + nir) > 0.0 ? (green - nir) / (green + nir) : 0.0;
-    if (ndwi > 0.0) {
-      outColor = vec4(0.18, 0.48, 0.84, 1.0);
-    } else {
-      float lum = tone(vec3(green), u_stretch_lo).r;
-      outColor = vec4(vec3(lum * 0.65 + 0.06), 1.0);
-    }
-  } else {
-    outColor = vec4(vec3(tone(vec3(x.x), u_stretch_lo).r), 1.0); // single band, grayscale
-  }
+  vec3 x = toPhysical(vec3(v0, v1, v2));
+  outColor = u_display == 1 ? shadeLinear(u_product, x, u_range) : shade(u_product, x, u_stretch_lo);
 }`;
+}
 
 function compile(gl, type, source) {
   const shader = gl.createShader(type);
@@ -140,12 +120,16 @@ function compile(gl, type, source) {
   return shader;
 }
 
+const UNIFORM_NAMES = ['u_canvas', 'u_view', 'u_cell', 'u_extent', 'u_data', 'u_anchorBase', 'u_deltaBase', 'u_inputs', 'u_product', 'u_display', 'u_range', 'u_stretch_lo', 'u_hasNodata', 'u_nodata', 'u_scale', 'u_divisor', 'u_offset'];
+
 export class Renderer {
   #gl;
+  #programs = new Map();
   #uniforms = {};
   #texture = null;
   #pool = null;
   #frame = 0;
+  #dtype = 'uint16';
 
   /** Called with a slot's cell metadata; the highest score is evicted first. Set by the viewer. */
   evictionScore = () => 0;
@@ -155,40 +139,59 @@ export class Renderer {
     const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, preserveDrawingBuffer: true });
     if (!gl) throw new Error('WebGL2 is not available in this browser.');
     this.#gl = gl;
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
-    const program = gl.createProgram();
-    const vs = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-    const fs = compile(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
-    gl.attachShader(program, vs);
-    gl.attachShader(program, fs);
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      throw new Error(`Program link failed: ${gl.getProgramInfoLog(program)}`);
-    }
-    gl.deleteShader(vs);
-    gl.deleteShader(fs);
-    gl.useProgram(program);
-    for (const name of ['u_canvas', 'u_view', 'u_cell', 'u_extent', 'u_data', 'u_anchorBase', 'u_deltaBase', 'u_inputs', 'u_product', 'u_stretch_lo', 'u_nodata']) {
-      this.#uniforms[name] = gl.getUniformLocation(program, name);
-    }
-    gl.uniform1i(this.#uniforms.u_data, 0);
+    this.#useProgram('uint16');
     this.limits = { maxLayers: gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS), maxSize: gl.getParameter(gl.MAX_TEXTURE_SIZE) };
+  }
+
+  /** Select (compiling on first use) the shader program that reads textures of this data type. */
+  #useProgram(dtype) {
+    const gl = this.#gl;
+    if (!TEXTURE_FORMATS[dtype]) throw new Error(`Unsupported data type ${dtype}; the viewer shows ${Object.keys(TEXTURE_FORMATS).join(', ')}.`);
+    let entry = this.#programs.get(dtype);
+    if (!entry) {
+      const program = gl.createProgram();
+      const vs = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
+      const fs = compile(gl, gl.FRAGMENT_SHADER, fragmentShader(dtype));
+      gl.attachShader(program, vs);
+      gl.attachShader(program, fs);
+      gl.linkProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        throw new Error(`Program link failed: ${gl.getProgramInfoLog(program)}`);
+      }
+      gl.deleteShader(vs);
+      gl.deleteShader(fs);
+      gl.useProgram(program);
+      const uniforms = Object.fromEntries(UNIFORM_NAMES.map((name) => [name, gl.getUniformLocation(program, name)]));
+      gl.uniform1i(uniforms.u_data, 0);
+      entry = { program, uniforms };
+      this.#programs.set(dtype, entry);
+    }
+    gl.useProgram(entry.program);
+    this.#uniforms = entry.uniforms;
+    this.#dtype = dtype;
+  }
+
+  get dtype() {
+    return this.#dtype;
   }
 
   get slots() {
     return this.#pool?.slots ?? 0;
   }
 
-  /** Number of slots that fit `budgetBytes` and the driver's layer limit. */
-  planSlots(nBand, chunkWidth, chunkHeight, budgetBytes, wanted) {
+  /** Number of slots that fit `budgetBytes` and the driver's layer limit (`bytesPerSample`: 1, 2 or 4 by data type). */
+  planSlots(nBand, chunkWidth, chunkHeight, budgetBytes, wanted, bytesPerSample = 2) {
     const byLayers = Math.floor(this.limits.maxLayers / nBand);
-    const byBytes = Math.floor(budgetBytes / (nBand * chunkWidth * chunkHeight * 2));
+    const byBytes = Math.floor(budgetBytes / (nBand * chunkWidth * chunkHeight * bytesPerSample));
     return Math.max(0, Math.min(wanted, byLayers, byBytes));
   }
 
-  /** (Re)allocate the texture pool. Drops every resident chunk. */
-  configure({ nBand, chunkWidth, chunkHeight, slots }) {
+  /** (Re)allocate the texture pool for a data type (default uint16). Drops every resident chunk. */
+  configure({ dtype = 'uint16', nBand, chunkWidth, chunkHeight, slots }) {
     const gl = this.#gl;
+    this.#useProgram(dtype);
+    const format = TEXTURE_FORMATS[dtype];
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, format.Array.BYTES_PER_ELEMENT);
     if (chunkWidth > this.limits.maxSize || chunkHeight > this.limits.maxSize) {
       throw new Error(`Chunk ${chunkWidth}x${chunkHeight} exceeds MAX_TEXTURE_SIZE ${this.limits.maxSize}.`);
     }
@@ -197,12 +200,13 @@ export class Renderer {
     this.#texture = gl.createTexture();
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.#texture);
-    gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.R16UI, chunkWidth, chunkHeight, slots * nBand);
+    gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl[format.internal], chunkWidth, chunkHeight, slots * nBand);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     this.#pool = {
+      dtype,
       nBand,
       chunkWidth,
       chunkHeight,
@@ -274,9 +278,12 @@ export class Renderer {
       slot = victim;
     }
     const gl = this.#gl;
+    const format = TEXTURE_FORMATS[pool.dtype];
+    // The reader may hand over the bits of a signed type as unsigned (or the reverse); a view keeps the same buffer.
+    const typed = data instanceof format.Array ? data : new format.Array(data.buffer, data.byteOffset, data.byteLength / format.Array.BYTES_PER_ELEMENT);
     const started = performance.now();
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.#texture);
-    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, slot * pool.nBand, pool.chunkWidth, pool.chunkHeight, pool.nBand, gl.RED_INTEGER, gl.UNSIGNED_SHORT, data);
+    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, slot * pool.nBand, pool.chunkWidth, pool.chunkHeight, pool.nBand, gl[format.format], gl[format.type], typed);
     this.stats.uploads++;
     this.stats.uploadMs += performance.now() - started;
     pool.meta[slot] = { key, ...meta };
@@ -298,7 +305,13 @@ export class Renderer {
     gl.uniform1i(this.#uniforms.u_product, f.shader);
     gl.uniform3i(this.#uniforms.u_inputs, ...f.inputs);
     gl.uniform1f(this.#uniforms.u_stretch_lo, f.stretchLo);
-    gl.uniform1i(this.#uniforms.u_nodata, f.nodata);
+    gl.uniform1i(this.#uniforms.u_display, f.display === 'linear' ? 1 : 0);
+    gl.uniform2f(this.#uniforms.u_range, ...(f.range ?? [0, 1]));
+    gl.uniform1i(this.#uniforms.u_hasNodata, f.nodata === null ? 0 : 1);
+    gl.uniform1f(this.#uniforms.u_nodata, f.nodata ?? 0);
+    gl.uniform3f(this.#uniforms.u_scale, ...f.unitScale);
+    gl.uniform3f(this.#uniforms.u_divisor, ...f.unitDivisor);
+    gl.uniform3f(this.#uniforms.u_offset, ...f.unitOffset);
   }
 
   /**

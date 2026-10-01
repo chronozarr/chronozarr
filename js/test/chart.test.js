@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSeries, chartRange, seriesPath, seriesSpecs, timeFromX, windowPixels, xFromTime } from '../tileripper/chart.js';
-import { resolveProducts } from '../tileripper/products.js';
+import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, windowPixels, xFromTime } from '../tileripper/chart.js';
+import { normalizeBands, resolveProducts } from '../tileripper/products.js';
 
-const BANDS = ['B02', 'B03', 'B04', 'B08'];
+const BANDS = normalizeBands(['B02', 'B03', 'B04', 'B08']);
 const product = (id, bands = BANDS) => resolveProducts(bands).find((p) => p.id === id);
 const pixel = (b02, b03, b04, b08) => Uint16Array.of(b02, b03, b04, b08);
 const reading = (...pixels) => ({ pixels });
@@ -33,11 +33,41 @@ test('true and false color chart three bands as reflectance, skipping nodata per
 });
 
 test('single band chart follows the chosen band, by name, whatever the band order', () => {
-  const bands = ['B08', 'B04'];
+  const bands = normalizeBands(['B08', 'B04']);
   const specs = seriesSpecs(product('band', bands), bands, 1);
   const [series] = buildSeries(specs, [reading(Uint16Array.of(3000, 1200))], 0);
   assert.equal(series.id, 'B04');
+  assert.equal(series.label, 'B04 reflectance');
   assert.equal(series.values[0], 0.12);
+});
+
+test('charts use each band\'s scale and offset, call float nodata a gap, and label by name and role', () => {
+  const bands = normalizeBands([
+    { name: 'r', common_name: 'red', scale: 0.5, offset: 10 },
+    { name: 'green', common_name: 'green' },
+    { name: 'B', common_name: 'blue', scale: 2 },
+  ]);
+  const series = buildSeries(seriesSpecs(product('true_color', bands), bands, 0), [reading(Float32Array.of(4, 5, 6)), reading(Float32Array.of(NaN, 5, -1))], -1);
+  assert.deepEqual(series.map((s) => s.label), ['r red', 'green', 'B blue'], 'a name equal to the role is not repeated');
+  assert.deepEqual(series.map((s) => s.values[0]), [12, 5, 12]);
+  assert.deepEqual(series.map((s) => s.values[1]), [null, 5, null], 'NaN and the nodata value are gaps');
+
+  const depth = normalizeBands([{ name: 'depth', units: 'm' }]);
+  const [single] = buildSeries(seriesSpecs(product('band', depth), depth, 0), [reading(Float32Array.of(2.5))], null);
+  assert.equal(single.label, 'depth (m)');
+  assert.equal(single.values[0], 2.5);
+});
+
+test('an index is a gap when either of its bands is at nodata', () => {
+  const [series] = buildSeries(seriesSpecs(product('ndvi'), BANDS, 0), [reading(pixel(0, 0, 0, 3000)), reading(pixel(0, 0, 1000, 0))], 0);
+  assert.deepEqual(series.values, [null, null]);
+});
+
+test('gapFilledTimes: timesteps with coverage 0 that have a value; none without coverage', () => {
+  const values = [0.2, 0.3, null, 0.4, undefined, 0.5];
+  assert.deepEqual(gapFilledTimes(values, [5, 0, 0, 3, 0, undefined]), [1], 'not the gap without a value (null), not the unloaded (undefined), not unknown coverage');
+  assert.deepEqual(gapFilledTimes(values, null), []);
+  assert.deepEqual(gapFilledTimes([1, 2], [0, 0]), [0, 1]);
 });
 
 test('water fraction is the share of water pixels in the window, ignoring nodata pixels', () => {

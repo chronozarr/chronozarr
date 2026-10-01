@@ -1,11 +1,11 @@
 // The per-pixel time series behind the sidebar chart, as pure functions over already-decoded pixels.
 //
-// A reading is what was sampled at one timestep: `{ pixels }`, one Uint16Array of per-band DN for each
+// A reading is what was sampled at one timestep: `{ pixels }`, one typed array of per-band stored values for each
 // pixel of a small window around the clicked pixel (the clicked pixel first). A timestep whose chunks are
 // not loaded yet has no reading. A series has one value per timestep: a number, null where the pixel has no
 // data (a gap), or undefined where the timestep is not loaded yet.
 
-import { REFLECTANCE_SCALE, ndvi, ndwi } from './products.js';
+import { isReflectance, ndvi, ndwi, toPhysical } from './products.js';
 
 const COLORS = { red: '#ef4444', green: '#34d399', blue: '#3b82f6', amber: '#f59e0b', grey: '#c5cbd9' };
 
@@ -26,30 +26,54 @@ export function windowPixels(x, y, width, height, radius) {
   return pixels;
 }
 
+/** A stored value that means "no data": the store's nodata value, or NaN in a float band. */
+const isMissing = (value, nodata) => value === nodata || Number.isNaN(value);
+
 /**
  * What to chart for a product: one entry per line. `window` is the radius of the pixel window the readings
  * need (1 = 3x3 around the click), `domain` a fixed value range or null to scale to the data, and
- * `compute(pixels, nodata)` turns one reading's pixels into a number, or null for no data.
+ * `compute(pixels, nodata)` turns one reading's pixels into a number, or null for no data. `bands` are the
+ * store's band objects (see normalizeBands); values are physical (stored * scale + offset).
  */
 export function seriesSpecs(product, bands, bandChoice) {
-  const index = (name) => bands.indexOf(name);
-  const reflectance = (name, label, color) => ({
-    id: name,
+  const [i0, i1] = product.indices;
+  const physical = (pixel, index, nodata) => (isMissing(pixel[index], nodata) ? null : toPhysical(pixel[index], bands[index]));
+  const line = (index, role, color) => {
+    const name = bands[index].name;
+    return {
+      id: name,
+      label: name.toLowerCase() === role ? name : `${name} ${role}`,
+      color,
+      window: 0,
+      domain: null,
+      compute: ([pixel], nodata) => physical(pixel, index, nodata),
+    };
+  };
+  // The two input bands of an index as physical values, or null when either is missing at this pixel.
+  const pair = (pixel, nodata) => {
+    const [first, second] = [physical(pixel, i0, nodata), physical(pixel, i1, nodata)];
+    return first === null || second === null ? null : [first, second];
+  };
+  const index = (id, label, color, fn) => ({
+    id,
     label,
     color,
     window: 0,
-    domain: null,
-    compute: ([pixel], nodata) => (pixel[index(name)] === nodata ? null : pixel[index(name)] / REFLECTANCE_SCALE),
+    domain: [-1, 1],
+    compute: ([pixel], nodata) => {
+      const values = pair(pixel, nodata);
+      return values === null ? null : fn(...values);
+    },
   });
   switch (product.id) {
     case 'true_color':
-      return [reflectance('B04', 'B04 red', COLORS.red), reflectance('B03', 'B03 green', COLORS.green), reflectance('B02', 'B02 blue', COLORS.blue)];
+      return [line(product.indices[0], 'red', COLORS.red), line(product.indices[1], 'green', COLORS.green), line(product.indices[2], 'blue', COLORS.blue)];
     case 'false_color':
-      return [reflectance('B08', 'B08 nir', COLORS.red), reflectance('B04', 'B04 red', COLORS.green), reflectance('B03', 'B03 green', COLORS.blue)];
+      return [line(product.indices[0], 'nir', COLORS.red), line(product.indices[1], 'red', COLORS.green), line(product.indices[2], 'green', COLORS.blue)];
     case 'ndvi':
-      return [{ id: 'ndvi', label: 'NDVI', color: COLORS.green, window: 0, domain: [-1, 1], compute: ([pixel]) => ndvi(pixel[index('B08')], pixel[index('B04')]) }];
+      return [index('ndvi', 'NDVI', COLORS.green, ndvi)];
     case 'ndwi':
-      return [{ id: 'ndwi', label: 'NDWI', color: COLORS.blue, window: 0, domain: [-1, 1], compute: ([pixel]) => ndwi(pixel[index('B03')], pixel[index('B08')]) }];
+      return [index('ndwi', 'NDWI', COLORS.blue, ndwi)];
     case 'water':
       return [
         {
@@ -58,14 +82,17 @@ export function seriesSpecs(product, bands, bandChoice) {
           color: COLORS.blue,
           window: 1,
           domain: [0, 1],
-          compute: (pixels) => {
-            const values = pixels.map((pixel) => ndwi(pixel[index('B03')], pixel[index('B08')])).filter((v) => v !== null);
+          compute: (pixels, nodata) => {
+            const values = pixels.map((pixel) => pair(pixel, nodata)).filter(Boolean).map(([green, nir]) => ndwi(green, nir)).filter((v) => v !== null);
             return values.length === 0 ? null : values.filter((v) => v > 0).length / values.length;
           },
         },
       ];
-    default:
-      return [reflectance(bands[bandChoice], `${bands[bandChoice]} reflectance`, COLORS.grey)];
+    default: {
+      const band = bands[bandChoice];
+      const label = isReflectance(band) ? `${band.name} reflectance` : band.units ? `${band.name} (${band.units})` : band.name;
+      return [{ ...line(bandChoice, '', COLORS.grey), label }];
+    }
   }
 }
 
@@ -118,4 +145,10 @@ export function timeFromX(x, count, left, right) {
   if (count <= 1) return 0;
   const frac = (x - left) / (right - left);
   return Math.min(count - 1, Math.max(0, Math.round(frac * (count - 1))));
+}
+
+/** Timesteps where the pixel was not observed (coverage 0) though the series has a value there: the points drawn hollow. */
+export function gapFilledTimes(values, coverage) {
+  if (!coverage) return [];
+  return values.flatMap((value, t) => (coverage[t] === 0 && typeof value === 'number' ? [t] : []));
 }

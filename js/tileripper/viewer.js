@@ -2,12 +2,26 @@
 // products on the GPU and shows decoded values on click. Opens ?store=<base url>.
 
 import { chunkKey, openStore, samplePixelFrom, scrubCost, windowOrder } from '../chronozarr/decoder.js';
-import { buildSeries, chartRange, seriesPath, seriesSpecs, timeFromX, windowPixels, xFromTime } from './chart.js';
-import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, chooseMovieLevel, snapSpeed } from './playback.js';
+import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, windowPixels, xFromTime } from './chart.js';
+import { ASSUMED_BANDWIDTH, ancestorCells, planCoarseStages, stageLeadMs } from './coarse.js';
+import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, chooseMovieLevel, describeReason, linkAllows, snapSpeed, wireRatio } from './playback.js';
 import { decodeView, encodeView } from './permalink.js';
 import { toggleExportPanel } from './export.js';
+import { FrameMonitor, formatBytes, formatMs, formatRate, hitRate, readStats } from './perf.js';
 import { Renderer } from './renderer.js';
-import { computeStretchLo, describePixel, inputIndices, makeTimeFormatter, resolveProducts } from './products.js';
+import {
+  computeStretchLo,
+  describePixel,
+  displayMode,
+  findBand,
+  inputConversion,
+  inputIndices,
+  makeTimeFormatter,
+  normalizeBands,
+  percentileRange,
+  resolveProducts,
+  toPhysical,
+} from './products.js';
 
 const PREFETCH_SETTLE_MS = 30;
 const PREFETCH_PLAYBACK_RESTART_MS = 250;
@@ -30,11 +44,31 @@ const STRETCH_SAMPLES_PER_CELL = 300;
 const URL_SYNC_MS = 300;
 const CHART_BATCH = 4;
 const CHART_RENDER_MS = 120;
+// A time change of more than this many steps is a jump: the speculative fetches around the old position are dropped.
+const SEEK_DISTANCE = 4;
+const PERF_UPDATE_MS = 250;
+const GAP_HATCH_PX = 8;
+const GAP_MASK_CACHE = 48;
 // Chart geometry in SVG units (the svg scales to the sidebar width).
 const CHART = { width: 264, height: 124, left: 34, right: 256, top: 8, bottom: 104 };
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/** Resolves after `ms`, or as soon as `signal` aborts. */
+function delay(ms, signal) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
 
 /** The last playback speed, if localStorage has a usable one (it can be missing or blocked). */
 function loadSpeed() {
@@ -62,6 +96,10 @@ class Viewer {
   products = [];
   productIndex = 0;
   bandChoice = 0;
+  /** The store's bands as {name, common_name?, scale, offset, divisor, units?}. */
+  bands = [];
+  /** Data type of the store: uint8, uint16, int16 or float32. */
+  dtype = 'uint16';
   t = 0;
   camera = { cx: 0, cy: 0, scale: 1 };
   /** Force one LOD regardless of zoom (benchmarks). */
@@ -75,7 +113,11 @@ class Viewer {
   #formatTime = (t) => String(t);
   #direction = 1;
   #stretchLo = null;
+  /** Linear stretch of a single band that is not reflectance: the [lo, hi] range (null until measured) and whether the user set it. */
+  #linear = { range: null, manual: false };
   #paintPartial = true;
+  /** A coarse stage landed that has not been painted yet (a time jump paints without clearing, so it needs asking). */
+  #coarsePending = false;
   #paintedLod = 0;
   #view = { lod: 0, cells: new Set() };
   #maxVisibleCells = 0;
@@ -93,11 +135,20 @@ class Viewer {
   #lookahead = null;
   #exportHold = null;
   #speed = loadSpeed();
-  #movie = { baseLod: 0, lod: 0 };
+  #movie = { baseLod: 0, lod: 0, reason: null, detail: null };
   #wasPlaying = false;
   #chart = null;
   #chartTimer = 0;
   #urlTimer = 0;
+  #viewTiming = null;
+  #movieMemo = null;
+  #playEpoch = 0;
+  #seekPending = false;
+  /** How long the store's metadata took to fetch: one round trip to the store, more or less. */
+  #roundTripMs = 0;
+  #perf = { monitor: new FrameMonitor(), timer: 0 };
+  #gaps = { visible: false, masks: new Map(), requested: new Set() };
+  #hatch = null;
   /** The store URL to keep in the address bar (?store=), or null for a catalog store. Set by the page. */
   pinnedStore = null;
 
@@ -107,6 +158,7 @@ class Viewer {
     this.#resizeCanvas();
     new ResizeObserver(() => {
       this.#resizeCanvas();
+      this.#beginView('camera');
       this.#paintPartial = true;
       this.requestRender();
     }).observe(this.canvas.parentElement);
@@ -116,7 +168,9 @@ class Viewer {
   }
 
   /**
-   * Open a store and resolve after the first complete frame is painted.
+   * Open a store and resolve after the first complete frame is painted. The result has the time to open the
+   * metadata (`openMs`), to the first frame that covers the whole view at some level (`coarseMs`, from the call;
+   * `coarseAfterMetadataMs`) and to the first complete frame at the target level (`firstPaintMs`).
    * @param {string} url
    * @param {{lod?:number, fetch?:typeof fetch, maxCacheBytes?:number, workers?:number, camera?:{cx:number,cy:number,scale:number},
    *   viewSearch?:string}} [options]  `viewSearch`: a query string whose t, p, b, z, c parameters restore the view (see permalink.js)
@@ -144,12 +198,19 @@ class Viewer {
       return null;
     }
     const openMs = performance.now() - started;
+    this.#roundTripMs = openMs;
 
     this.store = store;
     store.evictionScore = (entry) => this.#storeScore(entry);
+    this.bands = normalizeBands(store.attrs.bands);
+    this.dtype = store.dtype;
     this.#configurePool();
     this.#playback = this.#createPlayback();
-    this.products = resolveProducts(store.bands);
+    this.#movieMemo = null;
+    this.#linear = { range: null, manual: false };
+    this.#gaps = { visible: false, masks: new Map(), requested: new Set() };
+    this.#drawGapOverlay();
+    this.products = resolveProducts(this.bands);
     this.productIndex = this.products.findIndex((p) => p.available);
     this.bandChoice = 0;
     this.t = 0;
@@ -159,12 +220,13 @@ class Viewer {
     this.lodOverride = options.lod ?? null;
     this.#formatTime = makeTimeFormatter(store.times);
     this.#paintPartial = true;
+    const bandNames = this.bands.map((band) => band.name);
     const view = options.viewSearch
-      ? decodeView(options.viewSearch, { count: store.times.length, productIds: this.products.filter((p) => p.available).map((p) => p.id), bands: store.bands, transform: store.transform })
+      ? decodeView(options.viewSearch, { count: store.times.length, productIds: this.products.filter((p) => p.available).map((p) => p.id), bands: bandNames, transform: store.transform })
       : {};
     if (view.t !== undefined) this.t = view.t;
     if (view.productId !== undefined) this.productIndex = this.products.findIndex((p) => p.id === view.productId);
-    if (view.bandName !== undefined) this.bandChoice = store.bands.indexOf(view.bandName);
+    if (view.bandName !== undefined) this.bandChoice = bandNames.indexOf(view.bandName);
     if (options.camera) this.camera = { ...options.camera };
     else if (view.zoom !== undefined || view.center !== undefined) this.#restoreCamera(view);
     else this.fit();
@@ -175,13 +237,42 @@ class Viewer {
     this.#updateMeta();
     this.#updateSidebar(null);
     $('click-hint').classList.remove('hidden');
+    this.#updateGapToggle();
 
     const painted = this.whenPainted();
+    this.#beginView('open');
     this.renderNow();
     await painted;
     this.#setProgress(1);
     this.syncUrl();
-    return { openMs, firstPaintMs: performance.now() - started };
+    const { startedAt, coarseAt } = this.#viewTiming;
+    return {
+      openMs,
+      firstPaintMs: performance.now() - started,
+      coarseMs: coarseAt === null ? null : coarseAt - started,
+      coarseAfterMetadataMs: coarseAt === null ? null : coarseAt - startedAt,
+    };
+  }
+
+  /**
+   * A new view change starts (store open, camera move, time change): the clock for "time to coarse / full frame".
+   * A camera move also ends the prefetch for the old view, which would otherwise keep taking the link from the
+   * cells the new view is waiting for.
+   */
+  #beginView(kind) {
+    this.#viewTiming = { kind, startedAt: performance.now(), coarseAt: null, fullAt: null };
+    if (kind === 'camera') this.#dropSpeculativeFetches();
+  }
+
+  /** How long the last view change took to show a frame covering the whole view (`coarseMs`) and a complete one (`fullMs`); null while pending. */
+  get viewTiming() {
+    const timing = this.#viewTiming;
+    if (!timing) return null;
+    return {
+      kind: timing.kind,
+      coarseMs: timing.coarseAt === null ? null : timing.coarseAt - timing.startedAt,
+      fullMs: timing.fullAt === null ? null : timing.fullAt - timing.startedAt,
+    };
   }
 
   fit() {
@@ -189,6 +280,7 @@ class Viewer {
     const { width, height } = this.canvas;
     const scale = Math.min(width / level.width, height / level.height) * 0.94;
     this.camera = { cx: level.width / 2, cy: level.height / 2, scale };
+    this.#beginView('camera');
     this.#paintPartial = true;
     this.requestRender();
     this.#scheduleUrlSync();
@@ -219,6 +311,10 @@ class Viewer {
     if (!playing) this.#playback?.pause();
     const next = clamp(t, 0, this.store.times.length - 1);
     if (next === this.t) return;
+    if (!playing) {
+      this.#beginView('time');
+      if (Math.abs(next - this.t) > SEEK_DISTANCE) this.#dropSpeculativeFetches();
+    }
     this.#direction = direction ?? (next > this.t ? 1 : -1);
     this.t = next;
     this.#emit({ type: 'input', t: next });
@@ -228,6 +324,17 @@ class Viewer {
       this.requestRender();
       this.#scheduleUrlSync();
     }
+  }
+
+  /**
+   * After a jump in time or a camera move the prefetch window around the old view is stale: cancel what it still has
+   * in flight (what the demand fetches for the new view also need stays), and have the next prefetch say so with `seek`.
+   */
+  #dropSpeculativeFetches() {
+    this.#seekPending = true;
+    clearTimeout(this.#prefetchTimer);
+    this.#prefetchTimer = 0;
+    this.#prefetchAbort?.abort();
   }
 
   /** The address bar keeps the store (when not from the catalog) and whatever differs from the default view. */
@@ -243,7 +350,7 @@ class Viewer {
       {
         t: this.t === 0 ? null : this.t,
         productId: this.productIndex === this.products.findIndex((p) => p.available) ? null : product.id,
-        bandName: product.id === 'band' && this.bandChoice !== 0 ? this.store.bands[this.bandChoice] : null,
+        bandName: product.id === 'band' && this.bandChoice !== 0 ? this.bands[this.bandChoice].name : null,
         zoom: atFit ? null : scale / (window.devicePixelRatio || 1),
         center: atFit ? null : { col: cx, row: cy },
       },
@@ -276,7 +383,7 @@ class Viewer {
     const { store } = this;
     const baseLod = this.#normalLod();
     const deepestLod = Math.max(baseLod, this.#lodForScale(this.camera.scale / 4));
-    const lod = this.lodOverride ?? chooseMovieLevel({ baseLod, deepestLod, fits: (candidate) => store.loopFits(candidate, this.#visibleCells(candidate).length, timesteps) });
+    const lod = this.lodOverride ?? chooseMovieLevel({ baseLod, deepestLod, fits: (candidate) => store.loopFits(candidate, this.#visibleCells(candidate).length, timesteps) }).lod;
     const cells = this.#visibleCells(lod);
     const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.round(this.canvas.width * scale));
@@ -288,7 +395,7 @@ class Viewer {
     this.#prefetchAbort?.abort();
     const renderer = new Renderer(canvas);
     const first = store.levels[0];
-    renderer.configure({ nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots: Math.max(4, 2 * cells.length + 4) });
+    renderer.configure({ dtype: this.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots: Math.max(4, 2 * cells.length + 4) });
     const camera = { ...this.camera, scale: this.camera.scale * scale };
     const chunksFor = (t) => cells.flatMap(([row, col]) => [...new Set([store.anchorOf(t), t])].map((ct) => [row, col, ct]));
     return {
@@ -309,7 +416,7 @@ class Viewer {
           if (slots) drawable.push({ row, col, slots });
           else complete = false;
         }
-        renderer.beginPaint({ width: canvas.width, height: canvas.height, ...camera, ...this.#productUniforms(), stretchLo: this.#stretchLo ?? 0, nodata: store.nodata }, { clear: true });
+        renderer.beginPaint({ width: canvas.width, height: canvas.height, ...camera, ...this.#productUniforms(), stretchLo: this.#stretchLo ?? 0, nodata: store.nodata ?? null }, { clear: true });
         for (const { row, col, slots } of drawable) this.#drawCell(lod, row, col, slots, renderer);
         return complete;
       },
@@ -362,6 +469,7 @@ class Viewer {
   setProduct(index) {
     if (!this.products[index]?.available) return;
     this.productIndex = index;
+    this.#linear = { range: null, manual: false };
     this.#updateProductUi();
     this.#renderChart();
     this.#paintPartial = true;
@@ -371,6 +479,8 @@ class Viewer {
 
   setBandChoice(index) {
     this.bandChoice = index;
+    this.#linear = { range: null, manual: false };
+    this.#updateStretchUi();
     this.#renderChart();
     this.#paintPartial = true;
     this.requestRender();
@@ -420,9 +530,12 @@ class Viewer {
     }
     const complete = missing.length === 0;
     const clear = this.#paintPartial;
-    const painted = clear || drawable.length > 0;
+    const painted = clear || drawable.length > 0 || this.#coarsePending;
 
     if (complete && this.#stretchLo === null) this.#stretchLo = this.#computeStretch(lod, cells, t);
+    if (complete && this.#linear.range === null && this.#usesLinearRange()) this.#measureLinear(lod, cells, t);
+    // A frame is covered when every visible cell is drawn at the target level or sits under a coarser cached one.
+    let covered = false;
     if (painted) {
       renderer.beginPaint(
         {
@@ -431,14 +544,22 @@ class Viewer {
           ...this.camera,
           ...this.#productUniforms(),
           stretchLo: this.#stretchLo ?? 0,
-          nodata: store.nodata,
+          nodata: store.nodata ?? null,
         },
         { clear },
       );
-      if (!complete) this.#drawCoarser(lod, t);
+      const coarser = complete ? new Set() : this.#drawCoarser(lod, t);
+      covered = complete || missing.every(([row, col]) => this.#isUnderCoarser(coarser, lod, row, col));
       for (const { row, col, slots } of drawable) this.#drawCell(lod, row, col, slots);
       this.#paintedLod = lod;
+      this.#coarsePending = false;
       if (complete) this.paintedT = t;
+    }
+    const timing = this.#viewTiming;
+    if (timing && painted) {
+      const now = performance.now();
+      if (covered) timing.coarseAt ??= now;
+      if (complete) timing.fullAt ??= now;
     }
 
     if (complete) {
@@ -459,7 +580,8 @@ class Viewer {
     }
     const ms = performance.now() - started;
     const uploadMs = renderer.stats.uploadMs - uploadBefore;
-    if (painted) this.#emit({ type: 'paint', t, lod, complete, cells: cells.length, ready: drawable.length, uploadMs, renderMs: ms - uploadMs });
+    if (painted) this.#emit({ type: 'paint', t, lod, complete, covered, cells: cells.length, ready: drawable.length, uploadMs, renderMs: ms - uploadMs });
+    if (this.#gaps.visible) this.#drawGapOverlay();
     if (complete) {
       $('status').innerHTML = `<span class="fast">${Math.round(ms)}ms</span>`;
       for (const resolve of this.#painted.splice(0)) resolve();
@@ -480,6 +602,8 @@ class Viewer {
     this.#prefetchAbort = abort;
     const lod = movie ? this.#targetLod({ asPlaying: true }) : this.#view.lod;
     const cells = movie ? this.#visibleCells(lod) : [...this.#view.cells].map((k) => k.split('/').map(Number));
+    const seek = !movie && this.#seekPending;
+    if (!movie) this.#seekPending = false;
     return this.store
       .prefetch({
         lod,
@@ -488,6 +612,7 @@ class Viewer {
         direction: this.#direction,
         behindFactor: movie ? BEHIND_FACTOR_PLAYING : BEHIND_FACTOR,
         loop: movie,
+        seek,
         signal: abort.signal,
         onChunk: () => this.#scheduleGpuFill(),
       })
@@ -555,8 +680,9 @@ class Viewer {
     const { store, renderer } = this;
     const first = store.levels[0];
     const wanted = store.levels.reduce((n, l) => n + l.gridRows * l.gridCols * l.nTime, 0);
-    const slots = renderer.planSlots(first.nBand, first.chunkWidth, first.chunkHeight, POOL_BUDGET_BYTES, wanted);
-    renderer.configure({ nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots });
+    const bytesPerSample = first.chunkBytes / (first.nBand * first.chunkWidth * first.chunkHeight);
+    const slots = renderer.planSlots(first.nBand, first.chunkWidth, first.chunkHeight, POOL_BUDGET_BYTES, wanted, bytesPerSample);
+    renderer.configure({ dtype: this.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots });
     this.#maxVisibleCells = Math.floor(slots / 2);
   }
 
@@ -581,23 +707,78 @@ class Viewer {
   }
 
   /**
-   * The level to draw at. While a movie plays (or `asPlaying`), if the whole loop for the visible cells does
-   * not fit the decoded cache at the normal level, the first coarser level where it does, but never coarser than
-   * the level the viewer would pick at 4x zoom-out. A level pinned with lodOverride is left alone.
+   * The level to draw at. While a movie plays (or `asPlaying`), the first level from the normal one on where the
+   * whole loop for the visible cells fits the decoded cache and, for a loop not in memory yet, where the link can
+   * feed it (chooseMovieLevel), but never coarser than the level the viewer would pick at 4x zoom-out. A playing
+   * movie keeps its level until the camera, the speed or the playback state changes. A level pinned with
+   * lodOverride is left alone.
    */
   #targetLod({ asPlaying = this.#playing } = {}) {
     if (this.lodOverride !== null) return this.lodOverride;
     const baseLod = this.#normalLod();
-    let lod = baseLod;
+    let choice = { lod: baseLod, reason: null, detail: null };
     if (asPlaying) {
       const deepestLod = Math.max(baseLod, this.#lodForScale(this.camera.scale / 4));
-      lod = chooseMovieLevel({ baseLod, deepestLod, fits: (candidate) => this.store.loopFits(candidate, this.#visibleCells(candidate).length) });
+      const key = `${this.#playEpoch}|${baseLod}|${deepestLod}|${this.#visibleCells(baseLod).length}|${this.#speed}`;
+      if (this.#playing && this.#movieMemo?.key === key) choice = this.#movieMemo;
+      else {
+        const links = new Map();
+        const { lod, reason } = chooseMovieLevel({
+          baseLod,
+          deepestLod,
+          fits: (candidate) => this.store.loopFits(candidate, this.#visibleCells(candidate).length),
+          linkOk: (candidate) => {
+            const link = this.#linkCheck(candidate);
+            links.set(candidate, link);
+            return link.ok;
+          },
+        });
+        choice = { key, lod, reason, detail: this.#movieDetail(reason, links.get(baseLod)) };
+        if (this.#playing) this.#movieMemo = choice;
+      }
     }
-    this.#movie = { baseLod, lod };
-    return lod;
+    this.#movie = { baseLod, lod: choice.lod, reason: choice.reason, detail: choice.detail };
+    return choice.lod;
   }
 
-  /** While a movie plays: the normal level and the level it plays at (coarser when the loop would not fit the cache). */
+  /**
+   * Whether the link can feed a movie at this level: the wire bytes of one step (the visible cells, at the
+   * compression the caches show) times the speed, for the part of the loop not in memory yet, against the
+   * measured bandwidth (see linkAllows). The numbers go in the hint's tooltip.
+   */
+  #linkCheck(lod) {
+    const { store } = this;
+    const bandwidth = store.bandwidthEstimate();
+    const cells = this.#visibleCells(lod);
+    const level = store.levels[lod];
+    const bytesPerPixel = level.chunkBytes / (level.chunkWidth * level.chunkHeight);
+    const count = store.times.length;
+    let pixels = 0;
+    let cold = 0;
+    for (const [row, col] of cells) {
+      const { width, height } = store.cellExtent(lod, row, col);
+      pixels += width * height;
+      for (let t = 0; t < count; t++) if (!store.peekRaw(lod, row, col, t)) cold++;
+    }
+    const bytesPerStep = pixels * bytesPerPixel * wireRatio(readStats(store));
+    const stepsPerSecond = this.#playback?.effectiveStepsPerSecond ?? this.#speed;
+    const coldFraction = cells.length === 0 ? 0 : cold / (cells.length * count);
+    return { ok: linkAllows({ bytesPerStep, stepsPerSecond, coldFraction, bandwidth }), cells: cells.length, bytesPerStep, stepsPerSecond, coldFraction, bandwidth };
+  }
+
+  /** The tooltip of the resolution hint: what ruled out the normal level. */
+  #movieDetail(reason, baseLink) {
+    if (reason === null) return null;
+    const parts = [];
+    if (reason.includes('memory')) parts.push('the whole loop does not fit the decoded cache at the normal level');
+    if (reason.includes('link') && baseLink?.bandwidth) {
+      const need = baseLink.bytesPerStep * baseLink.stepsPerSecond * baseLink.coldFraction;
+      parts.push(`the link: ${baseLink.cells} cells at about ${formatBytes(baseLink.bytesPerStep)} per step, ${Math.round(baseLink.stepsPerSecond)}/s, ${Math.round(baseLink.coldFraction * 100)} % not in memory needs ${formatRate(need)}; measured ${formatRate(baseLink.bandwidth)}, limit 70 %`);
+    }
+    return parts.join('; ');
+  }
+
+  /** While a movie plays: the normal level, the level it plays at (coarser when the loop would not fit the cache or the link cannot feed it), and why. */
   get movieInfo() {
     return { ...this.#movie, playing: this.#playing };
   }
@@ -705,25 +886,93 @@ class Viewer {
     );
   }
 
-  /** Progressive LOD: under a partial frame, paint any already-cached coarser cells, coarsest first. */
+  /** Progressive LOD: under a partial frame, paint any already-cached coarser cells, coarsest first. Returns the ones drawn as "lod/row/col" keys. */
   #drawCoarser(lod, t) {
+    const drawn = new Set();
     for (let coarse = this.store.levels.length - 1; coarse > lod; coarse--) {
       for (const [row, col] of this.#visibleCells(coarse)) {
         const slots = this.#slotsFor(coarse, row, col, t);
-        if (slots) this.#drawCell(coarse, row, col, slots);
+        if (!slots) continue;
+        this.#drawCell(coarse, row, col, slots);
+        drawn.add(`${coarse}/${row}/${col}`);
       }
     }
+    return drawn;
   }
 
+  /** Whether some coarser level drawn in `drawn` covers cell (row, col) of `lod`. */
+  #isUnderCoarser(drawn, lod, row, col) {
+    for (let coarse = lod + 1; coarse < this.store.levels.length; coarse++) {
+      const shift = coarse - lod;
+      if (drawn.has(`${coarse}/${row >> shift}/${col >> shift}`)) return true;
+    }
+    return false;
+  }
+
+  /** What the shader needs to color the current product: inputs, the stored-to-physical conversion, and the display mode. */
   #productUniforms() {
     const product = this.products[this.productIndex];
-    return { shader: product.shader, inputs: inputIndices(product, this.store.bands, this.bandChoice) };
+    const display = this.#display(product);
+    return {
+      shader: product.shader,
+      inputs: inputIndices(product, this.bandChoice),
+      ...inputConversion(product, this.bands, this.bandChoice),
+      display: display.mode,
+      range: display.range,
+    };
   }
 
-  /** 2nd percentile of tone-mapped true-color samples, kept fixed while scrubbing. 0 without B02/B03/B04. */
+  /** How the product is shown (see displayMode): a linear stretch that is not fixed uses the measured or user-set range. */
+  #display(product) {
+    const display = displayMode(product, this.bands, this.bandChoice, this.dtype);
+    return display.mode === 'linear' && !display.fixed ? { ...display, range: this.#linear.range ?? [0, 1] } : display;
+  }
+
+  #usesLinearRange() {
+    const display = displayMode(this.products[this.productIndex], this.bands, this.bandChoice, this.dtype);
+    return display.mode === 'linear' && !display.fixed;
+  }
+
+  /** The range of a linear single band from the data on screen: 2nd to 98th percentile of the valid physical values. */
+  #measureLinear(lod, cells, t) {
+    const { store } = this;
+    const band = this.bands[this.bandChoice];
+    const values = [];
+    for (const [row, col] of cells) {
+      const { width, height } = store.cellExtent(lod, row, col);
+      const stride = Math.max(1, Math.floor((width * height) / STRETCH_SAMPLES_PER_CELL));
+      for (let i = 0; i < width * height; i += stride) {
+        const stored = store.samplePixel(lod, row, col, t, i % width, Math.floor(i / width))?.[this.bandChoice];
+        if (stored !== undefined && stored !== store.nodata && Number.isFinite(stored)) values.push(toPhysical(stored, band));
+      }
+    }
+    const range = percentileRange(values);
+    if (range) this.#linear = { range, manual: false };
+    this.#updateStretchUi();
+  }
+
+  /** The user typed a stretch range (physical units). */
+  setStretch(lo, hi) {
+    if (!(Number.isFinite(lo) && Number.isFinite(hi) && hi > lo)) {
+      this.#updateStretchUi();
+      return;
+    }
+    this.#linear = { range: [lo, hi], manual: true };
+    this.#paintPartial = true;
+    this.requestRender();
+  }
+
+  /** Back to the range measured from the data on screen. */
+  autoStretch() {
+    this.#linear = { range: null, manual: false };
+    this.#paintPartial = true;
+    this.requestRender();
+  }
+
+  /** 2nd percentile of tone-mapped true-color samples (physical reflectance), kept fixed while scrubbing. 0 without red, green and blue bands. */
   #computeStretch(lod, cells, t) {
     const { store } = this;
-    const idx = ['B04', 'B03', 'B02'].map((name) => store.bands.indexOf(name));
+    const idx = ['red', 'green', 'blue'].map((common) => findBand(this.bands, common));
     if (idx.some((i) => i < 0)) return 0;
     const level = store.levels[lod];
     const samples = [];
@@ -732,7 +981,7 @@ class Viewer {
       const stride = Math.max(1, Math.floor((width * height) / STRETCH_SAMPLES_PER_CELL));
       for (let i = 0; i < width * height; i += stride) {
         const values = store.samplePixel(lod, row, col, t, i % width, Math.floor(i / width));
-        if (values) samples.push(idx.map((b) => values[b]));
+        if (values) samples.push(idx.map((b) => toPhysical(values[b], this.bands[b])));
       }
     }
     return computeStretchLo(samples);
@@ -753,25 +1002,102 @@ class Viewer {
       for (const [row, col] of wanted) wave.cells.add(`${row}/${col}`);
       this.#emit({ type: 'load-start', t, cells: wanted.length });
       this.#setProgress(0.02);
-      let done = 0;
-      const { signal } = wave.controller;
-      const anchorT = this.store.anchorOf(t);
-      for (const [row, col] of wanted) {
-        Promise.all([this.store.getRaw(lod, row, col, anchorT, { signal }), anchorT === t ? null : this.store.getRaw(lod, row, col, t, { signal })]).then(
-          () => {
-            if (signal.aborted) return;
-            this.#setProgress((++done / wanted.length) * 0.98);
-            this.#emit({ type: 'cell-ready', t, row, col });
-            this.renderNow();
-          },
-          (error) => {
-            if (error.name === 'AbortError') return;
-            this.#chunkFailed(wave, { lod, row, col, t }, error);
-          },
-        );
-      }
+      this.#loadWanted(wave, wanted);
     }
     previous?.controller.abort();
+  }
+
+  /**
+   * The cells a wave still needs, coarse first: the small coarse levels (see coarse.js), each painted as it lands,
+   * then the target level, whose cells paint one by one. A stage starts when the previous one lands or, sooner, a
+   * couple of round trips after the previous one started (stageLeadMs), so the requests of one stage wait on the
+   * network while the bytes of the one before are still arriving instead of after them.
+   */
+  async #loadWanted(wave, wanted) {
+    const { lod } = wave;
+    const { signal } = wave.controller;
+    const lead = stageLeadMs(this.#roundTripMs);
+    let previous = null;
+    for (const stage of this.#coarseStages(lod, wanted, wave.t)) {
+      if (previous) await Promise.race([previous, delay(lead, signal)]);
+      if (signal.aborted) return;
+      previous = this.#loadStage(wave, stage);
+    }
+    if (previous) await Promise.race([previous, delay(lead, signal)]);
+    if (!signal.aborted) this.#loadCells(wave, wanted);
+  }
+
+  /** Load one coarse stage and paint it when it lands. Never rejects: a stage that fails only costs the preview. */
+  async #loadStage(wave, stage) {
+    const { t } = wave;
+    const { signal } = wave.controller;
+    const started = performance.now();
+    try {
+      await this.#loadFrame(stage.lod, stage.cells, t, signal);
+    } catch (error) {
+      if (error.name !== 'AbortError') console.warn(`coarse frame failed (level ${stage.lod}, cells ${JSON.stringify(stage.cells)}, timestep ${t}); the target level loads anyway:`, error);
+      return;
+    }
+    if (signal.aborted) return;
+    this.#emit({ type: 'coarse-frame', t, lod: stage.lod, cells: stage.cells.length, ms: performance.now() - started });
+    this.#coarsePending = true;
+    this.renderNow();
+  }
+
+  /** Levels to show before `lod` for the cells about to load at timestep t, coarsest first, as {lod, cells}; none for a pinned level, a movie, or a one-step time change. */
+  #coarseStages(lod, cells, t) {
+    if (this.lodOverride !== null || this.#playing) return [];
+    // Stepping to a nearby timestep keeps the previous one on screen as a stand-in; a jump or a camera move has none.
+    if (this.#viewTiming?.kind === 'time' && !this.#seekPending) return [];
+    const levels = planCoarseStages({
+      targetLod: lod,
+      coarsestLod: this.store.levels.length - 1,
+      frameBytes: (level) => this.#frameBytes(level, ancestorCells(cells, lod, level), t),
+      bandwidth: this.store.bandwidthEstimate() ?? ASSUMED_BANDWIDTH,
+      wireRatio: wireRatio(readStats(this.store)),
+    });
+    return levels.map((level) => ({ lod: level, cells: ancestorCells(cells, lod, level) }));
+  }
+
+  /** Decoded bytes of the valid pixels of the chunks of timestep t (its anchor and, unless it is one, its delta) that these cells of one level do not have in memory yet. */
+  #frameBytes(lod, cells, t) {
+    const { store } = this;
+    const level = store.levels[lod];
+    const bytesPerPixel = level.chunkBytes / (level.chunkWidth * level.chunkHeight);
+    const chunks = [...new Set([store.anchorOf(t), t])];
+    let pixels = 0;
+    for (const [row, col] of cells) {
+      const { width, height } = store.cellExtent(lod, row, col);
+      for (const ct of chunks) if (!store.peekRaw(lod, row, col, ct)) pixels += width * height;
+    }
+    return pixels * bytesPerPixel;
+  }
+
+  /** The chunks of timestep t for these cells of one level, decoded and in the cache when this resolves. */
+  async #loadFrame(lod, cells, t, signal) {
+    await this.store.getCoarseFrame(lod, cells, t, { signal });
+  }
+
+  /** Fetch the target-level cells of a wave, repainting as each one arrives. */
+  #loadCells(wave, wanted) {
+    const { lod, t } = wave;
+    const { signal } = wave.controller;
+    const anchorT = this.store.anchorOf(t);
+    let done = 0;
+    for (const [row, col] of wanted) {
+      Promise.all([this.store.getRaw(lod, row, col, anchorT, { signal }), anchorT === t ? null : this.store.getRaw(lod, row, col, t, { signal })]).then(
+        () => {
+          if (signal.aborted) return;
+          this.#setProgress((++done / wanted.length) * 0.98);
+          this.#emit({ type: 'cell-ready', t, row, col });
+          this.renderNow();
+        },
+        (error) => {
+          if (error.name === 'AbortError') return;
+          this.#chunkFailed(wave, { lod, row, col, t }, error);
+        },
+      );
+    }
   }
 
   /**
@@ -845,17 +1171,31 @@ class Viewer {
     const col = Math.floor(x / level.chunkWidth);
     const t = this.t;
     const anchorT = this.store.anchorOf(t);
+    const cellX = x - col * level.chunkWidth;
+    const cellY = y - row * level.chunkHeight;
     try {
       await Promise.all([this.store.getRaw(lod, row, col, anchorT), anchorT === t ? null : this.store.getRaw(lod, row, col, t)]);
     } catch (error) {
       this.#showError('Chunk load failed', error.message);
       return;
     }
-    const cellX = x - col * level.chunkWidth;
-    const cellY = y - row * level.chunkHeight;
+    const observed = await this.#observedAt(lod, row, col, t, cellX, cellY);
     const values = this.store.samplePixel(lod, row, col, t, cellX, cellY);
-    this.#updateSidebar({ t, lod, pixel: { x: Math.floor(worldX), y: Math.floor(worldY) }, ...describePixel(values, this.store.bands) });
+    this.#updateSidebar({ t, lod, pixel: { x: Math.floor(worldX), y: Math.floor(worldY) }, observed, ...describePixel(values, this.bands, this.store.nodata) });
     this.#startChart({ lod, row, col, x: cellX, y: cellY });
+  }
+
+  /** How many observations (scenes) stand behind the pixel at timestep t: null when the store has no coverage variable or it cannot be read. */
+  async #observedAt(lod, row, col, t, x, y) {
+    const { store } = this;
+    if (!store.hasCoverage) return null;
+    try {
+      const coverage = await store.getCoverage(lod, row, col, t);
+      return coverage ? coverage[y * store.levels[lod].chunkWidth + x] : null;
+    } catch (error) {
+      console.error(`coverage load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, error);
+      return null;
+    }
   }
 
   // ---- chart of the clicked pixel over time ----
@@ -866,8 +1206,11 @@ class Viewer {
     const { width, height } = this.store.cellExtent(lod, row, col);
     const chart = {
       cell: { lod, row, col },
+      pixel: { x, y },
       window: windowPixels(x, y, width, height, 1),
       readings: new Array(this.store.times.length).fill(undefined),
+      // Observations behind the pixel per timestep (undefined = not loaded, null = unreadable); null without a coverage variable.
+      coverage: this.store.hasCoverage ? new Array(this.store.times.length).fill(undefined) : null,
       controller: new AbortController(),
       failed: 0,
       done: false,
@@ -890,26 +1233,38 @@ class Viewer {
     const { lod, row, col } = chart.cell;
     const level = store.levels[lod];
     const sample = (anchor, delta) => ({ pixels: chart.window.map(([x, y]) => samplePixelFrom(anchor, delta, level, x, y)) });
+    const coverageOffset = chart.pixel.y * level.chunkWidth + chart.pixel.x;
     for (let t = 0; t < chart.readings.length; t++) {
       const anchor = store.peekRaw(lod, row, col, store.anchorOf(t));
       const delta = store.isAnchor(t) ? null : store.peekRaw(lod, row, col, t);
       if (anchor && (store.isAnchor(t) || delta)) chart.readings[t] = sample(anchor, delta);
+      if (chart.coverage) {
+        const coverage = store.peekCoverage(lod, row, col, t);
+        if (coverage) chart.coverage[t] = coverage[coverageOffset];
+      }
     }
     this.#renderChart();
-    const missing = chart.readings.flatMap((reading, t) => (reading ? [] : [t])).sort((a, b) => Math.abs(a - this.t) - Math.abs(b - this.t));
+    // Timesteps still missing their values or (with a coverage variable) their coverage, nearest to the one on screen first.
+    const missing = chart.readings
+      .flatMap((reading, t) => (reading && (!chart.coverage || chart.coverage[t] !== undefined) ? [] : [t]))
+      .sort((a, b) => Math.abs(a - this.t) - Math.abs(b - this.t));
     const { signal } = chart.controller;
     for (let i = 0; i < missing.length; i += CHART_BATCH) {
       await Promise.all(
         missing.slice(i, i + CHART_BATCH).map(async (t) => {
           const anchorT = store.anchorOf(t);
-          try {
-            const [anchor, delta] = await Promise.all([store.getRaw(lod, row, col, anchorT, { signal }), anchorT === t ? null : store.getRaw(lod, row, col, t, { signal })]);
-            chart.readings[t] = sample(anchor, delta);
-          } catch (error) {
-            if (error.name === 'AbortError') return;
-            chart.failed++;
-            console.error(`chart: chunk load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, error);
+          const observed = chart.coverage && chart.coverage[t] === undefined ? this.#loadChartCoverage(chart, t, coverageOffset) : null;
+          if (!chart.readings[t]) {
+            try {
+              const [anchor, delta] = await Promise.all([store.getRaw(lod, row, col, anchorT, { signal }), anchorT === t ? null : store.getRaw(lod, row, col, t, { signal })]);
+              chart.readings[t] = sample(anchor, delta);
+            } catch (error) {
+              if (error.name === 'AbortError') return;
+              chart.failed++;
+              console.error(`chart: chunk load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, error);
+            }
           }
+          await observed;
         }),
       );
       if (signal.aborted) return;
@@ -917,6 +1272,19 @@ class Viewer {
     }
     chart.done = true;
     this.#renderChart();
+  }
+
+  /** The coverage of the charted pixel at timestep t, into chart.coverage (null when it cannot be read). */
+  async #loadChartCoverage(chart, t, offset) {
+    const { lod, row, col } = chart.cell;
+    try {
+      const coverage = await this.store.getCoverage(lod, row, col, t, { signal: chart.controller.signal });
+      chart.coverage[t] = coverage ? coverage[offset] : null;
+    } catch (error) {
+      if (error.name === 'AbortError') return;
+      chart.coverage[t] = null;
+      console.error(`chart: coverage load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, error);
+    }
   }
 
   #scheduleChartRender() {
@@ -933,7 +1301,7 @@ class Viewer {
     const chart = this.#chart;
     if (!chart || !target) return;
     const { store } = this;
-    const specs = seriesSpecs(this.products[this.productIndex], store.bands, this.bandChoice);
+    const specs = seriesSpecs(this.products[this.productIndex], this.bands, this.bandChoice);
     chart.series = buildSeries(specs, chart.readings, store.nodata);
     const [lo, hi] = chartRange(chart.series);
     const n = store.times.length;
@@ -944,15 +1312,22 @@ class Viewer {
       .map((value) => `<line x1="${CHART.left}" x2="${CHART.right}" y1="${yOf(value)}" y2="${yOf(value)}" class="chart-grid"/><text x="${CHART.left - 4}" y="${yOf(value) + 3}" text-anchor="end" class="chart-axis">${fmt(value)}</text>`)
       .join('');
     const lines = chart.series.map((s) => `<path d="${seriesPath(s.values, xOf, yOf)}" fill="none" stroke="${s.color}" stroke-width="1.5" stroke-linejoin="round"/>`).join('');
+    // Hollow points mark timesteps where nothing was observed at the pixel and the value was filled in from another month.
+    const gaps = chart.series
+      .flatMap((s) => gapFilledTimes(s.values, chart.coverage).map((t) => `<circle cx="${xOf(t).toFixed(1)}" cy="${yOf(s.values[t]).toFixed(1)}" r="2.6" fill="var(--surface)" stroke="${s.color}" stroke-width="1.3"/>`))
+      .join('');
+    const anyGap = chart.coverage?.some((c) => c === 0) ?? false;
     target.innerHTML = `
       <svg class="chart-svg" viewBox="0 0 ${CHART.width} ${CHART.height}" role="img" aria-label="${chart.series.map((s) => s.label).join(', ')} over time">
-        ${grid}${lines}
+        ${grid}${lines}${gaps}
         <line id="chart-marker" y1="${CHART.top}" y2="${CHART.bottom}" class="chart-marker"/>
         <line id="chart-hover" y1="${CHART.top}" y2="${CHART.bottom}" class="chart-hover" visibility="hidden"/>
         <text x="${CHART.left}" y="${CHART.height - 4}" class="chart-axis">${this.#formatTime(0)}</text>
         <text x="${CHART.right}" y="${CHART.height - 4}" text-anchor="end" class="chart-axis">${this.#formatTime(n - 1)}</text>
       </svg>`;
-    $('chart-legend').innerHTML = chart.series.map((s) => `<span style="color:${s.color}">${s.label}</span>`).join('');
+    $('chart-legend').innerHTML =
+      chart.series.map((s) => `<span style="color:${s.color}">${s.label}</span>`).join('') +
+      (anyGap ? '<span class="chart-gap-key" title="No scene observed this pixel this month; its value is carried over from another month"><i></i>gap-filled</span>' : '');
     this.#updateChartMarker();
     this.#updateChartStatus();
   }
@@ -973,13 +1348,16 @@ class Viewer {
     const n = chart.readings.length;
     if (chart.hover !== null) {
       const t = chart.hover;
-      const values = chart.series.map((s) => (typeof s.values[t] === 'number' ? s.values[t].toFixed(3) : s.values[t] === null ? 'no data' : '…'));
-      status.textContent = `${this.#formatTime(t)} · ${values.join(' · ')}`;
+      const values = chart.series.map((s) => (typeof s.values[t] === 'number' ? formatValue(s.values[t]) : s.values[t] === null ? 'no data' : '…'));
+      const gap = chart.coverage?.[t] === 0 ? ' · gap-filled' : '';
+      status.textContent = `${this.#formatTime(t)} · ${values.join(' · ')}${gap}`;
       return;
     }
     const loaded = chart.readings.filter(Boolean).length;
     const failed = chart.failed > 0 ? ` · ${chart.failed} failed` : '';
-    status.textContent = chart.done ? `${loaded} of ${n} timesteps${failed} · click to jump` : `loading ${loaded} of ${n} timesteps…`;
+    const gapCount = chart.coverage?.filter((c) => c === 0).length ?? 0;
+    const gapNote = gapCount > 0 ? ` · ${gapCount} gap-filled` : '';
+    status.textContent = chart.done ? `${loaded} of ${n} timesteps${failed}${gapNote} · click to jump` : `loading ${loaded} of ${n} timesteps…`;
   }
 
   #bindChart() {
@@ -1022,6 +1400,149 @@ class Viewer {
     });
   }
 
+  // ---- performance overlay (key "d") ----
+
+  /** Show or hide the performance overlay: cache, requests, transfer, time to frame and slow frames, refreshed 4 times a second while visible. */
+  togglePerfOverlay() {
+    const panel = $('perf-overlay');
+    const show = panel.hidden;
+    panel.hidden = !show;
+    const perf = this.#perf;
+    clearInterval(perf.timer);
+    perf.timer = 0;
+    if (!show) {
+      perf.monitor.stop();
+      return;
+    }
+    perf.monitor.reset();
+    perf.monitor.start();
+    this.#updatePerfOverlay();
+    perf.timer = setInterval(() => this.#updatePerfOverlay(), PERF_UPDATE_MS);
+  }
+
+  #updatePerfOverlay() {
+    if (!this.store) return;
+    const stats = readStats(this.store);
+    const timing = this.viewTiming;
+    const frames = this.#perf.monitor.snapshot();
+    const count = (value) => (value === null ? '–' : value.toLocaleString('en-US'));
+    const rows = [
+      ['cache', `hit ${count(stats.cacheHits)} / miss ${count(stats.cacheMisses)} (${hitRate(stats.cacheHits, stats.cacheMisses)})`],
+      ['decoded', `${formatBytes(stats.decodedBytes)} · compressed ${formatBytes(stats.compressedBytes)} · speculative ${formatBytes(stats.speculativeBytes)}`],
+      ['requests', `in flight ${count(stats.inflight)} · deduped ${count(stats.dedupedRequests)} · total ${count(stats.requests)}`],
+      ['transferred', `${formatBytes(stats.transferredBytes)} · ${formatRate(stats.bandwidth)}`],
+      ['last view', timing ? `${timing.kind}: coarse ${formatMs(timing.coarseMs)} · full ${formatMs(timing.fullMs)}` : '–'],
+      ['frames', `> 16.7 ms: ${frames.over16_7ms} · > 33 ms: ${frames.over33ms} of ${frames.frames}`],
+    ];
+    $('perf-overlay').textContent = rows.map(([label, value]) => `${label.padEnd(12)}${value}`).join('\n');
+  }
+
+  // ---- gap-filled pixels on the map ----
+
+  /** Hatch the pixels that no scene observed in this timestep (coverage 0) over the map, or stop. */
+  toggleGaps() {
+    this.#gaps.visible = !this.#gaps.visible;
+    this.#updateGapToggle();
+    this.#drawGapOverlay();
+  }
+
+  #updateGapToggle() {
+    const button = $('gap-toggle');
+    button.hidden = !this.store?.hasCoverage;
+    button.classList.toggle('active', this.#gaps.visible);
+    button.setAttribute('aria-pressed', String(this.#gaps.visible));
+  }
+
+  /** Redraw the hatching for the cells on screen: each cell's coverage-0 pixels as a mask, scaled like the map, filled with stripes. */
+  #drawGapOverlay() {
+    const overlay = $('gap-canvas');
+    const { width, height } = this.canvas;
+    if (overlay.width !== width || overlay.height !== height) {
+      overlay.width = width;
+      overlay.height = height;
+    }
+    const ctx = overlay.getContext('2d');
+    ctx.clearRect(0, 0, width, height);
+    const { store } = this;
+    if (!this.#gaps.visible || !store?.hasCoverage) return;
+    const { lod } = this.#view;
+    const level = store.levels[lod];
+    const factor = 2 ** lod;
+    const { cx, cy, scale } = this.camera;
+    ctx.imageSmoothingEnabled = false;
+    for (const key of this.#view.cells) {
+      const [row, col] = key.split('/').map(Number);
+      const mask = this.#gapMask(lod, row, col);
+      if (!mask) continue;
+      const x = (col * level.chunkWidth * factor - cx) * scale + width / 2;
+      const y = (row * level.chunkHeight * factor - cy) * scale + height / 2;
+      ctx.drawImage(mask, 0, 0, mask.width, mask.height, x, y, mask.width * factor * scale, mask.height * factor * scale);
+    }
+    ctx.globalCompositeOperation = 'source-in';
+    ctx.fillStyle = this.#hatchPattern(ctx);
+    ctx.fillRect(0, 0, width, height);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /** A canvas the size of the cell's valid pixels, opaque where coverage is 0; null while the coverage chunk loads (the overlay redraws when it has). */
+  #gapMask(lod, row, col) {
+    const { store } = this;
+    const { t } = this;
+    const key = `${lod}/${row}/${col}/${t}`;
+    const { masks, requested } = this.#gaps;
+    const cached = masks.get(key);
+    if (cached) return cached;
+    const coverage = store.peekCoverage(lod, row, col, t);
+    if (!coverage) {
+      if (coverage === undefined && !requested.has(key)) {
+        requested.add(key);
+        store.getCoverage(lod, row, col, t).then(
+          () => {
+            requested.delete(key);
+            this.#drawGapOverlay();
+          },
+          (error) => console.error(`gap overlay: coverage load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, error),
+        );
+      }
+      return null;
+    }
+    const { width, height } = store.cellExtent(lod, row, col);
+    const stride = store.levels[lod].chunkWidth;
+    const mask = document.createElement('canvas');
+    mask.width = width;
+    mask.height = height;
+    const maskContext = mask.getContext('2d');
+    const image = maskContext.createImageData(width, height);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) if (coverage[y * stride + x] === 0) image.data[(y * width + x) * 4 + 3] = 255;
+    }
+    maskContext.putImageData(image, 0, 0);
+    masks.set(key, mask);
+    if (masks.size > GAP_MASK_CACHE) masks.delete(masks.keys().next().value);
+    return mask;
+  }
+
+  /** Diagonal white stripes, GAP_HATCH_PX apart on screen whatever the pixel ratio. */
+  #hatchPattern(ctx) {
+    const size = Math.max(4, Math.round(GAP_HATCH_PX * (window.devicePixelRatio || 1)));
+    if (this.#hatch?.size !== size) {
+      const tile = document.createElement('canvas');
+      tile.width = size;
+      tile.height = size;
+      const tileContext = tile.getContext('2d');
+      tileContext.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+      tileContext.lineWidth = Math.max(1, size / 6);
+      tileContext.beginPath();
+      for (const shift of [-size, 0, size]) {
+        tileContext.moveTo(shift, size);
+        tileContext.lineTo(shift + size, 0);
+      }
+      tileContext.stroke();
+      this.#hatch = { size, tile };
+    }
+    return ctx.createPattern(this.#hatch.tile, 'repeat');
+  }
+
   // ---- input ----
 
   #bindInput() {
@@ -1041,6 +1562,7 @@ class Viewer {
       const scaleToCanvas = canvas.width / canvas.getBoundingClientRect().width;
       this.camera.cx -= (dx * scaleToCanvas) / this.camera.scale;
       this.camera.cy -= (dy * scaleToCanvas) / this.camera.scale;
+      this.#beginView('camera');
       this.#paintPartial = true;
       this.requestRender();
       this.#scheduleUrlSync();
@@ -1061,6 +1583,7 @@ class Viewer {
       const worldX = cx + (px - canvas.width / 2) / scale;
       const worldY = cy + (py - canvas.height / 2) / scale;
       this.camera = { cx: worldX - (px - canvas.width / 2) / next, cy: worldY - (py - canvas.height / 2) / next, scale: next };
+      this.#beginView('camera');
       this.#paintPartial = true;
       this.requestRender();
       this.#scheduleUrlSync();
@@ -1075,6 +1598,11 @@ class Viewer {
     $('prev-btn').addEventListener('click', () => this.goToTime(this.t - 1));
     $('next-btn').addEventListener('click', () => this.goToTime(this.t + 1));
     $('band-select').addEventListener('change', (e) => this.setBandChoice(Number(e.target.value)));
+    const applyStretch = () => this.setStretch(Number($('stretch-min').value), Number($('stretch-max').value));
+    $('stretch-min').addEventListener('change', applyStretch);
+    $('stretch-max').addEventListener('change', applyStretch);
+    $('stretch-auto').addEventListener('click', () => this.autoStretch());
+    $('gap-toggle').addEventListener('click', () => this.toggleGaps());
 
     const track = $('timeline-track');
     let scrubbing = false;
@@ -1112,6 +1640,8 @@ class Viewer {
         this.goToTime(this.t + 1);
       } else if (/^[1-9]$/.test(e.key)) {
         this.setProduct(Number(e.key) - 1);
+      } else if ((e.key === 'd' || e.key === 'D') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        this.togglePerfOverlay();
       }
     });
     // A focused button would also click on Space; the keydown above has already toggled playback.
@@ -1135,13 +1665,27 @@ class Viewer {
       container.appendChild(button);
     });
     const select = $('band-select');
-    select.replaceChildren(...this.store.bands.map((name, i) => new Option(name, i)));
+    select.replaceChildren(...this.bands.map((band, i) => new Option(band.name, i)));
+    select.value = String(this.bandChoice);
     this.#updateProductUi();
   }
 
   #updateProductUi() {
     for (const button of $('products').children) button.classList.toggle('active', Number(button.dataset.index) === this.productIndex);
     $('band-select').hidden = this.products[this.productIndex].id !== 'band';
+    this.#updateStretchUi();
+  }
+
+  /** The min/max stretch controls show only while a band is displayed with an adjustable linear stretch. */
+  #updateStretchUi() {
+    const visible = Boolean(this.store) && this.#usesLinearRange();
+    $('stretch').hidden = !visible;
+    if (!visible) return;
+    const [lo, hi] = this.#linear.range ?? [0, 1];
+    for (const [id, value] of [['stretch-min', lo], ['stretch-max', hi]]) {
+      const input = $(id);
+      if (document.activeElement !== input) input.value = String(Number(value.toPrecision(5)));
+    }
   }
 
   #buildTimeline() {
@@ -1164,6 +1708,7 @@ class Viewer {
       this.requestRender();
       this.#scheduleUrlSync();
     }
+    if (playing !== this.#wasPlaying) this.#playEpoch++;
     this.#wasPlaying = playing;
     const button = $('play-btn');
     button.classList.toggle('playing', playing);
@@ -1185,12 +1730,16 @@ class Viewer {
     $('speed-label').textContent = effective < this.#speed ? `${this.#speed} /s → ${effective}` : `${this.#speed} /s`;
   }
 
-  /** "playing at 1/2 res" while the movie level is coarser than the normal one. */
+  /** "playing at 1/2 res · fits memory" (or "· link") while the movie level is coarser than the normal one; the tooltip has the numbers. */
   #updateResHint() {
-    const { baseLod, lod } = this.#movie;
-    const text = this.#playing && lod > baseLod ? `playing at 1/${2 ** (lod - baseLod)} res` : '';
+    const { baseLod, lod, reason, detail } = this.#movie;
+    const coarser = this.#playing && lod > baseLod;
+    const text = coarser ? `playing at 1/${2 ** (lod - baseLod)} res · ${describeReason(reason)}` : '';
     const hint = $('res-hint');
-    if (hint.textContent !== text) hint.textContent = text;
+    if (hint.textContent !== text) {
+      hint.textContent = text;
+      hint.title = coarser ? (detail ?? '') : '';
+    }
   }
 
   #updateTimeUi() {
@@ -1202,14 +1751,13 @@ class Viewer {
   #updateMeta() {
     const level = this.store.levels[0];
     const name = new URL(this.store.url, location.href).pathname.replace(/\/$/, '').split('/').pop();
-    $('nav-meta').textContent = `${name} · ${this.store.bands.join(' ')} · ${this.store.times.length} steps · ${level.width}×${level.height}`;
+    $('nav-meta').textContent = `${name} · ${this.bands.map((band) => band.name).join(' ')} · ${this.store.times.length} steps · ${level.width}×${level.height}`;
   }
 
   #updateCacheStats() {
     if (!this.store) return;
-    const { cache } = this.store.stats;
-    const info = this.store.cacheInfo();
-    $('cache-stats').textContent = `cache ${cache.hits} hit / ${cache.misses} miss · ${(info.bytes / 1048576).toFixed(0)} MB · GPU ${this.renderer.slots} slots`;
+    const stats = readStats(this.store);
+    $('cache-stats').textContent = `cache ${stats.cacheHits} hit / ${stats.cacheMisses} miss · ${((stats.decodedBytes ?? 0) / 1048576).toFixed(0)} MB · GPU ${this.renderer.slots} slots`;
   }
 
   #setProgress(frac) {
@@ -1269,6 +1817,13 @@ function metricHtml(name, value, color) {
     </div>`;
 }
 
+/** A value for display: whole numbers as they are, others with 3 significant-ish digits (more decimals for small values). */
+function formatValue(value) {
+  if (!Number.isFinite(value) || Number.isInteger(value)) return String(value);
+  const magnitude = Math.abs(value);
+  return value.toFixed(magnitude >= 1000 ? 1 : magnitude >= 10 ? 2 : 3);
+}
+
 function sidebarHtml(info, timeLabel) {
   const indices = [];
   if (info.hasNdvi) indices.push(metricHtml('NDVI', info.ndvi, ndviColor(info.ndvi)));
@@ -1286,12 +1841,17 @@ function sidebarHtml(info, timeLabel) {
       </div>`);
   }
   const row = (label, value) => `<div class="meta-row"><span class="label">${label}</span><span class="value mono">${value}</span></div>`;
+  const reflectance = info.bands.every((b) => b.reflectance);
+  const physical = (b) => (reflectance ? b.value.toFixed(4) : `${formatValue(b.value)}${b.units && b.units !== 'reflectance' ? ` ${b.units}` : ''}`);
+  const scaled = info.bands.some((b) => b.value !== b.stored);
+  const observed = info.observed === null || info.observed === undefined ? '' : row('Observed by', info.observed === 0 ? 'no scene (gap-filled)' : `${info.observed} scene${info.observed === 1 ? '' : 's'}`);
   return `
     <div class="sidebar-section">
       <div class="section-label">Location</div>
       <div class="meta-row"><span class="label">Time</span><span class="value">${timeLabel}</span></div>
       ${row('Pixel (x, y)', `${info.pixel.x}, ${info.pixel.y}`)}
       ${row('Level', info.lod === 0 ? '0 (full resolution)' : `${info.lod} (${2 ** info.lod}× coarser)`)}
+      ${observed}
     </div>
     ${indices.length ? `<div class="sidebar-section"><div class="section-label">Indices</div>${indices.join('')}</div>` : ''}
     <div class="sidebar-section">
@@ -1301,15 +1861,19 @@ function sidebarHtml(info, timeLabel) {
       <div id="chart-status" class="chart-status"></div>
     </div>
     <div class="sidebar-section">
-      <div class="section-label">Reflectance</div>
-      ${info.bands.map((b) => row(b.name, b.reflectance.toFixed(4))).join('')}
+      <div class="section-label">${reflectance ? 'Reflectance' : 'Value'}</div>
+      ${info.bands.map((b) => row(b.name, physical(b))).join('')}
     </div>
-    <div class="sidebar-section">
-      <div class="section-label">Raw DN</div>
+    ${
+      scaled
+        ? `<div class="sidebar-section">
+      <div class="section-label">Stored value</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 16px;">
-        ${info.bands.map((b) => row(b.name, b.dn)).join('')}
+        ${info.bands.map((b) => row(b.name, b.stored)).join('')}
       </div>
-    </div>`;
+    </div>`
+        : ''
+    }`;
 }
 
 async function loadCatalog() {
@@ -1328,6 +1892,7 @@ async function main() {
     bench: () => import('./bench.js').then((m) => m.runBenchmarks(viewer)),
     scrubBench: (options) => import('./bench.js').then((m) => m.runScrubBenchmarks(viewer, options)),
     playBench: (options) => import('./bench.js').then((m) => m.playBench(viewer, options)),
+    interactionBench: (options) => import('./bench.js').then((m) => m.interactionBench(viewer, options)),
   };
 
   $('export-btn').addEventListener('click', () => toggleExportPanel(viewer));
