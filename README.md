@@ -152,6 +152,17 @@ Movie playback, two loops, holds counted separately at the wrap, 2026-09-30:
 
 A 9-cell overview of the 117-month store is about 11.7 MB per timestep, so a cold loop is bound by the link (about 55 MB/s here), and the 1 GiB decoded cache holds about 48 of the 117 timesteps at that size. A 4-cell view fits entirely and plays at the display rate.
 
+Coarse-first loading and the bandwidth-aware movie level, live Ucayali store with the link throttled to 50 Mbit/s and 40 ms, 2026-09-30, medians:
+
+| Interaction | Before | After, first usable frame | After, full resolution |
+|---|---:|---:|---:|
+| Open | 2.03 s | 421 ms | 1.97 s |
+| Big time jump | 6.00 s | 927 ms | 3.97 s |
+| Zoom in | 4.86 s | under 2 ms (cached coarser cells) | 2.10 s |
+| Playback at 10 steps/s requested | 3.4 /s | | 5.3 /s, level dropped by the link rule |
+
+On an unthrottled link a frame expected within a second loads directly, so fast connections pay nothing for the staging. The 150 ms coarse-frame target holds on fast links (74 ms after metadata) and not at 50 Mbit/s, where three sequential requests per stage set a floor near 230 ms; shard_bytes hints remove one of them.
+
 Star-delta reconstruction runs in the fragment shader; the CPU loop it replaces cost 54 ms per 36-cell frame. Known limits: prefetch is greedy and will pull several hundred MB in the first seconds on any link; cold open of very small stores costs 30 to 40 ms for worker startup.
 
 ## Status
