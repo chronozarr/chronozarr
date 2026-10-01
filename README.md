@@ -41,14 +41,21 @@ chronozarr keeps native projection and lossless values, serves a timestep as one
 
 ## Install
 
-Packages are not yet published. The intended names are `chronozarr` on PyPI and `chronozarr-js` on npm. Until then, work from a checkout of this repository:
+The first release (0.2.0 of both packages) is pending: `chronozarr` is not on PyPI and `chronozarr-js` is not on npm yet, so the install commands below fail until the `v0.2.0` tag is published. Both packages release from one `v*` tag, so their versions move together.
+
+```bash
+pip install chronozarr              # Python package and CLI; extras: geo (GeoTIFF input), notebook (view()), netcdf, dask
+npm install chronozarr-js           # JavaScript reader and MapLibre layer
+```
+
+Until then, work from a checkout of this repository:
 
 ```bash
 uv sync                      # Python package and CLI; add --extra geo for GeoTIFF input, --extra notebook for view()
 uv run chronozarr --help
 ```
 
-The JavaScript reader is ES modules under `js/chronozarr/` and depends on `zarrita` 0.7.5 (`cd js && npm install`). The viewer has no runtime third-party host: zarrita and its codecs are vendored under `js/vendor` (zarrita 0.7.5, @zarrita/storage 0.2.0, numcodecs 0.3.2, all MIT), each file header records its version, license and the SHA-256 of the published file, and the page loads no web font. The MapLibre demo page (`js/maplibre/index.html`) is the exception by design: it loads maplibre-gl from a pinned CDN version.
+`chronozarr-js` is the ES modules under `js/chronozarr/` and `js/maplibre/`, published as they are (no build step, no runtime dependency): `import { openStore } from 'chronozarr-js'` and `import { ChronozarrLayer } from 'chronozarr-js/maplibre'`. From a checkout, `cd js && npm install` installs only the test tooling. zarrita and its codecs are vendored under `js/vendor` (zarrita 0.7.5, @zarrita/storage 0.2.0, numcodecs 0.3.2, all MIT), so the viewer has no runtime third-party host; each vendored file header records its version, license and the SHA-256 of the published file, and the page loads no web font. The MapLibre demo page (`js/maplibre/index.html`) is the exception by design: it loads maplibre-gl from a pinned CDN version. Usage examples are in [js/README.md](https://github.com/jameshgrn/tile-ripper/blob/main/js/README.md).
 
 ## Quickstart
 
