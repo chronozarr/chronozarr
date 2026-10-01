@@ -5,6 +5,12 @@
 // single texSubImage3D from the decoded array. The fragment shader reads the anchor slot and, for delta
 // timesteps, the delta slot and adds them per pixel, so switching timesteps or products never runs a CPU loop
 // over pixels. The product colors come from products-glsl.js.
+//
+// A store with a validity mask (spec 2.4) gets a second TEXTURE_2D_ARRAY (R8UI) with one layer per slot. The mask
+// belongs to a timestep, so layer s holds the mask of the timestep whose data chunk sits in slot s: a delta
+// timestep is drawn with the mask layer of its delta slot, an anchor timestep with that of its anchor slot. Where
+// the mask is 0 the shader writes the background color (opaque, so painting over the previous frame cannot leave
+// the previous timestep's pixel behind), and the store's nodata value is not compared (spec 2.3).
 
 import { PRODUCT_GLSL } from './products-glsl.js';
 
@@ -54,15 +60,18 @@ void main() {
   v_texel = corner * u_extent;
 }`;
 
-export function fragmentShader(dtype) {
+/** Fragment shader for one data type; `hasMask` adds the validity mask texture (see the top of this file). */
+export function fragmentShader(dtype, hasMask = false) {
   const format = TEXTURE_FORMATS[dtype];
   const isFloat = dtype === 'float32';
   return `#version 300 es
 precision highp float;
 precision highp int;
 precision highp ${format.sampler};
+precision highp usampler2DArray;
 in vec2 v_texel;
 uniform ${format.sampler} u_data;
+${hasMask ? 'uniform usampler2DArray u_mask;   // validity mask, one layer per slot: 1 = valid\nuniform int u_maskLayer;        // layer of the slot that holds the mask of the timestep on screen' : ''}
 uniform vec2 u_extent;
 uniform int u_anchorBase;   // first layer of the anchor slot
 uniform int u_deltaBase;    // first layer of the delta slot; -1 when the timestep is itself an anchor
@@ -71,7 +80,7 @@ uniform int u_product;
 uniform int u_display;      // 0 = tone-mapped reflectance, 1 = linear stretch of u_range
 uniform vec2 u_range;
 uniform float u_stretch_lo;
-uniform int u_hasNodata;
+uniform int u_hasNodata;    // the store declares a nodata value and has no mask
 uniform float u_nodata;
 uniform vec3 u_scale;       // per input: physical = stored * scale + offset ...
 uniform vec3 u_divisor;     // ... or stored / divisor + offset where the divisor is above zero
@@ -95,7 +104,11 @@ vec3 toPhysical(vec3 v) {
 ${PRODUCT_GLSL}
 void main() {
   ivec2 texel = ivec2(min(floor(v_texel), u_extent - 1.0));
-  float v0 = value(texel, u_inputs.x);
+${hasMask ? `  if (texelFetch(u_mask, ivec3(texel, u_maskLayer), 0).r == 0u) {   // masked out: the background shows
+    outColor = vec4(BG, 1.0);
+    return;
+  }
+` : ''}  float v0 = value(texel, u_inputs.x);
   float v1 = value(texel, u_inputs.y);
   float v2 = value(texel, u_inputs.z);
   bool empty = (u_inputs.x < 0 || isNodata(v0)) && (u_inputs.y < 0 || isNodata(v1)) && (u_inputs.z < 0 || isNodata(v2));
@@ -120,16 +133,18 @@ function compile(gl, type, source) {
   return shader;
 }
 
-const UNIFORM_NAMES = ['u_canvas', 'u_view', 'u_cell', 'u_extent', 'u_data', 'u_anchorBase', 'u_deltaBase', 'u_inputs', 'u_product', 'u_display', 'u_range', 'u_stretch_lo', 'u_hasNodata', 'u_nodata', 'u_scale', 'u_divisor', 'u_offset'];
+const UNIFORM_NAMES = ['u_canvas', 'u_view', 'u_cell', 'u_extent', 'u_data', 'u_mask', 'u_maskLayer', 'u_anchorBase', 'u_deltaBase', 'u_inputs', 'u_product', 'u_display', 'u_range', 'u_stretch_lo', 'u_hasNodata', 'u_nodata', 'u_scale', 'u_divisor', 'u_offset'];
 
 export class Renderer {
   #gl;
   #programs = new Map();
   #uniforms = {};
   #texture = null;
+  #maskTexture = null;
   #pool = null;
   #frame = 0;
   #dtype = 'uint16';
+  #hasMask = false;
 
   /** Called with a slot's cell metadata; the highest score is evicted first. Set by the viewer. */
   evictionScore = () => 0;
@@ -143,15 +158,16 @@ export class Renderer {
     this.limits = { maxLayers: gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS), maxSize: gl.getParameter(gl.MAX_TEXTURE_SIZE) };
   }
 
-  /** Select (compiling on first use) the shader program that reads textures of this data type. */
-  #useProgram(dtype) {
+  /** Select (compiling on first use) the shader program that reads textures of this data type, with the mask texture if `hasMask`. */
+  #useProgram(dtype, hasMask) {
     const gl = this.#gl;
     if (!TEXTURE_FORMATS[dtype]) throw new Error(`Unsupported data type ${dtype}; the viewer shows ${Object.keys(TEXTURE_FORMATS).join(', ')}.`);
-    let entry = this.#programs.get(dtype);
+    const programKey = `${dtype}${hasMask ? '+mask' : ''}`;
+    let entry = this.#programs.get(programKey);
     if (!entry) {
       const program = gl.createProgram();
       const vs = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-      const fs = compile(gl, gl.FRAGMENT_SHADER, fragmentShader(dtype));
+      const fs = compile(gl, gl.FRAGMENT_SHADER, fragmentShader(dtype, hasMask));
       gl.attachShader(program, vs);
       gl.attachShader(program, fs);
       gl.linkProgram(program);
@@ -163,33 +179,43 @@ export class Renderer {
       gl.useProgram(program);
       const uniforms = Object.fromEntries(UNIFORM_NAMES.map((name) => [name, gl.getUniformLocation(program, name)]));
       gl.uniform1i(uniforms.u_data, 0);
+      gl.uniform1i(uniforms.u_mask, 1);
       entry = { program, uniforms };
-      this.#programs.set(dtype, entry);
+      this.#programs.set(programKey, entry);
     }
     gl.useProgram(entry.program);
     this.#uniforms = entry.uniforms;
     this.#dtype = dtype;
+    this.#hasMask = hasMask;
   }
 
   get dtype() {
     return this.#dtype;
   }
 
+  /** Whether the pool has a validity mask layer per slot (set by `configure`). */
+  get hasMask() {
+    return this.#hasMask;
+  }
+
   get slots() {
     return this.#pool?.slots ?? 0;
   }
 
-  /** Number of slots that fit `budgetBytes` and the driver's layer limit (`bytesPerSample`: 1, 2 or 4 by data type). */
-  planSlots(nBand, chunkWidth, chunkHeight, budgetBytes, wanted, bytesPerSample = 2) {
+  /**
+   * Number of slots that fit `budgetBytes` and the driver's layer limit (`bytesPerSample`: 1, 2 or 4 by data type).
+   * With `hasMask` each slot also carries one byte per pixel of mask.
+   */
+  planSlots(nBand, chunkWidth, chunkHeight, budgetBytes, wanted, bytesPerSample = 2, hasMask = false) {
     const byLayers = Math.floor(this.limits.maxLayers / nBand);
-    const byBytes = Math.floor(budgetBytes / (nBand * chunkWidth * chunkHeight * bytesPerSample));
-    return Math.max(0, Math.min(wanted, byLayers, byBytes));
+    const slotBytes = nBand * chunkWidth * chunkHeight * bytesPerSample + (hasMask ? chunkWidth * chunkHeight : 0);
+    return Math.max(0, Math.min(wanted, byLayers, Math.floor(budgetBytes / slotBytes)));
   }
 
-  /** (Re)allocate the texture pool for a data type (default uint16). Drops every resident chunk. */
-  configure({ dtype = 'uint16', nBand, chunkWidth, chunkHeight, slots }) {
+  /** (Re)allocate the texture pool for a data type (default uint16), with a mask layer per slot if `hasMask`. Drops every resident chunk. */
+  configure({ dtype = 'uint16', nBand, chunkWidth, chunkHeight, slots, hasMask = false }) {
     const gl = this.#gl;
-    this.#useProgram(dtype);
+    this.#useProgram(dtype, hasMask);
     const format = TEXTURE_FORMATS[dtype];
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, format.Array.BYTES_PER_ELEMENT);
     if (chunkWidth > this.limits.maxSize || chunkHeight > this.limits.maxSize) {
@@ -205,12 +231,26 @@ export class Renderer {
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    if (this.#maskTexture) gl.deleteTexture(this.#maskTexture);
+    this.#maskTexture = null;
+    if (hasMask) {
+      this.#maskTexture = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.#maskTexture);
+      gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.R8UI, chunkWidth, chunkHeight, slots);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.activeTexture(gl.TEXTURE0);
+    }
     this.#pool = {
       dtype,
       nBand,
       chunkWidth,
       chunkHeight,
       slots,
+      maskResident: new Uint8Array(slots),
       meta: new Array(slots).fill(null),
       keyToSlot: new Map(),
       usedInFrame: new Uint32Array(slots),
@@ -229,6 +269,7 @@ export class Renderer {
     pool.keyToSlot.clear();
     pool.meta.fill(null);
     pool.usedInFrame.fill(0);
+    pool.maskResident.fill(0);
     pool.free = Array.from({ length: pool.slots }, (_, i) => pool.slots - 1 - i);
   }
 
@@ -247,6 +288,40 @@ export class Renderer {
 
   isResident(key) {
     return this.#pool.keyToSlot.has(key);
+  }
+
+  /** Resident slot for `key`, or -1, without marking it in use (unlike `slotOf`). */
+  peekSlot(key) {
+    return this.#pool.keyToSlot.get(key) ?? -1;
+  }
+
+  /** Whether slot `slot` holds the mask of the timestep of the chunk in it. Always false without a mask layer. */
+  hasMaskAt(slot) {
+    return this.#pool.maskResident[slot] === 1;
+  }
+
+  /**
+   * Upload the validity mask (uint8 [y][x] over the padded chunk, 1 = valid) of the timestep whose data chunk
+   * sits in `slot`. Call after `upload` returned that slot; a new chunk in the slot drops its mask.
+   */
+  uploadMask(slot, data) {
+    const pool = this.#pool;
+    if (!this.#maskTexture) throw new Error('uploadMask: the pool was configured without a mask.');
+    if (data.length !== pool.chunkWidth * pool.chunkHeight) {
+      throw new Error(`uploadMask: a mask of ${data.length} values does not fit a ${pool.chunkWidth}x${pool.chunkHeight} chunk.`);
+    }
+    const gl = this.#gl;
+    const started = performance.now();
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.#maskTexture);
+    // One byte per texel: rows are not padded to the data type's alignment.
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, slot, pool.chunkWidth, pool.chunkHeight, 1, gl.RED_INTEGER, gl.UNSIGNED_BYTE, data);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, TEXTURE_FORMATS[pool.dtype].Array.BYTES_PER_ELEMENT);
+    gl.activeTexture(gl.TEXTURE0);
+    this.stats.uploads++;
+    this.stats.uploadMs += performance.now() - started;
+    pool.maskResident[slot] = 1;
   }
 
   /**
@@ -287,6 +362,7 @@ export class Renderer {
     this.stats.uploads++;
     this.stats.uploadMs += performance.now() - started;
     pool.meta[slot] = { key, ...meta };
+    pool.maskResident[slot] = 0;
     pool.keyToSlot.set(key, slot);
     pool.usedInFrame[slot] = background ? 0 : this.#frame;
     return slot;
@@ -316,15 +392,20 @@ export class Renderer {
 
   /**
    * Draw one cell. `world` = {x, y, w, h} in level-0 pixels; `extent` = valid texels {w, h}.
-   * `deltaSlot` is -1 when the timestep is an anchor.
+   * `deltaSlot` is -1 when the timestep is an anchor. `maskSlot` is the slot holding the mask of the timestep
+   * (its delta slot, or its anchor slot for an anchor); only read when the pool has a mask.
    */
-  drawCell(world, extent, anchorSlot, deltaSlot) {
+  drawCell(world, extent, anchorSlot, deltaSlot, maskSlot = -1) {
     const gl = this.#gl;
     const nBand = this.#pool.nBand;
     gl.uniform4f(this.#uniforms.u_cell, world.x, world.y, world.w, world.h);
     gl.uniform2f(this.#uniforms.u_extent, extent.w, extent.h);
     gl.uniform1i(this.#uniforms.u_anchorBase, anchorSlot * nBand);
     gl.uniform1i(this.#uniforms.u_deltaBase, deltaSlot < 0 ? -1 : deltaSlot * nBand);
+    if (this.#hasMask) {
+      if (maskSlot < 0 || !this.hasMaskAt(maskSlot)) throw new Error(`drawCell: slot ${maskSlot} holds no validity mask; upload it with uploadMask first.`);
+      gl.uniform1i(this.#uniforms.u_maskLayer, maskSlot);
+    }
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 

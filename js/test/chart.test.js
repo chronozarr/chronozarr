@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, windowPixels, xFromTime } from '../tileripper/chart.js';
+import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, validAt, windowPixels, xFromTime } from '../tileripper/chart.js';
 import { normalizeBands, resolveProducts } from '../tileripper/products.js';
 
 const BANDS = normalizeBands(['B02', 'B03', 'B04', 'B08']);
@@ -116,4 +116,48 @@ test('xFromTime and timeFromX are inverses and clamp to the axis', () => {
   assert.equal(timeFromX(900, 117, 30, 270), 116);
   assert.equal(timeFromX(150, 1, 30, 270), 0);
   assert.equal(xFromTime(0, 1, 30, 270), 150);
+});
+
+test('a masked-out timestep is a gap in the chart, even when the pixel holds a plausible value there', () => {
+  const specs = seriesSpecs(product('true_color'), BANDS, 0);
+  const readings = [
+    { pixels: [pixel(500, 800, 1000, 3000)], valid: [true] },
+    { pixels: [pixel(500, 800, 1000, 3000)], valid: [false] },
+    undefined,
+    { pixels: [pixel(600, 900, 1100, 3100)], valid: [true] },
+  ];
+  const series = buildSeries(specs, readings, null);
+  assert.deepEqual(series.map((s) => s.values), [[0.1, null, undefined, 0.11], [0.08, null, undefined, 0.09], [0.05, null, undefined, 0.06]]);
+});
+
+test('with a mask the nodata value is not compared: a stored 0 is a value where the mask says valid', () => {
+  const [series] = buildSeries(seriesSpecs(product('band', normalizeBands(['B04'])), normalizeBands(['B04']), 0), [{ pixels: [Uint16Array.of(0)], valid: [true] }, { pixels: [Uint16Array.of(0)] }], null);
+  assert.deepEqual(series.values, [0, 0]);
+  const [compared] = buildSeries(seriesSpecs(product('band', normalizeBands(['B04'])), normalizeBands(['B04']), 0), [{ pixels: [Uint16Array.of(0)] }], 0);
+  assert.deepEqual(compared.values, [null], 'a store without a mask still reads its nodata value as a gap');
+});
+
+test('a series on the clicked pixel does not borrow a valid neighbour when that pixel is masked out', () => {
+  const window3 = [pixel(0, 0, 1000, 3000), pixel(0, 0, 2000, 3000), pixel(0, 0, 3000, 1000)];
+  const [series] = buildSeries(seriesSpecs(product('ndvi'), BANDS, 0), [{ pixels: window3, valid: [false, true, true] }, { pixels: window3, valid: [true, false, false] }], null);
+  assert.equal(series.values[0], null, 'the clicked pixel (first) is masked: a gap, not the neighbours');
+  assert.ok(Math.abs(series.values[1] - 0.5) < 1e-12, 'the clicked pixel valid: its own value');
+});
+
+test('water fraction counts only the unmasked pixels of the window, and is a gap when all are masked', () => {
+  const water = pixel(0, 1100, 700, 250);
+  const land = pixel(0, 900, 900, 3000);
+  const specs = seriesSpecs(product('water'), BANDS, 0);
+  const window4 = [water, water, land, land];
+  const [series] = buildSeries(specs, [{ pixels: window4, valid: [true, false, true, true] }, { pixels: window4, valid: [false, false, false, false] }, { pixels: window4, valid: [false, false, true, true] }], null);
+  assert.ok(Math.abs(series.values[0] - 1 / 3) < 1e-12, '1 water of 3 unmasked pixels');
+  assert.equal(series.values[1], null, 'every pixel of the window masked out');
+  assert.equal(series.values[2], 0, 'the masked water pixels do not count');
+});
+
+test('validAt reads the mask at each window pixel with the chunk width as row stride', () => {
+  const chunkWidth = 8;
+  const mask = new Uint8Array(chunkWidth * 4).fill(1);
+  mask[1 * chunkWidth + 3] = 0;
+  assert.deepEqual(validAt(mask, chunkWidth, [[3, 1], [2, 1], [3, 2], [4, 1]]), [false, true, true, true]);
 });

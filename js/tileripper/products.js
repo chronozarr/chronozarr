@@ -107,6 +107,14 @@ export function displayMode(product, bands, bandChoice, dtype) {
   return reflectanceLike ? { mode: 'reflectance', fixed: true, range: null } : { mode: 'linear', fixed: false, range: null };
 }
 
+/**
+ * The nodata value to compare stored values with: none for a store that has a validity mask, which decides alone
+ * (spec 2.3: a reader that has a mask MUST use it and MUST NOT also compare against nodata), else the declared one.
+ */
+export function nodataToCompare({ hasMask, nodata }) {
+  return hasMask ? null : (nodata ?? null);
+}
+
 export function ndvi(nir, red) {
   return nir + red > 0 ? (nir - red) / (nir + red) : null;
 }
@@ -121,22 +129,35 @@ export function isReflectance(band) {
 }
 
 /**
- * Sidebar model for one pixel: per band the stored and physical values, plus indices when their bands exist. A band
- * at `nodata` counts as missing (so a pixel with no data has no indices).
+ * Sidebar model for one pixel: per band the stored and physical values, plus indices when their bands exist.
+ * `mask` is the pixel's validity mask value (1 valid, 0 invalid) for a store that has a mask, else null. A mask decides
+ * and `nodata` is then not compared (spec 2.3); a masked-out pixel has no stored or physical values and no indices.
+ * Without a mask, a band at `nodata` counts as missing (so a pixel with no data has no indices). `valid` is false
+ * for a masked-out pixel and, without a mask, for one whose every band is at `nodata` (or NaN).
  */
-export function describePixel(values, rawBands, nodata = null) {
+export function describePixel(values, rawBands, nodata = null, mask = null) {
   const bands = normalizeBands(rawBands);
+  const masked = mask === 0;
+  const sentinel = mask === null ? nodata : null;
   const physical = (common) => {
     const i = findBand(bands, common);
-    return i < 0 || values[i] === nodata ? null : toPhysical(values[i], bands[i]);
+    return masked || i < 0 || values[i] === sentinel ? null : toPhysical(values[i], bands[i]);
   };
   const [green, red, nir] = [physical('green'), physical('red'), physical('nir')];
   const hasNdvi = findBand(bands, 'red') >= 0 && findBand(bands, 'nir') >= 0;
   const hasNdwi = findBand(bands, 'green') >= 0 && findBand(bands, 'nir') >= 0;
   const ndviValue = red !== null && nir !== null ? ndvi(nir, red) : null;
   const ndwiValue = green !== null && nir !== null ? ndwi(green, nir) : null;
+  const valid = mask === null ? Array.from(values).some((value) => value !== nodata && !Number.isNaN(value)) : !masked;
   return {
-    bands: bands.map((band, i) => ({ name: band.name, units: band.units ?? null, reflectance: isReflectance(band), stored: values[i], value: toPhysical(values[i], band) })),
+    valid,
+    bands: bands.map((band, i) => ({
+      name: band.name,
+      units: band.units ?? null,
+      reflectance: isReflectance(band),
+      stored: masked ? null : values[i],
+      value: masked ? null : toPhysical(values[i], band),
+    })),
     ndvi: ndviValue,
     ndwi: ndwiValue,
     isWater: ndwiValue !== null && ndwiValue > 0,

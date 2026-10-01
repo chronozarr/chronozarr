@@ -4,9 +4,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openStore, samplePixelFrom } from '../chronozarr/decoder.js';
-import { buildSyntheticStore, coverageValue } from '../support/synthetic-store.js';
-import { buildSeries, gapFilledTimes, seriesSpecs, windowPixels } from '../tileripper/chart.js';
-import { describePixel, displayMode, inputConversion, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../tileripper/products.js';
+import { buildSyntheticStore, coverageValue, maskValue } from '../support/synthetic-store.js';
+import { buildSeries, gapFilledTimes, seriesSpecs, validAt, windowPixels } from '../tileripper/chart.js';
+import { describePixel, displayMode, inputConversion, nodataToCompare, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../tileripper/products.js';
 
 const base = { nTime: 6, height: 40, width: 40, chunk: 32, anchorInterval: 3, sharded: true };
 
@@ -128,4 +128,48 @@ test('coverage from the store marks the gap-filled timesteps of a charted pixel'
   assert.deepEqual(gaps, coverage.flatMap((c, t) => (c === 0 ? [t] : [])));
   assert.ok(gaps.length > 0, 'the fixture has gap-filled timesteps at this pixel');
   assert.equal(store.peekCoverage(0, 0, 0, 0) instanceof Uint8Array, true, 'the viewer paints the overlay from the cached coverage chunk');
+});
+
+test('a masked store: the chart and the readout follow the mask chunk the reader returns, and the declared nodata value is ignored', async () => {
+  const [x, y] = [3, 2];
+  // At (3, 2) the mask is 0 where (t + 2*3 + 3*5) % 4 === 0, i.e. t = 3 of 0..5; its stored values are genuinely 0 at every other timestep.
+  const values = (t, b, py, px) => (px === x && py === y ? 0 : 1000 + 100 * b + t * 10 + px);
+  const { store, bands, products } = await open({
+    ...base,
+    nBand: 4,
+    mask: true,
+    nodata: 0,
+    specVersion: '0.2.0',
+    bandObjects: ['B02', 'B03', 'B04', 'B08'].map((name) => ({ name, scale: 1e-4 })),
+    values,
+  });
+  assert.equal(store.hasMask, true);
+  assert.equal(store.nodata, 0, 'the store declares nodata 0 as well');
+  const level = store.levels[0];
+  const window = windowPixels(x, y, 40, 40, 0);
+  const readings = [];
+  const masks = [];
+  for (let t = 0; t < store.times.length; t++) {
+    const [anchor, delta, mask] = await Promise.all([store.getRaw(0, 0, 0, store.anchorOf(t)), store.isAnchor(t) ? null : store.getRaw(0, 0, 0, t), store.getMask(0, 0, 0, t)]);
+    masks.push(mask[y * level.chunkWidth + x]);
+    readings.push({ pixels: window.map(([px, py]) => samplePixelFrom(anchor, delta, level, px, py)), valid: validAt(mask, level.chunkWidth, window) });
+  }
+  assert.deepEqual(masks, Array.from({ length: 6 }, (_, t) => maskValue(t, y, x)), 'the mask chunk of each timestep');
+  assert.ok(masks.includes(0) && masks.includes(1), 'the fixture is masked at some timesteps and valid at others');
+  const nodata = nodataToCompare(store);
+  assert.equal(nodata, null, 'with a mask nothing is compared against nodata');
+  assert.equal(nodataToCompare({ hasMask: false, nodata: 0 }), 0);
+  assert.equal(nodataToCompare({ hasMask: false, nodata: null }), null);
+  const [red] = buildSeries(seriesSpecs(products.true_color, bands, 0), readings, nodata);
+  assert.deepEqual(red.values, masks.map((m) => (m === 0 ? null : 0)), 'a gap where masked, the stored 0 where valid');
+  const [wrong] = buildSeries(seriesSpecs(products.true_color, bands, 0), readings.map(({ pixels }) => ({ pixels })), store.nodata);
+  assert.ok(wrong.values.every((v) => v === null), 'comparing against nodata as well would blank every timestep');
+
+  const at = (t) => describePixel(readings[t].pixels[0], bands, nodata, masks[t]);
+  const maskedT = masks.indexOf(0);
+  const validT = masks.indexOf(1);
+  assert.equal(at(maskedT).valid, false);
+  assert.ok(at(maskedT).bands.every((b) => b.value === null));
+  assert.equal(at(validT).valid, true);
+  assert.deepEqual(at(validT).bands.map((b) => b.value), [0, 0, 0, 0], 'a valid pixel holding the declared nodata value is data');
 });

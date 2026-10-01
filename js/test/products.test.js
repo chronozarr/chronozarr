@@ -165,3 +165,31 @@ test('time labels: months for month-start timesteps, ISO dates otherwise', () =>
   assert.equal(makeTimeFormatter(['2024-01-01T00:00:00Z', '2024-02-01T00:00:00Z'])(1), 'Feb 2024');
   assert.equal(makeTimeFormatter(['2024-01-01T00:00:00Z', '2024-01-17T00:00:00Z'])(1), '2024-01-17');
 });
+
+test('describePixel with a validity mask: masked-out means no values and no indices, and the mask replaces nodata', () => {
+  const bands = ['B04', 'B08'];
+  const masked = describePixel(Uint16Array.of(1354, 2303), bands, 0, 0);
+  assert.equal(masked.valid, false);
+  assert.deepEqual(masked.bands.map((b) => [b.name, b.stored, b.value]), [['B04', null, null], ['B08', null, null]]);
+  assert.equal(masked.ndvi, null);
+  assert.equal(masked.isWater, false);
+  assert.equal(masked.hasNdvi, true, 'the bands exist, the pixel has no value');
+
+  const valid = describePixel(Uint16Array.of(1354, 2303), bands, 0, 1);
+  assert.equal(valid.valid, true);
+  assert.equal(valid.bands[0].value, 0.1354);
+
+  // A declared nodata of 0 is not compared once there is a mask (spec 2.3): a valid pixel holding 0 is data.
+  const zero = describePixel(Uint16Array.of(0, 2303), bands, 0, 1);
+  assert.equal(zero.valid, true);
+  assert.equal(zero.ndvi, 1, 'red 0 is a value here');
+  assert.equal(describePixel(Uint16Array.of(0, 2303), bands, 0, null).ndvi, null, 'without a mask the same pixel is missing');
+});
+
+test('describePixel validity without a mask: invalid only when every band is at nodata (or NaN)', () => {
+  assert.equal(describePixel(Uint16Array.of(0, 0), ['B04', 'B08'], 0).valid, false);
+  assert.equal(describePixel(Uint16Array.of(0, 5), ['B04', 'B08'], 0).valid, true);
+  assert.equal(describePixel(Uint16Array.of(0, 0), ['B04', 'B08'], null).valid, true, 'no nodata value declared: zeros are values');
+  assert.equal(describePixel(Float32Array.of(NaN), [{ name: 'depth' }], null).valid, false);
+  assert.equal(describePixel(Float32Array.of(-9999), [{ name: 'depth' }], -9999).valid, false);
+});

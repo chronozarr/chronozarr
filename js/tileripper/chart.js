@@ -1,8 +1,9 @@
 // The per-pixel time series behind the sidebar chart, as pure functions over already-decoded pixels.
 //
-// A reading is what was sampled at one timestep: `{ pixels }`, one typed array of per-band stored values for each
-// pixel of a small window around the clicked pixel (the clicked pixel first). A timestep whose chunks are
-// not loaded yet has no reading. A series has one value per timestep: a number, null where the pixel has no
+// A reading is what was sampled at one timestep: `{ pixels, valid? }`, one typed array of per-band stored values for
+// each pixel of a small window around the clicked pixel (the clicked pixel first), and, for a store with a validity
+// mask, `valid`: per pixel whether the mask of that timestep is 1 there. A timestep whose chunks are not loaded yet
+// has no reading. A series has one value per timestep: a number, null where the pixel has no
 // data (a gap), or undefined where the timestep is not loaded yet.
 
 import { isReflectance, ndvi, ndwi, toPhysical } from './products.js';
@@ -24,6 +25,11 @@ export function windowPixels(x, y, width, height, radius) {
     }
   }
   return pixels;
+}
+
+/** Per window pixel (as from windowPixels): whether the validity mask (uint8 [y][x] over a chunk `chunkWidth` wide) is nonzero there. */
+export function validAt(mask, chunkWidth, pixels) {
+  return pixels.map(([x, y]) => mask[y * chunkWidth + x] !== 0);
 }
 
 /** A stored value that means "no data": the store's nodata value, or NaN in a float band. */
@@ -96,14 +102,31 @@ export function seriesSpecs(product, bands, bandChoice) {
   }
 }
 
-/** One value per timestep per spec: number, null (no data) or undefined (not loaded). */
+/**
+ * The pixels of a reading a spec may use: those the mask marks valid (all of them without a mask). A spec on the
+ * clicked pixel alone (window 0) needs that pixel valid, not a neighbour standing in for it.
+ */
+function usablePixels(reading, spec) {
+  if (!reading.valid) return reading.pixels;
+  if (spec.window === 0) return reading.valid[0] ? reading.pixels : [];
+  return reading.pixels.filter((_, i) => reading.valid[i]);
+}
+
+/**
+ * One value per timestep per spec: number, null (no data: the nodata value, or masked out) or undefined (not loaded).
+ * With a validity mask, `nodata` is not compared (spec 2.3): pass null.
+ */
 export function buildSeries(specs, readings, nodata) {
   return specs.map((spec) => ({
     id: spec.id,
     label: spec.label,
     color: spec.color,
     domain: spec.domain,
-    values: readings.map((reading) => (reading ? spec.compute(reading.pixels, nodata) : undefined)),
+    values: readings.map((reading) => {
+      if (!reading) return undefined;
+      const pixels = usablePixels(reading, spec);
+      return pixels.length === 0 ? null : spec.compute(pixels, nodata);
+    }),
   }));
 }
 

@@ -34,3 +34,17 @@ test('texture formats pair the GL internal format with upload types and a typed 
     assert.ok(format.internal.includes(String(widths[dtype] * 8)), `${dtype}: ${format.internal}`);
   }
 });
+
+test('the mask variant of each shader reads one mask layer per slot, writes the background where it is 0, and leaves the rest alone', () => {
+  for (const dtype of Object.keys(TEXTURE_FORMATS)) {
+    const plain = fragmentShader(dtype);
+    const masked = fragmentShader(dtype, true);
+    assert.doesNotMatch(plain, /u_mask/, `${dtype}: the plain shader has no mask`);
+    assert.match(masked, /uniform usampler2DArray u_mask;/, dtype);
+    assert.match(masked, /uniform int u_maskLayer;/, dtype);
+    assert.match(masked, /texelFetch\(u_mask, ivec3\(texel, u_maskLayer\), 0\)\.r == 0u\)/, `${dtype}: mask 0 is invalid`);
+    assert.match(masked, /outColor = vec4\(BG, 1\.0\);\s*return;\s*\}\s*float v0/, `${dtype}: invalid pixels get the opaque background before any data is read`);
+    const withoutMask = masked.replace(/  if \(texelFetch\(u_mask[\s\S]*?\n  \}\n/, '').split('\n').filter((line) => !/u_mask/.test(line));
+    assert.deepEqual(withoutMask.filter(Boolean), plain.split('\n').filter(Boolean), `${dtype}: apart from the mask lines the two programs are the same`);
+  }
+});

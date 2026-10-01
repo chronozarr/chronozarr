@@ -28,6 +28,7 @@
     background: var(--bg);
     color: var(--text);
     height: 100vh;
+    height: 100dvh;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -36,13 +37,14 @@
 
   /* ---- Nav ---- */
   nav {
-    height: 52px;
-    padding: 0 20px;
+    min-height: 52px;
+    padding: 8px 20px;
     border-bottom: 1px solid var(--border);
     background: var(--surface);
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 16px;
+    gap: 8px 16px;
     flex-shrink: 0;
   }
   .brand {
@@ -77,10 +79,17 @@
   }
   select:hover { border-color: var(--text-3); }
   select:focus { border-color: var(--accent); }
+  #catalog-select {
+    min-width: 0;
+    max-width: min(100%, 260px);
+    text-overflow: ellipsis;
+  }
+  .product-select { display: none; }
 
   /* Product pills */
   .products {
     display: flex;
+    flex-wrap: wrap;
     background: var(--surface-2);
     border-radius: 6px;
     padding: 3px;
@@ -106,17 +115,6 @@
     color: #fff;
     box-shadow: 0 1px 3px rgba(0,0,0,0.3);
   }
-  .nav-right {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .nav-meta {
-    font-size: 11px;
-    color: var(--text-3);
-    white-space: nowrap;
-  }
 
   /* ---- Main ---- */
   main {
@@ -124,6 +122,7 @@
     display: flex;
     overflow: hidden;
     min-height: 0;
+    position: relative;
   }
 
   /* Canvas area */
@@ -161,8 +160,12 @@
   .click-hint {
     position: absolute;
     bottom: 24px;
-    left: 50%;
-    transform: translateX(-50%);
+    left: 12px;
+    right: 12px;
+    width: max-content;
+    max-width: calc(100% - 24px);
+    margin: 0 auto;
+    text-align: center;
     font-size: 12px;
     color: var(--text-3);
     background: rgba(17, 22, 32, 0.85);
@@ -195,7 +198,11 @@
     font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
     font-size: 11px;
     line-height: 1.55;
-    white-space: pre;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-width: calc(100% - 20px);
+    max-height: calc(100% - 20px);
+    overflow: auto;
     pointer-events: none;
     font-variant-numeric: tabular-nums;
   }
@@ -214,6 +221,7 @@
     text-align: center;
     display: none;
     z-index: 10;
+    max-width: calc(100% - 32px);
   }
   .error-overlay.visible { display: block; }
   .error-overlay.toast {
@@ -239,6 +247,7 @@
     display: flex;
     flex-direction: column;
   }
+  .inspector-head { display: none; }
   .sidebar-empty {
     flex: 1;
     display: flex;
@@ -350,16 +359,18 @@
   .chart-gap-key { color: var(--text-2); font-weight: 500; display: inline-flex; align-items: center; gap: 4px; }
   .chart-gap-key i { width: 7px; height: 7px; border: 1.3px solid var(--text-2); border-radius: 50%; display: inline-block; }
   .chart-status { font-size: 11px; color: var(--text-2); margin-top: 6px; font-variant-numeric: tabular-nums; min-height: 14px; }
+  .no-data { color: var(--amber); font-weight: 600; }
 
   /* ---- Timeline ---- */
   .timeline-bar {
-    height: 56px;
+    min-height: 56px;
     border-top: 1px solid var(--border);
     background: var(--surface);
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    padding: 0 20px;
-    gap: 16px;
+    padding: 8px 20px;
+    gap: 8px 16px;
     flex-shrink: 0;
   }
   .month-nav {
@@ -399,7 +410,8 @@
     user-select: none;
   }
   .timeline-track {
-    flex: 1;
+    flex: 1 1 160px;
+    min-width: 120px;
     height: 32px;
     position: relative;
     cursor: pointer;
@@ -539,8 +551,9 @@
   .export-panel {
     position: fixed;
     right: 16px;
-    bottom: 68px;
+    bottom: calc(var(--timeline-h, 56px) + 12px);
     width: 300px;
+    max-width: calc(100% - 32px);
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -582,23 +595,74 @@
   #export-status { margin-top: 8px; color: var(--text-2); font-variant-numeric: tabular-nums; min-height: 1.4em; word-break: break-word; }
   .export-panel[hidden], .export-panel [hidden] { display: none; }
 
-  .timeline-status {
-    font-size: 11px;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-    flex-shrink: 0;
-    min-width: 50px;
-    text-align: right;
+  /* ---- Responsive ----
+     The breakpoints are DRAWER_BELOW and COMPACT_BELOW of layout.js; viewer-layout.test.js keeps them in step. */
+  @media (width < 900px) {
+    /* The inspector is a drawer over the map: opened by a click on the map, closed by Escape or its close button. */
+    .sidebar {
+      position: absolute;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 8;
+      width: min(340px, 100%);
+      min-width: 0;
+      box-shadow: -8px 0 28px rgba(0, 0, 0, 0.45);
+      transform: translateX(100%);
+      visibility: hidden;
+      transition: transform 0.18s ease, visibility 0s linear 0.18s;
+    }
+    .sidebar.open {
+      transform: none;
+      visibility: visible;
+      transition-delay: 0s;
+    }
+    .inspector-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: 8px 8px 8px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .inspector-close {
+      width: 32px;
+      height: 32px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: none;
+      color: var(--text-2);
+      font: inherit;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .inspector-close:hover { border-color: var(--text-2); color: var(--text); }
+    nav { padding: 8px 12px; gap: 8px 10px; }
+    .timeline-bar { padding: 8px 12px; }
   }
-  .timeline-status .fast { color: var(--green); }
-
-  /* ---- Responsive ---- */
-  @media (max-width: 900px) {
-    .sidebar { display: none; }
-    .products { overflow-x: auto; }
-    nav { gap: 10px; padding: 0 12px; }
-    .timeline-bar { padding: 0 12px; }
+  @media (width < 700px) {
+    /* Phones: one select instead of the product buttons; the timeline keeps its transport controls on top and the track on a row of its own. */
+    .products, .nav-sep { display: none; }
+    .product-select { display: block; flex: 1 1 140px; min-width: 0; }
+    select { min-height: 32px; }
+    .timeline-bar { gap: 6px 10px; }
+    .timeline-bar > * { order: 4; }
+    #play-btn { order: 0; }
+    .month-nav { order: 1; }
+    #export-btn { order: 2; margin-left: auto; }
+    .timeline-track { order: 3; flex: 1 0 100%; }
+    .speed { flex-wrap: wrap; }
+    #res-hint { flex: 1 0 100%; white-space: normal; }
+    .stretch { flex-wrap: wrap; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar { transition: none; }
   }
 </style>
 </head>
@@ -609,16 +673,13 @@
   <div class="nav-sep"></div>
   <select id="catalog-select" hidden></select>
   <div class="products" id="products"></div>
+  <select id="product-select" class="product-select" aria-label="Product"></select>
   <select id="band-select" hidden></select>
   <div class="stretch" id="stretch" hidden>
     <input id="stretch-min" type="number" step="any" title="Stretch minimum" aria-label="Stretch minimum">
     <span>–</span>
     <input id="stretch-max" type="number" step="any" title="Stretch maximum" aria-label="Stretch maximum">
     <button id="stretch-auto" title="Fit the stretch to the data on screen">Auto</button>
-  </div>
-  <div class="nav-right">
-    <span class="nav-meta" id="cache-stats"></span>
-    <span class="nav-meta" id="nav-meta"></span>
   </div>
 </nav>
 
@@ -635,7 +696,11 @@
     </div>
   </section>
 
-  <aside class="sidebar" id="sidebar">
+  <aside class="sidebar" id="sidebar" aria-label="Pixel inspector">
+    <div class="inspector-head">
+      <span>Inspector</span>
+      <button id="inspector-close" class="inspector-close" type="button" title="Close (Escape)" aria-label="Close inspector">&times;</button>
+    </div>
     <div class="sidebar-empty" id="sidebar-empty">
       <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
         <circle cx="12" cy="12" r="7"/>
@@ -670,7 +735,6 @@
   </div>
   <button id="gap-toggle" class="export-btn" title="Hatch the pixels no scene observed this timestep (their value is carried over)" aria-pressed="false" hidden>Gaps</button>
   <button id="export-btn" class="export-btn" title="Export the loop as WebM or GIF" disabled>Export</button>
-  <span class="timeline-status" id="status"></span>
 </div>
 
 <div id="export-panel" class="export-panel" hidden role="dialog" aria-label="Export loop">
