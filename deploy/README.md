@@ -1,6 +1,6 @@
 # Publishing
 
-Stores live in the R2 bucket `tileripper-stores`, served at `https://data.tileripper.com`; the viewer is a Cloudflare Worker serving `js/` as static assets (`wrangler.toml`). All commands need `npx wrangler login` once. The header checklist, the upload order and recipes for other hosts (S3 with CloudFront, GCS, Source Cooperative) are in [docs/hosting.md](../docs/hosting.md).
+Stores live in the R2 bucket `tileripper-stores`, served at `https://data.tileripper.com`; the viewer is a Cloudflare Worker serving `js/` as static assets (`wrangler.toml`). wrangler is pinned in the root `package.json`: run `npm install` once at the repo root so `npx wrangler` resolves that copy, which went through the 7-day release-age quarantine (bare `npx wrangler` would otherwise fetch the latest release the moment it is published). All commands need `npx wrangler login` once. The header checklist, the upload order and recipes for other hosts (S3 with CloudFront, GCS, Source Cooperative) are in [docs/hosting.md](../docs/hosting.md).
 
 ## Stores
 

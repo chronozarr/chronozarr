@@ -1,0 +1,8 @@
+{
+  "name": "tile-ripper-deploy",
+  "private": true,
+  "description": "Pins wrangler for `npx wrangler deploy` so the install goes through the 7-day release-age quarantine instead of npx fetching the latest release.",
+  "devDependencies": {
+    "wrangler": "4.138.0"
+  }
+}

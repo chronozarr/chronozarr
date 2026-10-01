@@ -44,3 +44,6 @@ HANDOVER.md
 # Screenshots (development artifacts)
 *.png
 HANDOVER.md
+
+# root tooling (wrangler pinned in package.json)
+/node_modules/
