@@ -328,3 +328,88 @@ def test_band_schema_accepts_names_and_objects():
     assert schema.parse_bands(["a", "b"], "bands") == (Band("a"), Band("b"))
     with pytest.raises(schema.SchemaError, match="must be unique"):
         schema.parse_bands(["a", {"name": "a"}], "bands")
+
+
+# --- nodata with a mask -----------------------------------------------------------------------
+
+
+def _zeros_that_are_valid():
+    """A scene with zero-valued pixels that the mask says are valid, and masked-out pixels."""
+    truth = make_truth(3, 1, 13, 11)
+    truth[truth == 0] = 1
+    truth[:, :, 0:2, 0:2] = 0  # real zeros: valid
+    mask = np.ones((3, 13, 11), dtype=np.uint8)
+    mask[:, 5:7, 5:7] = 0  # invalid whatever the value
+    return truth, mask
+
+
+def test_a_mask_makes_the_default_nodata_null(tmp_path):
+    truth, mask = _zeros_that_are_valid()
+    _, store = _encode(tmp_path, truth, mask=mask, encoding="none")
+    assert store.attrs.nodata is None
+    data = zarr.open_group(str(tmp_path / "s"), mode="r")["0"]["data"]
+    assert data.attrs["nodata"] is None
+    assert data.fill_value == 0
+    assert chronozarr.validate(tmp_path / "s") == []
+    physical = store.physical(0)
+    assert not np.isnan(physical[0, :2, :2]).any()  # zeros under mask == 1 stay valid
+    assert np.isnan(physical[0, 5:7, 5:7]).all()
+    level, level_mask, _ = reference_reduce(truth, nodata=None, mask=mask)
+    assert np.array_equal(store.to_xarray(lod=1).values, level)
+    assert np.array_equal(store.read_mask(0, lod=1), level_mask[0])
+
+
+def test_a_mask_with_iterable_input_also_defaults_nodata_to_null(tmp_path):
+    truth, mask = _zeros_that_are_valid()
+    chronozarr.encode(
+        iter(truth),
+        tmp_path / "s",
+        times=make_da(truth).time.values,
+        bands=["b0"],
+        crs=CRS,
+        transform=TRANSFORM,
+        mask=iter(mask),
+        chunk_size=CS,
+        encoding="none",
+    )
+    assert chronozarr.open_store(tmp_path / "s").attrs.nodata is None
+
+
+def test_an_explicit_nodata_is_kept_with_a_mask(tmp_path):
+    truth, mask = _zeros_that_are_valid()
+    _, store = _encode(tmp_path, truth, mask=mask, encoding="none", nodata=0)
+    assert store.attrs.nodata == 0
+    assert zarr.open_group(str(tmp_path / "s"), mode="r")["0"]["data"].attrs["nodata"] == 0
+    assert chronozarr.validate(tmp_path / "s") == []
+
+
+def test_without_a_mask_the_default_nodata_is_still_zero(tmp_path):
+    truth, _ = _zeros_that_are_valid()
+    _, store = _encode(tmp_path, truth, encoding="none")
+    assert store.attrs.nodata == 0
+
+
+def test_to_xarray_carries_validity_as_a_mask_coordinate_not_a_nodata_attr(tmp_path):
+    truth, mask = _zeros_that_are_valid()
+    _, store = _encode(tmp_path, truth, mask=mask, encoding="none", nodata=0)
+    da = store.to_xarray()
+    assert "nodata" not in da.attrs
+    assert da["mask"].dims == ("time", "y", "x")
+    assert da["mask"].dtype == np.uint8
+    assert np.array_equal(da["mask"].values, mask)
+    subset = store.to_xarray(lod=1, times=[2, 0])
+    assert subset["mask"].shape == (2, *subset.shape[2:])
+    assert np.array_equal(subset["mask"].values[0], store.read_mask(2, lod=1))
+    physical = store.to_xarray(physical=True)
+    assert "nodata" not in physical.attrs
+    assert np.isnan(physical.values[0, 0, 5, 5])
+    assert not np.isnan(physical.values[0, 0, 0, 0])
+    assert da.isel(time=1)["mask"].shape == mask[1].shape  # selects along with the data
+
+
+def test_to_xarray_without_a_mask_keeps_the_nodata_attr_and_has_no_mask(tmp_path):
+    truth, _ = _zeros_that_are_valid()
+    _, store = _encode(tmp_path, truth, encoding="none")
+    da = store.to_xarray()
+    assert da.attrs["nodata"] == 0
+    assert "mask" not in da.coords

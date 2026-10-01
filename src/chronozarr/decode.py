@@ -210,7 +210,8 @@ class ChronoStore:
 
         `times` selects timestep indices (default: all). Values are the stored dtype, or float32
         physical values with NaN for invalid pixels when `physical` is true. The result is
-        loaded into memory.
+        loaded into memory. When the store has a mask, validity is carried by a `mask` coordinate
+        (uint8, dims time/y/x, 1 = valid) and no `nodata` attribute is set.
         """
         level = self._level(lod)
         selected = (
@@ -221,17 +222,23 @@ class ChronoStore:
         values = read(level, selected, window, window)
         y, x = schema.pixel_centers(level.transform, level.shape[2], level.shape[3])
         attrs: dict[str, Any] = {"crs": self.attrs.crs, "transform": list(level.transform)}
-        if self.nodata is not None and not physical:
+        coords: dict[str, Any] = {
+            "time": self.times[selected].astype("datetime64[ns]"),
+            "band": list(self.bands),
+            "y": y,
+            "x": x,
+        }
+        if level.mask is not None:
+            coords["mask"] = (
+                schema.PLANE_DIMENSIONS,
+                self._read_plane(level.mask, selected, window, window),
+            )
+        elif self.nodata is not None and not physical:
             attrs["nodata"] = self.nodata
         return xr.DataArray(
             values,
             dims=schema.DIMENSIONS,
-            coords={
-                "time": self.times[selected].astype("datetime64[ns]"),
-                "band": list(self.bands),
-                "y": y,
-                "x": x,
-            },
+            coords=coords,
             name=self.attrs.variable,
             attrs=attrs,
         )

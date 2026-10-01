@@ -75,7 +75,7 @@ def test_dataset_structure(store_path):
     assert np.issubdtype(ds["time"].dtype, np.datetime64)
     assert ds.attrs["crs"] == "EPSG:32631"
     assert ds.attrs["temporal_encoding"] == "star-delta"
-    assert ds.attrs["nodata"] == 0
+    assert "nodata" not in ds.attrs  # this store has a mask, which carries validity
     store = chronozarr.open_store(path)
     y, x = chronozarr.schema.pixel_centers(store.levels[0].transform, 40, 50)
     assert np.array_equal(ds["y"].values, y)
@@ -345,3 +345,20 @@ def test_http_store_is_read_only_and_unlistable():
 
 async def _drain(iterator):
     return [item async for item in iterator]
+
+
+def test_backend_nodata_attr_follows_the_mask(tmp_path):
+    truth = make_truth(3, 1, 20, 20)
+    mask = (truth[:, 0] > 0).astype(np.uint8)
+    chronozarr.encode(
+        make_da(truth, ["b"]), tmp_path / "masked", chunk_size=CS, mask=mask, nodata=0
+    )
+    chronozarr.encode(make_da(truth, ["b"]), tmp_path / "plain", chunk_size=CS)
+    masked, plain = _open(tmp_path / "masked"), _open(tmp_path / "plain")
+    assert "nodata" not in masked.attrs
+    assert masked["mask"].dtype == np.uint8
+    assert np.array_equal(masked["mask"].values, mask)
+    assert plain.attrs["nodata"] == 0
+    assert "mask" not in plain
+    store = chronozarr.open_store(tmp_path / "masked")
+    assert np.array_equal(masked["data"].isel(time=1).values, store.physical(1), equal_nan=True)

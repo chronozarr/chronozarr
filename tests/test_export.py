@@ -234,9 +234,12 @@ def test_zarr_with_cf_attributes_roundtrips_to_cogs(tmp_path, flags):
             assert out.nodata == (None if shared else -9999)
 
 
-def masked_store(tmp_path, truth, mask):
+def masked_store(tmp_path, truth, mask, **encode_kwargs):
+    # A mask store has no nodata by default; tests about the nodata tag next to a mask ask for 0.
     path = tmp_path / "store"
-    chronozarr.encode(make_da(truth, BANDS), path, mask=mask, chunk_size=16, anchor_interval=2)
+    chronozarr.encode(
+        make_da(truth, BANDS), path, mask=mask, chunk_size=16, anchor_interval=2, **encode_kwargs
+    )
     return path
 
 
@@ -248,7 +251,7 @@ def test_export_keeps_a_valid_zero_and_an_invalid_nonzero_pixel(tmp_path):
     truth[:, :, 5, 6] = 0  # valid zero
     truth[:, :, 3, 4] = 777  # invalid, not zero
     mask[:, 3, 4] = 0
-    path = masked_store(tmp_path, truth, mask)
+    path = masked_store(tmp_path, truth, mask, nodata=0)
     assert chronozarr.open_store(path).attrs.nodata == 0
     for t, tif in enumerate(export_cog(path, tmp_path / "cogs")):
         with rasterio.open(tif) as src:
@@ -261,7 +264,7 @@ def test_export_keeps_the_nodata_tag_next_to_a_mask_when_no_valid_pixel_holds_it
     rasterio = pytest.importorskip("rasterio")
     truth = make_truth(4, 2, 40, 50)  # its only zeros are the nodata corner
     mask = (truth != 0).all(axis=1).astype(np.uint8)
-    path = masked_store(tmp_path, truth, mask)
+    path = masked_store(tmp_path, truth, mask, nodata=0)
     for t, tif in enumerate(export_cog(path, tmp_path / "cogs")):
         with rasterio.open(tif) as src:
             assert src.nodata == 0
@@ -275,7 +278,7 @@ def test_export_decides_the_nodata_tag_per_timestep(tmp_path):
     mask = (truth != 0).all(axis=1).astype(np.uint8)
     truth[2, :, 5, 6] = 0  # a valid zero in timestep 2 only
     mask[2, 5, 6] = 1
-    tifs = export_cog(masked_store(tmp_path, truth, mask), tmp_path / "cogs")
+    tifs = export_cog(masked_store(tmp_path, truth, mask, nodata=0), tmp_path / "cogs")
     tags = []
     for tif in tifs:
         with rasterio.open(tif) as src:

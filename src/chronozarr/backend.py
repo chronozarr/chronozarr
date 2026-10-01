@@ -154,7 +154,7 @@ def open_dataset(
         "spec_version": store.attrs.spec_version,
         "temporal_encoding": store.attrs.temporal.encoding,
     }
-    if store.nodata is not None:
+    if store.nodata is not None and level.mask is None:  # a mask carries validity instead
         attrs["nodata"] = store.nodata
     dropped = {drop_variables} if isinstance(drop_variables, str) else set(drop_variables or ())
     return xr.Dataset(

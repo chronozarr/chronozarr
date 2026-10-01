@@ -308,9 +308,17 @@ def _resolve_bands(
     return parsed
 
 
-def _resolve_nodata(nodata: int | float | None | str, dtype: np.dtype) -> int | float | None:
-    """The nodata value for `dtype`: 'default' is 0 for uint8/uint16 and None otherwise."""
+def _resolve_nodata(
+    nodata: int | float | None | str, dtype: np.dtype, *, has_mask: bool
+) -> int | float | None:
+    """The nodata value for `dtype`.
+
+    'default' is 0 for uint8/uint16 and None otherwise, and None whenever a mask supplies
+    validity: a nodata value would then collide with valid pixels that happen to be 0.
+    """
     if nodata == "default":
+        if has_mask:
+            return None
         return schema.NODATA if dtype.name in schema.TEMPORAL_DTYPES else None
     if nodata is None:
         return None
@@ -1089,7 +1097,7 @@ def encode(
         codec: "zstd" (default) or "blosc-zstd-shuffle" (blosc, zstd inside, byte shuffle).
         level: Compression level. Default 5 for zstd (1..22), 1 for blosc (0..9).
         nodata: Value marking invalid pixels, or None for none. "default" is 0 for uint8 and
-            uint16 and None for int16 and float32.
+            uint16 and None for int16 and float32, and None whenever `mask` is given.
         mask: Optional uint8 validity plane (1 = valid), (time, y, x) DataArray, or an iterable
             of per-timestep (y, x) arrays when `data` is an iterable. Overrides nodata for
             pyramid means and readers.
@@ -1128,7 +1136,7 @@ def encode(
     if len(times_iso) != prepared.n_time:
         raise ValueError(f"{len(times_iso)} times for {prepared.n_time} timesteps")
     resolved_bands = _resolve_bands(bands, prepared.band_coords, prepared.n_band)
-    resolved_nodata = _resolve_nodata(nodata, prepared.dtype)
+    resolved_nodata = _resolve_nodata(nodata, prepared.dtype, has_mask=prepared.mask is not None)
     if encoding == schema.STAR_DELTA and prepared.dtype.name not in schema.TEMPORAL_DTYPES:
         raise ValueError(
             f"star-delta needs uint8 or uint16 data, got {prepared.dtype}; use encoding='none'"
