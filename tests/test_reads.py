@@ -34,6 +34,14 @@ class CountingStore(WrapperStore):
         self.reads.extend(key_ranges)
         return await super().get_partial_values(prototype, key_ranges)
 
+    async def get_ranges(self, key, byte_ranges, *, prototype, **options):
+        # zarr >= 3.4 reads a shard's inner chunks through get_ranges, which WrapperStore
+        # forwards to the inner store, bypassing get(). Record one read per requested range
+        # (coalescing below this layer does not change what a reader logically asked for).
+        self.reads.extend((key, byte_range) for byte_range in byte_ranges)
+        async for batch in super().get_ranges(key, byte_ranges, prototype=prototype, **options):
+            yield batch
+
     def data_reads(self) -> list[tuple[str, ByteRequest | None]]:
         return [r for r in self.reads if r[0].startswith("0/data/c/")]
 
