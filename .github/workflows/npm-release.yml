@@ -105,4 +105,4 @@ jobs:
       - name: Publish with provenance
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
-        run: npm publish "dist/chronozarr-${TAG#v}.tgz" --provenance --access public
+        run: npm publish "./dist/chronozarr-${TAG#v}.tgz" --provenance --access public
