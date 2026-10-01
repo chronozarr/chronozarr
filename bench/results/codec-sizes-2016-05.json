@@ -1,0 +1,13 @@
+{
+ "timestep": 2,
+ "store (zstd 5, chunks of all levels)": {
+  "level0": 42248601,
+  "level1": 11039975,
+  "level2": 2838066,
+  "level3": 725641,
+  "all levels": 56852283
+ },
+ "COG as exported (DEFLATE, predictor 2), file bytes": 57876521,
+ "COG ZSTD 5, no predictor, file bytes": 62225767,
+ "COG ZSTD 5, predictor 2, file bytes": 53843180
+}

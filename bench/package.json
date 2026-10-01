@@ -1,0 +1,28 @@
+{
+  "name": "chronozarr-bench",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Measured comparisons: chronozarr against CarbonPlan zarr-layer, and against one COG per date",
+  "type": "module",
+  "scripts": {
+    "test": "node --test cog/model.test.mjs",
+    "zarr-layer:build": "node zarr-layer/build.mjs",
+    "zarr-layer:probe": "node zarr-layer/probe.mjs",
+    "zarr-layer:values": "node zarr-layer/values.mjs",
+    "zarr-layer:compare": "node zarr-layer/run-all.mjs",
+    "zarr-layer:summary": "node zarr-layer/summarize.mjs",
+    "cog:session": "node cog/session.mjs",
+    "cog:report": "node cog/report.mjs",
+    "cog:decode": "node cog/decode-bench.mjs"
+  },
+  "dependencies": {
+    "@carbonplan/zarr-layer": "0.10.0",
+    "geotiff": "3.0.5",
+    "maplibre-gl": "6.11.2",
+    "proj4": "2.22.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "playwright": "1.63.0"
+  }
+}

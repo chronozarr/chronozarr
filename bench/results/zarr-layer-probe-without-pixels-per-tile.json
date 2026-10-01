@@ -1,0 +1,378 @@
+{
+ "store": "https://data.tileripper.com/ucayali_santa_maria/chronozarr-3",
+ "patch": "no-pixels-per-tile",
+ "extra": {},
+ "outcome": "complete",
+ "ms": 5669.5,
+ "view": {
+  "center": [
+   -75.00503196049539,
+   -7.6349829020455315
+  ],
+  "widthPx": 1457.6399819554063,
+  "heightPx": 1470.0662706389558
+ },
+ "state": {
+  "at": 5442,
+  "level": 1,
+  "total": 9,
+  "loaded": 9,
+  "loading": 0,
+  "version": 1
+ },
+ "describe": {
+  "crs": "EPSG:3857",
+  "proj4": "EPSG:32718",
+  "levelAssets": [
+   "0",
+   "1",
+   "2",
+   "3"
+  ],
+  "xyLimits": {
+   "xMin": 485650,
+   "xMax": 513240,
+   "yMin": 9142230,
+   "yMax": 9169880
+  },
+  "latIsAscending": false,
+  "dimensions": [
+   "time",
+   "band",
+   "y",
+   "x"
+  ],
+  "shape": [
+   117,
+   4,
+   2765,
+   2759
+  ],
+  "chunks": [
+   1,
+   4,
+   512,
+   512
+  ],
+  "fill_value": 0,
+  "dtype": "uint16",
+  "resolutionLevels": [
+   {
+    "asset": "0",
+    "shape": [
+     117,
+     4,
+     2765,
+     2759
+    ]
+   },
+   {
+    "asset": "1",
+    "shape": [
+     117,
+     4,
+     1383,
+     1380
+    ]
+   },
+   {
+    "asset": "2",
+    "shape": [
+     117,
+     4,
+     692,
+     690
+    ]
+   },
+   {
+    "asset": "3",
+    "shape": [
+     117,
+     4,
+     346,
+     345
+    ]
+   }
+  ]
+ },
+ "canvas": {
+  "width": 1500,
+  "height": 1500
+ },
+ "lit": 2142525,
+ "litBox": {
+  "minX": 21,
+  "minY": 15,
+  "maxX": 1478,
+  "maxY": 1484
+ },
+ "mapCenter": {
+  "lng": -75.00503196049539,
+  "lat": -7.6349829020455315
+ },
+ "mapZoom": 12,
+ "net": {
+  "requests": 32,
+  "bytes": 10304478,
+  "byKind": {
+   "metadata": {
+    "requests": 1,
+    "bytes": 39624,
+    "aborted": 0,
+    "abortedBytes": 0
+   },
+   "data": {
+    "requests": 22,
+    "bytes": 10264854,
+    "aborted": 0,
+    "abortedBytes": 0
+   },
+   "head": {
+    "requests": 9,
+    "bytes": 0,
+    "aborted": 9,
+    "abortedBytes": 0
+   }
+  },
+  "cache": {
+   "MISS": 14,
+   "HIT": 18
+  }
+ },
+ "requests": [
+  {
+   "method": "GET",
+   "path": "/zarr.json",
+   "range": null,
+   "status": 200,
+   "bytes": 39624
+  },
+  {
+   "method": "GET",
+   "path": "/.zattrs",
+   "range": null,
+   "status": 404,
+   "bytes": 6824
+  },
+  {
+   "method": "GET",
+   "path": "/.zgroup",
+   "range": null,
+   "status": 404,
+   "bytes": 6832
+  },
+  {
+   "method": "GET",
+   "path": "/0/band/c/0",
+   "range": null,
+   "status": 200,
+   "bytes": 385
+  },
+  {
+   "method": "GET",
+   "path": "/0/time/c/0",
+   "range": null,
+   "status": 200,
+   "bytes": 820
+  },
+  {
+   "method": "HEAD",
+   "path": "/1/data/c/0/0/1/1",
+   "range": null,
+   "status": 200,
+   "bytes": 0
+  },
+  {
+   "method": "HEAD",
+   "path": "/1/data/c/0/0/0/1",
+   "range": null,
+   "status": 200,
+   "bytes": 0
+  },
+  {
+   "method": "HEAD",
+   "path": "/1/data/c/0/0/1/0",
+   "range": null,
+   "status": 200,
+   "bytes": 0
+  },
+  {
+   "method": "HEAD",
+   "path": "/1/data/c/0/0/1/2",
+   "range": null,
+   "status": 200,
+   "bytes": 0
+  },
+  {
+   "method": "HEAD",
+   "path": "/1/data/c/0/0/2/1",
+   "range": null,
+   "status": 200,
+   "bytes": 0
+  },
+  {
+   "method": "HEAD",
+   "path": "/1/data/c/0/0/0/0",
+   "range": null,
+   "status": 200,
+   "bytes": 0
+  },
+  {
+   "method": "HEAD",
+   "path": "/1/data/c/0/0/0/2",
+   "range": null,
+   "status": 200,
+   "bytes": 0
+  },
+  {
+   "method": "HEAD",
+   "path": "/1/data/c/0/0/2/0",
+   "range": null,
+   "status": 200,
+   "bytes": 0
+  },
+  {
+   "method": "HEAD",
+   "path": "/1/data/c/0/0/2/2",
+   "range": null,
+   "status": 200,
+   "bytes": 0
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/0/2",
+   "range": "bytes=116160404-116162279",
+   "status": 206,
+   "bytes": 2246
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/0/1",
+   "range": "bytes=171117396-171119271",
+   "status": 206,
+   "bytes": 2256
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/2/1",
+   "range": "bytes=121477580-121479455",
+   "status": 206,
+   "bytes": 2412
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/1/0",
+   "range": "bytes=169958902-169960777",
+   "status": 206,
+   "bytes": 2406
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/1/1",
+   "range": "bytes=173544463-173546338",
+   "status": 206,
+   "bytes": 2243
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/1/2",
+   "range": "bytes=119095134-119097009",
+   "status": 206,
+   "bytes": 2256
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/2/0",
+   "range": "bytes=119457293-119459168",
+   "status": 206,
+   "bytes": 2236
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/2/2",
+   "range": "bytes=83409200-83411075",
+   "status": 206,
+   "bytes": 2172
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/0/0",
+   "range": "bytes=166976875-166978750",
+   "status": 206,
+   "bytes": 2192
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/2/2",
+   "range": "bytes=43790247-44468850",
+   "status": 206,
+   "bytes": 679741
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/0/1",
+   "range": "bytes=88824342-90225923",
+   "status": 206,
+   "bytes": 1403530
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/2/0",
+   "range": "bytes=62523511-63509030",
+   "status": 206,
+   "bytes": 986988
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/2/1",
+   "range": "bytes=63265890-64259027",
+   "status": 206,
+   "bytes": 994787
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/0/2",
+   "range": "bytes=60712803-61671726",
+   "status": 206,
+   "bytes": 960369
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/1/0",
+   "range": "bytes=88392113-89780983",
+   "status": 206,
+   "bytes": 1390780
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/1/1",
+   "range": "bytes=89893534-91318079",
+   "status": 206,
+   "bytes": 1426504
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/1/2",
+   "range": "bytes=62199461-63191243",
+   "status": 206,
+   "bytes": 993265
+  },
+  {
+   "method": "GET",
+   "path": "/1/data/c/0/0/0/0",
+   "range": "bytes=86830588-88222267",
+   "status": 206,
+   "bytes": 1393610
+  }
+ ],
+ "messages": [
+  {
+   "type": "error",
+   "text": "Failed to load resource: the server responded with a status of 404 ()"
+  },
+  {
+   "type": "error",
+   "text": "Failed to load resource: the server responded with a status of 404 ()"
+  }
+ ]
+}

@@ -1,0 +1,17 @@
+{
+ "date": "2016-05-01",
+ "view": "level 1, 3 x 3 cells (1380 x 1383 pixels, 4 bands, uint16)",
+ "repeats": 7,
+ "COG, DEFLATE + predictor 2 (geotiff.js, pako)": {
+  "medianMs": 252.9,
+  "minMs": 249.5
+ },
+ "COG, ZSTD 5 + predictor 2 (geotiff.js, zstddec WASM)": {
+  "medianMs": 116.4,
+  "minMs": 115.2
+ },
+ "chronozarr reader, zstd 5 chunks (WASM, one thread)": {
+  "medianMs": 37.9,
+  "minMs": 35.5
+ }
+}

@@ -1,0 +1,22 @@
+{
+ "store": "https://data.tileripper.com/ucayali_santa_maria/chronozarr-3",
+ "level": "finest",
+ "pixel": "1388,1380",
+ "timesteps": [
+  0,
+  2,
+  3,
+  40,
+  41,
+  60,
+  80,
+  100,
+  101,
+  102,
+  116
+ ],
+ "valuesCompared": 44,
+ "equal": 44,
+ "nodataLeftOutByTheLayer": 4,
+ "mismatches": []
+}

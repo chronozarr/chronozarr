@@ -1,0 +1,187 @@
+{
+ "store": "https://data.tileripper.com/ucayali_santa_maria/chronozarr-3",
+ "patch": null,
+ "extra": {},
+ "outcome": "not complete: layer not complete after 30000 ms: {\"level\":3,\"total\":0,\"loaded\":0,\"loading\":0,\"version\":1}",
+ "ms": 30332,
+ "view": {
+  "center": [
+   -75.00503196049539,
+   -7.6349829020455315
+  ],
+  "widthPx": 1457.6399819554063,
+  "heightPx": 1470.0662706389558
+ },
+ "state": {
+  "level": 3,
+  "total": 0,
+  "loaded": 0,
+  "loading": 0,
+  "version": 1
+ },
+ "describe": {
+  "crs": "EPSG:3857",
+  "proj4": "EPSG:32718",
+  "levelAssets": [
+   "0",
+   "1",
+   "2",
+   "3"
+  ],
+  "xyLimits": {
+   "xMin": -20037508.342789244,
+   "xMax": 20037508.342789244,
+   "yMin": -20037508.342789244,
+   "yMax": 20037508.342789244
+  },
+  "latIsAscending": false,
+  "dimensions": [
+   "time",
+   "band",
+   "y",
+   "x"
+  ],
+  "shape": [
+   117,
+   4,
+   2765,
+   2759
+  ],
+  "chunks": [
+   1,
+   4,
+   512,
+   512
+  ],
+  "fill_value": 0,
+  "dtype": "uint16",
+  "resolutionLevels": [
+   {
+    "asset": "0",
+    "shape": [
+     117,
+     4,
+     2765,
+     2759
+    ]
+   },
+   {
+    "asset": "1",
+    "shape": [
+     117,
+     4,
+     1383,
+     1380
+    ]
+   },
+   {
+    "asset": "2",
+    "shape": [
+     117,
+     4,
+     692,
+     690
+    ]
+   },
+   {
+    "asset": "3",
+    "shape": [
+     117,
+     4,
+     346,
+     345
+    ]
+   }
+  ]
+ },
+ "canvas": {
+  "width": 1500,
+  "height": 1500
+ },
+ "lit": 0,
+ "litBox": null,
+ "mapCenter": {
+  "lng": -75.00503196049539,
+  "lat": -7.6349829020455315
+ },
+ "mapZoom": 12,
+ "net": {
+  "requests": 6,
+  "bytes": 61306,
+  "byKind": {
+   "data": {
+    "requests": 5,
+    "bytes": 21876,
+    "aborted": 0,
+    "abortedBytes": 0
+   },
+   "metadata": {
+    "requests": 1,
+    "bytes": 39430,
+    "aborted": 0,
+    "abortedBytes": 0
+   }
+  },
+  "cache": {
+   "MISS": 6
+  }
+ },
+ "requests": [
+  {
+   "method": "GET",
+   "path": "/.zmetadata",
+   "range": null,
+   "status": 404,
+   "bytes": 7028
+  },
+  {
+   "method": "GET",
+   "path": "/zarr.json",
+   "range": null,
+   "status": 200,
+   "bytes": 39430
+  },
+  {
+   "method": "GET",
+   "path": "/.zattrs",
+   "range": null,
+   "status": 404,
+   "bytes": 6838
+  },
+  {
+   "method": "GET",
+   "path": "/.zgroup",
+   "range": null,
+   "status": 404,
+   "bytes": 6808
+  },
+  {
+   "method": "GET",
+   "path": "/0/band/c/0",
+   "range": null,
+   "status": 200,
+   "bytes": 381
+  },
+  {
+   "method": "GET",
+   "path": "/0/time/c/0",
+   "range": null,
+   "status": 200,
+   "bytes": 821
+  }
+ ],
+ "messages": [
+  {
+   "type": "error",
+   "text": "Failed to load resource: the server responded with a status of 404 ()"
+  },
+  {
+   "type": "error",
+   "text": "Failed to load resource: the server responded with a status of 404 ()"
+  },
+  {
+   "type": "error",
+   "text": "Failed to load resource: the server responded with a status of 404 ()"
+  }
+ ]
+}

@@ -1,0 +1,4888 @@
+{
+ "source": "local",
+ "profile": "natural",
+ "store": "ucayali_santa_maria/chronozarr-3",
+ "level": 1,
+ "startT": 40,
+ "steps": 20,
+ "runs": [
+  {
+   "tool": "tileripper",
+   "source": "local",
+   "profile": "natural",
+   "mode": "burst",
+   "rep": 1,
+   "level": 1,
+   "cells": 9,
+   "canvas": {
+    "width": 1500,
+    "height": 1592
+   },
+   "openTimeline": [
+    {
+     "kind": "metadata",
+     "role": "metadata",
+     "path": "/zarr.json",
+     "bytes": null,
+     "startMs": 0,
+     "firstByteMs": 1.2,
+     "endMs": 1.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1876,
+     "startMs": 6.1,
+     "firstByteMs": 10.8,
+     "endMs": 7.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1876,
+     "startMs": 6.3,
+     "firstByteMs": 10.6,
+     "endMs": 7.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 1876,
+     "startMs": 6.3,
+     "firstByteMs": 10.7,
+     "endMs": 7.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1876,
+     "startMs": 6.4,
+     "firstByteMs": 10.8,
+     "endMs": 8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1876,
+     "startMs": 6.6,
+     "firstByteMs": 10.9,
+     "endMs": 8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 1876,
+     "startMs": 6.6,
+     "firstByteMs": 13.1,
+     "endMs": 8.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 1876,
+     "startMs": 6.7,
+     "firstByteMs": 13.2,
+     "endMs": 9.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 1876,
+     "startMs": 6.8,
+     "firstByteMs": 13.3,
+     "endMs": 9.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 1876,
+     "startMs": 7.5,
+     "firstByteMs": 13.3,
+     "endMs": 9.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1382723,
+     "startMs": 14.4,
+     "firstByteMs": 16.7,
+     "endMs": 30.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 920795,
+     "startMs": 14.7,
+     "firstByteMs": 16.8,
+     "endMs": 26.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1308193,
+     "startMs": 14.9,
+     "firstByteMs": 16.9,
+     "endMs": 30.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1354915,
+     "startMs": 15,
+     "firstByteMs": 17.4,
+     "endMs": 31.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1423646,
+     "startMs": 15.1,
+     "firstByteMs": 17.6,
+     "endMs": 31.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 967094,
+     "startMs": 15.3,
+     "firstByteMs": 20.2,
+     "endMs": 31.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 955391,
+     "startMs": 15.4,
+     "firstByteMs": 40.1,
+     "endMs": 36,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 669003,
+     "startMs": 15.5,
+     "firstByteMs": 40.2,
+     "endMs": 35.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 987808,
+     "startMs": 15.7,
+     "firstByteMs": 40.2,
+     "endMs": 36.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    }
+   ],
+   "open": {
+    "indexReadsDoneMs": 9.2,
+    "ms": 105.5,
+    "metadataMs": 3.6,
+    "requests": 19,
+    "bytes": 10030788,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 18,
+      "bytes": 9991564,
+      "aborted": 0,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "readerStats": {
+     "requests": 19,
+     "bytes": 10025464,
+     "deduped": 0,
+     "inflight": 0
+    }
+   },
+   "scrub": {
+    "steps": 20,
+    "settled": true,
+    "settleMs": 1904.4,
+    "requests": 311,
+    "bytes": 352327362,
+    "byKind": {
+     "metadata": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 311,
+      "bytes": 352327362,
+      "aborted": 9,
+      "abortedBytes": 917504
+     }
+    },
+    "edgeCache": {},
+    "stepsShownExactly": 20,
+    "stepsNeverCompleted": 0,
+    "lagMs": {
+     "n": 20,
+     "median": 0.3,
+     "p95": 53.4,
+     "max": 53.4
+    },
+    "lags": [
+     53.4,
+     29.2,
+     16.2,
+     0.3,
+     0.3,
+     0.2,
+     0.4,
+     0.2,
+     0.2,
+     0.4,
+     0.2,
+     0.3,
+     0.3,
+     0.4,
+     0.3,
+     0.2,
+     0.3,
+     0.3,
+     0.3,
+     3.8
+    ],
+    "stepsWithMixedFrame": 0,
+    "mixedFrameMs": 0,
+    "paintedFrames": 23,
+    "readerStats": {
+     "requests": 311,
+     "bytes": 341186452
+    },
+    "extra": {
+     "levelFallbacks": 0,
+     "keptFrames": 0,
+     "versionsApplied": null,
+     "levelsSeen": null
+    }
+   },
+   "trailing3s": {
+    "requests": 1,
+    "bytes": 2639588
+   },
+   "sessionTotal": {
+    "requests": 331,
+    "bytes": 364997738,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 330,
+      "bytes": 364958514,
+      "aborted": 9,
+      "abortedBytes": 917504
+     }
+    }
+   },
+   "messages": []
+  },
+  {
+   "tool": "zarr-layer",
+   "source": "local",
+   "profile": "natural",
+   "mode": "burst",
+   "rep": 1,
+   "level": 1,
+   "cells": 9,
+   "canvas": {
+    "width": 1800,
+    "height": 1700
+   },
+   "openTimeline": [
+    {
+     "kind": "metadata",
+     "role": "metadata",
+     "path": "/zarr.json",
+     "bytes": null,
+     "startMs": 0,
+     "firstByteMs": 3.1,
+     "endMs": 1.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/0/band/c/0",
+     "bytes": null,
+     "startMs": 4.9,
+     "firstByteMs": 6,
+     "endMs": 6.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/0/time/c/0",
+     "bytes": null,
+     "startMs": 5,
+     "firstByteMs": 6.2,
+     "endMs": 6.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": null,
+     "startMs": 23.6,
+     "firstByteMs": 25.1,
+     "endMs": 25.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": null,
+     "startMs": 23.7,
+     "firstByteMs": 25.4,
+     "endMs": 25.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": null,
+     "startMs": 23.8,
+     "firstByteMs": 25.8,
+     "endMs": 26,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": null,
+     "startMs": 23.9,
+     "firstByteMs": 26.3,
+     "endMs": 26.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": null,
+     "startMs": 23.9,
+     "firstByteMs": 26.7,
+     "endMs": 26.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": null,
+     "startMs": 24,
+     "firstByteMs": 27.1,
+     "endMs": 27.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": null,
+     "startMs": 24,
+     "firstByteMs": 26.1,
+     "endMs": 26.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": null,
+     "startMs": 24.1,
+     "firstByteMs": 26.2,
+     "endMs": 26.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": null,
+     "startMs": 24.2,
+     "firstByteMs": 26.9,
+     "endMs": 27.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1876,
+     "startMs": 25.3,
+     "firstByteMs": 27.9,
+     "endMs": 27.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1876,
+     "startMs": 25.5,
+     "firstByteMs": 27.8,
+     "endMs": 27.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1876,
+     "startMs": 25.9,
+     "firstByteMs": 28.4,
+     "endMs": 28,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 1876,
+     "startMs": 26.2,
+     "firstByteMs": 28.4,
+     "endMs": 28.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 1876,
+     "startMs": 26.3,
+     "firstByteMs": 28.5,
+     "endMs": 28.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 1876,
+     "startMs": 26.4,
+     "firstByteMs": 28.5,
+     "endMs": 28.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 1876,
+     "startMs": 26.7,
+     "firstByteMs": 28.8,
+     "endMs": 28.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 1876,
+     "startMs": 27,
+     "firstByteMs": 29.1,
+     "endMs": 28.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1876,
+     "startMs": 27.2,
+     "firstByteMs": 29.3,
+     "endMs": 29.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1382723,
+     "startMs": 28.3,
+     "firstByteMs": 29.4,
+     "endMs": 43.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1423646,
+     "startMs": 28.6,
+     "firstByteMs": 30.9,
+     "endMs": 40.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1354915,
+     "startMs": 28.8,
+     "firstByteMs": 31.3,
+     "endMs": 43.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 920795,
+     "startMs": 28.9,
+     "firstByteMs": 32.6,
+     "endMs": 45.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 955391,
+     "startMs": 28.9,
+     "firstByteMs": 33,
+     "endMs": 46.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 967094,
+     "startMs": 29,
+     "firstByteMs": 33.4,
+     "endMs": 46.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 987808,
+     "startMs": 29.2,
+     "firstByteMs": 61.5,
+     "endMs": 47.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 669003,
+     "startMs": 29.3,
+     "firstByteMs": 61.6,
+     "endMs": 49.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1308193,
+     "startMs": 29.6,
+     "firstByteMs": 61.7,
+     "endMs": 50.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    }
+   ],
+   "open": {
+    "indexReadsDoneMs": 29.5,
+    "ms": 123.5,
+    "metadataMs": null,
+    "requests": 30,
+    "bytes": 10031749,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 20,
+      "bytes": 9992525,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 9,
+      "bytes": 0,
+      "aborted": 9,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "readerStats": null
+   },
+   "scrub": {
+    "steps": 20,
+    "settled": true,
+    "settleMs": 1978.6,
+    "requests": 180,
+    "bytes": 213659716,
+    "byKind": {
+     "metadata": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 180,
+      "bytes": 213659716,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "stepsShownExactly": 20,
+    "stepsNeverCompleted": 0,
+    "lagMs": {
+     "n": 20,
+     "median": 78.1,
+     "p95": 84.1,
+     "max": 84.1
+    },
+    "lags": [
+     82.9,
+     81,
+     80.9,
+     84.1,
+     78.1,
+     77.1,
+     81.6,
+     81.5,
+     77,
+     78.1,
+     76.5,
+     77.2,
+     77.3,
+     77.8,
+     76.5,
+     77.4,
+     79.1,
+     79.9,
+     76.6,
+     78
+    ],
+    "stepsWithMixedFrame": 20,
+    "mixedFrameMs": 862.8,
+    "paintedFrames": 80,
+    "readerStats": null,
+    "extra": {
+     "levelFallbacks": null,
+     "keptFrames": null,
+     "versionsApplied": 20,
+     "levelsSeen": [
+      1
+     ]
+    }
+   },
+   "trailing3s": {
+    "requests": 0,
+    "bytes": 0
+   },
+   "sessionTotal": {
+    "requests": 210,
+    "bytes": 223691465,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 200,
+      "bytes": 223652241,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 9,
+      "bytes": 0,
+      "aborted": 9,
+      "abortedBytes": 0
+     }
+    }
+   },
+   "messages": []
+  },
+  {
+   "tool": "tileripper",
+   "source": "local",
+   "profile": "natural",
+   "mode": "paced",
+   "rep": 1,
+   "level": 1,
+   "cells": 9,
+   "canvas": {
+    "width": 1500,
+    "height": 1592
+   },
+   "openTimeline": [
+    {
+     "kind": "metadata",
+     "role": "metadata",
+     "path": "/zarr.json",
+     "bytes": null,
+     "startMs": 0,
+     "firstByteMs": 1.3,
+     "endMs": 1.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1876,
+     "startMs": 5.9,
+     "firstByteMs": 10.3,
+     "endMs": 6.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1876,
+     "startMs": 6.1,
+     "firstByteMs": 10.5,
+     "endMs": 7.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 1876,
+     "startMs": 6.2,
+     "firstByteMs": 10.5,
+     "endMs": 7.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1876,
+     "startMs": 6.3,
+     "firstByteMs": 10.5,
+     "endMs": 7.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1876,
+     "startMs": 6.4,
+     "firstByteMs": 10.6,
+     "endMs": 7.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 1876,
+     "startMs": 6.5,
+     "firstByteMs": 12.6,
+     "endMs": 7.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 1876,
+     "startMs": 6.6,
+     "firstByteMs": 12.8,
+     "endMs": 8.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 1876,
+     "startMs": 6.7,
+     "firstByteMs": 12.9,
+     "endMs": 8.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 1876,
+     "startMs": 7.3,
+     "firstByteMs": 13,
+     "endMs": 8.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1308193,
+     "startMs": 13.9,
+     "firstByteMs": 16,
+     "endMs": 26.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1382723,
+     "startMs": 14.1,
+     "firstByteMs": 16.2,
+     "endMs": 27.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 920795,
+     "startMs": 14.3,
+     "firstByteMs": 16.4,
+     "endMs": 23.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1354915,
+     "startMs": 14.4,
+     "firstByteMs": 16.5,
+     "endMs": 26.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1423646,
+     "startMs": 14.5,
+     "firstByteMs": 16.7,
+     "endMs": 27.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 967094,
+     "startMs": 14.6,
+     "firstByteMs": 19.9,
+     "endMs": 27.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 955391,
+     "startMs": 14.7,
+     "firstByteMs": 35.6,
+     "endMs": 31.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 987808,
+     "startMs": 14.8,
+     "firstByteMs": 36,
+     "endMs": 32.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 669003,
+     "startMs": 14.9,
+     "firstByteMs": 36,
+     "endMs": 31.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    }
+   ],
+   "open": {
+    "indexReadsDoneMs": 8.6,
+    "ms": 100.6,
+    "metadataMs": 3.6,
+    "requests": 19,
+    "bytes": 10030788,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 18,
+      "bytes": 9991564,
+      "aborted": 0,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "readerStats": {
+     "requests": 19,
+     "bytes": 10025464,
+     "deduped": 0,
+     "inflight": 0
+    }
+   },
+   "scrub": {
+    "steps": 20,
+    "settled": true,
+    "settleMs": 2175.2,
+    "requests": 305,
+    "bytes": 351270600,
+    "byKind": {
+     "metadata": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 305,
+      "bytes": 351270600,
+      "aborted": 3,
+      "abortedBytes": 524288
+     }
+    },
+    "edgeCache": {},
+    "stepsShownExactly": 20,
+    "stepsNeverCompleted": 0,
+    "lagMs": {
+     "n": 20,
+     "median": 0.3,
+     "p95": 0.8,
+     "max": 0.8
+    },
+    "lags": [
+     0.8,
+     0.3,
+     0.3,
+     0.5,
+     0.2,
+     0.4,
+     0.4,
+     0.4,
+     0.2,
+     0.3,
+     0.4,
+     0.3,
+     0.1,
+     0.3,
+     0.2,
+     0.7,
+     0.3,
+     0.2,
+     0.3,
+     0.3
+    ],
+    "stepsWithMixedFrame": 0,
+    "mixedFrameMs": 0,
+    "paintedFrames": 20,
+    "readerStats": {
+     "requests": 305,
+     "bytes": 344200786
+    },
+    "extra": {
+     "levelFallbacks": 0,
+     "keptFrames": 0,
+     "versionsApplied": null,
+     "levelsSeen": null
+    }
+   },
+   "trailing3s": {
+    "requests": 0,
+    "bytes": 1680542
+   },
+   "sessionTotal": {
+    "requests": 324,
+    "bytes": 362981930,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 323,
+      "bytes": 362942706,
+      "aborted": 3,
+      "abortedBytes": 524288
+     }
+    }
+   },
+   "messages": []
+  },
+  {
+   "tool": "zarr-layer",
+   "source": "local",
+   "profile": "natural",
+   "mode": "paced",
+   "rep": 1,
+   "level": 1,
+   "cells": 9,
+   "canvas": {
+    "width": 1800,
+    "height": 1700
+   },
+   "openTimeline": [
+    {
+     "kind": "metadata",
+     "role": "metadata",
+     "path": "/zarr.json",
+     "bytes": null,
+     "startMs": 0,
+     "firstByteMs": 1.7,
+     "endMs": 1.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/0/band/c/0",
+     "bytes": null,
+     "startMs": 3.9,
+     "firstByteMs": 6.4,
+     "endMs": 5.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/0/time/c/0",
+     "bytes": null,
+     "startMs": 3.9,
+     "firstByteMs": 6.4,
+     "endMs": 5.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": null,
+     "startMs": 25.1,
+     "firstByteMs": 26.6,
+     "endMs": 26.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": null,
+     "startMs": 25.2,
+     "firstByteMs": 26.9,
+     "endMs": 27,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": null,
+     "startMs": 25.3,
+     "firstByteMs": 27.1,
+     "endMs": 27.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": null,
+     "startMs": 25.4,
+     "firstByteMs": 27.6,
+     "endMs": 27.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": null,
+     "startMs": 25.4,
+     "firstByteMs": 27.8,
+     "endMs": 27.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": null,
+     "startMs": 25.5,
+     "firstByteMs": 28,
+     "endMs": 28.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": null,
+     "startMs": 25.5,
+     "firstByteMs": 28.2,
+     "endMs": 28.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": null,
+     "startMs": 25.6,
+     "firstByteMs": 28.3,
+     "endMs": 28.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": null,
+     "startMs": 25.7,
+     "firstByteMs": 28.4,
+     "endMs": 28.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1876,
+     "startMs": 26.8,
+     "firstByteMs": 28.7,
+     "endMs": 28.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1876,
+     "startMs": 27,
+     "firstByteMs": 28.8,
+     "endMs": 28.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1876,
+     "startMs": 27.2,
+     "firstByteMs": 29.6,
+     "endMs": 29.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 1876,
+     "startMs": 27.7,
+     "firstByteMs": 29.8,
+     "endMs": 29.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 1876,
+     "startMs": 27.8,
+     "firstByteMs": 29.7,
+     "endMs": 29.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1876,
+     "startMs": 28.1,
+     "firstByteMs": 29.9,
+     "endMs": 30,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 1876,
+     "startMs": 28.2,
+     "firstByteMs": 30.1,
+     "endMs": 30.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 1876,
+     "startMs": 28.3,
+     "firstByteMs": 30.2,
+     "endMs": 30.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 1876,
+     "startMs": 28.4,
+     "firstByteMs": 31,
+     "endMs": 31.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1423646,
+     "startMs": 29.3,
+     "firstByteMs": 31.2,
+     "endMs": 47.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1382723,
+     "startMs": 29.4,
+     "firstByteMs": 31.5,
+     "endMs": 42.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1354915,
+     "startMs": 30,
+     "firstByteMs": 32.2,
+     "endMs": 51.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 987808,
+     "startMs": 30.3,
+     "firstByteMs": 32.5,
+     "endMs": 50.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1308193,
+     "startMs": 30.4,
+     "firstByteMs": 33.2,
+     "endMs": 52.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 967094,
+     "startMs": 30.5,
+     "firstByteMs": 37.4,
+     "endMs": 52.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 920795,
+     "startMs": 30.6,
+     "firstByteMs": 65.3,
+     "endMs": 52.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 955391,
+     "startMs": 30.7,
+     "firstByteMs": 67.3,
+     "endMs": 55.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 669003,
+     "startMs": 31.3,
+     "firstByteMs": 67.3,
+     "endMs": 55.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    }
+   ],
+   "open": {
+    "indexReadsDoneMs": 31.1,
+    "ms": 127.1,
+    "metadataMs": null,
+    "requests": 30,
+    "bytes": 10031749,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 20,
+      "bytes": 9992525,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 9,
+      "bytes": 0,
+      "aborted": 9,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "readerStats": null
+   },
+   "scrub": {
+    "steps": 20,
+    "settled": true,
+    "settleMs": 3847.2,
+    "requests": 180,
+    "bytes": 213659716,
+    "byKind": {
+     "metadata": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 180,
+      "bytes": 213659716,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "stepsShownExactly": 20,
+    "stepsNeverCompleted": 0,
+    "lagMs": {
+     "n": 20,
+     "median": 82.6,
+     "p95": 102.1,
+     "max": 102.1
+    },
+    "lags": [
+     85,
+     83.8,
+     81.7,
+     82.6,
+     80.9,
+     80.6,
+     102.1,
+     83.4,
+     76.9,
+     86.6,
+     79.2,
+     90.2,
+     86.6,
+     82.3,
+     79.4,
+     85.8,
+     80.4,
+     86.9,
+     76.1,
+     81.9
+    ],
+    "stepsWithMixedFrame": 20,
+    "mixedFrameMs": 823.5,
+    "paintedFrames": 79,
+    "readerStats": null,
+    "extra": {
+     "levelFallbacks": null,
+     "keptFrames": null,
+     "versionsApplied": 20,
+     "levelsSeen": [
+      1
+     ]
+    }
+   },
+   "trailing3s": {
+    "requests": 0,
+    "bytes": 0
+   },
+   "sessionTotal": {
+    "requests": 210,
+    "bytes": 223691465,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 200,
+      "bytes": 223652241,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 9,
+      "bytes": 0,
+      "aborted": 9,
+      "abortedBytes": 0
+     }
+    }
+   },
+   "messages": []
+  },
+  {
+   "tool": "zarr-layer",
+   "source": "local",
+   "profile": "natural",
+   "mode": "burst",
+   "rep": 1,
+   "level": 1,
+   "cells": 9,
+   "canvas": {
+    "width": 1800,
+    "height": 1700
+   },
+   "openTimeline": [
+    {
+     "kind": "metadata",
+     "role": "metadata",
+     "path": "/zarr.json",
+     "bytes": null,
+     "startMs": 0,
+     "firstByteMs": 1.7,
+     "endMs": 1.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/0/band/c/0",
+     "bytes": null,
+     "startMs": 3.9,
+     "firstByteMs": 6.2,
+     "endMs": 5.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/0/time/c/0",
+     "bytes": null,
+     "startMs": 4,
+     "firstByteMs": 6.3,
+     "endMs": 5.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": null,
+     "startMs": 26.8,
+     "firstByteMs": 28.1,
+     "endMs": 28.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": null,
+     "startMs": 26.9,
+     "firstByteMs": 28.5,
+     "endMs": 28.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": null,
+     "startMs": 27,
+     "firstByteMs": 29,
+     "endMs": 29.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": null,
+     "startMs": 27,
+     "firstByteMs": 29.3,
+     "endMs": 29.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": null,
+     "startMs": 27.1,
+     "firstByteMs": 29.5,
+     "endMs": 29.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": null,
+     "startMs": 27.1,
+     "firstByteMs": 29.5,
+     "endMs": 29.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": null,
+     "startMs": 27.2,
+     "firstByteMs": 29.8,
+     "endMs": 30,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": null,
+     "startMs": 27.2,
+     "firstByteMs": 29.7,
+     "endMs": 29.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": null,
+     "startMs": 27.3,
+     "firstByteMs": 29.9,
+     "endMs": 30,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1876,
+     "startMs": 28.2,
+     "firstByteMs": 30.8,
+     "endMs": 30.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1876,
+     "startMs": 28.6,
+     "firstByteMs": 31.3,
+     "endMs": 30.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1876,
+     "startMs": 29,
+     "firstByteMs": 31.4,
+     "endMs": 31.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 1876,
+     "startMs": 29.4,
+     "firstByteMs": 31.4,
+     "endMs": 31.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 1876,
+     "startMs": 29.5,
+     "firstByteMs": 31.4,
+     "endMs": 31.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1876,
+     "startMs": 29.6,
+     "firstByteMs": 31.5,
+     "endMs": 31.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 1876,
+     "startMs": 29.7,
+     "firstByteMs": 32.2,
+     "endMs": 32.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 1876,
+     "startMs": 29.8,
+     "firstByteMs": 33.1,
+     "endMs": 33.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 1876,
+     "startMs": 29.9,
+     "firstByteMs": 33.1,
+     "endMs": 33.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1423646,
+     "startMs": 31.2,
+     "firstByteMs": 33.2,
+     "endMs": 43.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1382723,
+     "startMs": 31.7,
+     "firstByteMs": 33.7,
+     "endMs": 44.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1354915,
+     "startMs": 31.8,
+     "firstByteMs": 34,
+     "endMs": 45.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 967094,
+     "startMs": 31.9,
+     "firstByteMs": 33.8,
+     "endMs": 42,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 987808,
+     "startMs": 31.9,
+     "firstByteMs": 36,
+     "endMs": 45.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1308193,
+     "startMs": 32,
+     "firstByteMs": 36.1,
+     "endMs": 46.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 955391,
+     "startMs": 32.4,
+     "firstByteMs": 63.2,
+     "endMs": 49.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 669003,
+     "startMs": 33.3,
+     "firstByteMs": 63.3,
+     "endMs": 49.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 920795,
+     "startMs": 33.6,
+     "firstByteMs": 63.3,
+     "endMs": 49.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    }
+   ],
+   "open": {
+    "indexReadsDoneMs": 33.2,
+    "ms": 124.7,
+    "metadataMs": null,
+    "requests": 30,
+    "bytes": 10031749,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 20,
+      "bytes": 9992525,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 9,
+      "bytes": 0,
+      "aborted": 9,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "readerStats": null
+   },
+   "scrub": {
+    "steps": 20,
+    "settled": true,
+    "settleMs": 1979.8,
+    "requests": 180,
+    "bytes": 213659716,
+    "byKind": {
+     "metadata": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 180,
+      "bytes": 213659716,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "stepsShownExactly": 20,
+    "stepsNeverCompleted": 0,
+    "lagMs": {
+     "n": 20,
+     "median": 78.8,
+     "p95": 84.2,
+     "max": 84.2
+    },
+    "lags": [
+     78.8,
+     82,
+     80.9,
+     80.9,
+     78.4,
+     78.1,
+     77.7,
+     81,
+     77.3,
+     77.8,
+     79.2,
+     78.9,
+     77.1,
+     77.5,
+     77.4,
+     79.3,
+     84.2,
+     80.5,
+     77.7,
+     78.7
+    ],
+    "stepsWithMixedFrame": 20,
+    "mixedFrameMs": 899.8,
+    "paintedFrames": 80,
+    "readerStats": null,
+    "extra": {
+     "levelFallbacks": null,
+     "keptFrames": null,
+     "versionsApplied": 20,
+     "levelsSeen": [
+      1
+     ]
+    }
+   },
+   "trailing3s": {
+    "requests": 0,
+    "bytes": 0
+   },
+   "sessionTotal": {
+    "requests": 210,
+    "bytes": 223691465,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 200,
+      "bytes": 223652241,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 9,
+      "bytes": 0,
+      "aborted": 9,
+      "abortedBytes": 0
+     }
+    }
+   },
+   "messages": []
+  },
+  {
+   "tool": "tileripper",
+   "source": "local",
+   "profile": "natural",
+   "mode": "burst",
+   "rep": 1,
+   "level": 1,
+   "cells": 9,
+   "canvas": {
+    "width": 1500,
+    "height": 1592
+   },
+   "openTimeline": [
+    {
+     "kind": "metadata",
+     "role": "metadata",
+     "path": "/zarr.json",
+     "bytes": null,
+     "startMs": 0,
+     "firstByteMs": 1.2,
+     "endMs": 1.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1876,
+     "startMs": 6,
+     "firstByteMs": 8,
+     "endMs": 7.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1876,
+     "startMs": 6.2,
+     "firstByteMs": 8.1,
+     "endMs": 7.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 1876,
+     "startMs": 6.3,
+     "firstByteMs": 8.1,
+     "endMs": 7.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1876,
+     "startMs": 6.4,
+     "firstByteMs": 10.2,
+     "endMs": 8.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1876,
+     "startMs": 6.5,
+     "firstByteMs": 10.3,
+     "endMs": 8.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 1876,
+     "startMs": 6.6,
+     "firstByteMs": 10.4,
+     "endMs": 8.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 1876,
+     "startMs": 6.7,
+     "firstByteMs": 10.4,
+     "endMs": 8.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 1876,
+     "startMs": 6.8,
+     "firstByteMs": 13.2,
+     "endMs": 8.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 1876,
+     "startMs": 7.5,
+     "firstByteMs": 13.3,
+     "endMs": 9.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1308193,
+     "startMs": 13.7,
+     "firstByteMs": 17.1,
+     "endMs": 23.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1382723,
+     "startMs": 14,
+     "firstByteMs": 17.3,
+     "endMs": 27.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 920795,
+     "startMs": 14.2,
+     "firstByteMs": 17.3,
+     "endMs": 24,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1354915,
+     "startMs": 14.6,
+     "firstByteMs": 22.1,
+     "endMs": 34.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1423646,
+     "startMs": 14.7,
+     "firstByteMs": 22.9,
+     "endMs": 35.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 967094,
+     "startMs": 14.8,
+     "firstByteMs": 29.7,
+     "endMs": 33.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 955391,
+     "startMs": 14.9,
+     "firstByteMs": 33,
+     "endMs": 36.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 987808,
+     "startMs": 15.1,
+     "firstByteMs": 36.5,
+     "endMs": 41.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 669003,
+     "startMs": 15.2,
+     "firstByteMs": 36.5,
+     "endMs": 36.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    }
+   ],
+   "open": {
+    "indexReadsDoneMs": 9.6,
+    "ms": 108.4,
+    "metadataMs": 3.5,
+    "requests": 19,
+    "bytes": 10030788,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 18,
+      "bytes": 9991564,
+      "aborted": 0,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "readerStats": {
+     "requests": 19,
+     "bytes": 10025464,
+     "deduped": 0,
+     "inflight": 0
+    }
+   },
+   "scrub": {
+    "steps": 20,
+    "settled": true,
+    "settleMs": 1902.2,
+    "requests": 301,
+    "bytes": 343554950,
+    "byKind": {
+     "metadata": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 301,
+      "bytes": 343554950,
+      "aborted": 7,
+      "abortedBytes": 2629061
+     }
+    },
+    "edgeCache": {},
+    "stepsShownExactly": 20,
+    "stepsNeverCompleted": 0,
+    "lagMs": {
+     "n": 20,
+     "median": 0.3,
+     "p95": 55.6,
+     "max": 55.6
+    },
+    "lags": [
+     55.6,
+     0.6,
+     12.1,
+     0.3,
+     0.3,
+     0.3,
+     0.4,
+     0.3,
+     0.5,
+     0.3,
+     0.2,
+     0.2,
+     0.4,
+     0.2,
+     0.2,
+     4.5,
+     4.2,
+     3.4,
+     0.2,
+     0.3
+    ],
+    "stepsWithMixedFrame": 0,
+    "mixedFrameMs": 0,
+    "paintedFrames": 21,
+    "readerStats": {
+     "requests": 301,
+     "bytes": 338667072
+    },
+    "extra": {
+     "levelFallbacks": 0,
+     "keptFrames": 0,
+     "versionsApplied": null,
+     "levelsSeen": null
+    }
+   },
+   "trailing3s": {
+    "requests": 0,
+    "bytes": 1680542
+   },
+   "sessionTotal": {
+    "requests": 320,
+    "bytes": 355266280,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 319,
+      "bytes": 355227056,
+      "aborted": 7,
+      "abortedBytes": 2629061
+     }
+    }
+   },
+   "messages": []
+  },
+  {
+   "tool": "zarr-layer",
+   "source": "local",
+   "profile": "natural",
+   "mode": "paced",
+   "rep": 1,
+   "level": 1,
+   "cells": 9,
+   "canvas": {
+    "width": 1800,
+    "height": 1700
+   },
+   "openTimeline": [
+    {
+     "kind": "metadata",
+     "role": "metadata",
+     "path": "/zarr.json",
+     "bytes": null,
+     "startMs": 0,
+     "firstByteMs": 2.1,
+     "endMs": 2.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/0/band/c/0",
+     "bytes": null,
+     "startMs": 4.2,
+     "firstByteMs": 6.5,
+     "endMs": 5.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/0/time/c/0",
+     "bytes": null,
+     "startMs": 4.3,
+     "firstByteMs": 6.6,
+     "endMs": 5.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": null,
+     "startMs": 27.4,
+     "firstByteMs": 28.9,
+     "endMs": 29.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": null,
+     "startMs": 27.5,
+     "firstByteMs": 29.1,
+     "endMs": 29.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": null,
+     "startMs": 27.6,
+     "firstByteMs": 29.3,
+     "endMs": 29.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": null,
+     "startMs": 27.6,
+     "firstByteMs": 29.5,
+     "endMs": 29.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": null,
+     "startMs": 27.7,
+     "firstByteMs": 29.6,
+     "endMs": 29.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": null,
+     "startMs": 27.7,
+     "firstByteMs": 29.7,
+     "endMs": 29.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": null,
+     "startMs": 27.8,
+     "firstByteMs": 29.9,
+     "endMs": 30,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": null,
+     "startMs": 27.9,
+     "firstByteMs": 30.1,
+     "endMs": 30.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": null,
+     "startMs": 27.9,
+     "firstByteMs": 30.3,
+     "endMs": 30.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1876,
+     "startMs": 29,
+     "firstByteMs": 31.6,
+     "endMs": 31.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1876,
+     "startMs": 29.2,
+     "firstByteMs": 31.4,
+     "endMs": 31.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1876,
+     "startMs": 29.3,
+     "firstByteMs": 32.1,
+     "endMs": 31.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 1876,
+     "startMs": 29.6,
+     "firstByteMs": 32.1,
+     "endMs": 31.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 1876,
+     "startMs": 29.6,
+     "firstByteMs": 32.2,
+     "endMs": 32,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1876,
+     "startMs": 29.7,
+     "firstByteMs": 32.2,
+     "endMs": 32,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 1876,
+     "startMs": 30,
+     "firstByteMs": 33,
+     "endMs": 33.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 1876,
+     "startMs": 30.1,
+     "firstByteMs": 33.5,
+     "endMs": 33.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 1876,
+     "startMs": 30.3,
+     "firstByteMs": 33.1,
+     "endMs": 33.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1382723,
+     "startMs": 32,
+     "firstByteMs": 33.4,
+     "endMs": 47.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1423646,
+     "startMs": 32.3,
+     "firstByteMs": 34.5,
+     "endMs": 53.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 967094,
+     "startMs": 32.5,
+     "firstByteMs": 35.9,
+     "endMs": 50.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1354915,
+     "startMs": 32.6,
+     "firstByteMs": 39.1,
+     "endMs": 57.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 987808,
+     "startMs": 32.7,
+     "firstByteMs": 39.3,
+     "endMs": 42.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1308193,
+     "startMs": 32.7,
+     "firstByteMs": 39.3,
+     "endMs": 58,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 920795,
+     "startMs": 33.8,
+     "firstByteMs": 64.3,
+     "endMs": 52.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 669003,
+     "startMs": 34,
+     "firstByteMs": 73.6,
+     "endMs": 55.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 955391,
+     "startMs": 34.1,
+     "firstByteMs": 73.8,
+     "endMs": 57.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    }
+   ],
+   "open": {
+    "indexReadsDoneMs": 33.6,
+    "ms": 130.4,
+    "metadataMs": null,
+    "requests": 30,
+    "bytes": 10031749,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 20,
+      "bytes": 9992525,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 9,
+      "bytes": 0,
+      "aborted": 9,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "readerStats": null
+   },
+   "scrub": {
+    "steps": 20,
+    "settled": true,
+    "settleMs": 3783.1,
+    "requests": 180,
+    "bytes": 213659716,
+    "byKind": {
+     "metadata": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 180,
+      "bytes": 213659716,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "stepsShownExactly": 20,
+    "stepsNeverCompleted": 0,
+    "lagMs": {
+     "n": 20,
+     "median": 80.2,
+     "p95": 99.6,
+     "max": 99.6
+    },
+    "lags": [
+     99.6,
+     82.8,
+     83.5,
+     82.7,
+     78.6,
+     77.5,
+     81.9,
+     80.7,
+     78.2,
+     81,
+     76,
+     76.7,
+     84.4,
+     77.6,
+     72.5,
+     75.9,
+     80.2,
+     79.6,
+     83.1,
+     78.7
+    ],
+    "stepsWithMixedFrame": 20,
+    "mixedFrameMs": 805.3,
+    "paintedFrames": 78,
+    "readerStats": null,
+    "extra": {
+     "levelFallbacks": null,
+     "keptFrames": null,
+     "versionsApplied": 20,
+     "levelsSeen": [
+      1
+     ]
+    }
+   },
+   "trailing3s": {
+    "requests": 0,
+    "bytes": 0
+   },
+   "sessionTotal": {
+    "requests": 210,
+    "bytes": 223691465,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 200,
+      "bytes": 223652241,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 9,
+      "bytes": 0,
+      "aborted": 9,
+      "abortedBytes": 0
+     }
+    }
+   },
+   "messages": []
+  },
+  {
+   "tool": "tileripper",
+   "source": "local",
+   "profile": "natural",
+   "mode": "paced",
+   "rep": 1,
+   "level": 1,
+   "cells": 9,
+   "canvas": {
+    "width": 1500,
+    "height": 1592
+   },
+   "openTimeline": [
+    {
+     "kind": "metadata",
+     "role": "metadata",
+     "path": "/zarr.json",
+     "bytes": null,
+     "startMs": 0,
+     "firstByteMs": 1.4,
+     "endMs": 1.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1876,
+     "startMs": 6,
+     "firstByteMs": 10.5,
+     "endMs": 7.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1876,
+     "startMs": 6.2,
+     "firstByteMs": 10.7,
+     "endMs": 7.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 1876,
+     "startMs": 6.3,
+     "firstByteMs": 10.7,
+     "endMs": 8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1876,
+     "startMs": 6.5,
+     "firstByteMs": 10.7,
+     "endMs": 8.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1876,
+     "startMs": 6.6,
+     "firstByteMs": 10.8,
+     "endMs": 8.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 1876,
+     "startMs": 6.7,
+     "firstByteMs": 10.8,
+     "endMs": 8.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 1876,
+     "startMs": 6.8,
+     "firstByteMs": 10.9,
+     "endMs": 8.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 1876,
+     "startMs": 6.9,
+     "firstByteMs": 10.9,
+     "endMs": 8.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 1876,
+     "startMs": 7.4,
+     "firstByteMs": 11,
+     "endMs": 9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1308193,
+     "startMs": 14.4,
+     "firstByteMs": 15.8,
+     "endMs": 25.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1382723,
+     "startMs": 14.6,
+     "firstByteMs": 16.2,
+     "endMs": 27.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 920795,
+     "startMs": 14.7,
+     "firstByteMs": 16.4,
+     "endMs": 24,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1354915,
+     "startMs": 14.8,
+     "firstByteMs": 17,
+     "endMs": 28,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1423646,
+     "startMs": 14.9,
+     "firstByteMs": 17.8,
+     "endMs": 29.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 967094,
+     "startMs": 15,
+     "firstByteMs": 21.4,
+     "endMs": 28.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 955391,
+     "startMs": 15.1,
+     "firstByteMs": 35.4,
+     "endMs": 32.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 987808,
+     "startMs": 15.2,
+     "firstByteMs": 35.5,
+     "endMs": 33.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 669003,
+     "startMs": 15.4,
+     "firstByteMs": 35.6,
+     "endMs": 33.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    }
+   ],
+   "open": {
+    "indexReadsDoneMs": 9,
+    "ms": 97.4,
+    "metadataMs": 3.8,
+    "requests": 19,
+    "bytes": 10030788,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 18,
+      "bytes": 9991564,
+      "aborted": 0,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "readerStats": {
+     "requests": 19,
+     "bytes": 10025464,
+     "deduped": 0,
+     "inflight": 0
+    }
+   },
+   "scrub": {
+    "steps": 20,
+    "settled": true,
+    "settleMs": 2187,
+    "requests": 305,
+    "bytes": 350432373,
+    "byKind": {
+     "metadata": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 305,
+      "bytes": 350432373,
+      "aborted": 7,
+      "abortedBytes": 3751676
+     }
+    },
+    "edgeCache": {},
+    "stepsShownExactly": 20,
+    "stepsNeverCompleted": 0,
+    "lagMs": {
+     "n": 20,
+     "median": 0.3,
+     "p95": 3.9,
+     "max": 3.9
+    },
+    "lags": [
+     2.6,
+     0.5,
+     0.3,
+     0.2,
+     0.3,
+     0.3,
+     0.3,
+     0.3,
+     0.3,
+     0.3,
+     0.2,
+     0.2,
+     3.9,
+     0.3,
+     0.2,
+     0.6,
+     0.3,
+     0.2,
+     0.3,
+     0.4
+    ],
+    "stepsWithMixedFrame": 0,
+    "mixedFrameMs": 0,
+    "paintedFrames": 20,
+    "readerStats": {
+     "requests": 306,
+     "bytes": 344200786
+    },
+    "extra": {
+     "levelFallbacks": 0,
+     "keptFrames": 0,
+     "versionsApplied": null,
+     "levelsSeen": null
+    }
+   },
+   "trailing3s": {
+    "requests": 1,
+    "bytes": 1680542
+   },
+   "sessionTotal": {
+    "requests": 325,
+    "bytes": 362143703,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 324,
+      "bytes": 362104479,
+      "aborted": 7,
+      "abortedBytes": 3751676
+     }
+    }
+   },
+   "messages": []
+  },
+  {
+   "tool": "tileripper",
+   "source": "local",
+   "profile": "natural",
+   "mode": "burst",
+   "rep": 1,
+   "level": 1,
+   "cells": 9,
+   "canvas": {
+    "width": 1500,
+    "height": 1592
+   },
+   "openTimeline": [
+    {
+     "kind": "metadata",
+     "role": "metadata",
+     "path": "/zarr.json",
+     "bytes": null,
+     "startMs": 0,
+     "firstByteMs": 1.6,
+     "endMs": 1.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1876,
+     "startMs": 6.4,
+     "firstByteMs": 8.3,
+     "endMs": 7.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1876,
+     "startMs": 6.6,
+     "firstByteMs": 8.4,
+     "endMs": 8.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 1876,
+     "startMs": 6.7,
+     "firstByteMs": 11.4,
+     "endMs": 8.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1876,
+     "startMs": 6.8,
+     "firstByteMs": 14.1,
+     "endMs": 8.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1876,
+     "startMs": 6.9,
+     "firstByteMs": 14.2,
+     "endMs": 8.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 1876,
+     "startMs": 7,
+     "firstByteMs": 14.3,
+     "endMs": 9.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 1876,
+     "startMs": 7.1,
+     "firstByteMs": 14.3,
+     "endMs": 9.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 1876,
+     "startMs": 7.2,
+     "firstByteMs": 14.4,
+     "endMs": 10.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 1876,
+     "startMs": 7.9,
+     "firstByteMs": 15.3,
+     "endMs": 12.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1308193,
+     "startMs": 14.9,
+     "firstByteMs": 17.6,
+     "endMs": 22.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1382723,
+     "startMs": 15.1,
+     "firstByteMs": 17.7,
+     "endMs": 24,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 920795,
+     "startMs": 15.8,
+     "firstByteMs": 20.5,
+     "endMs": 26.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1354915,
+     "startMs": 16,
+     "firstByteMs": 26.8,
+     "endMs": 31.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1423646,
+     "startMs": 16.1,
+     "firstByteMs": 26.9,
+     "endMs": 31.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 967094,
+     "startMs": 16.3,
+     "firstByteMs": 27,
+     "endMs": 29.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 955391,
+     "startMs": 16.4,
+     "firstByteMs": 27.2,
+     "endMs": 31.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 987808,
+     "startMs": 16.5,
+     "firstByteMs": 30.3,
+     "endMs": 33.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 669003,
+     "startMs": 16.7,
+     "firstByteMs": 36.9,
+     "endMs": 33,
+     "cache": null,
+     "protocol": "http/1.1"
+    }
+   ],
+   "open": {
+    "indexReadsDoneMs": 12.4,
+    "ms": 99.9,
+    "metadataMs": 4.1,
+    "requests": 19,
+    "bytes": 10030788,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 18,
+      "bytes": 9991564,
+      "aborted": 0,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "readerStats": {
+     "requests": 19,
+     "bytes": 10025464,
+     "deduped": 0,
+     "inflight": 0
+    }
+   },
+   "scrub": {
+    "steps": 20,
+    "settled": true,
+    "settleMs": 1900.6,
+    "requests": 306,
+    "bytes": 346249631,
+    "byKind": {
+     "metadata": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 306,
+      "bytes": 346249631,
+      "aborted": 10,
+      "abortedBytes": 1114112
+     }
+    },
+    "edgeCache": {},
+    "stepsShownExactly": 20,
+    "stepsNeverCompleted": 0,
+    "lagMs": {
+     "n": 20,
+     "median": 0.4,
+     "p95": 52,
+     "max": 52
+    },
+    "lags": [
+     52,
+     10.2,
+     4.9,
+     0.4,
+     0.6,
+     0.4,
+     2.8,
+     0.3,
+     0.3,
+     0.3,
+     0.3,
+     0.3,
+     0.1,
+     0.1,
+     0.3,
+     3.6,
+     0.2,
+     2.9,
+     0.3,
+     0.4
+    ],
+    "stepsWithMixedFrame": 0,
+    "mixedFrameMs": 0,
+    "paintedFrames": 22,
+    "readerStats": {
+     "requests": 306,
+     "bytes": 334778469
+    },
+    "extra": {
+     "levelFallbacks": 0,
+     "keptFrames": 0,
+     "versionsApplied": null,
+     "levelsSeen": null
+    }
+   },
+   "trailing3s": {
+    "requests": 2,
+    "bytes": 3345823
+   },
+   "sessionTotal": {
+    "requests": 327,
+    "bytes": 359626242,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 326,
+      "bytes": 359587018,
+      "aborted": 10,
+      "abortedBytes": 1114112
+     }
+    }
+   },
+   "messages": []
+  },
+  {
+   "tool": "zarr-layer",
+   "source": "local",
+   "profile": "natural",
+   "mode": "burst",
+   "rep": 1,
+   "level": 1,
+   "cells": 9,
+   "canvas": {
+    "width": 1800,
+    "height": 1700
+   },
+   "openTimeline": [
+    {
+     "kind": "metadata",
+     "role": "metadata",
+     "path": "/zarr.json",
+     "bytes": null,
+     "startMs": 0,
+     "firstByteMs": 1.7,
+     "endMs": 1.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/0/band/c/0",
+     "bytes": null,
+     "startMs": 3.9,
+     "firstByteMs": 6.3,
+     "endMs": 5.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/0/time/c/0",
+     "bytes": null,
+     "startMs": 4,
+     "firstByteMs": 6.4,
+     "endMs": 5.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": null,
+     "startMs": 25.8,
+     "firstByteMs": 27.4,
+     "endMs": 27.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": null,
+     "startMs": 25.9,
+     "firstByteMs": 27.8,
+     "endMs": 27.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": null,
+     "startMs": 26,
+     "firstByteMs": 28.4,
+     "endMs": 28.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": null,
+     "startMs": 26.1,
+     "firstByteMs": 29,
+     "endMs": 29.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": null,
+     "startMs": 26.1,
+     "firstByteMs": 29.2,
+     "endMs": 29.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": null,
+     "startMs": 26.2,
+     "firstByteMs": 29.5,
+     "endMs": 29.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": null,
+     "startMs": 26.2,
+     "firstByteMs": 28.6,
+     "endMs": 28.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": null,
+     "startMs": 26.3,
+     "firstByteMs": 28.8,
+     "endMs": 29,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": null,
+     "startMs": 26.3,
+     "firstByteMs": 29.3,
+     "endMs": 29.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1876,
+     "startMs": 27.6,
+     "firstByteMs": 30,
+     "endMs": 29.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1876,
+     "startMs": 27.8,
+     "firstByteMs": 30.8,
+     "endMs": 30.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1876,
+     "startMs": 28.5,
+     "firstByteMs": 30.9,
+     "endMs": 30.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 1876,
+     "startMs": 28.6,
+     "firstByteMs": 31.3,
+     "endMs": 31.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 1876,
+     "startMs": 28.9,
+     "firstByteMs": 31.2,
+     "endMs": 31.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 1876,
+     "startMs": 29.1,
+     "firstByteMs": 31.5,
+     "endMs": 31.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 1876,
+     "startMs": 29.2,
+     "firstByteMs": 31.5,
+     "endMs": 31.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 1876,
+     "startMs": 29.3,
+     "firstByteMs": 32.7,
+     "endMs": 32.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1876,
+     "startMs": 29.6,
+     "firstByteMs": 32.7,
+     "endMs": 32.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1423646,
+     "startMs": 30.5,
+     "firstByteMs": 33.1,
+     "endMs": 44.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1382723,
+     "startMs": 31.1,
+     "firstByteMs": 33.3,
+     "endMs": 44,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1354915,
+     "startMs": 31.1,
+     "firstByteMs": 33.4,
+     "endMs": 43.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 955391,
+     "startMs": 31.4,
+     "firstByteMs": 33.6,
+     "endMs": 42.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 920795,
+     "startMs": 31.7,
+     "firstByteMs": 35.6,
+     "endMs": 42.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 967094,
+     "startMs": 31.7,
+     "firstByteMs": 38.2,
+     "endMs": 45.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 987808,
+     "startMs": 31.8,
+     "firstByteMs": 76.6,
+     "endMs": 48.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 669003,
+     "startMs": 33,
+     "firstByteMs": 76.5,
+     "endMs": 47.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1308193,
+     "startMs": 33.1,
+     "firstByteMs": 76.6,
+     "endMs": 49.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    }
+   ],
+   "open": {
+    "indexReadsDoneMs": 32.7,
+    "ms": 127.7,
+    "metadataMs": null,
+    "requests": 30,
+    "bytes": 10031749,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 20,
+      "bytes": 9992525,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 9,
+      "bytes": 0,
+      "aborted": 9,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "readerStats": null
+   },
+   "scrub": {
+    "steps": 20,
+    "settled": true,
+    "settleMs": 1976.7,
+    "requests": 180,
+    "bytes": 213659716,
+    "byKind": {
+     "metadata": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 180,
+      "bytes": 213659716,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "stepsShownExactly": 20,
+    "stepsNeverCompleted": 0,
+    "lagMs": {
+     "n": 20,
+     "median": 78.6,
+     "p95": 83.1,
+     "max": 83.1
+    },
+    "lags": [
+     83.1,
+     80.4,
+     81.7,
+     80.8,
+     77.5,
+     75.8,
+     75.5,
+     81,
+     77,
+     76.3,
+     80.3,
+     79.7,
+     76,
+     77.6,
+     78.6,
+     82,
+     76,
+     82.7,
+     74.1,
+     75.2
+    ],
+    "stepsWithMixedFrame": 20,
+    "mixedFrameMs": 788.5,
+    "paintedFrames": 78,
+    "readerStats": null,
+    "extra": {
+     "levelFallbacks": null,
+     "keptFrames": null,
+     "versionsApplied": 20,
+     "levelsSeen": [
+      1
+     ]
+    }
+   },
+   "trailing3s": {
+    "requests": 0,
+    "bytes": 0
+   },
+   "sessionTotal": {
+    "requests": 210,
+    "bytes": 223691465,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 200,
+      "bytes": 223652241,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 9,
+      "bytes": 0,
+      "aborted": 9,
+      "abortedBytes": 0
+     }
+    }
+   },
+   "messages": []
+  },
+  {
+   "tool": "tileripper",
+   "source": "local",
+   "profile": "natural",
+   "mode": "paced",
+   "rep": 1,
+   "level": 1,
+   "cells": 9,
+   "canvas": {
+    "width": 1500,
+    "height": 1592
+   },
+   "openTimeline": [
+    {
+     "kind": "metadata",
+     "role": "metadata",
+     "path": "/zarr.json",
+     "bytes": null,
+     "startMs": 0,
+     "firstByteMs": 1.2,
+     "endMs": 1.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1876,
+     "startMs": 6,
+     "firstByteMs": 7.9,
+     "endMs": 7.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1876,
+     "startMs": 6.2,
+     "firstByteMs": 8,
+     "endMs": 7.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 1876,
+     "startMs": 6.3,
+     "firstByteMs": 8,
+     "endMs": 7.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1876,
+     "startMs": 6.4,
+     "firstByteMs": 8.1,
+     "endMs": 7.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1876,
+     "startMs": 6.5,
+     "firstByteMs": 8.1,
+     "endMs": 7.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 1876,
+     "startMs": 6.6,
+     "firstByteMs": 8.1,
+     "endMs": 7.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 1876,
+     "startMs": 6.7,
+     "firstByteMs": 10.3,
+     "endMs": 8.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 1876,
+     "startMs": 6.8,
+     "firstByteMs": 10.4,
+     "endMs": 8.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 1876,
+     "startMs": 7.5,
+     "firstByteMs": 10.5,
+     "endMs": 8.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1308193,
+     "startMs": 11,
+     "firstByteMs": 14.5,
+     "endMs": 21.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1382723,
+     "startMs": 11.2,
+     "firstByteMs": 14.6,
+     "endMs": 22,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 920795,
+     "startMs": 11.3,
+     "firstByteMs": 14.6,
+     "endMs": 21.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1423646,
+     "startMs": 14,
+     "firstByteMs": 18.5,
+     "endMs": 28.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1354915,
+     "startMs": 14.2,
+     "firstByteMs": 21,
+     "endMs": 30,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 967094,
+     "startMs": 14.3,
+     "firstByteMs": 27.4,
+     "endMs": 30.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 955391,
+     "startMs": 14.8,
+     "firstByteMs": 27.8,
+     "endMs": 32,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 987808,
+     "startMs": 14.9,
+     "firstByteMs": 27.8,
+     "endMs": 31.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 669003,
+     "startMs": 15,
+     "firstByteMs": 27.9,
+     "endMs": 30.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    }
+   ],
+   "open": {
+    "indexReadsDoneMs": 8.9,
+    "ms": 94.9,
+    "metadataMs": 3.7,
+    "requests": 19,
+    "bytes": 10030788,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 18,
+      "bytes": 9991564,
+      "aborted": 0,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "readerStats": {
+     "requests": 19,
+     "bytes": 10025464,
+     "deduped": 0,
+     "inflight": 0
+    }
+   },
+   "scrub": {
+    "steps": 20,
+    "settled": true,
+    "settleMs": 2180.4,
+    "requests": 314,
+    "bytes": 355114589,
+    "byKind": {
+     "metadata": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 314,
+      "bytes": 355114589,
+      "aborted": 11,
+      "abortedBytes": 2694183
+     }
+    },
+    "edgeCache": {},
+    "stepsShownExactly": 20,
+    "stepsNeverCompleted": 0,
+    "lagMs": {
+     "n": 20,
+     "median": 0.3,
+     "p95": 5.1,
+     "max": 5.1
+    },
+    "lags": [
+     5.1,
+     0.3,
+     0.4,
+     0.3,
+     0.2,
+     0.3,
+     0.3,
+     0.2,
+     0.3,
+     0.3,
+     0.2,
+     0.3,
+     0.4,
+     0.2,
+     0.2,
+     0.2,
+     0.4,
+     0.2,
+     0.2,
+     0.3
+    ],
+    "stepsWithMixedFrame": 0,
+    "mixedFrameMs": 0,
+    "paintedFrames": 20,
+    "readerStats": {
+     "requests": 314,
+     "bytes": 344200786
+    },
+    "extra": {
+     "levelFallbacks": 0,
+     "keptFrames": 0,
+     "versionsApplied": null,
+     "levelsSeen": null
+    }
+   },
+   "trailing3s": {
+    "requests": 0,
+    "bytes": 1352862
+   },
+   "sessionTotal": {
+    "requests": 333,
+    "bytes": 366498239,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 332,
+      "bytes": 366459015,
+      "aborted": 11,
+      "abortedBytes": 2694183
+     }
+    }
+   },
+   "messages": []
+  },
+  {
+   "tool": "zarr-layer",
+   "source": "local",
+   "profile": "natural",
+   "mode": "paced",
+   "rep": 1,
+   "level": 1,
+   "cells": 9,
+   "canvas": {
+    "width": 1800,
+    "height": 1700
+   },
+   "openTimeline": [
+    {
+     "kind": "metadata",
+     "role": "metadata",
+     "path": "/zarr.json",
+     "bytes": null,
+     "startMs": 0,
+     "firstByteMs": 1.8,
+     "endMs": 1.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/0/band/c/0",
+     "bytes": null,
+     "startMs": 6.1,
+     "firstByteMs": 7.7,
+     "endMs": 7.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/0/time/c/0",
+     "bytes": null,
+     "startMs": 6.2,
+     "firstByteMs": 7.8,
+     "endMs": 7.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": null,
+     "startMs": 24.2,
+     "firstByteMs": 25.9,
+     "endMs": 26.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": null,
+     "startMs": 24.4,
+     "firstByteMs": 26.2,
+     "endMs": 26.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": null,
+     "startMs": 24.4,
+     "firstByteMs": 26.4,
+     "endMs": 26.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": null,
+     "startMs": 24.5,
+     "firstByteMs": 27,
+     "endMs": 27.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": null,
+     "startMs": 24.5,
+     "firstByteMs": 27.3,
+     "endMs": 27.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": null,
+     "startMs": 24.6,
+     "firstByteMs": 27.6,
+     "endMs": 27.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": null,
+     "startMs": 24.7,
+     "firstByteMs": 26.7,
+     "endMs": 26.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": null,
+     "startMs": 24.7,
+     "firstByteMs": 26.9,
+     "endMs": 27.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "head",
+     "role": "head",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": null,
+     "startMs": 24.8,
+     "firstByteMs": 27.5,
+     "endMs": 27.6,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1876,
+     "startMs": 26.1,
+     "firstByteMs": 29,
+     "endMs": 28.8,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1876,
+     "startMs": 26.3,
+     "firstByteMs": 29.1,
+     "endMs": 29,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1876,
+     "startMs": 26.5,
+     "firstByteMs": 28.5,
+     "endMs": 28.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 1876,
+     "startMs": 26.8,
+     "firstByteMs": 29.2,
+     "endMs": 29.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 1876,
+     "startMs": 26.9,
+     "firstByteMs": 29.1,
+     "endMs": 29,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 1876,
+     "startMs": 27,
+     "firstByteMs": 29.2,
+     "endMs": 29.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 1876,
+     "startMs": 27.4,
+     "firstByteMs": 29.4,
+     "endMs": 29.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 1876,
+     "startMs": 27.5,
+     "firstByteMs": 30.2,
+     "endMs": 30.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "index",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1876,
+     "startMs": 27.7,
+     "firstByteMs": 30.1,
+     "endMs": 30.2,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/0",
+     "bytes": 1354915,
+     "startMs": 29,
+     "firstByteMs": 30.6,
+     "endMs": 42.1,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/1",
+     "bytes": 1423646,
+     "startMs": 29.5,
+     "firstByteMs": 31.3,
+     "endMs": 43.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/1",
+     "bytes": 1382723,
+     "startMs": 29.6,
+     "firstByteMs": 31.7,
+     "endMs": 42.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/0",
+     "bytes": 955391,
+     "startMs": 29.7,
+     "firstByteMs": 31.8,
+     "endMs": 42.4,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/1/2",
+     "bytes": 967094,
+     "startMs": 29.7,
+     "firstByteMs": 32.5,
+     "endMs": 41.5,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/2",
+     "bytes": 920795,
+     "startMs": 29.9,
+     "firstByteMs": 32.7,
+     "endMs": 41.7,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/1",
+     "bytes": 987808,
+     "startMs": 29.9,
+     "firstByteMs": 68.1,
+     "endMs": 46.9,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/0/0",
+     "bytes": 1308193,
+     "startMs": 30.4,
+     "firstByteMs": 68.2,
+     "endMs": 47.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    },
+    {
+     "kind": "data",
+     "role": "data",
+     "path": "/1/data/c/0/0/2/2",
+     "bytes": 669003,
+     "startMs": 30.5,
+     "firstByteMs": 68.2,
+     "endMs": 46.3,
+     "cache": null,
+     "protocol": "http/1.1"
+    }
+   ],
+   "open": {
+    "indexReadsDoneMs": 30.2,
+    "ms": 122.1,
+    "metadataMs": null,
+    "requests": 30,
+    "bytes": 10031749,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 20,
+      "bytes": 9992525,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 9,
+      "bytes": 0,
+      "aborted": 9,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "readerStats": null
+   },
+   "scrub": {
+    "steps": 20,
+    "settled": true,
+    "settleMs": 3790.4,
+    "requests": 180,
+    "bytes": 213659716,
+    "byKind": {
+     "metadata": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 180,
+      "bytes": 213659716,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 0,
+      "bytes": 0,
+      "aborted": 0,
+      "abortedBytes": 0
+     }
+    },
+    "edgeCache": {},
+    "stepsShownExactly": 20,
+    "stepsNeverCompleted": 0,
+    "lagMs": {
+     "n": 20,
+     "median": 78,
+     "p95": 84.8,
+     "max": 84.8
+    },
+    "lags": [
+     81.7,
+     78.9,
+     80.1,
+     84.8,
+     76.2,
+     77.7,
+     73.8,
+     81.6,
+     74.7,
+     76,
+     76.4,
+     79,
+     76.8,
+     80.4,
+     75.1,
+     78.3,
+     78,
+     80.3,
+     77.9,
+     77
+    ],
+    "stepsWithMixedFrame": 20,
+    "mixedFrameMs": 838.9,
+    "paintedFrames": 79,
+    "readerStats": null,
+    "extra": {
+     "levelFallbacks": null,
+     "keptFrames": null,
+     "versionsApplied": 20,
+     "levelsSeen": [
+      1
+     ]
+    }
+   },
+   "trailing3s": {
+    "requests": 0,
+    "bytes": 0
+   },
+   "sessionTotal": {
+    "requests": 210,
+    "bytes": 223691465,
+    "byKind": {
+     "metadata": {
+      "requests": 1,
+      "bytes": 39224,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "data": {
+      "requests": 200,
+      "bytes": 223652241,
+      "aborted": 0,
+      "abortedBytes": 0
+     },
+     "head": {
+      "requests": 9,
+      "bytes": 0,
+      "aborted": 9,
+      "abortedBytes": 0
+     }
+    }
+   },
+   "messages": []
+  }
+ ]
+}
