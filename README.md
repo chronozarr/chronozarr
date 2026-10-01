@@ -170,7 +170,18 @@ Coarse-first loading and the bandwidth-aware movie level, live Ucayali store wit
 
 On an unthrottled link a frame expected within a second loads directly, so fast connections pay nothing for the staging. The 150 ms coarse-frame target holds on fast links (74 ms after metadata) and not at 50 Mbit/s, where three sequential requests per stage set a floor near 230 ms; shard_bytes hints remove one of them.
 
-Star-delta reconstruction runs in the fragment shader; the CPU loop it replaces cost 54 ms per 36-cell frame. Known limits: prefetch is greedy and will pull several hundred MB in the first seconds on any link; cold open of very small stores costs 30 to 40 ms for worker startup.
+Whole frames and buffered playback, live Ucayali store, cold, device pixel ratio 2, 2026-10-01. A frame is one level and one timestep for every visible cell, shown complete or not at all: the target level when it is in memory, else the finest coarser level that is, else the frame already on screen. The whole loop is kept in memory at the coarsest useful level (level 3 here, about 80 MB) so a complete frame exists for every timestep. Playback buffers 2 s of frames before it starts and pauses on an indicator when it runs dry instead of holding frame by frame. "Partial" counts frames with some cells at another level or timestep; "whole" is the first frame covering the view at any level.
+
+| Link | Tree | Open: whole / full | Scrub 20 steps: partial frames | Play 10 /s: achieved | Initial buffer | Buffering pauses | Holds |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Natural | Before | 505 ms / 1.41 s | 8 of 9 | 5.7 /s | | | 98 (19.0 s) |
+| Natural | After | 605 ms / 2.06 s | 0 of 37 | 10.0 /s | 1.9 s | 0 | 0 |
+| 50 Mbit/s, 40 ms | Before | 545 ms / 2.25 s | 8 of 9 | 4.1 /s | | | 110 (35.3 s) |
+| 50 Mbit/s, 40 ms | After | 499 ms / 2.58 s | 0 of 36 | 7.8 /s | 7.3 s | 2 (6.4 s) | 0 |
+
+The cost is the full-resolution frame of a scrub step on a slow link, which lands later (median 3.7 to 4.5 s against 2.9 to 3.2 s at 50 Mbit/s) because a whole coarse frame of the right timestep is fetched first.
+
+Star-delta reconstruction runs in the fragment shader; the CPU loop it replaces cost 54 ms per 36-cell frame. Known limits: the coarse loop pulls the whole time axis at its level after the first frame (tens of MB for a store a few cells wide); cold open of very small stores costs 30 to 40 ms for worker startup.
 
 ## Status
 

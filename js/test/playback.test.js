@@ -51,7 +51,7 @@ function setup({ count = 10, stepsPerSecond = 4, ready = () => true, display = f
       state.index = index;
     },
     isReady: (index) => ready(index, display.now()),
-    prepare: (index) => state.prepared.push(index),
+    prepare: (indices) => state.prepared.push(indices),
     onChange: () => state.changes++,
     now: display.now,
     requestFrame: display.requestFrame,
@@ -70,7 +70,7 @@ test('cadence: the first step happens at once, then each step on the frame neare
   assert.equal(state.steps.length, 5);
   assert.deepEqual(state.steps.map((s) => s.index), [1, 2, 3, 4, 5]);
   for (const [k, at] of times(state).entries()) assert.ok(Math.abs(at - k * 250) <= FRAME_60 / 2 + 1e-6, `step ${k} at ${at}`);
-  assert.equal(playback.stats.held, 0);
+  assert.equal(playback.stats.bufferingPauses, 0);
 });
 
 test('60 steps/s on a 60 Hz display is one step on every frame, never two', () => {
@@ -154,39 +154,128 @@ test('the wrap: after the last timestep the next step is t=0, moving forward, an
   playback.pause();
 });
 
-test('holds at the wrap are counted separately from holds elsewhere', () => {
-  const { playback, display } = setup({ count: 4, stepsPerSecond: 30, ready: (index, now) => !(index === 0 && now < 700) && !(index === 2 && now < 100) });
+test('playback starts at once when the next two seconds of frames are ready, and never asks for any', () => {
+  const { playback, state, display } = setup({ count: 100, stepsPerSecond: 10 });
+  playback.play();
+  assert.equal(state.steps.length, 1, 'the first step is immediate');
+  assert.equal(playback.buffering, false);
+  display.runUntil(3000);
+  assert.deepEqual(state.prepared, [], 'a full buffer needs no requests');
+  assert.equal(playback.stats.bufferingPauses, 0);
+  assert.equal(playback.stats.initialBufferMs, 0);
+  assert.deepEqual(playback.buffered, { ahead: 20, needed: 20 });
+});
+
+test('it waits for two seconds of frames before it starts (the whole loop when that is shorter), asking for them in order', () => {
+  // Ten frames a second arrive from the network: timestep k is ready from k * 100 ms.
+  const { playback, state, display } = setup({ count: 100, stepsPerSecond: 10, ready: (index, now) => index * 100 <= now });
+  playback.play();
+  assert.equal(playback.playing, true, 'playing, as far as the UI is concerned, while it buffers');
+  assert.equal(playback.buffering, true);
+  assert.deepEqual(state.prepared[0], Array.from({ length: 20 }, (_, k) => k + 1), 'the next 20 timesteps, nearest first');
+  display.runUntil(1900);
+  assert.equal(state.steps.length, 0, 'not before frame 20 is in');
+  display.runUntil(2100);
+  assert.equal(playback.buffering, false);
+  assert.equal(state.steps.length > 0, true);
+  assert.ok(state.steps[0].at >= 2000 && state.steps[0].at < 2000 + FRAME_60, `started on the first frame with 20 frames ready (${state.steps[0].at})`);
+  assert.ok(Math.abs(playback.stats.initialBufferMs - state.steps[0].at) < 1e-6);
+  assert.equal(playback.stats.bufferingPauses, 0, 'the first wait is not a pause');
+
+  const short = setup({ count: 5, stepsPerSecond: 30, ready: (index, now) => index !== 3 || now >= 500 });
+  short.playback.play();
+  short.display.runUntil(400);
+  assert.equal(short.state.steps.length, 0, 'a loop of five waits for all four other frames');
+  short.display.runUntil(600);
+  assert.ok(short.state.steps.length > 0);
+});
+
+test('the buffered count is reported while it fills', () => {
+  const { playback, state, display } = setup({ count: 100, stepsPerSecond: 10, ready: (index, now) => index * 100 <= now });
+  playback.play();
+  const afterPlay = state.changes;
+  display.runUntil(500);
+  assert.ok(state.changes > afterPlay, 'onChange follows the buffer filling');
+  assert.equal(playback.buffered.needed, 20);
+  assert.ok(playback.buffered.ahead >= 4 && playback.buffered.ahead <= 5, `ahead ${playback.buffered.ahead}`);
+});
+
+test('when the next frame is not ready it pauses and refills instead of holding, then resumes by itself without skipping or bursting', () => {
+  // Timestep 6 is missing from 300 ms to 1500 ms; everything else is there.
+  const { playback, state, display } = setup({ count: 10, stepsPerSecond: 4, ready: (index, now) => !(index === 6 && now >= 300 && now < 1500) });
+  playback.play();
+  display.runUntil(2600);
+  const indexes = state.steps.map((s) => s.index);
+  assert.deepEqual(indexes.slice(0, 8), [1, 2, 3, 4, 5, 6, 7, 8], 'every timestep in order, none skipped');
+  assert.equal(playback.stats.bufferingPauses, 1);
+  const dryAt = state.steps[4].at;
+  const resumed = state.steps[5];
+  assert.ok(resumed.at >= 1500 && resumed.at < 1500 + FRAME_60, `resumed on the first frame after the data arrived (${resumed.at})`);
+  assert.ok(Math.abs(playback.stats.bufferingMs - (resumed.at - dryAt - 250)) < FRAME_60 + 1e-6, 'measured from when the step was due to when it resumed');
+  assert.equal(playback.stats.longestBufferingMs, playback.stats.bufferingMs);
+  const gaps = state.steps.slice(6, 9).map((step, i) => step.at - state.steps[5 + i].at);
+  assert.ok(gaps.every((gap) => gap >= 250 - FRAME_60), `the grid restarted at the resume, no catch-up burst: ${gaps}`);
+  assert.ok(state.prepared.length >= 2, 'it kept asking while it waited');
+  assert.deepEqual(state.prepared.at(-1).slice(0, 2), [6, 7], 'for the timesteps after the one on screen');
+});
+
+test('a pause at the wrap is counted separately from pauses elsewhere', () => {
+  // Timestep 2 is not there from 20 to 300 ms (the pause at 33 ms), timestep 0 not from 330 to 900 ms (the pause at the wrap).
+  const { playback, display } = setup({ count: 4, stepsPerSecond: 30, ready: (index, now) => !(index === 2 && now >= 20 && now < 300) && !(index === 0 && now >= 330 && now < 900) });
   playback.play();
   display.runUntil(1500);
-  assert.equal(playback.stats.held, 2, 'one hold at t=2 and one at the wrap');
-  assert.equal(playback.stats.wrapHeld, 1);
-  assert.ok(playback.stats.longestWrapHoldMs > 400, `the wrap waited for its data (${playback.stats.longestWrapHoldMs} ms)`);
-  assert.ok(playback.stats.longestHoldMs >= playback.stats.longestWrapHoldMs);
+  assert.equal(playback.stats.bufferingPauses, 2, 'one at timestep 2 and one at the wrap');
+  assert.equal(playback.stats.wrapPauses, 1);
+  assert.ok(playback.stats.longestBufferingMs > 400, `the wrap waited for its data (${playback.stats.longestBufferingMs} ms)`);
 });
 
-test('holds on the current frame until the next timestep is ready, without skipping ahead', () => {
-  const { playback, state, display } = setup({ ready: (index, now) => index !== 2 || now >= 705 });
+test('it asks for more frames when fewer than a second are ready ahead, while playing, and pauses when they run out', () => {
+  // Nothing past timestep 12 has arrived. At 4/s a start needs 8 frames and a second is 4.
+  const { playback, state, display } = setup({ count: 100, stepsPerSecond: 4, ready: (index) => index <= 12 });
   playback.play();
-  display.runUntil(1300);
-  const indexes = state.steps.map((s) => s.index);
-  assert.deepEqual(indexes, indexes.map((_, i) => i + 1), 'every timestep is shown, in order');
-  assert.equal(state.steps[0].at, 0);
-  const resumed = state.steps[1];
-  assert.ok(resumed.at >= 705 && resumed.at < 705 + FRAME_60, `resumed on the first frame after the data arrived (${resumed.at})`);
-  assert.deepEqual(state.prepared, [2], 'the held step is prepared once, not on every frame');
-  assert.equal(playback.stats.held, 1);
-  assert.ok(Math.abs(playback.stats.longestHoldMs - (resumed.at - 250)) < 1e-6, 'measured from the moment the step was due');
-  assert.equal(playback.stats.totalHoldMs, playback.stats.longestHoldMs);
+  assert.equal(playback.buffering, false, 'twelve frames ahead are more than the eight a start needs');
+  assert.deepEqual(state.prepared, []);
+  display.runUntil(4000);
+  assert.deepEqual(state.steps.map((s) => s.index), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], 'it plays every timestep there is');
+  assert.deepEqual(state.prepared[0], [10, 11, 12, 13, 14, 15, 16, 17], 'on timestep 9 only three frames are left ahead, under a second: it asks for the next eight');
+  assert.equal(playback.buffering, true, 'on timestep 12 the next frame is missing');
+  assert.equal(playback.stats.bufferingPauses, 1);
+  assert.equal(playback.playing, true, 'and playback is still on, waiting');
 });
 
-test('after a hold the schedule restarts at the moment the step happened: no catch-up burst', () => {
-  const { playback, state, display } = setup({ count: 1000, stepsPerSecond: 30, ready: (index, now) => index !== 2 || now >= 2000 });
+test('pausing while it buffers stops it; changing the speed while it buffers does not start it early', () => {
+  let open = false;
+  const { playback, state, display } = setup({ count: 100, stepsPerSecond: 4, ready: (index) => open || index < 3 });
   playback.play();
-  display.runUntil(3000);
-  assert.ok(state.steps[1].at >= 2000);
-  const after = state.steps.slice(1, 10);
-  const gapFrames = after.slice(1).map((s, i) => s.frame - after[i].frame);
-  assert.ok(gapFrames.every((gap) => gap === 2), `steady 30/s after the hold, at most one step per frame: ${gapFrames}`);
+  display.runUntil(400);
+  assert.equal(state.steps.length, 0);
+  playback.setSpeed(15);
+  display.runUntil(600);
+  assert.equal(state.steps.length, 0, 'still buffering at the new speed (30 frames wanted now)');
+  open = true;
+  display.runUntil(800);
+  assert.ok(state.steps.length >= 2);
+  assert.ok(state.steps[0].at >= 600 && state.steps[0].at <= 600 + 2 * FRAME_60, 'started on the first frame after the data arrived');
+  const gap = state.steps[1].at - state.steps[0].at;
+  assert.ok(Math.abs(gap - 1000 / 15) <= FRAME_60, `the new speed applies (gap ${gap})`);
+
+  const paused = setup({ count: 100, stepsPerSecond: 4, ready: () => false });
+  paused.playback.play();
+  paused.display.runUntil(300);
+  assert.equal(paused.playback.buffering, true);
+  paused.playback.pause();
+  assert.equal(paused.playback.buffering, false);
+  assert.equal(paused.playback.playing, false);
+  assert.equal(paused.display.waiting, false);
+});
+
+test('without wrap it looks no further than the last timestep', () => {
+  const { playback, state, display } = setup({ count: 6, stepsPerSecond: 30, wrap: false, start: 3, ready: (index) => index > 3 });
+  playback.play();
+  assert.equal(playback.buffering, false, 'only timesteps 4 and 5 lie ahead of 3; the wrapped ones are not asked for');
+  display.runUntil(300);
+  assert.deepEqual(state.steps.map((s) => s.index).slice(0, 2), [4, 5]);
+  assert.deepEqual(state.prepared, []);
 });
 
 test('a frame that comes more than an interval late does not produce a burst either', () => {
@@ -280,23 +369,6 @@ test('speed can change mid-play: the next step is one new interval after the las
   display.runUntil(lastNow + 1030);
   assert.equal(state.steps.length, stepsBefore + 1);
   assert.equal(playback.stepsPerSecond, 1);
-});
-
-test('changing speed while a step is held does not release it early', () => {
-  let open = false;
-  const { playback, state, display } = setup({ ready: (index) => index !== 2 || open });
-  playback.play();
-  display.runUntil(400);
-  assert.equal(state.steps.length, 1);
-  playback.setSpeed(15);
-  display.runUntil(600);
-  assert.equal(state.steps.length, 1, 'still held');
-  open = true;
-  display.runUntil(800);
-  assert.ok(state.steps.length >= 3);
-  assert.ok(state.steps[1].at >= 600 && state.steps[1].at <= 600 + 2 * FRAME_60, 'released on the first frame after the data arrived');
-  const gap = state.steps[2].at - state.steps[1].at;
-  assert.ok(Math.abs(gap - 1000 / 15) <= FRAME_60, `the new speed applies after the hold (gap ${gap})`);
 });
 
 test('onChange fires for play, pause and speed changes', () => {

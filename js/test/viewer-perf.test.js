@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FrameMonitor, MB, analyzeLatency, distribution, emptyStats, formatBytes, formatMs, formatPhaseTable, formatRate, hitRate, readStats, statsDelta } from '../tileripper/perf.js';
+import { FrameMonitor, MB, analyzeLatency, distribution, emptyStats, formatBytes, formatMs, formatPhaseTable, formatRate, frameCompleteness, hitRate, isWholeFrame, readStats, statsDelta } from '../tileripper/perf.js';
 
 // The reader's shape: stats() with network and cache counters, cacheInfo() for both cache tiers, bandwidthEstimate().
 const reader = () => ({
@@ -85,9 +85,9 @@ test('analyzeLatency: first covering paint and first complete paint after each i
   const paint = (at, t, complete, covered) => ({ type: 'paint', at, t, complete, covered });
   const events = [
     paint(5, 1, true, true),
-    paint(130, 2, false, true),
+    { ...paint(130, 2, false, true), ready: 0 },
     paint(400, 2, true, true),
-    paint(250, 3, false, false),
+    { ...paint(250, 3, false, false), ready: 1 },
     { type: 'cell-ready', at: 260 },
     paint(900, 3, true, true),
   ];
@@ -118,11 +118,40 @@ test('distribution: median, p95 and max of a list; empty gives nulls', () => {
 test('formatPhaseTable: one markdown row per phase, unknown counters as dashes', () => {
   const stats = { ...emptyStats(), requests: 12, transferredBytes: 5 * MB, cacheHits: 3, cacheMisses: 1, decodedBytes: 40 * MB };
   const table = formatPhaseTable([
-    { name: 'open', coarse: distribution([120]), full: distribution([640]), stats, frames: { frames: 30, over16_7ms: 2, over33ms: 1 }, peakInflight: 4 },
+    { name: 'open', coarse: distribution([120]), full: distribution([640]), frameCompleteness: { painted: 9, partial: 0, levelFallbacks: 2, keptFrames: 1 }, stats, frames: { frames: 30, over16_7ms: 2, over33ms: 1 }, peakInflight: 4 },
     { name: 'scrub', coarse: null, full: null, stats: { ...stats, bandwidth: 8 * MB }, frames: { frames: 10, over16_7ms: 0, over33ms: 0 }, peakInflight: null },
   ]).split('\n');
   assert.equal(table.length, 4);
   assert.match(table[0], /^\| phase \| coarse med \/ max \| full med \/ max \|/);
-  assert.match(table[2], /^\| open \| 120 ms \/ 120 ms \| 640 ms \/ 640 ms \| 12 \| 5\.0 MB \| 3 \/ 1 \| 0 \| 4 \| 2 \/ 1 of 30 \| 40\.0 MB \/ – \| – \|$/);
-  assert.match(table[3], /^\| scrub \| – \| – \| 12 \| 5\.0 MB \| 3 \/ 1 \| 0 \| – \| 0 \/ 0 of 10 \| 40\.0 MB \/ – \| 8\.0 MB\/s \(67 Mbit\/s\) \|$/);
+  assert.match(table[0], /\| partial \/ fallback \/ kept frames \|/);
+  assert.match(table[2], /^\| open \| 120 ms \/ 120 ms \| 640 ms \/ 640 ms \| 0 \/ 2 \/ 1 of 9 \| 12 \| 5\.0 MB \| 3 \/ 1 \| 0 \| 4 \| 2 \/ 1 of 30 \| 40\.0 MB \/ – \| – \|$/);
+  assert.match(table[3], /^\| scrub \| – \| – \| – \| 12 \| 5\.0 MB \| 3 \/ 1 \| 0 \| – \| 0 \/ 0 of 10 \| 40\.0 MB \/ – \| 8\.0 MB\/s \(67 Mbit\/s\) \|$/);
+});
+
+test('isWholeFrame: atomic viewers say so; for older ones a frame is whole when complete or only a coarser level was drawn', () => {
+  assert.equal(isWholeFrame({ partial: false, complete: false }), true, 'a fallback frame: whole, though not at the target level');
+  assert.equal(isWholeFrame({ partial: true, complete: true }), false, 'the flag wins');
+  assert.equal(isWholeFrame({ complete: true, ready: 4, cells: 4 }), true);
+  assert.equal(isWholeFrame({ complete: false, covered: true, ready: 0, cells: 4 }), true, 'a coarse level drawn under no target cell');
+  assert.equal(isWholeFrame({ complete: false, covered: true, ready: 2, cells: 4 }), false, 'target cells drawn over a coarse level or the previous timestep');
+  assert.equal(isWholeFrame({ complete: false, covered: false, ready: 1, cells: 4 }), false);
+});
+
+test('frameCompleteness counts partial frames, level fallbacks and kept frames; a viewer that does not report them gives null', () => {
+  const atomic = [
+    { type: 'paint', partial: false, complete: true, fallback: false },
+    { type: 'paint', partial: false, complete: false, fallback: true },
+    { type: 'kept', t: 4 },
+    { type: 'paint', partial: false, complete: true, fallback: false },
+    { type: 'cell-ready' },
+  ];
+  assert.deepEqual(frameCompleteness(atomic), { painted: 3, partial: 0, partialFraction: 0, levelFallbacks: 1, keptFrames: 1 });
+  const old = [
+    { type: 'paint', complete: false, covered: true, ready: 0, cells: 9 },
+    { type: 'paint', complete: false, covered: true, ready: 3, cells: 9 },
+    { type: 'paint', complete: false, covered: true, ready: 8, cells: 9 },
+    { type: 'paint', complete: true, covered: true, ready: 9, cells: 9 },
+  ];
+  assert.deepEqual(frameCompleteness(old), { painted: 4, partial: 2, partialFraction: 0.5, levelFallbacks: null, keptFrames: null });
+  assert.deepEqual(frameCompleteness([]), { painted: 0, partial: 0, partialFraction: 0, levelFallbacks: null, keptFrames: null });
 });

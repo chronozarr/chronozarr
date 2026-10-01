@@ -19,7 +19,7 @@
 
 import * as zarr from '../vendor/zarrita/index.js';
 import { applyDelta, openStore } from '../chronozarr/decoder.js';
-import { FrameMonitor, analyzeLatency, emptyStats, formatPhaseTable, readStats, statsDelta } from './perf.js';
+import { FrameMonitor, analyzeLatency, emptyStats, formatPhaseTable, frameCompleteness, isWholeFrame, readStats, statsDelta } from './perf.js';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -498,13 +498,33 @@ async function settleNetwork(viewer, { timeoutMs = 900000, quietMs = 2000 } = {}
 const SIXTY_HZ_FRAME_MS = 17;
 
 /**
+ * What playback's statistics say about waiting for frames, whichever viewer produced them: a viewer from before
+ * buffering held on a single frame (`held`), the current one pauses and refills its buffer (`bufferingPauses`).
+ */
+function stallStats(stats) {
+  return {
+    initialBufferMs: stats.initialBufferMs === undefined || stats.initialBufferMs === null ? null : round(stats.initialBufferMs),
+    bufferingPauses: stats.bufferingPauses ?? 0,
+    bufferingMs: round(stats.bufferingMs ?? 0),
+    longestBufferingMs: round(stats.longestBufferingMs ?? 0),
+    wrapPauses: stats.wrapPauses ?? 0,
+    holds: stats.held ?? 0,
+    holdMs: round(stats.totalHoldMs ?? 0),
+    longestHoldMs: round(stats.longestHoldMs ?? 0),
+    wrapHolds: stats.wrapHeld ?? 0,
+  };
+}
+
+/**
  * Plays `loops` consecutive full loops (every timestep, wrapping from the last back to the first; two by
  * default so the second one shows the loop in steady state) at `stepsPerSecond` on the open store and
- * reports what playback actually delivered, with holds at the wrap reported apart from holds elsewhere: the achieved rate between the first and last step, the display
- * rate it measured and the effective speed it clamped to, how many steps had to hold because their data was
- * not ready and for how long, how late frames appeared after each step, time spent uploading textures inside
- * the frames that painted (uploads that the GPU window did not manage to do ahead of time), and main-thread
- * stalls. `cold` reopens the store first (empty caches, HTTP cache bypassed); `warm: 'prefetch'` waits for
+ * reports what playback actually delivered: the achieved rate between the first and last step, the display
+ * rate it measured and the effective speed it clamped to, the time it buffered before starting and how often it
+ * ran dry and paused to refill (`bufferingPauses`, with the wrap's apart; a viewer from before buffering reports
+ * the steps it had to hold instead), how late frames appeared after each step, the completeness of the frames painted
+ * (`frameCompleteness`: how many were partial, drawn from a coarser level, or kept back), time spent uploading
+ * textures inside the frames that painted (uploads that the GPU window did not manage to do ahead of time), and
+ * main-thread stalls. `cold` reopens the store first (empty caches, HTTP cache bypassed); `warm: 'prefetch'` waits for
  * the window prefetch to finish and the network to go quiet first; `idleMs` just waits. `lod` pins a level
  * (2 = four cells on the test stores).
  */
@@ -583,12 +603,8 @@ export async function playBench(viewer, { stepsPerSecond = 4, loops = 2, cold = 
     loopMs: round(loopMs),
     idealLoopMs: round(((stepsWanted - 1) / Math.min(stepsPerSecond, refreshHz ?? stepsPerSecond)) * 1000),
     perLoopStepsPerSecond,
-    heldFrames: stats.held,
-    heldAtWrap: stats.wrapHeld,
-    heldElsewhere: stats.held - stats.wrapHeld,
-    longestHoldMs: round(stats.longestHoldMs),
-    longestWrapHoldMs: round(stats.longestWrapHoldMs),
-    totalHoldMs: round(stats.totalHoldMs),
+    frameCompleteness: frameCompleteness(events),
+    ...stallStats(stats),
     wrapGapsMs,
     typicalStepGapMs: round(typicalGap),
     displayLagMs: distribution(lags),
@@ -660,10 +676,14 @@ async function wheel(viewer, { ticks, deltaY, everyMs = 30 }) {
  *   zoom out             one wheel event of about 1/8x
  *   play                 `loops` loops at `stepsPerSecond`
  *
- * Coarse and full times are measured from the last input of a phase (for the scrub phases, per step). From the page
- * console: `await tileripper.interactionBench()`; `network: {rttMs, mbps}` simulates a remote link.
+ * "Coarse" is the first whole frame at any level, "full" the complete frame at the level asked for; both are measured from
+ * the last input of a phase (for the scrub phases, per step). Every phase also reports the completeness of the frames
+ * it painted (`frameCompleteness`): how many were partial (none, for a viewer that draws only whole frames), how many
+ * came from a coarser level than asked for, and how often it kept the canvas as it was because no whole frame was ready.
+ * From the page console: `await tileripper.interactionBench()`; `network: {rttMs, mbps}` simulates a remote link;
+ * `only: ['open', 'scrub forward 20', 'play']` runs just those phases.
  */
-export async function interactionBench(viewer, { network = null, stepsPerSecond = 10, loops = 2, cadenceMs = 100, playCapMs = 180000, settleMs = 60000 } = {}) {
+export async function interactionBench(viewer, { network = null, stepsPerSecond = 10, loops = 2, cadenceMs = 100, playCapMs = 180000, settleMs = 60000, only = null } = {}) {
   const fetchImpl = network ? simulatedRemoteFetch(network) : noStoreFetch;
   const url = viewer.store.url.replace(/\/$/, '');
   const events = [];
@@ -681,12 +701,13 @@ export async function interactionBench(viewer, { network = null, stepsPerSecond 
       if (inflight !== null) peakInflight = Math.max(peakInflight ?? 0, inflight);
     }, 50);
     frames.start();
+    const first = events.length;
     return {
-      first: events.length,
+      first,
       end(extra = {}) {
         frames.stop();
         clearInterval(sampler);
-        const phase = { name, stats: statsDelta(before, readStats(viewer.store)), frames: frames.snapshot(), peakInflight, ...extra };
+        const phase = { name, stats: statsDelta(before, readStats(viewer.store)), frames: frames.snapshot(), peakInflight, frameCompleteness: frameCompleteness(events.slice(first)), ...extra };
         phases.push(phase);
         return phase;
       },
@@ -704,13 +725,14 @@ export async function interactionBench(viewer, { network = null, stepsPerSecond 
       const { openMs, firstPaintMs } = await openWithin(viewer, url, { fetch: fetchImpl });
       await sleep(50);
       const paints = events.slice(phase.first).filter((e) => e.type === 'paint');
-      const reportsCoverage = paints.some((p) => p.covered !== undefined);
-      const covered = reportsCoverage ? paints.find((p) => p.covered === true || p.complete) : null;
+      const reportsFrames = paints.some((p) => p.covered !== undefined || p.partial !== undefined);
+      const covered = reportsFrames ? paints.find(isWholeFrame) : null;
       const full = paints.find((p) => p.complete);
       const firstCell = paints.find((p) => p.ready > 0);
       results.open = {
         metadataMs: Math.round(openMs),
         firstCellMs: firstCell ? Math.round(firstCell.at - started) : null,
+        firstCompleteFrameMs: covered ? Math.round(covered.at - started) : null,
         coarseMs: covered ? Math.round(covered.at - started) : null,
         coarseAfterMetadataMs: covered ? Math.round(covered.at - started - openMs) : null,
         fullMs: Math.round(firstPaintMs),
@@ -758,23 +780,26 @@ export async function interactionBench(viewer, { network = null, stepsPerSecond 
       }
     };
 
+    const wants = (name) => !only || only.includes(name);
     await waitUntil(() => viewer.paintedT === viewer.t, settleMs);
-    await scrub('scrub forward 20', 'ArrowRight', Math.min(20, count - 1 - viewer.t), 1);
-    await scrub('scrub reverse 10', 'ArrowLeft', Math.min(10, viewer.t), -1);
-    await gesture('big jump', async () => {
-      const point = timelinePoint(viewer, (viewer.t + Math.round(count / 2)) % count);
-      const at = performance.now();
-      pointer(document.getElementById('timeline-track'), 'pointerdown', point);
-      pointer(window, 'pointerup', point);
-      return at;
-    });
+    if (wants('scrub forward 20')) await scrub('scrub forward 20', 'ArrowRight', Math.min(20, count - 1 - viewer.t), 1);
+    if (wants('scrub reverse 10')) await scrub('scrub reverse 10', 'ArrowLeft', Math.min(10, viewer.t), -1);
+    if (wants('big jump')) {
+      await gesture('big jump', async () => {
+        const point = timelinePoint(viewer, (viewer.t + Math.round(count / 2)) % count);
+        const at = performance.now();
+        pointer(document.getElementById('timeline-track'), 'pointerdown', point);
+        pointer(window, 'pointerup', point);
+        return at;
+      });
+    }
     const panDx = -0.4 * viewer.canvas.getBoundingClientRect().width;
-    await gesture('pan', () => drag(viewer, { dx: panDx, dy: 0 }), () => drag(viewer, { dx: -panDx, dy: 0 }));
-    await gesture('zoom in', () => wheel(viewer, { ticks: 1, deltaY: -ZOOM_STEP_DELTA }));
-    await gesture('pan (zoomed in)', () => drag(viewer, { dx: panDx, dy: 0 }), () => drag(viewer, { dx: -panDx, dy: 0 }));
-    await gesture('zoom out', () => wheel(viewer, { ticks: 1, deltaY: ZOOM_STEP_DELTA }));
+    if (wants('pan')) await gesture('pan', () => drag(viewer, { dx: panDx, dy: 0 }), () => drag(viewer, { dx: -panDx, dy: 0 }));
+    if (wants('zoom in')) await gesture('zoom in', () => wheel(viewer, { ticks: 1, deltaY: -ZOOM_STEP_DELTA }));
+    if (wants('pan (zoomed in)')) await gesture('pan (zoomed in)', () => drag(viewer, { dx: panDx, dy: 0 }), () => drag(viewer, { dx: -panDx, dy: 0 }));
+    if (wants('zoom out')) await gesture('zoom out', () => wheel(viewer, { ticks: 1, deltaY: ZOOM_STEP_DELTA }));
 
-    {
+    if (wants('play')) {
       const phase = beginPhase('play');
       viewer.playback.setSpeed(stepsPerSecond);
       viewer.play();
@@ -789,9 +814,7 @@ export async function interactionBench(viewer, { network = null, stepsPerSecond 
         achievedStepsPerSecond: achieved === null ? null : round(achieved),
         finished,
         steps: stats.steps,
-        held: stats.held,
-        totalHoldMs: round(stats.totalHoldMs),
-        longestHoldMs: round(stats.longestHoldMs),
+        ...stallStats(stats),
         normalLod: movie.baseLod,
         movieLod: movie.lod,
         movieReason: movie.reason ?? null,
@@ -803,6 +826,7 @@ export async function interactionBench(viewer, { network = null, stepsPerSecond 
     viewer.probe = null;
   }
 
+  results.frameCompleteness = frameCompleteness(events);
   results.phases = phases;
   results.table = formatPhaseTable(phases);
   console.log(`${JSON.stringify({ ...results, phases: undefined, table: undefined }, null, 2)}\n${results.table}`);

@@ -149,20 +149,20 @@ export class FrameMonitor {
 
 /**
  * Time from each input to the first paint that reached it, from the viewer's probe events (`{type:'paint', at, t,
- * complete, covered}`). `inputs` is `[{at, t}]`; `reached(paint, input)` says whether a paint shows what the input
+ * complete, ...}`). `inputs` is `[{at, t}]`; `reached(paint, input)` says whether a paint shows what the input
  * asked for (for a step in the scrub direction: that timestep or a later one; for a gesture: any paint after it).
- * `coarseMs` is the first paint with the whole visible area covered at some level (null when the viewer does not
- * report `covered`), `fullMs` the first complete paint at the target level.
+ * `coarseMs` is the first whole frame at any level (see isWholeFrame; null when the viewer does not report whether
+ * its frames are whole), `fullMs` the first complete paint at the target level.
  */
 export function analyzeLatency(events, inputs, reached) {
   const paints = events.filter((e) => e.type === 'paint');
   const rows = inputs.map((input) => {
     const candidates = paints.filter((p) => p.at >= input.at && reached(p, input));
-    const covered = candidates.find((p) => p.covered === true || p.complete);
+    const whole = candidates.find(isWholeFrame);
     const full = candidates.find((p) => p.complete);
-    const reportsCoverage = paints.some((p) => p.covered !== undefined);
+    const reportsFrames = paints.some((p) => p.covered !== undefined || p.partial !== undefined);
     return {
-      coarseMs: reportsCoverage && covered ? covered.at - input.at : null,
+      coarseMs: reportsFrames && whole ? whole.at - input.at : null,
       fullMs: full ? full.at - input.at : null,
     };
   });
@@ -182,15 +182,16 @@ const cell = (value, format) => (value === null || value === undefined ? '–' :
 const medMax = (d) => (d.n === 0 ? '–' : `${formatMs(d.median)} / ${formatMs(d.max)}`);
 
 /**
- * Markdown table of interaction-benchmark phases. Each phase: `{name, coarse, full, stats (a statsDelta), frames,
- * peakInflight, bandwidth, decodedBytes, compressedBytes}`.
+ * Markdown table of interaction-benchmark phases. Each phase: `{name, coarse, full, frameCompleteness, stats (a statsDelta),
+ * frames, peakInflight}`.
  */
 export function formatPhaseTable(phases) {
-  const header = ['phase', 'coarse med / max', 'full med / max', 'requests', 'transferred', 'hits / misses', 'deduped', 'peak in-flight', 'frames >16.7 / >33 ms', 'decoded / compressed cache', 'bandwidth'];
+  const header = ['phase', 'coarse med / max', 'full med / max', 'partial / fallback / kept frames', 'requests', 'transferred', 'hits / misses', 'deduped', 'peak in-flight', 'frames >16.7 / >33 ms', 'decoded / compressed cache', 'bandwidth'];
   const rows = phases.map((p) => [
     p.name,
     p.coarse ? medMax(p.coarse) : '–',
     p.full ? medMax(p.full) : '–',
+    p.frameCompleteness ? `${p.frameCompleteness.partial} / ${cell(p.frameCompleteness.levelFallbacks, String)} / ${cell(p.frameCompleteness.keptFrames, String)} of ${p.frameCompleteness.painted}` : '–',
     cell(p.stats.requests, String),
     cell(p.stats.transferredBytes, formatBytes),
     `${cell(p.stats.cacheHits, String)} / ${cell(p.stats.cacheMisses, String)}`,
@@ -201,4 +202,35 @@ export function formatPhaseTable(phases) {
     cell(p.stats.bandwidth, formatRate),
   ]);
   return [header, header.map(() => '---'), ...rows].map((row) => `| ${row.join(' | ')} |`).join('\n');
+}
+
+// ---- frame completeness from probe events ----
+
+/**
+ * Whether a paint event is one whole frame. A viewer that draws only whole frames says so with `partial: false`. For
+ * one that painted cell by cell, a frame is whole when every cell of the target level was drawn, or when only a
+ * coarser level was drawn and under no target cell at all; a target cell drawn on top of a coarser level or of the
+ * previous timestep is a partial frame.
+ */
+export function isWholeFrame(paint) {
+  if (paint.partial !== undefined) return !paint.partial;
+  return Boolean(paint.complete) || (paint.ready === 0 && paint.covered === true);
+}
+
+/**
+ * What the frames painted in a run were like: how many, how many were partial (the viewer should never paint one),
+ * how many showed a coarser level than the one it wanted (`levelFallbacks`), and how often it kept the canvas as it
+ * was because no whole frame was ready (`keptFrames`). The last two are null for a viewer that does not report them.
+ */
+export function frameCompleteness(events) {
+  const paints = events.filter((e) => e.type === 'paint');
+  const reports = paints.some((p) => p.partial !== undefined) || events.some((e) => e.type === 'kept');
+  const partial = paints.filter((p) => !isWholeFrame(p)).length;
+  return {
+    painted: paints.length,
+    partial,
+    partialFraction: paints.length === 0 ? 0 : partial / paints.length,
+    levelFallbacks: reports ? paints.filter((p) => p.fallback === true).length : null,
+    keptFrames: reports ? events.filter((e) => e.type === 'kept').length : null,
+  };
 }

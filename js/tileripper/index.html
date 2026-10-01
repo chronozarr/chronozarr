@@ -454,6 +454,16 @@
     width: 12px;
     height: 12px;
   }
+  /* The frame asked for is not on screen yet: the marker pulses and the image stays on the last whole frame. */
+  .timeline-tick.active.loading {
+    background: var(--surface);
+    border: 2px solid var(--accent);
+    animation: marker-pulse 0.9s ease-in-out infinite;
+  }
+  @keyframes marker-pulse {
+    0%, 100% { box-shadow: 0 0 0 3px var(--accent-dim); }
+    50% { box-shadow: 0 0 0 7px var(--accent-dim); }
+  }
   select[hidden] { display: none; }
   .play-btn {
     background: none;
@@ -475,6 +485,26 @@
   .play-btn.playing { background: var(--accent); border-color: var(--accent); color: #fff; }
   .play-btn.playing .icon-play { display: none; }
   .play-btn.playing .icon-pause { display: block; }
+  /* Playback is on but waiting for frames: a ring turns around the button until it starts. */
+  .play-btn { position: relative; }
+  .play-btn.buffering::after {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border: 2px solid transparent;
+    border-top-color: var(--accent);
+    border-right-color: var(--accent);
+    border-radius: 9px;
+    animation: buffer-spin 0.8s linear infinite;
+    pointer-events: none;
+  }
+  @keyframes buffer-spin { to { transform: rotate(360deg); } }
+  #buffer-hint {
+    font-size: 10px;
+    color: var(--accent);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
   .speed {
     display: flex;
     align-items: center;
@@ -658,11 +688,12 @@
     #export-btn { order: 2; margin-left: auto; }
     .timeline-track { order: 3; flex: 1 0 100%; }
     .speed { flex-wrap: wrap; }
-    #res-hint { flex: 1 0 100%; white-space: normal; }
+    #res-hint, #buffer-hint { flex: 1 0 100%; white-space: normal; }
     .stretch { flex-wrap: wrap; }
   }
   @media (prefers-reduced-motion: reduce) {
     .sidebar { transition: none; }
+    .play-btn.buffering::after, .timeline-tick.active.loading { animation: none; }
   }
 </style>
 </head>
@@ -732,6 +763,7 @@
     <input type="range" id="speed" min="0" max="20" step="1" value="3" title="Playback speed (steps per second)" aria-label="Playback speed">
     <span id="speed-label">4 /s</span>
     <span id="res-hint"></span>
+    <span id="buffer-hint" role="status"></span>
   </div>
   <button id="gap-toggle" class="export-btn" title="Hatch the pixels no scene observed this timestep (their value is carried over)" aria-pressed="false" hidden>Gaps</button>
   <button id="export-btn" class="export-btn" title="Export the loop as WebM or GIF" disabled>Export</button>

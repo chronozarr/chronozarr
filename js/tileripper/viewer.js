@@ -4,6 +4,7 @@
 import { chunkKey, openStore, samplePixelFrom, scrubCost, windowOrder } from '../chronozarr/decoder.js';
 import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, validAt, windowPixels, xFromTime } from './chart.js';
 import { ASSUMED_BANDWIDTH, ancestorCells, planCoarseStages, stageLeadMs } from './coarse.js';
+import { chooseFrame } from './frames.js';
 import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, chooseMovieLevel, describeReason, linkAllows, snapSpeed, wireRatio } from './playback.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
@@ -51,6 +52,10 @@ const SEEK_DISTANCE = 4;
 const PERF_UPDATE_MS = 250;
 const GAP_HATCH_PX = 8;
 const GAP_MASK_CACHE = 48;
+// Timesteps the playback buffer loads at once, at demand priority.
+const BUFFER_BATCH = 3;
+// Eviction rank of the chunks of the coarse loop: after what the view shows, before everything else.
+const COARSE_LOOP_RANK = 5e5;
 // Chart geometry in SVG units (the svg scales to the sidebar width).
 const CHART = { width: 264, height: 124, left: 34, right: 256, top: 8, bottom: 104 };
 
@@ -117,10 +122,19 @@ class Viewer {
   #stretchLo = null;
   /** Linear stretch of a single band that is not reflectance: the [lo, hi] range (null until measured) and whether the user set it. */
   #linear = { range: null, manual: false };
-  #paintPartial = true;
-  /** A coarse stage landed that has not been painted yet (a time jump paints without clearing, so it needs asking). */
-  #coarsePending = false;
-  #paintedLod = 0;
+  /** The canvas must be painted again even if the frame to show is the one already on it (the camera, product or size changed). */
+  #dirty = true;
+  /** The frame on the canvas: {lod, t, cells (a Set of "row/col"), kind}; null until the first one. */
+  #shown = null;
+  /** Whether the frame at the level and timestep that were asked for is not the one on screen yet. */
+  #loading = false;
+  #keptKey = null;
+  /** The whole-loop prefetch at the coarsest useful level, {key, controller}, and that level (-1: none). */
+  #coarseLoop = null;
+  #coarseLoopLod = -1;
+  /** Fills the playback buffer: {wanted, running, controller}. */
+  #bufferPump = null;
+  #frameStats = { painted: 0, fallback: 0, kept: 0 };
   #view = { lod: 0, cells: new Set() };
   #maxVisibleCells = 0;
   #rafId = 0;
@@ -134,7 +148,6 @@ class Viewer {
   #wave = null;
   #toastTimer = 0;
   #playback = null;
-  #lookahead = null;
   #exportHold = null;
   #speed = loadSpeed();
   #movie = { baseLod: 0, lod: 0, reason: null, detail: null };
@@ -161,9 +174,15 @@ class Viewer {
     this.renderer.evictionScore = (meta) => this.#chunkScore(meta);
     this.#resizeCanvas();
     new ResizeObserver(() => {
+      // A fitted view stays fitted when the canvas changes size (the first layout of an embedded pane can be 1 px wide).
+      const refit = Boolean(this.store) && this.#atFit();
       this.#resizeCanvas();
+      if (refit) {
+        this.fit();
+        return;
+      }
       this.#beginView('camera');
-      this.#paintPartial = true;
+      this.#dirty = true;
       this.requestRender();
     }).observe(this.canvas.parentElement);
     this.#bindInput();
@@ -221,11 +240,15 @@ class Viewer {
     this.bandChoice = 0;
     this.t = 0;
     this.paintedT = -1;
+    this.#shown = null;
+    this.#loading = false;
+    this.#keptKey = null;
+    this.#frameStats = { painted: 0, fallback: 0, kept: 0 };
     this.#direction = 1;
     this.#stretchLo = null;
     this.lodOverride = options.lod ?? null;
     this.#formatTime = makeTimeFormatter(store.times);
-    this.#paintPartial = true;
+    this.#dirty = true;
     const bandNames = this.bands.map((band) => band.name);
     const view = options.viewSearch
       ? decodeView(options.viewSearch, { count: store.times.length, productIds: this.products.filter((p) => p.available).map((p) => p.id), bands: bandNames, transform: store.transform })
@@ -288,7 +311,7 @@ class Viewer {
     const scale = Math.min(width / level.width, height / level.height) * 0.94;
     this.camera = { cx: level.width / 2, cy: level.height / 2, scale };
     this.#beginView('camera');
-    this.#paintPartial = true;
+    this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
   }
@@ -309,6 +332,13 @@ class Viewer {
     return Math.min(this.canvas.width / level.width, this.canvas.height / level.height) * 0.94;
   }
 
+  /** Whether the camera shows the whole store centered at the fitted scale for the current canvas size. */
+  #atFit() {
+    const level = this.store.levels[0];
+    const { cx, cy, scale } = this.camera;
+    return Math.abs(scale / this.fitScale - 1) < 0.01 && Math.abs(cx - level.width / 2) < 1 && Math.abs(cy - level.height / 2) < 1;
+  }
+
   /**
    * Show timestep t. A manual call (keys, buttons, the timeline) pauses playback; playback itself passes
    * `playing` and keeps its direction forward when it loops from the last timestep to the first.
@@ -320,7 +350,7 @@ class Viewer {
     if (next === this.t) return;
     if (!playing) {
       this.#beginView('time');
-      if (Math.abs(next - this.t) > SEEK_DISTANCE) this.#dropSpeculativeFetches();
+      if (Math.abs(next - this.t) > SEEK_DISTANCE) this.#dropSpeculativeFetches({ coarseLoop: true });
     }
     this.#direction = direction ?? (next > this.t ? 1 : -1);
     this.t = next;
@@ -337,11 +367,16 @@ class Viewer {
    * After a jump in time or a camera move the prefetch window around the old view is stale: cancel what it still has
    * in flight (what the demand fetches for the new view also need stays), and have the next prefetch say so with `seek`.
    */
-  #dropSpeculativeFetches() {
+  #dropSpeculativeFetches({ coarseLoop = false } = {}) {
     this.#seekPending = true;
     clearTimeout(this.#prefetchTimer);
     this.#prefetchTimer = 0;
     this.#prefetchAbort?.abort();
+    // A seek cancels every speculative request, the coarse loop's too: plan it again from the new timestep.
+    if (coarseLoop) {
+      this.#coarseLoop?.controller.abort();
+      this.#coarseLoop = null;
+    }
   }
 
   /** The address bar keeps the store (when not from the catalog) and whatever differs from the default view. */
@@ -349,9 +384,8 @@ class Viewer {
     clearTimeout(this.#urlTimer);
     this.#urlTimer = 0;
     if (!this.store || this.#playing) return;
-    const level = this.store.levels[0];
     const { cx, cy, scale } = this.camera;
-    const atFit = Math.abs(scale / this.fitScale - 1) < 0.01 && Math.abs(cx - level.width / 2) < 1 && Math.abs(cy - level.height / 2) < 1;
+    const atFit = this.#atFit();
     const product = this.products[this.productIndex];
     const view = encodeView(
       {
@@ -400,6 +434,8 @@ class Viewer {
     clearTimeout(this.#prefetchTimer);
     this.#prefetchTimer = 0;
     this.#prefetchAbort?.abort();
+    this.#coarseLoop?.controller.abort();
+    this.#coarseLoop = null;
     const renderer = new Renderer(canvas);
     const first = store.levels[0];
     renderer.configure({ dtype: this.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots: Math.max(4, 2 * cells.length + 4), hasMask: store.hasMask });
@@ -463,20 +499,9 @@ class Viewer {
     this.#updateSpeedUi();
   }
 
-  /** Whether every visible cell has the chunks for timestep t in memory, so showing it needs no fetch. */
+  /** Whether every visible cell has the chunks for timestep t in memory at the level that is drawn, so showing it needs no fetch. */
   isTimestepReady(t) {
-    const lod = this.#targetLod();
-    const anchorT = this.store.anchorOf(t);
-    for (const [row, col] of this.#visibleCells(lod)) {
-      for (const ct of new Set([anchorT, t])) {
-        if (!this.renderer.isResident(chunkKey(lod, row, col, ct)) && !this.store.peekRaw(lod, row, col, ct)) return false;
-      }
-      if (this.store.hasMask) {
-        const slot = this.renderer.peekSlot(chunkKey(lod, row, col, t));
-        if (!(slot >= 0 && this.renderer.hasMaskAt(slot)) && !this.store.peekMask(lod, row, col, t)) return false;
-      }
-    }
-    return true;
+    return this.#frameReady(this.#targetLod(), t);
   }
 
   setProduct(index) {
@@ -485,7 +510,7 @@ class Viewer {
     this.#linear = { range: null, manual: false };
     this.#updateProductUi();
     this.#renderChart();
-    this.#paintPartial = true;
+    this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
   }
@@ -495,7 +520,7 @@ class Viewer {
     this.#linear = { range: null, manual: false };
     this.#updateStretchUi();
     this.#renderChart();
-    this.#paintPartial = true;
+    this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
   }
@@ -514,75 +539,63 @@ class Viewer {
   }
 
   /**
-   * Paint the current view now, cell by cell: every visible cell whose chunks for the current timestep are
-   * ready is drawn as soon as it is ready. After a pure time change the previous frame stays underneath
-   * (cells still loading keep showing the previous timestep, or the cached coarser level at the new
-   * one); camera, product and resize changes clear and repaint. Returns {complete, ms, lod, cells}.
+   * Paint the current view now and say whether the frame at the level it wants is complete. A frame is always
+   * whole: the complete frame at the target level when every visible cell of it is in memory, else the complete
+   * frame of the finest coarser level (the same timestep, less resolution), else the frame that is on screen already
+   * if it is still complete for this view (see chooseFrame); when none is, the canvas is left as it is. Never a
+   * mixture of cells, levels or timesteps. This repaints even when the frame is the one already shown; the viewer's
+   * own callbacks go through #render, which leaves the canvas alone in that case. Returns {complete, ms, lod, cells}
+   * for the target level.
    */
   renderNow() {
+    return this.#render({ force: true });
+  }
+
+  #render({ force }) {
     if (this.#rafId) {
       cancelAnimationFrame(this.#rafId);
       this.#rafId = 0;
     }
     if (!this.store) return { complete: false, ms: 0, lod: 0, cells: 0 };
     const started = performance.now();
-    const { store, renderer, canvas, t } = this;
+    const { store, t } = this;
     const lod = this.#targetLod();
     this.#updateResHint();
     const cells = this.#visibleCells(lod);
     this.#view = { lod, cells: new Set(cells.map(([row, col]) => `${row}/${col}`)) };
+    const missing = cells.filter(([row, col]) => !this.#cellReady(lod, row, col, t));
+    const choice = chooseFrame({
+      targetLod: lod,
+      coarsestLod: store.levels.length - 1,
+      t,
+      isReady: (frameLod, frameT) => (frameLod === lod && frameT === t ? missing.length === 0 : this.#frameReady(frameLod, frameT)),
+      previous: this.#shown,
+    });
 
-    renderer.newFrame();
-    const uploadBefore = renderer.stats.uploadMs;
-    const drawable = [];
-    const missing = [];
-    for (const [row, col] of cells) {
-      const slots = this.#slotsFor(lod, row, col, t);
-      if (slots) drawable.push({ row, col, slots });
-      else missing.push([row, col]);
-    }
-    const complete = missing.length === 0;
-    const clear = this.#paintPartial;
-    const painted = clear || drawable.length > 0 || this.#coarsePending;
-
-    if (complete && this.#stretchLo === null) this.#stretchLo = this.#computeStretch(lod, cells, t);
-    if (complete && this.#linear.range === null && this.#usesLinearRange()) this.#measureLinear(lod, cells, t);
-    // A frame is covered when every visible cell is drawn at the target level or sits under a coarser cached one.
-    let covered = false;
-    if (painted) {
-      renderer.beginPaint(
-        {
-          width: canvas.width,
-          height: canvas.height,
-          ...this.camera,
-          ...this.#productUniforms(),
-          stretchLo: this.#stretchLo ?? 0,
-          nodata: this.#nodata,
-        },
-        { clear },
-      );
-      const coarser = complete ? new Set() : this.#drawCoarser(lod, t);
-      covered = complete || missing.every(([row, col]) => this.#isUnderCoarser(coarser, lod, row, col));
-      for (const { row, col, slots } of drawable) this.#drawCell(lod, row, col, slots);
-      this.#paintedLod = lod;
-      this.#coarsePending = false;
-      if (complete) this.paintedT = t;
-    }
+    const shown = this.#shown;
+    const same = choice !== null && shown !== null && shown.lod === choice.lod && shown.t === choice.t;
+    const painted = choice !== null && (force || this.#dirty || !same) && this.#paintFrame(choice, lod);
+    const showing = choice !== null && (painted || (same && !this.#dirty)) && choice.kind === 'target';
     const timing = this.#viewTiming;
-    if (timing && painted) {
+    if (timing && (painted || same) && choice.t === t) {
       const now = performance.now();
-      if (covered) timing.coarseAt ??= now;
-      if (complete) timing.fullAt ??= now;
+      timing.coarseAt ??= now;
+      if (choice.kind === 'target') timing.fullAt ??= now;
     }
+    if (choice === null) this.#noteKept(lod, t);
+    else this.#keptKey = null;
+    this.#setLoading(!showing);
 
-    if (complete) {
+    if (showing) {
       if ($('error-overlay').classList.contains('toast')) this.#hideError();
-      this.#paintPartial = false;
       this.#wave?.controller.abort();
       this.#wave = null;
       this.#setProgress(1);
       this.#scheduleGpuFill();
       this.#schedulePrefetch();
+    } else if (missing.length === 0) {
+      // Everything is in memory but a frame could not be drawn whole (a slot could not be had): try again next frame.
+      this.requestRender();
     } else {
       this.#requestCells(lod, missing, t);
       // Cells that failed for good no longer hold anything back: keep prefetching for the ones that work.
@@ -591,15 +604,112 @@ class Viewer {
         this.#schedulePrefetch();
       }
     }
-    const ms = performance.now() - started;
-    const uploadMs = renderer.stats.uploadMs - uploadBefore;
-    if (painted) this.#emit({ type: 'paint', t, lod, complete, covered, cells: cells.length, ready: drawable.length, uploadMs, renderMs: ms - uploadMs });
     if (this.#gaps.visible) this.#drawGapOverlay();
-    if (complete) {
-      this.#paintMs = ms;
+    const ms = performance.now() - started;
+    if (showing) {
+      this.#paintMs = painted ? ms : this.#paintMs;
       for (const resolve of this.#painted.splice(0)) resolve();
     }
-    return { complete, ms, lod, cells: cells.length };
+    return { complete: showing, ms, lod, cells: cells.length };
+  }
+
+  /**
+   * Draw one whole frame: upload what is not on the GPU yet, clear, draw every visible cell of the level. Returns
+   * false, drawing nothing, if some cell could not be had after all (the canvas keeps what it shows).
+   */
+  #paintFrame({ lod, t, kind }, targetLod) {
+    const { renderer, canvas } = this;
+    const started = performance.now();
+    const cells = this.#visibleCells(lod);
+    renderer.newFrame();
+    const uploadBefore = renderer.stats.uploadMs;
+    const drawable = [];
+    for (const [row, col] of cells) {
+      const slots = this.#slotsFor(lod, row, col, t);
+      if (!slots) return false;
+      drawable.push({ row, col, slots });
+    }
+    if (this.#stretchLo === null) this.#stretchLo = this.#computeStretch(lod, cells, t);
+    if (this.#linear.range === null && this.#usesLinearRange()) this.#measureLinear(lod, cells, t);
+    renderer.beginPaint(
+      {
+        width: canvas.width,
+        height: canvas.height,
+        ...this.camera,
+        ...this.#productUniforms(),
+        stretchLo: this.#stretchLo ?? 0,
+        nodata: this.#nodata,
+      },
+      { clear: true },
+    );
+    for (const { row, col, slots } of drawable) this.#drawCell(lod, row, col, slots);
+    this.#shown = { lod, t, cells: new Set(cells.map(([row, col]) => `${row}/${col}`)), kind };
+    this.#dirty = false;
+    if (kind === 'target') this.paintedT = t;
+    this.#frameStats.painted++;
+    if (lod > targetLod) this.#frameStats.fallback++;
+    const ms = performance.now() - started;
+    const uploadMs = renderer.stats.uploadMs - uploadBefore;
+    this.#emit({
+      type: 'paint',
+      t,
+      lod,
+      targetLod,
+      kind,
+      complete: kind === 'target',
+      partial: false,
+      covered: true,
+      fallback: lod > targetLod,
+      cells: cells.length,
+      ready: cells.length,
+      uploadMs,
+      renderMs: ms - uploadMs,
+    });
+    return true;
+  }
+
+  /** No whole frame is ready for what was asked for, so the canvas stays as it is; probes hear about it once per request. */
+  #noteKept(lod, t) {
+    const key = `${lod}/${t}/${this.camera.cx}/${this.camera.cy}/${this.camera.scale}`;
+    if (this.#keptKey === key) return;
+    this.#keptKey = key;
+    this.#frameStats.kept++;
+    this.#emit({ type: 'kept', t, targetLod: lod });
+  }
+
+  /** What the frames painted so far were like: how many, how many came from a coarser level than wanted, how often none was ready. */
+  get frameStats() {
+    return { ...this.#frameStats };
+  }
+
+  /** The frame on the canvas: its level, timestep and kind ('target', 'fallback' or 'previous'), or null before the first. */
+  get shownFrame() {
+    return this.#shown ? { lod: this.#shown.lod, t: this.#shown.t, kind: this.#shown.kind } : null;
+  }
+
+  /** Whether the chunks of timestep t (anchor, delta and validity mask) of one cell are in memory, decoded or already on the GPU. */
+  #cellReady(lod, row, col, t) {
+    const { store, renderer } = this;
+    for (const ct of new Set([store.anchorOf(t), t])) {
+      if (!renderer.isResident(chunkKey(lod, row, col, ct)) && !store.peekRaw(lod, row, col, ct)) return false;
+    }
+    if (store.hasMask) {
+      const slot = renderer.peekSlot(chunkKey(lod, row, col, t));
+      if (!(slot >= 0 && renderer.hasMaskAt(slot)) && !store.peekMask(lod, row, col, t)) return false;
+    }
+    return true;
+  }
+
+  /** Whether every cell the view needs at this level has timestep t in memory. */
+  #frameReady(lod, t) {
+    return this.#visibleCells(lod).every(([row, col]) => this.#cellReady(lod, row, col, t));
+  }
+
+  /** The timeline marker shows a loading state while the frame for the timestep asked for is not on screen at the level asked for. */
+  #setLoading(loading) {
+    if (loading === this.#loading) return;
+    this.#loading = loading;
+    this.#updateTimeUi();
   }
 
   /**
@@ -632,12 +742,60 @@ class Viewer {
         onChunk: (chunkLod, row, col, t) => {
           this.#scheduleGpuFill();
           this.#prefetchMask(chunkLod, row, col, t, abort.signal);
+          this.#recheckFrame();
         },
       })
       .then((result) => {
         for (const { key, error } of result.errors) console.error(`prefetch failed for chunk ${key}:`, error);
         return result;
       });
+  }
+
+  /**
+   * Prefetch the whole loop at the coarsest useful level (the level of a view four times further out than the more
+   * zoomed-out of the camera and the fitted view; for a store a few cells wide that is its last level, one cell), so
+   * that some complete frame is in memory for every timestep and a frame never has to be a partial one. It uses the
+   * playing prefetch, which the store's idle limit does not apply to; the horizon prefetch of the current level goes
+   * on as before. It runs once per view: again only when the level or its cells change, or after a jump in time.
+   */
+  #prefetchCoarseLoop() {
+    const { store } = this;
+    if (this.lodOverride !== null || this.#exportHold) return;
+    const lod = Math.max(this.#lodForScale(Math.min(this.camera.scale, this.fitScale) / 4), this.#view.lod);
+    this.#coarseLoopLod = lod;
+    const cells = this.#visibleCells(lod);
+    const key = `${lod}:${cells.map(([row, col]) => `${row}/${col}`).join(',')}`;
+    if (this.#coarseLoop?.key === key || cells.length === 0) return;
+    this.#coarseLoop?.controller.abort();
+    const controller = new AbortController();
+    const loop = { key, controller };
+    this.#coarseLoop = loop;
+    store
+      .prefetch({
+        lod,
+        cells,
+        t: this.t,
+        direction: this.#direction,
+        behindFactor: BEHIND_FACTOR_PLAYING,
+        loop: true,
+        playing: true,
+        masks: store.hasMask,
+        signal: controller.signal,
+        onChunk: (chunkLod, row, col, t) => {
+          this.#prefetchMask(chunkLod, row, col, t, controller.signal);
+          this.#recheckFrame();
+        },
+      })
+      .then((result) => {
+        for (const { key: chunk, error } of result.errors) console.error(`coarse loop: prefetch failed for chunk ${chunk}:`, error);
+        // Chunks that failed are planned again the next time the view settles; the store leaves a failed cell alone for a while.
+        if (result.errors.length > 0 && this.#coarseLoop === loop) this.#coarseLoop = null;
+      });
+  }
+
+  /** A chunk landed in memory while the frame that was asked for is not on screen: it may have made a whole frame possible. */
+  #recheckFrame() {
+    if (this.#loading) this.requestRender();
   }
 
   /** A chunk the prefetch just decoded needs its validity mask too: read it (a no-op without a mask) and refill the GPU window. */
@@ -658,27 +816,59 @@ class Viewer {
       getIndex: () => this.t,
       goTo: (index, direction) => this.goToTime(index, { playing: true, direction }),
       isReady: (index) => this.isTimestepReady(index),
-      prepare: (index) => this.#prepareTimestep(index),
+      prepare: (indices) => this.#fillBuffer(indices),
       onChange: () => this.#updatePlayUi(),
     });
   }
 
-  /** Playback is waiting on timestep t: fetch it for the visible cells now, at demand priority. */
-  #prepareTimestep(t) {
-    this.#lookahead?.abort();
-    const controller = new AbortController();
-    this.#lookahead = controller;
-    const { signal } = controller;
-    const lod = this.#targetLod();
-    const anchorT = this.store.anchorOf(t);
-    for (const [row, col] of this.#visibleCells(lod)) {
-      Promise.all([this.store.getRaw(lod, row, col, anchorT, { signal }), anchorT === t ? null : this.store.getRaw(lod, row, col, t, { signal }), this.#maskRead(lod, row, col, t, signal)]).catch((error) => {
-        if (error.name === 'AbortError') return;
-        console.error(`playback: chunk load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, error);
-        this.#playback?.pause();
-        this.#showError('Playback paused', `${this.#formatTime(t)}: ${error.name}: ${error.message}`, { toast: true });
-      });
+  /**
+   * Playback wants these timesteps (the next ones, nearest first) in memory: load the ones that are not, a few at a
+   * time and at demand priority, in order, until they all are or playback stops. A new request replaces the list of a
+   * pump that is already running; the store shares the fetches.
+   */
+  #fillBuffer(indices) {
+    const pump = (this.#bufferPump ??= { wanted: [], running: false, controller: null });
+    pump.wanted = indices;
+    if (pump.running) return;
+    pump.running = true;
+    pump.controller = new AbortController();
+    this.#runBufferPump(pump);
+  }
+
+  async #runBufferPump(pump) {
+    const { signal } = pump.controller;
+    let failed = null;
+    try {
+      let previous = '';
+      while (!signal.aborted) {
+        const lod = this.#targetLod();
+        const batch = pump.wanted.filter((t) => !this.#frameReady(lod, t)).slice(0, BUFFER_BATCH);
+        const key = batch.join(',');
+        // The same batch again means the cache cannot keep what was loaded: stop rather than load it forever.
+        if (batch.length === 0 || key === previous) break;
+        previous = key;
+        await Promise.all(batch.map((t) => this.#loadTimestep(lod, t, signal)));
+      }
+    } catch (error) {
+      if (error.name !== 'AbortError') failed = error;
+    } finally {
+      pump.running = false;
     }
+    if (failed) {
+      console.error('playback: could not fill the buffer:', failed);
+      this.#playback?.pause();
+      this.#showError('Playback paused', `${failed.name}: ${failed.message}`, { toast: true });
+    }
+  }
+
+  /** The chunks of timestep t of every visible cell of a level, with their masks, at demand priority. */
+  #loadTimestep(lod, t, signal) {
+    const anchorT = this.store.anchorOf(t);
+    return Promise.all(
+      this.#visibleCells(lod).map(([row, col]) =>
+        Promise.all([this.store.getRaw(lod, row, col, anchorT, { signal }), anchorT === t ? null : this.store.getRaw(lod, row, col, t, { signal }), this.#maskRead(lod, row, col, t, signal)]),
+      ),
+    );
   }
 
   #emit(event) {
@@ -686,7 +876,10 @@ class Viewer {
   }
 
   #abortBackground() {
-    this.#lookahead?.abort();
+    this.#bufferPump?.controller?.abort();
+    this.#bufferPump = null;
+    this.#coarseLoop?.controller.abort();
+    this.#coarseLoop = null;
     this.#wave?.controller.abort();
     this.#wave = null;
     clearTimeout(this.#gpuFillTimer);
@@ -918,9 +1111,15 @@ class Viewer {
 
   /** Eviction order for decoded chunks and texture slots: outside the view first, then by scrub cost from t. */
   #chunkScore(meta) {
-    const visible = meta.lod === this.#view.lod && this.#view.cells.has(`${meta.row}/${meta.col}`);
+    const cell = `${meta.row}/${meta.col}`;
+    const visible = meta.lod === this.#view.lod && this.#view.cells.has(cell);
+    // The frame on screen may be a coarser level or an earlier timestep than the view asks for; it must stay drawable.
+    const shown = this.#shown;
+    const onScreen = shown !== null && meta.lod === shown.lod && shown.cells.has(cell) && (meta.t === shown.t || meta.t === this.store.anchorOf(shown.t));
+    // The coarse loop is what a frame falls back to whatever the timestep: it stays ahead of everything else that is not on screen.
+    const rank = visible || onScreen ? 0 : meta.lod === this.#coarseLoopLod ? COARSE_LOOP_RANK : 1e6;
     const cost = scrubCost(meta.t - this.t, this.#direction, this.#behindFactor, this.#playing ? this.store.times.length : null);
-    return (visible ? 0 : 1e6) + (this.store.isAnchor(meta.t) ? cost / 2 : cost);
+    return rank + (this.store.isAnchor(meta.t) ? cost / 2 : cost);
   }
 
   /**
@@ -944,29 +1143,6 @@ class Viewer {
       slots.delta,
       slots.mask,
     );
-  }
-
-  /** Progressive LOD: under a partial frame, paint any already-cached coarser cells, coarsest first. Returns the ones drawn as "lod/row/col" keys. */
-  #drawCoarser(lod, t) {
-    const drawn = new Set();
-    for (let coarse = this.store.levels.length - 1; coarse > lod; coarse--) {
-      for (const [row, col] of this.#visibleCells(coarse)) {
-        const slots = this.#slotsFor(coarse, row, col, t);
-        if (!slots) continue;
-        this.#drawCell(coarse, row, col, slots);
-        drawn.add(`${coarse}/${row}/${col}`);
-      }
-    }
-    return drawn;
-  }
-
-  /** Whether some coarser level drawn in `drawn` covers cell (row, col) of `lod`. */
-  #isUnderCoarser(drawn, lod, row, col) {
-    for (let coarse = lod + 1; coarse < this.store.levels.length; coarse++) {
-      const shift = coarse - lod;
-      if (drawn.has(`${coarse}/${row >> shift}/${col >> shift}`)) return true;
-    }
-    return false;
   }
 
   /** What the shader needs to color the current product: inputs, the stored-to-physical conversion, and the display mode. */
@@ -1022,14 +1198,14 @@ class Viewer {
       return;
     }
     this.#linear = { range: [lo, hi], manual: true };
-    this.#paintPartial = true;
+    this.#dirty = true;
     this.requestRender();
   }
 
   /** Back to the range measured from the data on screen. */
   autoStretch() {
     this.#linear = { range: null, manual: false };
-    this.#paintPartial = true;
+    this.#dirty = true;
     this.requestRender();
   }
 
@@ -1075,8 +1251,8 @@ class Viewer {
   }
 
   /**
-   * The cells a wave still needs, coarse first: the small coarse levels (see coarse.js), each painted as it lands,
-   * then the target level, whose cells paint one by one. A stage starts when the previous one lands or, sooner, a
+   * The cells a wave still needs, coarse first: the small coarse levels (see coarse.js), each shown once it is
+   * complete, then the target level, which is shown when all of its cells are in. A stage starts when the previous one lands or, sooner, a
    * couple of round trips after the previous one started (stageLeadMs), so the requests of one stage wait on the
    * network while the bytes of the one before are still arriving instead of after them.
    */
@@ -1094,7 +1270,7 @@ class Viewer {
     if (!signal.aborted) this.#loadCells(wave, wanted);
   }
 
-  /** Load one coarse stage and paint it when it lands. Never rejects: a stage that fails only costs the preview. */
+  /** Load one coarse stage and show it when it has landed whole. Never rejects: a stage that fails only costs the preview. */
   async #loadStage(wave, stage) {
     const { t } = wave;
     const { signal } = wave.controller;
@@ -1107,15 +1283,16 @@ class Viewer {
     }
     if (signal.aborted) return;
     this.#emit({ type: 'coarse-frame', t, lod: stage.lod, cells: stage.cells.length, ms: performance.now() - started });
-    this.#coarsePending = true;
-    this.renderNow();
+    this.#render({ force: false });
   }
 
-  /** Levels to show before `lod` for the cells about to load at timestep t, coarsest first, as {lod, cells}; none for a pinned level, a movie, or a one-step time change. */
+  /**
+   * Levels to show before `lod` for the cells about to load at timestep t, coarsest first, as {lod, cells}; none for
+   * a pinned level or a movie. A stage is skipped by the plan when its frame is in memory already (the coarse loop
+   * got there first) or when the frame asked for would arrive soon anyway.
+   */
   #coarseStages(lod, cells, t) {
     if (this.lodOverride !== null || this.#playing) return [];
-    // Stepping to a nearby timestep keeps the previous one on screen as a stand-in; a jump or a camera move has none.
-    if (this.#viewTiming?.kind === 'time' && !this.#seekPending) return [];
     const levels = planCoarseStages({
       targetLod: lod,
       coarsestLod: this.store.levels.length - 1,
@@ -1145,7 +1322,7 @@ class Viewer {
     await Promise.all([this.store.getCoarseFrame(lod, cells, t, { signal }), ...cells.map(([row, col]) => this.#maskRead(lod, row, col, t, signal))]);
   }
 
-  /** Fetch the target-level cells of a wave, repainting as each one arrives. */
+  /** Fetch the target-level cells of a wave; the frame is painted when the last one has arrived (earlier ones only change what is ready). */
   #loadCells(wave, wanted) {
     const { lod, t } = wave;
     const { signal } = wave.controller;
@@ -1157,7 +1334,7 @@ class Viewer {
           if (signal.aborted) return;
           this.#setProgress((++done / wanted.length) * 0.98);
           this.#emit({ type: 'cell-ready', t, row, col });
-          this.renderNow();
+          this.#render({ force: false });
         },
         (error) => {
           if (error.name === 'AbortError') return;
@@ -1201,7 +1378,10 @@ class Viewer {
     if (this.#prefetchTimer || this.#exportHold) return;
     const sinceStart = performance.now() - this.#prefetchStartedAt;
     const wait = this.#playing ? Math.max(PREFETCH_SETTLE_MS, PREFETCH_PLAYBACK_RESTART_MS - sinceStart) : PREFETCH_SETTLE_MS;
-    this.#prefetchTimer = setTimeout(() => this.prefetchNow(), wait);
+    this.#prefetchTimer = setTimeout(() => {
+      this.#prefetchCoarseLoop();
+      this.prefetchNow();
+    }, wait);
   }
 
   get #playing() {
@@ -1258,7 +1438,9 @@ class Viewer {
     const { cx, cy, scale } = this.camera;
     const worldX = cx + (px - this.canvas.width / 2) / scale;
     const worldY = cy + (py - this.canvas.height / 2) / scale;
-    const lod = this.#paintedLod;
+    const frame = this.#shown;
+    if (!frame) return;
+    const lod = frame.lod;
     const level = this.store.levels[lod];
     const factor = 2 ** lod;
     const x = Math.floor(worldX / factor);
@@ -1271,7 +1453,7 @@ class Viewer {
     }
     const row = Math.floor(y / level.chunkHeight);
     const col = Math.floor(x / level.chunkWidth);
-    const t = this.t;
+    const { t } = frame;
     const anchorT = this.store.anchorOf(t);
     const cellX = x - col * level.chunkWidth;
     const cellY = y - row * level.chunkHeight;
@@ -1549,6 +1731,7 @@ class Viewer {
       ['last view', timing ? `${timing.kind}: coarse ${formatMs(timing.coarseMs)} · full ${formatMs(timing.fullMs)}` : '–'],
       ['paint', this.#paintMs === null ? '–' : formatMs(this.#paintMs)],
       ['frames', `> 16.7 ms: ${frames.over16_7ms} · > 33 ms: ${frames.over33ms} of ${frames.frames}`],
+      ['painted', `${this.#frameStats.painted} whole frames · ${this.#frameStats.fallback} at a coarser level · ${this.#frameStats.kept} kept`],
     ];
     $('perf-overlay').textContent = rows.map(([label, value]) => `${label.padEnd(12)}${value}`).join('\n');
   }
@@ -1580,15 +1763,16 @@ class Viewer {
     const ctx = overlay.getContext('2d');
     ctx.clearRect(0, 0, width, height);
     const { store } = this;
-    if (!this.#gaps.visible || !store?.hasCoverage) return;
-    const { lod } = this.#view;
+    const frame = this.#shown;
+    if (!this.#gaps.visible || !store?.hasCoverage || !frame) return;
+    const { lod } = frame;
     const level = store.levels[lod];
     const factor = 2 ** lod;
     const { cx, cy, scale } = this.camera;
     ctx.imageSmoothingEnabled = false;
-    for (const key of this.#view.cells) {
+    for (const key of frame.cells) {
       const [row, col] = key.split('/').map(Number);
-      const mask = this.#gapMask(lod, row, col);
+      const mask = this.#gapMask(lod, row, col, frame.t);
       if (!mask) continue;
       const x = (col * level.chunkWidth * factor - cx) * scale + width / 2;
       const y = (row * level.chunkHeight * factor - cy) * scale + height / 2;
@@ -1601,9 +1785,8 @@ class Viewer {
   }
 
   /** A canvas the size of the cell's valid pixels, opaque where coverage is 0; null while the coverage chunk loads (the overlay redraws when it has). */
-  #gapMask(lod, row, col) {
+  #gapMask(lod, row, col, t) {
     const { store } = this;
-    const { t } = this;
     const key = `${lod}/${row}/${col}/${t}`;
     const { masks, requested } = this.#gaps;
     const cached = masks.get(key);
@@ -1679,7 +1862,7 @@ class Viewer {
       this.camera.cx -= (dx * scaleToCanvas) / this.camera.scale;
       this.camera.cy -= (dy * scaleToCanvas) / this.camera.scale;
       this.#beginView('camera');
-      this.#paintPartial = true;
+      this.#dirty = true;
       this.requestRender();
       this.#scheduleUrlSync();
     });
@@ -1700,7 +1883,7 @@ class Viewer {
       const worldY = cy + (py - canvas.height / 2) / scale;
       this.camera = { cx: worldX - (px - canvas.width / 2) / next, cy: worldY - (py - canvas.height / 2) / next, scale: next };
       this.#beginView('camera');
-      this.#paintPartial = true;
+      this.#dirty = true;
       this.requestRender();
       this.#scheduleUrlSync();
     }, { passive: false });
@@ -1846,9 +2029,17 @@ class Viewer {
     button.setAttribute('aria-label', button.title);
     button.disabled = !this.store;
     $('export-btn').disabled = !this.store;
+    const buffering = this.#playback?.buffering ?? false;
+    button.classList.toggle('buffering', buffering);
+    button.setAttribute('aria-busy', String(buffering));
+    const hint = $('buffer-hint');
+    const { ahead, needed } = this.#playback?.buffered ?? { ahead: 0, needed: 0 };
+    const text = buffering ? `buffering ${ahead} / ${needed}` : '';
+    if (hint.textContent !== text) hint.textContent = text;
+    if (buffering) button.title = 'Buffering: playback starts when the next frames are loaded (Space to cancel)';
     if (!playing) {
-      this.#lookahead?.abort();
-      this.#lookahead = null;
+      this.#bufferPump?.controller?.abort();
+      this.#bufferPump = null;
     }
     this.#updateSpeedUi();
   }
@@ -1875,7 +2066,11 @@ class Viewer {
   #updateTimeUi() {
     this.#updateChartMarker();
     $('time-label').textContent = this.#formatTime(this.t);
-    this.#tickElements.forEach((tick, i) => tick.classList.toggle('active', i === this.t));
+    this.#tickElements.forEach((tick, i) => {
+      tick.classList.toggle('active', i === this.t);
+      tick.classList.toggle('loading', i === this.t && this.#loading);
+    });
+    $('timeline-track').classList.toggle('loading', this.#loading);
   }
 
   /** What the performance overlay says about the store: its name, bands, timesteps and size (kept out of the header). */
