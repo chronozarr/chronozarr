@@ -1,4 +1,4 @@
-"""Command line interface: `chronozarr encode | validate | info | doctor`."""
+"""Command line interface: `chronozarr encode | append | validate | info | doctor` and more."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import numpy as np
 import xarray as xr
 
 from chronozarr import schema
+from chronozarr.append import append, is_store
 from chronozarr.convert import FIDELITY_HELP, RESAMPLING_METHODS, Plan, convert
 from chronozarr.decode import open_store
 from chronozarr.doctor import DEFAULT_ORIGIN, diagnose
@@ -174,7 +175,7 @@ def _encode_options(command: Any) -> Any:
             "--shard-time",
             type=int,
             default=None,
-            help="Timesteps per shard along time (default: all).",
+            help="Timesteps per shard along time (default: all; may exceed the timesteps given).",
         ),
         click.option(
             "--lods", "n_lods", type=int, default=None, help="Pyramid levels including level 0."
@@ -248,6 +249,45 @@ def encode_command(
     with _command_errors():
         report = encode(da, out, crs=crs, **_encode_kwargs(options))
     click.echo(_encode_summary(out, report))
+
+
+@main.command("append")
+@click.argument("store", type=click.Path(path_type=Path))
+@click.argument("input", metavar="INPUT")
+@click.option("--crs", default=None, help="CRS of the input, checked against the store.")
+@click.option("--variable", default=None, help="Variable to append from a Zarr/NetCDF input.")
+@click.option("--workers", type=int, default=None, help="Cells written concurrently (default 4).")
+def append_command(
+    store: Path, input: str, crs: str | None, variable: str | None, workers: int | None
+) -> None:
+    """Append the timesteps of INPUT to the end of the chronozarr store STORE, in place.
+
+    INPUT is a chronozarr store (for example one month written by `convert`), a Zarr store or
+    NetCDF file with dims (time, band, y, x), or a quoted glob of GeoTIFFs, one per timestep with
+    the date in the file name. Its grid, bands, dtype, CRS and nodata must match STORE, and its
+    times must come after the store's last one.
+
+    Only the shards (or chunks, for an unsharded store) that gain a timestep are written, plus
+    the metadata; every other object keeps its bytes. A store meant for appends should be encoded
+    with --no-shard: an unsharded append writes only new chunk objects, while a sharded one
+    rewrites the shard that grows. Appending is not atomic: run it on a working copy and publish
+    after `chronozarr validate`.
+    """
+    with _command_errors():
+        if is_store(input):
+            if crs is not None or variable is not None:
+                raise click.UsageError("--crs and --variable do not apply to a chronozarr store")
+            report = append(store, Path(input), workers=workers)
+        else:
+            da = _read_geotiffs(input) if any(ch in input for ch in _GLOB_CHARS) else None
+            if da is None:
+                da = _read_xarray(input, variable)
+            report = append(store, da, crs=crs, workers=workers)
+    click.echo(
+        f"appended {report.n_appended} timestep(s) to {store}: {report.n_time} in total, "
+        f"wrote {report.objects_written} objects ({report.bytes_written / 1e6:.1f} MB) "
+        f"in {report.seconds:.1f} s"
+    )
 
 
 @main.command("validate")

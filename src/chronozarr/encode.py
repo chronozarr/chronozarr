@@ -29,7 +29,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Generic, Literal, Protocol, TypeVar, cast
 
 import numcodecs
 import numcodecs.abc
@@ -58,6 +58,8 @@ AUTO_SAMPLE_FRACTION = 0.1
 DEFAULT_LEVEL = {"zstd": 5, "blosc-zstd-shuffle": 1}
 LEVEL_RANGE = {"zstd": (1, 22), "blosc-zstd-shuffle": (0, 9)}
 DEFAULT_CELLS_IN_FLIGHT = 4
+
+_R = TypeVar("_R")
 
 Encoding = Literal["auto", "none", "star-delta"]
 Codec = Literal["zstd", "blosc-zstd-shuffle"]
@@ -593,19 +595,19 @@ def _encode_cell(
     return _CellResult(encoded - started, written - encoded, total, count)
 
 
-class _CellWriter:
-    """Runs cell encodes on a pool with at most `limit` cells (and their buffers) in flight."""
+class _CellWriter(Generic[_R]):
+    """Runs cell jobs on a pool with at most `limit` cells (and their buffers) in flight."""
 
     def __init__(self, limit: int) -> None:
         self.pool = ThreadPoolExecutor(max_workers=limit)
         self.slots = threading.BoundedSemaphore(limit)
-        self.futures: list[tuple[int, int, int, Future[_CellResult]]] = []
+        self.futures: list[tuple[int, int, int, Future[_R]]] = []
 
-    def submit(self, level: int, row: int, col: int, run: Callable[[], _CellResult]) -> None:
+    def submit(self, level: int, row: int, col: int, run: Callable[[], _R]) -> None:
         self._raise_finished()
         self.slots.acquire()
 
-        def job() -> _CellResult:
+        def job() -> _R:
             try:
                 return run()
             finally:
@@ -618,13 +620,91 @@ class _CellWriter:
             if future.done() and (error := future.exception()) is not None:
                 raise error
 
-    def results(self) -> list[tuple[int, int, int, _CellResult]]:
+    def results(self) -> list[tuple[int, int, int, _R]]:
         return [(lvl, r, c, f.result()) for lvl, r, c, f in self.futures]
 
     def shutdown(self) -> None:
         for _, _, _, future in self.futures:
             future.cancel()
         self.pool.shutdown(wait=True)
+
+
+class _Pyramid:
+    """Depth-first walk of the pyramid, producing every cell of every level exactly once.
+
+    A level-0 cell is read from `source`; a cell of level k is assembled from the four cells of
+    level k-1 beneath it, so a level-0 cell is read, handed to `submit`, downsampled into its
+    parent and dropped. `n_time` is the number of timesteps `source` holds.
+    """
+
+    def __init__(
+        self,
+        shapes: Sequence[tuple[int, int]],
+        chunk_size: int,
+        *,
+        n_time: int,
+        n_band: int,
+        dtype: np.dtype,
+        nodata: int | float | None,
+        source: _Source,
+        compute: ThreadPoolExecutor,
+    ) -> None:
+        self.shapes, self.cs = list(shapes), chunk_size
+        self.n_time, self.n_band, self.dtype, self.nodata = n_time, n_band, dtype, nodata
+        self.source, self.compute = source, compute
+        self.grids = [schema.grid_shape(h, w, chunk_size) for h, w in self.shapes]
+        self.downsample_s = [0.0] * len(self.shapes)  # per level, summed over cells
+
+    def walk(self, submit: Callable[[int, int, int, Block], None]) -> None:
+        """Call `submit(level, row, col, block)` for every cell, children before parents."""
+        top = len(self.shapes) - 1
+        for row in range(self.grids[top][0]):
+            for col in range(self.grids[top][1]):
+                self._produce(top, row, col, submit)
+
+    def _produce(
+        self, k: int, row: int, col: int, submit: Callable[[int, int, int, Block], None]
+    ) -> Block:
+        """Level-k cell (row, col): read at level 0, else assembled from its four children."""
+        block = self.source.read_cell(row, col) if k == 0 else self._assemble(k, row, col, submit)
+        submit(k, row, col, block)
+        return block
+
+    def _assemble(
+        self, k: int, row: int, col: int, submit: Callable[[int, int, int, Block], None]
+    ) -> Block:
+        cs = self.cs
+        height, width = self.shapes[k]
+        h, w = min(cs, height - row * cs), min(cs, width - col * cs)
+        parent = Block(np.empty((self.n_time, self.n_band, h, w), dtype=self.dtype))
+        half = cs // 2
+        filled = 0
+        for i in (0, 1):
+            for j in (0, 1):
+                child_row, child_col = 2 * row + i, 2 * col + j
+                if child_row >= self.grids[k - 1][0] or child_col >= self.grids[k - 1][1]:
+                    continue
+                child = self._produce(k - 1, child_row, child_col, submit)
+                started = time.perf_counter()
+                small = downsample_block(child, self.nodata, self.compute)
+                ys = slice(i * half, i * half + small.height)
+                xs = slice(j * half, j * half + small.width)
+                if parent.mask is None and small.mask is not None:
+                    parent.mask = np.empty((self.n_time, h, w), dtype=np.uint8)
+                if parent.coverage is None and small.coverage is not None:
+                    parent.coverage = np.empty((self.n_time, h, w), dtype=np.uint8)
+                parent.data[:, :, ys, xs] = small.data
+                if small.mask is not None and parent.mask is not None:
+                    parent.mask[:, ys, xs] = small.mask
+                if small.coverage is not None and parent.coverage is not None:
+                    parent.coverage[:, ys, xs] = small.coverage
+                filled += small.height * small.width
+                self.downsample_s[k] += time.perf_counter() - started
+        if filled != h * w:
+            raise AssertionError(
+                f"level {k} cell ({row}, {col}): children cover {filled} of {h * w} pixels"
+            )
+        return parent
 
 
 # --- Store writing ----------------------------------------------------------------------------
@@ -635,6 +715,40 @@ def _tree_stats(path: Path) -> tuple[int, int]:
     return sum(p.stat().st_size for p in files), len(files)
 
 
+def _put_coord(
+    group: zarr.Group,
+    name: str,
+    values: np.ndarray,
+    dtype: type | str,
+    attrs: dict | None = None,
+    *,
+    overwrite: bool = False,
+) -> None:
+    """A one-chunk coordinate array named after its only dimension."""
+    array = group.create_array(
+        name=name,
+        shape=values.shape,
+        chunks=values.shape,
+        dtype=dtype,
+        dimension_names=(name,),
+        overwrite=overwrite,
+    )
+    array[:] = values
+    array.attrs.update({"_ARRAY_DIMENSIONS": [name], **(attrs or {})})
+
+
+def _write_time_coord(group: zarr.Group, times_ms: np.ndarray, *, overwrite: bool = False) -> None:
+    """The `time` coordinate: int64 milliseconds since the epoch, CF attributes, one chunk."""
+    _put_coord(
+        group,
+        "time",
+        times_ms,
+        "int64",
+        {"units": schema.TIME_UNITS, "calendar": schema.TIME_CALENDAR},
+        overwrite=overwrite,
+    )
+
+
 def _write_coords(
     group: zarr.Group,
     transform: Transform,
@@ -643,27 +757,11 @@ def _write_coords(
     times_ms: np.ndarray,
     bands: Sequence[str],
 ) -> None:
-    def put(name: str, values: np.ndarray, dtype: type | str, attrs: dict | None = None) -> None:
-        array = group.create_array(
-            name=name,
-            shape=values.shape,
-            chunks=values.shape,
-            dtype=dtype,
-            dimension_names=(name,),
-        )
-        array[:] = values
-        array.attrs.update({"_ARRAY_DIMENSIONS": [name], **(attrs or {})})
-
-    put(
-        "time",
-        times_ms,
-        "int64",
-        {"units": schema.TIME_UNITS, "calendar": schema.TIME_CALENDAR},
-    )
-    put("band", np.array(bands, dtype=object), str)
+    _write_time_coord(group, times_ms)
+    _put_coord(group, "band", np.array(bands, dtype=object), str)
     y, x = schema.pixel_centers(transform, height, width)
-    put("x", x, "float64")
-    put("y", y, "float64")
+    _put_coord(group, "x", x, "float64")
+    _put_coord(group, "y", y, "float64")
 
 
 def _compressors(codec: str, level: int) -> ZstdCodec | BloscCodec:
@@ -746,7 +844,7 @@ def _create_level(root: zarr.Group, k: int, layout: _Layout) -> _LevelArrays:
     return _LevelArrays(data, planes[0], planes[1])
 
 
-def _shard_bytes(out: Path, layout: _Layout, n_levels: int) -> dict[str, dict[str, int]]:
+def _shard_bytes(out: Path, n_levels: int) -> dict[str, dict[str, int]]:
     """Byte length of every shard object of the data array, keyed by level then t/row/col."""
     sizes: dict[str, dict[str, int]] = {}
     for k in range(n_levels):
@@ -776,9 +874,18 @@ def _write_store(
     arrays = [_create_level(root, k, layout) for k in range(len(layout.shapes))]
     grids = [schema.grid_shape(h, w, cs) for h, w in layout.shapes]
     volatility = np.zeros(grids[0], dtype=np.float32)
-    downsample_s = [0.0] * len(layout.shapes)
-    writer = _CellWriter(cells_in_flight)
+    writer = _CellWriter[_CellResult](cells_in_flight)
     compute = ThreadPoolExecutor(max_workers=os.cpu_count() or 1)
+    pyramid = _Pyramid(
+        layout.shapes,
+        cs,
+        n_time=layout.n_time,
+        n_band=layout.n_band,
+        dtype=layout.dtype,
+        nodata=layout.nodata,
+        source=source,
+        compute=compute,
+    )
 
     def submit(k: int, row: int, col: int, block: Block) -> None:
         ys = slice(row * cs, row * cs + block.height)
@@ -800,51 +907,8 @@ def _write_store(
             ),
         )
 
-    def produce(k: int, row: int, col: int) -> Block:
-        """Level-k cell (row, col): read at level 0, else assembled from its four children."""
-        block = source.read_cell(row, col) if k == 0 else assemble(k, row, col)
-        submit(k, row, col, block)
-        return block
-
-    def assemble(k: int, row: int, col: int) -> Block:
-        height, width = layout.shapes[k]
-        h, w = min(cs, height - row * cs), min(cs, width - col * cs)
-        n_time, n_band = layout.n_time, layout.n_band
-        parent = Block(np.empty((n_time, n_band, h, w), dtype=layout.dtype))
-        half = cs // 2
-        filled = 0
-        for i in (0, 1):
-            for j in (0, 1):
-                child_row, child_col = 2 * row + i, 2 * col + j
-                if child_row >= grids[k - 1][0] or child_col >= grids[k - 1][1]:
-                    continue
-                child = produce(k - 1, child_row, child_col)
-                started = time.perf_counter()
-                small = downsample_block(child, layout.nodata, compute)
-                ys = slice(i * half, i * half + small.height)
-                xs = slice(j * half, j * half + small.width)
-                if parent.mask is None and small.mask is not None:
-                    parent.mask = np.empty((n_time, h, w), dtype=np.uint8)
-                if parent.coverage is None and small.coverage is not None:
-                    parent.coverage = np.empty((n_time, h, w), dtype=np.uint8)
-                parent.data[:, :, ys, xs] = small.data
-                if small.mask is not None and parent.mask is not None:
-                    parent.mask[:, ys, xs] = small.mask
-                if small.coverage is not None and parent.coverage is not None:
-                    parent.coverage[:, ys, xs] = small.coverage
-                filled += small.height * small.width
-                downsample_s[k] += time.perf_counter() - started
-        if filled != h * w:
-            raise AssertionError(
-                f"level {k} cell ({row}, {col}): children cover {filled} of {h * w} pixels"
-            )
-        return parent
-
-    top = len(layout.shapes) - 1
     try:
-        for row in range(grids[top][0]):
-            for col in range(grids[top][1]):
-                produce(top, row, col)
+        pyramid.walk(submit)
         results = writer.results()
     except BaseException:
         writer.shutdown()
@@ -852,6 +916,7 @@ def _write_store(
     finally:
         compute.shutdown(wait=True)
     writer.shutdown()
+    downsample_s = pyramid.downsample_s
 
     per_level: dict[int, list[_CellResult]] = {k: [] for k in range(len(layout.shapes))}
     for k, row, col, result in results:
@@ -896,7 +961,7 @@ def _write_store(
         coverage_variable=schema.COVERAGE_VARIABLE if layout.has_coverage else None,
         provenance=provenance,
         levels=summaries,
-        shard_bytes=_shard_bytes(out, layout, len(layout.shapes)) if layout.shard else None,
+        shard_bytes=_shard_bytes(out, len(layout.shapes)) if layout.shard else None,
     )
     datasets = tuple(LevelRef(str(k), cs, layout.crs) for k in range(len(layout.shapes)))
     root.attrs.update(RootAttrs(meta, datasets).to_attrs())
@@ -1107,7 +1172,8 @@ def encode(
         chunk_size: Spatial chunk (and cell) edge in pixels; even. 512 (default) and 256 are
             the spec values; smaller even sizes exist for tests.
         shard: One shard object per (time shard, cell) (default), or one object per chunk.
-        shard_time: Timesteps per shard along time (default and maximum: all of them).
+        shard_time: Timesteps per shard along time. Default: all of them. A value larger than
+            the timesteps given is allowed: the first shard then holds them and any appended later.
         n_lods: Number of pyramid levels including level 0. Default: stop at the first level
             whose cell grid is 1 x 1.
         workers: Cells encoded concurrently (each holds about two copies of a cell in memory;
@@ -1142,8 +1208,8 @@ def encode(
             f"star-delta needs uint8 or uint16 data, got {prepared.dtype}; use encoding='none'"
         )
     resolved_provenance = None if provenance is None else schema.parse_provenance(provenance)
-    if shard_time is not None and not 1 <= shard_time <= prepared.n_time:
-        raise ValueError(f"shard_time must be in 1..{prepared.n_time}, got {shard_time}")
+    if shard_time is not None and shard_time < 1:
+        raise ValueError(f"shard_time must be at least 1, got {shard_time}")
 
     layout = _Layout(
         n_time=prepared.n_time,
@@ -1189,7 +1255,13 @@ def encode(
                     prefix=f".{out.name}-spill-", dir=str(spill_dir) if spill_dir else out.parent
                 )
             )
-            source = _spill_timesteps(prepared, layout, spill)
+            source = _spill_timesteps(
+                prepared,
+                spill,
+                chunk_size=chunk_size,
+                has_mask=layout.has_mask,
+                has_coverage=layout.has_coverage,
+            )
         return _encode(out, layout, source, encoding, cells_in_flight, resolved_provenance)
     except BaseException:
         shutil.rmtree(out, ignore_errors=True)
@@ -1201,34 +1273,42 @@ def encode(
             shutil.rmtree(spill, ignore_errors=True)
 
 
-def _spill_timesteps(prepared: _Input, layout: _Layout, directory: Path) -> _SpillSource:
-    """Consume the per-timestep iterables into cell-major files."""
+def _spill_timesteps(
+    prepared: _Input,
+    directory: Path,
+    *,
+    chunk_size: int,
+    has_mask: bool,
+    has_coverage: bool,
+) -> _SpillSource:
+    """Consume the per-timestep iterables of `prepared` into cell-major files."""
     assert prepared.timesteps is not None
+    n_time, dtype = prepared.n_time, prepared.dtype
     spill = _SpillSource(
         directory,
-        n_time=layout.n_time,
-        n_band=layout.n_band,
+        n_time=n_time,
+        n_band=prepared.n_band,
         height=prepared.height,
         width=prepared.width,
-        dtype=layout.dtype,
-        chunk_size=layout.chunk_size,
-        has_mask=layout.has_mask,
-        has_coverage=layout.has_coverage,
+        dtype=dtype,
+        chunk_size=chunk_size,
+        has_mask=has_mask,
+        has_coverage=has_coverage,
     )
     masks = iter(prepared.mask) if prepared.mask is not None else None
     coverages = iter(prepared.coverage) if prepared.coverage is not None else None
-    expected = (layout.n_band, prepared.height, prepared.width)
+    expected = (prepared.n_band, prepared.height, prepared.width)
     plane_shape = (prepared.height, prepared.width)
     seen = 0
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
         for t, step in enumerate(prepared.timesteps):
-            if t >= layout.n_time:
-                raise ValueError(f"the input has more than the {layout.n_time} timesteps in times")
+            if t >= n_time:
+                raise ValueError(f"the input has more than the {n_time} timesteps in times")
             step = np.asarray(step)
-            if step.shape != expected or step.dtype != layout.dtype:
+            if step.shape != expected or step.dtype != dtype:
                 raise ValueError(
                     f"timestep {t} is {step.dtype}{step.shape}; expected "
-                    f"{layout.dtype}{expected} like timestep 0"
+                    f"{dtype}{expected} like timestep 0"
                 )
             planes: list[np.ndarray | None] = []
             for name, iterator, binary in (("mask", masks, True), ("coverage", coverages, False)):
@@ -1246,8 +1326,8 @@ def _spill_timesteps(prepared: _Input, layout: _Layout, directory: Path) -> _Spi
                 planes.append(plane)
             spill.write_timestep(t, step, planes[0], planes[1], pool)
             seen += 1
-    if seen != layout.n_time:
-        raise ValueError(f"the input has {seen} timesteps but times has {layout.n_time}")
+    if seen != n_time:
+        raise ValueError(f"the input has {seen} timesteps but times has {n_time}")
     return spill
 
 

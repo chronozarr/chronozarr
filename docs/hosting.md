@@ -68,7 +68,7 @@ put ./zarr.json
 
 `set -e` stops before phase 2 or 3 if any upload in the previous phase failed (`xargs` exits 123).
 
-The repository's `scripts/upload_stores.sh` uploads to R2 with `Cache-Control: public, max-age=31536000, immutable` in one parallel pass, so it does not enforce metadata-last. It also lists `<aoi>/chronozarr` under `data/stores`, which does not match a versioned directory such as `chronozarr-3`, so for current stores use the procedure above. One pass is harmless while nothing links to the new prefix (for TileRipper the catalog change is the commit point: upload, run `chronozarr doctor`, then deploy the catalog); use the procedure above when a reader can reach the prefix during the upload.
+The repository's `scripts/upload_stores.sh` uploads to R2 in the same three phases and stops before the next phase when an upload fails. It reads `data/stores/<aoi>/$STORE` (`STORE=chronozarr-3` for a versioned prefix) and sets `Cache-Control` per object: `immutable` for every chunk and shard except the objects an append rewrites, which get `max-age=300` (`--trailing-ttl SECONDS` changes it; `--dry-run` prints the class of every object without uploading). Section 7 lists those objects.
 
 ## 3. Recipes
 
@@ -286,10 +286,48 @@ For an unsharded store the first data chunk is `0/data/c/0/0/0/0` as well (times
 - **Compression in front of the store.** A CDN, proxy or bucket setting that adds `Content-Encoding` to shard objects breaks reads: the index offsets are in stored bytes and a `Range` header applies to the encoded representation. Turn compression off for the store path, or rely on content types the host does not compress.
 - **Cloudflare rules that match nothing.** A Cache Rule or Transform Rule whose expression was pasted into a URI wildcard value instead of matching `Hostname` applies to no request, and R2 responses stay `DYNAMIC` with no `Timing-Allow-Origin` (section 3.2).
 - **Fallback pages.** Static hosts configured for single-page apps answer unknown paths with `200` and `index.html`. The store then appears to have every shard. Serve the store from a host or prefix with real `404` behaviour.
-- **Rewriting a prefix.** With `immutable` and a one-year `max-age`, a rewritten object stays stale in browsers and CDNs for up to a year. Always re-encode to a new prefix.
+- **Rewriting a prefix.** With `immutable` and a one-year `max-age`, a rewritten object stays stale in browsers and CDNs for up to a year. Always re-encode to a new prefix. The only in-place change is an append, and only the objects of section 7 change.
 - **Local testing.** `python -m http.server` ignores `Range`, so sharded stores read whole shards (doctor reports it as a failure). Use `chronozarr.view(store)` from a notebook or any range-capable static server.
-- **Shard size.** `shard_time` defaults to `n_time`, so one shard holds a cell's whole time axis. Lower it (and keep it a multiple of `anchor_interval` for star-delta stores) when a shard would exceed what the host or CDN caches or serves in one object.
+- **Shard size.** `shard_time` defaults to `n_time`, so one shard holds a cell's whole time axis. Lower it (and keep it a multiple of `anchor_interval` for star-delta stores) when a shard would exceed what the host or CDN caches or serves in one object. A store that will grow should be unsharded (section 7).
 
 ## 6. The live store
 
 The published demo store is `ucayali_santa_maria/chronozarr-3` (plain encoding; see the README status). It replaces `chronozarr-2`, which was live on 2026-09-30 when `chronozarr doctor` was run against `https://data.tileripper.com/ucayali_santa_maria/chronozarr-2`: 15 ok, 2 info, 0 warnings (`edge cache` HIT, `timing-allow-origin` `*`, `cache-control` `max-age=31536000`). The host is R2 with `deploy/r2-cors.json` plus the Cache Rule and the Transform Rule of section 3.2; both rules match the hostname, so they apply to every prefix under it.
+
+## 7. Appending to a live store
+
+`chronozarr append STORE INPUT` adds timesteps to the end of a store in place (spec section 14). It writes the shards or chunks that gain data and the metadata; every other object keeps its bytes and its cache entry.
+
+**Write the store for appends unsharded** (`--no-shard`). An unsharded append writes only new chunk objects, 55 MB per month on the Ucayali mosaics, with nothing rewritten but the metadata. It has no shard index for an open viewer to hold stale, and the same chunk reads per timestep with no index read. A sharded store rewrites the shard that receives each new timestep, whole: `(shard_time + 1) / 2` chunks per cell per append on average, 4389 MB against 686 MB over a 12-month cycle at `shard_time` 12. The default layout (one shard for the whole initial axis) opens a second shard as long as the first and rewrites it on every append, up to 117 chunks per cell for a 117-month store. Sharding is the default because of object count: 93 objects for 117 months against about 5900 unsharded, one file per cell for the whole time axis. So give an appendable store a finite `--shard-time` (12 for monthly data, a multiple of `--anchor-interval` for star-delta) only when object count matters more than the rewrite cost, and keep the whole-axis default for archives that are not appended to. The first batch may be a single timestep at any `--shard-time`. An unsharded store of thousands of objects is slow to upload for the first time (section 3.2 says how), but an append uploads only the objects it wrote, 63 in the measurement. Measured costs: `docs/append.md`.
+
+**Procedure.**
+
+```bash
+chronozarr convert new_month.csv work/new_month      # one new timestep, or encode/convert several
+cp -R data/stores/aoi/chronozarr-3 work/aoi-working  # append is not atomic: work on a copy
+touch work/stamp
+chronozarr append work/aoi-working work/new_month
+chronozarr validate work/aoi-working
+# publish: shards and chunks first, root zarr.json last; only objects the append touched
+STORE=chronozarr-3 ROOT=work scripts/upload_stores.sh --newer-than work/stamp --trailing-ttl 300 aoi-working
+```
+
+(`scripts/upload_stores.sh` reads `$ROOT/<aoi>/$STORE`; put the working copy at `work/<aoi>/chronozarr-3` for the layout it expects.)
+
+**Cache classes.** Only these objects change in place, so only these need a short lifetime:
+
+| Object | Why it changes | Cache-Control |
+|---|---|---|
+| root `zarr.json` and every other `zarr.json` | new `times`, `temporal`, shapes, `shard_bytes`, consolidated metadata | `public, max-age=300` |
+| `{level}/time/c/0` | the time axis is one chunk | `public, max-age=300` |
+| `volatility/c/0/0` | new deltas join each cell's mean | `public, max-age=300` |
+| for each cell, level and sharded variable (`data`, `mask`, `coverage`), the shard with the highest time index | it gains the new chunks | `public, max-age=300` |
+| every other shard; every chunk of an unsharded store (new timesteps are new keys) | never rewritten | `public, max-age=31536000, immutable` |
+
+The trailing shard of a cell is the one holding its last timestep. When the next shard opens, the old one becomes immutable (nothing rewrites it again) but keeps the `max-age=300` it was uploaded with, because `--newer-than` does not touch it. That costs an origin revalidation every five minutes per shard; upload those shards once without `--newer-than` if that matters. The script classifies by the current state of the whole store, so a run without `--newer-than` sets every object's header correctly.
+
+**Cloudflare.** The Cache Rule in section 3.2 sets Edge TTL to *Ignore cache-control header and use this TTL, 1 year* and Browser TTL to a 1-year override, on every URL of the host. Behind that rule the live `data.tileripper.com` serves a rewritten `zarr.json` or trailing shard from the edge for a year, whatever the origin sent, so appends are invisible there. A provider needs a rule that respects the headers the upload script sets: change Edge TTL to *Use cache-control header if present, use default TTL if not* (default 1 year) and Browser TTL to *Respect origin TTL*, or keep the override rule for immutable paths and add a rule above it that matches the mutable objects. Trailing shards cannot be matched by path pattern (their time index grows), so the header-based rule is the simple one. Purging the changed URLs after the upload also works; it does not replace the TTL, because browsers keep their own copy.
+
+**Open viewers.** A viewer keeps the root `zarr.json` it loaded until the page is reloaded, so it keeps showing the old timesteps and does not see the new ones. Everything it already reads stays correct: the chunks, offsets and references of existing timesteps do not change. The one failure, for a sharded store, is a shard index it fetches after an append using the old shard length from `shard_bytes`: the trailing shard is longer, the range lands on the wrong bytes and the index checksum fails. Reloading fixes it. An unsharded store has no shard index, so a stale viewer has no such failure. The same mismatch can occur for up to the short lifetime when a CDN holds an old shard object next to a new `zarr.json` (or the reverse), which is why the upload order is shards, then metadata, and why both lifetimes are the same.
+
+**What `doctor` says.** `chronozarr doctor` on an appended store passes the same checks. Its `cache-control` line reads the header of one object, `0/data/c/0/0/0/0` (time shard 0, cell (0, 0)). That shard is immutable once a second time shard exists. While the store still has one time shard it is the trailing shard with `max-age=300`, and doctor warns on a versioned prefix; that warning is expected then. Check `zarr.json` and a trailing shard with `curl -I` (section 4).

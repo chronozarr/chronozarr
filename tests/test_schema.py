@@ -178,8 +178,14 @@ def test_consolidated_metadata_is_written_and_readable(good_store):
         (lambda b: b["temporal"].update(encoding="chain-delta"), "expected one of"),
         (lambda b: b["temporal"].update(anchor_interval=0), "expected int >= 1"),
         (lambda b: b["temporal"].update(anchor_indices=[0, 1]), "anchor_indices"),
-        (lambda b: b["temporal"].update(delta_reference={"1": 2}), "delta_reference"),
-        (lambda b: b["temporal"].update(delta_reference={}), "delta_reference"),
+        (
+            lambda b: b["temporal"].update(delta_reference={"1": 1}),
+            "timestep 1 references 1, which is not an anchor",
+        ),
+        (
+            lambda b: b["temporal"].update(delta_reference={}),
+            "are neither anchors nor listed",
+        ),
     ],
 )
 def test_bad_chronozarr_block_is_rejected_by_reader_and_validator(store_copy, edit, message):
@@ -262,3 +268,34 @@ def test_optional_data_attrs_are_not_required_but_must_be_correct_when_present(s
 
     data.attrs["spatial:bbox"] = [0.0, 0.0, 1.0, 1.0]
     assert any("attribute spatial:bbox must be" in p for p in chronozarr.validate(store_copy))
+
+
+def test_delta_reference_rule_accepts_any_anchor_within_one_interval():
+    anchors = [0, 6, 12]
+    nearest = {1: 0, 2: 0, 3: 0, 4: 6, 5: 6, 7: 6, 8: 6, 9: 6, 10: 12, 11: 12}
+    preceding = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 7: 6, 8: 6, 9: 6, 10: 6, 11: 6}
+    assert schema.delta_reference_problem(nearest, anchors, 13, 6) is None
+    assert schema.delta_reference_problem(preceding, anchors, 13, 6) is None
+    assert schema.delta_reference_problem({**preceding, 5: 6}, anchors, 13, 6) is None
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (lambda r: r.pop(7), "[7] are neither anchors nor listed"),
+        (lambda r: r.update({6: 0}), "[6] are anchors or outside"),
+        (lambda r: r.update({40: 0}), "[40] are anchors or outside"),
+        (lambda r: r.update({7: 8}), "timestep 7 references 8, which is not an anchor"),
+        (lambda r: r.update({8: 0}), "timestep 8 references anchor 0 at distance 8"),
+        (lambda r: r.update({1: 12}), "timestep 1 references anchor 12 at distance 11"),
+    ],
+)
+def test_delta_reference_rule_names_the_violation(change, message):
+    reference = {1: 0, 2: 0, 3: 0, 4: 6, 5: 6, 7: 6, 8: 6, 9: 6, 10: 12, 11: 12}
+    change(reference)
+    assert message in (schema.delta_reference_problem(reference, [0, 6, 12], 13, 6) or "")
+
+
+def test_an_interval_of_one_has_no_references():
+    assert schema.delta_reference_problem({}, [0, 1, 2], 3, 1) is None
+    assert "anchors or outside" in (schema.delta_reference_problem({1: 0}, [0, 1, 2], 3, 1) or "")

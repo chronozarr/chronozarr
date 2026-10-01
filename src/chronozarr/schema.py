@@ -52,11 +52,13 @@ class SchemaError(ValueError):
 
 
 def compute_anchor_schedule(n_time: int, anchor_interval: int) -> tuple[list[int], dict[int, int]]:
-    """Return (anchor_indices, delta_reference).
+    """Return (anchor_indices, delta_reference) as a fresh encode writes them.
 
     Anchors are 0, k, 2k, ... below n_time. Every other timestep references the nearest anchor
     by index distance; ties go to the earlier anchor. Decoding any timestep needs one anchor
-    and one delta.
+    and one delta. The anchors depend only on a timestep's position; the references are the
+    writer's default for new timesteps, not a validity rule (`delta_reference_problem`): an
+    append keeps the references already recorded.
     """
     anchors = list(range(0, n_time, anchor_interval))
     reference: dict[int, int] = {}
@@ -67,6 +69,34 @@ def compute_anchor_schedule(n_time: int, anchor_interval: int) -> tuple[list[int
         later = earlier + anchor_interval
         reference[t] = later if later < n_time and later - t < t - earlier else earlier
     return anchors, reference
+
+
+def delta_reference_problem(
+    reference: Mapping[int, int], anchors: Sequence[int], n_time: int, interval: int
+) -> str | None:
+    """Why `reference` is not a valid star-delta reference map, or None when it is valid.
+
+    Valid means: every non-anchor timestep is a key, no anchor is, and each value is an anchor
+    at index distance 0 < d < `interval` from its key. Nothing requires the nearest anchor.
+    """
+    anchor_set = set(anchors)
+    non_anchors = set(range(n_time)) - anchor_set
+    missing = sorted(non_anchors - reference.keys())
+    if missing:
+        return f"timesteps {missing[:5]} are neither anchors nor listed"
+    unexpected = sorted(reference.keys() - non_anchors)
+    if unexpected:
+        return f"keys {unexpected[:5]} are anchors or outside 0..{n_time - 1}"
+    for t in sorted(reference):
+        anchor = reference[t]
+        if anchor not in anchor_set:
+            return f"timestep {t} references {anchor}, which is not an anchor"
+        if abs(anchor - t) >= interval:
+            return (
+                f"timestep {t} references anchor {anchor} at distance {abs(anchor - t)}; "
+                f"the distance must be below anchor_interval {interval}"
+            )
+    return None
 
 
 def scale_transform(transform: Transform, level: int) -> Transform:
@@ -489,19 +519,15 @@ def _parse_temporal(block: Any, n_time: int, where: str) -> Temporal:
     except ValueError as exc:
         raise _fail(f"{where}.delta_reference", "keys must be decimal timestep indices") from exc
 
-    anchors, expected = compute_anchor_schedule(n_time, interval)
+    anchors, _ = compute_anchor_schedule(n_time, interval)
     if raw_anchors != anchors:
         raise _fail(
             f"{where}.anchor_indices",
             f"expected {anchors} for n_time={n_time}, anchor_interval={interval}; "
             f"got {raw_anchors}",
         )
-    if reference != expected:
-        raise _fail(
-            f"{where}.delta_reference",
-            f"does not match the nearest-anchor schedule for n_time={n_time}, "
-            f"anchor_interval={interval}",
-        )
+    if (problem := delta_reference_problem(reference, anchors, n_time, interval)) is not None:
+        raise _fail(f"{where}.delta_reference", problem)
     return Temporal(interval, tuple(raw_anchors), reference, STAR_DELTA, selection)
 
 
@@ -723,7 +749,7 @@ def get_array(parent: zarr.Group, name: str, where: str) -> zarr.Array:
 # --- Store validation -----------------------------------------------------------------------
 
 
-def _same_numbers(a: Sequence[Any], b: Sequence[float]) -> bool:
+def same_numbers(a: Sequence[Any], b: Sequence[float]) -> bool:
     return len(a) == len(b) and all(
         math.isclose(x, y, rel_tol=1e-12, abs_tol=1e-9) for x, y in zip(a, b, strict=True)
     )
@@ -796,10 +822,10 @@ def _check_layout(
     if state.sharded is False:
         problems.append(f"{name}: must not be sharded when the data array is not")
     shards = tuple(array.shards)
-    if shards[1:] != (*lead, cs, cs) or not 1 <= shards[0] <= array.shape[0]:
+    if shards[1:] != (*lead, cs, cs) or shards[0] < 1:
         problems.append(
             f"{name}: shards must be (shard_time, {', '.join(str(n) for n in (*lead, cs, cs))}) "
-            f"with 1 <= shard_time <= n_time, got {shards}"
+            f"with shard_time >= 1, got {shards}"
         )
     elif state.shard_time is not None and shards[0] != state.shard_time:
         problems.append(
@@ -900,7 +926,7 @@ def _check_level(
 
     if attrs.crs != meta.crs:
         problems.append(f"{prefix}: crs {attrs.crs!r} differs from chronozarr.crs {meta.crs!r}")
-    if state.attrs is not None and not _same_numbers(
+    if state.attrs is not None and not same_numbers(
         attrs.transform, scale_transform(state.attrs.transform, index)
     ):
         problems.append(
@@ -967,7 +993,7 @@ def _check_level(
     }
     for key, value in optional_numbers.items():
         got = a.get(key)
-        if key in a and not (isinstance(got, list) and _same_numbers(got, value)):
+        if key in a and not (isinstance(got, list) and same_numbers(got, value)):
             problems.append(f"{where}: attribute {key} must be {value}, got {got}")
     _check_crs_attr(a, meta.crs, where, problems)
 
@@ -1010,7 +1036,7 @@ def _check_levels_attr(root: zarr.Group, attrs: RootAttrs, problems: list[str]) 
             data = get_array(group, attrs.chronozarr.variable, where)
         except SchemaError:
             continue  # reported by the level checks
-        if not _same_numbers(summary.transform, level_attrs.transform):
+        if not same_numbers(summary.transform, level_attrs.transform):
             problems.append(f"{where}: transform differs from the level group's")
         if not math.isclose(summary.resolution, level_attrs.resolution):
             problems.append(f"{where}: resolution differs from the level group's")

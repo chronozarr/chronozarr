@@ -329,8 +329,9 @@ Found while building; the mosaics were not modified.
   and its mean coverage is 0.04 against 0.3 to 0.5 in other months, so it is probably cut short too.
   To recover: move `2023-06.npz` to `2026-03.npz` out of `data/mosaics/lake_mead/`, rerun
   `examples/sentinel2_pc/ingest.py --aoi lake_mead` (it skips months whose file exists), then rebuild.
-  Until then the store ends in 2023-06. Appending the recovered months to this store would need a
-  finite `shard_time` (spec 14); it has one shard over all its months.
+  Until then the store ends in 2023-06. Appending the recovered months to this store would rewrite
+  its single whole-axis shard per cell (spec 14); a store built to grow should be unsharded
+  (`--no-shard`).
 - **Lake Mead from 2022-02 still carries the +1000 DN processing-baseline offset.** Band medians jump
   by about 1100 DN between 2022-01 and 2022-02 (B02 1166 to 2122) in every band; Ucayali, corrected,
   does not. NDWI is not invariant to an additive offset: the 99th percentile of NDWI went from 0.89 to

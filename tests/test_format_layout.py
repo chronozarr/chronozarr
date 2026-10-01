@@ -222,12 +222,19 @@ def test_shard_time_defaults_to_all_timesteps(tmp_path):
     assert store.levels[0].shard_time == 5
 
 
-@pytest.mark.parametrize("shard_time", [0, 8, -1])
-def test_shard_time_is_bounded_by_n_time(tmp_path, shard_time):
-    with pytest.raises(ValueError, match=r"shard_time must be in 1\.\.5"):
+@pytest.mark.parametrize("shard_time", [0, -1])
+def test_shard_time_must_be_positive(tmp_path, shard_time):
+    with pytest.raises(ValueError, match="shard_time must be at least 1"):
         chronozarr.encode(
             make_da(make_truth(5, 1, 8, 8)), tmp_path / "s", chunk_size=CS, shard_time=shard_time
         )
+
+
+def test_shard_time_may_exceed_the_timesteps_written(tmp_path):
+    store = _encode(tmp_path, make_truth(3, 1, 13, 11), shard_time=8)
+    assert store.levels[0].shard_time == 8
+    assert store.levels[0].data.shape[0] == 3
+    assert chronozarr.validate(tmp_path / "s") == []
 
 
 def test_shard_bytes_match_the_shard_objects(tmp_path):
