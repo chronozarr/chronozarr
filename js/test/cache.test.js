@@ -162,6 +162,33 @@ test('speculative allowance saved up is capped at the initial bytes plus a few s
   assert.equal(budget.available(4_000_000), 1_000_000 + 0.5 * 4_000_000 * 5);
 });
 
+test('changing the share keeps what was earned at the old share and earns at the new one afterwards', () => {
+  const clock = clockAt();
+  const budget = new SpeculativeBudget({ initial: 0, share: 0.5, burstSeconds: 100, clock: clock.read });
+  assert.equal(budget.share, 0.5);
+  clock.now += 2000;
+  assert.equal(budget.available(null), 0, 'time before any rate was known earns nothing');
+  budget.setShare(0.9, 1_000_000);
+  assert.equal(budget.share, 0.9);
+  clock.now += 1000;
+  budget.setShare(0.5, 1_000_000);
+  assert.ok(Math.abs(budget.available(1_000_000) - 900_000) < 1, 'one second at 0.9 of 1 MB/s');
+  clock.now += 1000;
+  assert.ok(Math.abs(budget.available(1_000_000) - 1_400_000) < 1, 'then a second at 0.5');
+  budget.setShare(0.5, 1_000_000);
+  assert.equal(budget.share, 0.5);
+});
+
+test('a higher share also raises the cap on what may be saved up', () => {
+  const clock = clockAt();
+  const budget = new SpeculativeBudget({ initial: 1000, share: 0.5, burstSeconds: 5, clock: clock.read });
+  budget.setShare(0.9, 2_000_000);
+  clock.now += 3_600_000;
+  assert.equal(budget.available(2_000_000), 1000 + 0.9 * 2_000_000 * 5);
+  budget.setShare(0.5, 2_000_000);
+  assert.equal(budget.available(2_000_000), 1000 + 0.5 * 2_000_000 * 5, 'lowering it trims the saved-up amount to the lower cap');
+});
+
 test('speculative spend can go negative (a chunk bigger than estimated) and setInitial shifts the allowance', () => {
   const clock = clockAt();
   const budget = new SpeculativeBudget({ initial: 100, share: 0.5, clock: clock.read });
@@ -183,6 +210,24 @@ test('bandwidth is null until a transfer big enough to measure has finished', ()
   clock.now += 50;
   bw.end(1000);
   assert.equal(bw.estimate, null, '1 KB in 50 ms says nothing about throughput');
+});
+
+test('the estimate is mature after a second of transfer time, however it is spread over requests', () => {
+  const clock = clockAt();
+  const bw = new BandwidthEstimator(clock.read);
+  assert.equal(bw.mature, false);
+  bw.begin();
+  clock.now += 900;
+  bw.end(2_000_000);
+  assert.ok(bw.estimate > 0);
+  assert.equal(bw.mature, false, '0.9 s of transfer is still young');
+  clock.now += 600_000;
+  bw.begin();
+  clock.now += 200;
+  bw.end(500_000);
+  assert.equal(bw.mature, true, 'idle time between requests does not count, nor does it make an old estimate young again');
+  clock.now += 3_600_000;
+  assert.equal(bw.mature, true);
 });
 
 test('bandwidth is aggregate: parallel transfers add up instead of each seeing a share', () => {

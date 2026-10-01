@@ -6,6 +6,8 @@
 const TAU_MS = 4000;
 const MIN_BYTES = 64 * 1024;
 const MIN_BUSY_MS = 1;
+/** Seconds of transfer time (not decayed) after which the estimate counts as established. */
+const MATURE_BUSY_MS = 1000;
 
 export class BandwidthEstimator {
   #clock;
@@ -13,6 +15,7 @@ export class BandwidthEstimator {
   #last = null;
   #bytes = 0;
   #busyMs = 0;
+  #totalBusyMs = 0;
   #rate = null;
 
   constructor(clock = () => performance.now()) {
@@ -38,6 +41,11 @@ export class BandwidthEstimator {
     return this.#rate;
   }
 
+  /** Whether the estimate rests on at least a second of transfer time: before that it may only reflect a few small, latency-bound requests. */
+  get mature() {
+    return this.#rate !== null && this.#totalBusyMs >= MATURE_BUSY_MS;
+  }
+
   #advance() {
     const now = this.#clock();
     if (this.#last !== null) {
@@ -45,6 +53,7 @@ export class BandwidthEstimator {
       const decay = Math.exp(-elapsed / TAU_MS);
       this.#bytes *= decay;
       this.#busyMs = this.#busyMs * decay + (this.#inflight > 0 ? elapsed : 0);
+      if (this.#inflight > 0) this.#totalBusyMs += elapsed;
     }
     this.#last = now;
   }

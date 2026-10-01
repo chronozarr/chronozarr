@@ -113,7 +113,8 @@ test('bandwidthEstimate is null at first, then follows the measured transfers', 
 test('speculative fetching starts with its initial allowance and waits for a bandwidth measurement after that', async () => {
   const readable = buildSyntheticStore(LARGE);
   const initial = LARGE_CHUNK * 0.7 * 2.5;
-  const store = await openStore('memory://allowance', { store: readable, workers: 0, speculativeBytesInitial: initial });
+  // A frozen clock: transfers take no measured time, so no bandwidth estimate ever forms, however fast or slow the machine is.
+  const store = await openStore('memory://allowance', { store: readable, workers: 0, speculativeBytesInitial: initial, clock: () => 0 });
   const abort = new AbortController();
   const done = store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, concurrency: 1, signal: abort.signal });
   await sleep(80);
@@ -126,7 +127,7 @@ test('speculative fetching starts with its initial allowance and waits for a ban
 
 test('with no allowance and no measured bandwidth nothing speculative is fetched; demand reads are unaffected', async () => {
   const readable = buildSyntheticStore(LARGE);
-  const store = await openStore('memory://none-allowed', { store: readable, workers: 0, speculativeBytesInitial: 0 });
+  const store = await openStore('memory://none-allowed', { store: readable, workers: 0, speculativeBytesInitial: 0, clock: () => 0 });
   const abort = new AbortController();
   const done = store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, concurrency: 2, signal: abort.signal });
   await sleep(60);
@@ -136,52 +137,94 @@ test('with no allowance and no measured bandwidth nothing speculative is fetched
   assert.equal((await done).fetched, 0);
 });
 
-test('the allowance grows with measured bandwidth: a fast link prefetches much more in the same fake time', async (t) => {
-  // Nothing here waits on real time. The prefetch loop sleeps with setTimeout while it waits for allowance, so
-  // setTimeout is faked, and the store's clock is the link's simulated clock. The test advances both together,
-  // one step at a time, and lets the store run to quiet before the next step.
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+/** Prefetch `cells` of a simulated link for `steps` steps of fake time (setTimeout faked, the store's clock is the link's), after `warmup` demand reads. */
+async function prefetchOnFakeLink(t, { rate, steps, warmup, nTime = 200 }) {
   const settle = async () => {
     for (let i = 0; i < 3; i++) await new Promise((resolve) => setImmediate(resolve));
   };
-  const STEP_MS = 100;
-  const STEPS = 50;
-  const SHARE = 0.5;
+  const readable = buildSyntheticStore({ ...LARGE, nTime });
+  const link = simulatedLink(readable, rate);
+  const store = await openStore('memory://fake-link', { store: link.store, workers: 0, clock: link.clock, speculativeBytesInitial: 0, maxCacheBytes: 1e9, compressedBytes: 1e9 });
+  const opened = link.now;
+  for (let read = 0; read < warmup; read++) await store.getRaw(0, 0, 0, read);
+  const shareBefore = store.stats.cache.speculativeShare;
+  store.resetStats();
+  const abort = new AbortController();
+  const done = store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, concurrency: 1, signal: abort.signal });
+  await settle();
+  for (let step = 0; step < steps; step++) {
+    link.now += 100;
+    t.mock.timers.tick(100);
+    await settle();
+  }
+  abort.abort();
+  const result = await done;
+  return { store, bytes: store.stats.cache.speculativeBytes, elapsedS: (link.now - opened) / 1000, fetched: result.fetched, planned: result.planned, shareBefore, shareAfter: store.stats.cache.speculativeShare };
+}
+
+test('while the estimate is young the allowance grows with the measured bandwidth: half the link, spent at estimated size', async (t) => {
+  // Nothing here waits on real time: setTimeout is faked and the link's clock advances only when the test says so.
+  // 20 and 80 MB/s links move a 128 KB chunk in 6.5 and 1.6 ms, so the few dozen chunks fetched stay far below
+  // the second of transfer time after which the estimate counts as established.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   /** The allowance is spent at the *estimated* compressed size of a chunk (0.7 of decoded until chunks have been seen, rising toward the observed ratio), so real bytes can exceed what was earned by at most 1 / 0.7. */
   const MIN_ESTIMATE_RATIO = 0.7;
+  const runs = [];
+  for (const rate of [20_000_000, 80_000_000]) {
+    const run = await prefetchOnFakeLink(t, { rate, steps: 1, warmup: 2 });
+    assert.equal(run.shareBefore, 0.5);
+    assert.equal(run.shareAfter, 0.5, 'still young at the end');
+    const earned = 0.5 * rate * run.elapsedS;
+    assert.ok(run.bytes > 0, 'a measured link earns allowance even though it started with none');
+    assert.ok(run.bytes <= earned / MIN_ESTIMATE_RATIO, `${rate / 1e6} MB/s link stays within what it earned: ${run.bytes} <= ${earned} / ${MIN_ESTIMATE_RATIO}`);
+    assert.ok(run.fetched < run.planned - 2, `${rate / 1e6} MB/s link is throttled (${run.fetched} of ${run.planned})`);
+    runs.push(run);
+  }
+  assert.ok(runs[1].bytes > 2 * runs[0].bytes, `the faster link prefetched more: ${runs[1].bytes} vs ${runs[0].bytes}`);
+});
 
-  const run = async (rate) => {
-    const readable = buildSyntheticStore({ ...LARGE, nTime: 100 });
-    const link = simulatedLink(readable, rate);
-    const store = await openStore('memory://growth', { store: link.store, workers: 0, clock: link.clock, speculativeBytesInitial: 0, maxCacheBytes: 1e9, compressedBytes: 1e9 });
-    const opened = link.now;
-    await store.getRaw(0, 0, 0, 0);
-    await store.getRaw(0, 0, 0, 1);
-    assert.ok(Math.abs(store.bandwidthEstimate() - rate) / rate < 1e-9, `sequential transfers on the simulated link measure its rate: ${store.bandwidthEstimate()} vs ${rate}`);
-    store.resetStats();
-    const abort = new AbortController();
-    const done = store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, concurrency: 1, signal: abort.signal });
-    await settle();
-    for (let step = 0; step < STEPS; step++) {
-      link.now += STEP_MS;
-      t.mock.timers.tick(STEP_MS);
-      await settle();
-    }
-    abort.abort();
-    const result = await done;
-    // Everything earned since the store was created (the allowance starts at 0 and earns once bandwidth is known).
-    const earned = SHARE * rate * ((link.now - opened) / 1000);
-    return { bytes: store.stats.cache.speculativeBytes, earned, fetched: result.fetched, planned: result.planned };
+test('once the estimate is established and nothing is pending, speculation is not throttled below the link', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  // A 400 KB/s link takes 0.33 s a chunk: after four demand reads (over a second of transfer) it is established.
+  const run = await prefetchOnFakeLink(t, { rate: 400_000, steps: 1, warmup: 4, nTime: 60 });
+  assert.equal(run.shareBefore, 1.0);
+  assert.equal(run.fetched, run.planned - 4, 'the whole window within one step (the four chunks the warm-up reads already cached are skipped)');
+  // The same link while young would have been held to half of it by the allowance:
+  const young = await prefetchOnFakeLink(t, { rate: 400_000, steps: 1, warmup: 2, nTime: 60 });
+  assert.equal(young.shareBefore, 0.5);
+  assert.ok(young.fetched < run.fetched, `young: ${young.fetched} chunks, established: ${run.fetched}`);
+});
+
+test('the speculative share is 0.5 while the estimate is young or a demand read is pending, 1.0 when idle and established', async () => {
+  const readable = buildSyntheticStore({ ...LARGE, nTime: 24 });
+  const link = simulatedLink(readable, 500_000);
+  let gate = null;
+  const gated = {
+    get: link.store.get,
+    async getRange(key, range, options) {
+      if (gate && range.offset !== undefined) await gate.promise;
+      return link.store.getRange(key, range, options);
+    },
   };
+  const store = await openStore('memory://share', { store: gated, workers: 0, clock: link.clock, speculativeBytesInitial: 0, maxCacheBytes: 1e9, compressedBytes: 1e9 });
+  const share = () => store.stats.cache.speculativeShare;
+  assert.equal(share(), 0.5, 'nothing measured yet');
+  await store.getRaw(0, 0, 0, 0);
+  await store.getRaw(0, 0, 0, 1);
+  assert.equal(share(), 0.5, 'two chunks at 0.5 MB/s are half a second of transfer: still young');
+  for (const t of [2, 3, 4]) await store.getRaw(0, 0, 0, t);
+  assert.ok(store.bandwidthEstimate() > 0);
+  assert.equal(share(), 1.0, 'over a second of transfer and nothing pending: established');
 
-  const slow = await run(400_000);
-  const fast = await run(8_000_000);
-  assert.ok(slow.bytes > 0, 'a measured link earns allowance even though it started with none');
-  assert.ok(slow.bytes <= slow.earned / MIN_ESTIMATE_RATIO, `slow link stays within what it earned: ${slow.bytes} <= ${slow.earned} / ${MIN_ESTIMATE_RATIO}`);
-  assert.ok(fast.bytes <= fast.earned / MIN_ESTIMATE_RATIO, `fast link stays within what it earned: ${fast.bytes} <= ${fast.earned} / ${MIN_ESTIMATE_RATIO}`);
-  assert.ok(slow.fetched < slow.planned - 2, `the slow link is still throttled at the end (${slow.fetched} of ${slow.planned})`);
-  assert.ok(fast.fetched >= fast.planned - 2, `the fast link has earned its whole window (${fast.fetched} of ${fast.planned}; 2 were already cached)`);
-  assert.ok(fast.bytes > 3 * slow.bytes, `fast ${fast.bytes} vs slow ${slow.bytes}`);
+  let release;
+  gate = { promise: new Promise((resolve) => (release = resolve)) };
+  const pending = store.getRaw(0, 0, 0, 5);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(share(), 0.5, 'a demand read is waiting: back to the lower share');
+  release();
+  await pending;
+  gate = null;
+  assert.equal(share(), 1.0, 'and up again once it has been served');
 });
 
 // ---- demand is never starved; stale work is cancelled ----
@@ -217,13 +260,12 @@ test('a demand read issued during prefetch starts at once', async () => {
   const abort = new AbortController();
   const prefetching = store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, concurrency: 8, signal: abort.signal });
   await sleep(60);
-  const issued = performance.now();
   const before = readable.log.length;
   const demand = store.getRaw(0, 0, 0, 37);
-  await sleep(10);
+  // One turn of the event loop (all microtasks, no timers): no slot or queue stands between a demand read and the store while only background requests are in flight.
+  await new Promise((resolve) => setImmediate(resolve));
   const started = readable.log.slice(before).find((c) => c.range?.offset !== undefined || c.range?.suffixLength !== undefined);
-  assert.ok(started, 'the demand request was sent within 10 ms although prefetch was running');
-  assert.ok(performance.now() - issued < 35);
+  assert.ok(started, 'the demand request was sent at once although prefetch was running');
   await demand;
   abort.abort();
   await prefetching;

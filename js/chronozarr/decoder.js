@@ -37,8 +37,17 @@ const DEFAULT_MAX_REQUESTS = 12;
 const PREFETCH_COOLDOWN_MS = 30000;
 const DEFAULT_RETRY_DELAYS_MS = [200, 600, 1500];
 const DEFAULT_SPECULATIVE_INITIAL_BYTES = 16 * MIB;
-/** Fraction of the measured bandwidth that speculative fetching may use once the initial allowance is spent. */
-const SPECULATIVE_SHARE = 0.5;
+/**
+ * Fraction of the measured bandwidth that speculative fetching earns once the initial allowance is spent:
+ * a half while a demand read is pending or the estimate is young (under a second of transfer time), the whole
+ * link when nothing is waiting and the estimate is established. Demand requests keep their own request slots
+ * and go first, and prefetch starts nothing new while one is pending, so a busy link costs them little. A
+ * smaller idle share caps cold-loop playback on a fast link at that fraction of the link: on the live Ucayali
+ * store (a link of about 20 MB/s, 10 steps/s asked, median of 3 runs) an idle share of 0.5 achieved 8.2 steps/s,
+ * 0.9 achieved 9.1 and 1.0 achieved 9.7.
+ */
+const SPECULATIVE_SHARE_PENDING = 0.5;
+const SPECULATIVE_SHARE_IDLE = 1.0;
 const AUX_CACHE_BYTES = 128 * MIB;
 /** Compressed size over decoded size assumed until chunks have been seen (Sentinel-2 reflectance: 0.65 to 0.72). */
 const INITIAL_COMPRESSION_RATIO = 0.7;
@@ -279,7 +288,7 @@ export class ChronoStore {
     this.#names = names;
     this.#shardBytes = cz.shard_bytes ?? null;
     this.#cache = new ChunkCache({ decodedBytes: budgets.decodedBytes, compressedBytes: budgets.compressedBytes, score: (entry) => this.evictionScore(entry) });
-    this.#speculative = new SpeculativeBudget({ initial: budgets.speculativeBytesInitial, share: SPECULATIVE_SHARE, clock });
+    this.#speculative = new SpeculativeBudget({ initial: budgets.speculativeBytesInitial, share: SPECULATIVE_SHARE_PENDING, clock });
 
     const { bands, bandNames } = normalizeBands(cz, url);
     this.bands = bandNames;
@@ -358,6 +367,7 @@ export class ChronoStore {
     const cacheStats = this.#counters.cache;
     Object.defineProperties(cacheStats, {
       decodedBytes: { get: () => this.#cache.decodedBytes, enumerable: true },
+      speculativeShare: { get: () => this.#speculative.share, enumerable: true },
       compressedBytes: { get: () => this.#cache.compressedBytes, enumerable: true },
       evictions: { get: () => this.#cache.evictions.decoded, enumerable: true },
       compressedEvictions: { get: () => this.#cache.evictions.compressed, enumerable: true },
@@ -674,12 +684,19 @@ export class ChronoStore {
   /** Wait until `bytes` of speculative traffic may start, then spend them. */
   async #awaitSpeculative(bytes, signal) {
     for (;;) {
+      this.#updateSpeculativeShare();
       const waitMs = this.#speculative.waitMs(bytes, this.#bandwidth.estimate);
       if (waitMs === 0) break;
       // Unknown bandwidth: look again soon, since demand traffic or a new budget can change that.
       await sleep(Number.isFinite(waitMs) ? Math.min(Math.max(waitMs, 10), 250) : 50, signal);
     }
     this.#speculative.spend(bytes);
+  }
+
+  /** The allowance earns at the idle share only while no demand read is pending and the bandwidth estimate is established. */
+  #updateSpeculativeShare() {
+    const idle = this.#demandInflight === 0 && this.#bandwidth.mature;
+    this.#speculative.setShare(idle ? SPECULATIVE_SHARE_IDLE : SPECULATIVE_SHARE_PENDING, this.#bandwidth.estimate);
   }
 
   #checkCell(level, row, col) {
@@ -761,11 +778,17 @@ export class ChronoStore {
         { once: true },
       );
     }
-    if (!background) this.#demandInflight++;
+    if (!background) {
+      this.#demandInflight++;
+      this.#updateSpeculativeShare();
+    }
     entry.promise = this.#load(key, meta, entry)
       .finally(() => {
         this.#inflight.delete(key);
-        if (!background && --this.#demandInflight === 0) for (const wake of this.#demandIdleWaiters.splice(0)) wake();
+        if (!background && --this.#demandInflight === 0) {
+          this.#updateSpeculativeShare();
+          for (const wake of this.#demandIdleWaiters.splice(0)) wake();
+        }
       });
     this.#inflight.set(key, entry);
     return entry;

@@ -217,8 +217,10 @@ export class ChunkCache {
 /**
  * How many bytes of speculative (prefetch) traffic may start now. It begins with `initial` bytes (16 MB by
  * default) so a freshly opened store can warm up at once, and earns `share` of the measured download rate
- * after that, up to a few seconds' worth saved. Demand requests never spend from it. A store whose bandwidth
- * is still unknown earns nothing beyond the initial allowance.
+ * after that, up to a few seconds' worth saved. The share can be changed while the store runs (setShare):
+ * the store lowers it while a demand read is pending or the bandwidth estimate is young, and raises it when
+ * nothing is waiting. Demand requests never spend from the allowance. A store whose bandwidth is still
+ * unknown earns nothing beyond the initial allowance.
  */
 export class SpeculativeBudget {
   #initial;
@@ -239,6 +241,18 @@ export class SpeculativeBudget {
 
   get initial() {
     return this.#initial;
+  }
+
+  get share() {
+    return this.#share;
+  }
+
+  /** Earn at a different share of the rate from now on; what was earned up to now stays earned at the old share. */
+  setShare(share, rate) {
+    if (share === this.#share) return;
+    this.#refill(rate);
+    this.#share = share;
+    this.#refill(rate);
   }
 
   setInitial(initial) {
