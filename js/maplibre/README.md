@@ -83,7 +83,7 @@ bands get the 2nd to 98th percentile of the valid values on screen, or `range: [
   (`n_band * chunk^2 * bytes`; 2 MiB for 4 bands of uint16 at 512 px, so 128 slots); a cell on screen needs two slots
   (anchor and delta, one for unencoded stores), plus one per chunk of a mask. A view that needs more cells than half the
   slots draws the cells nearest the centre and emits an `error`. Uploads are capped at 16 MiB per frame. CPU: the reader
-  caches (`storeOptions.decodedBytes`, 1 to 2 GiB by default, and a compressed tier) are separate and are what make
+  caches (`storeOptions.totalBytes`, 1.5 GiB on machines reporting 8 GB or more and 768 MiB below, shared by the decoded and compressed tiers) are separate and are what make
   a warm time change a zero-request operation; `prefetch` fills them within those budgets.
 - **Precision.** Vertex positions are float32 offsets from each mesh's centre, the matrix is composed in float64: the
   error is under 0.01 px at zoom 22. Adjacent cells share edge vertices to 1e-11 of the world.

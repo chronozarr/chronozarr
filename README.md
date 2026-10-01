@@ -157,7 +157,7 @@ Movie playback, two loops, holds counted separately at the wrap, 2026-09-30:
 | Ucayali over the internet, 4 cells, warm | 60 /s | 60.03 /s | 0 / 0 |
 | Ucayali over the internet, 9 cells, cold | 60 /s | 6.0 /s | 0 / 155 |
 
-A 9-cell overview of the 117-month store is about 11.7 MB per timestep, so a cold loop is bound by the link (about 55 MB/s here), and the 1 GiB decoded cache holds about 48 of the 117 timesteps at that size. A 4-cell view fits entirely and plays at the display rate.
+A 9-cell overview of the 117-month store is about 11.7 MB per timestep, so a cold loop is bound by the link (about 55 MB/s here), and the cache, 1.5 GiB shared by the decoded and compressed tiers on an 8 GB machine, holds roughly half of the 117 timesteps at that size; idle prefetch stops after 64 MiB and expands only during playback. A 4-cell view fits entirely and plays at the display rate.
 
 Coarse-first loading and the bandwidth-aware movie level, live Ucayali store with the link throttled to 50 Mbit/s and 40 ms, 2026-09-30, medians:
 

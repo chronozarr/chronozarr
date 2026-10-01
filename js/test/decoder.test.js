@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { openStore, applyDelta, chunkKey, defaultCacheBytes, samplePixelFrom, scrubCost, windowOrder } from '../chronozarr/decoder.js';
+import { openStore, applyDelta, chunkKey, defaultTotalBytes, samplePixelFrom, scrubCost, windowOrder } from '../chronozarr/decoder.js';
 import { buildSyntheticStore, sourceValue } from '../support/synthetic-store.js';
 import { startStaticServer } from '../support/static-server.js';
 
@@ -254,8 +254,8 @@ test('prefetch window is sized by the cache budget, never anchors everywhere', a
   assert.deepEqual(cached, [16, 18, 19, 20, 21, 22, 23, 24, 25], 'a window around t=20, reaching further ahead (25) than behind (18), with its anchors 16 and 24');
 
   const everything = await openStore('memory://synthetic', { store: buildSyntheticStore(spec), maxCacheBytes: chunkBytes * 100, compressedBytes: 0 });
-  const full = await everything.prefetch({ lod: 0, cells: [[0, 0]], t: 20, concurrency: 1 });
-  assert.equal(full.planned, 40, 'the whole axis when it fits');
+  const full = await everything.prefetch({ lod: 0, cells: [[0, 0]], t: 20, playing: true, concurrency: 1 });
+  assert.equal(full.planned, 40, 'the whole axis when it fits and the viewer plays');
 });
 
 test('prefetch skips cached chunks and honours abort', async () => {
@@ -407,13 +407,13 @@ test('errors carry the store URL and the reason', async () => {
   await assert.rejects(store.getRaw(3, 0, 0, 0), /lod 3 out of range/);
 });
 
-test('decoded cache budget: 2 GiB from 8 GB of device memory, else 1 GiB', () => {
-  const GIB = 1024 ** 3;
-  assert.equal(defaultCacheBytes(8), 2 * GIB);
-  assert.equal(defaultCacheBytes(16), 2 * GIB);
-  assert.equal(defaultCacheBytes(4), GIB);
-  assert.equal(defaultCacheBytes(0.5), GIB);
-  assert.equal(defaultCacheBytes(undefined), GIB, 'browsers without navigator.deviceMemory');
+test('joint cache budget: 1.5 GiB from 8 GB of device memory, else 768 MiB', () => {
+  const MIB = 1024 ** 2;
+  assert.equal(defaultTotalBytes(8), 1536 * MIB);
+  assert.equal(defaultTotalBytes(16), 1536 * MIB);
+  assert.equal(defaultTotalBytes(4), 768 * MIB);
+  assert.equal(defaultTotalBytes(0.5), 768 * MIB);
+  assert.equal(defaultTotalBytes(undefined), 768 * MIB, 'browsers without navigator.deviceMemory');
 });
 
 test('loopFits: whether the whole time axis of some cells fits 90% of the cache budget', async () => {

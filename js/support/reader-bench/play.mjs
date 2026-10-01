@@ -24,7 +24,7 @@ const { chromium } = createRequire(import.meta.url)(playwrightPath);
 const options = JSON.parse(optionsJson);
 const throttle = JSON.parse(throttleJson);
 
-const server = await startStaticServer(REPO_ROOT);
+const server = await startStaticServer(process.env.BENCH_ROOT ?? REPO_ROOT);
 const browser = await chromium.launch({ executablePath: chromePath, headless: true, args: ['--ignore-gpu-blocklist', '--use-angle=metal'] });
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });

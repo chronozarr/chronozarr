@@ -625,6 +625,8 @@ class Viewer {
         direction: this.#direction,
         behindFactor: movie ? BEHIND_FACTOR_PLAYING : BEHIND_FACTOR,
         loop: movie,
+        playing: movie,
+        masks: this.store.hasMask,
         seek,
         signal: abort.signal,
         onChunk: (chunkLod, row, col, t) => {

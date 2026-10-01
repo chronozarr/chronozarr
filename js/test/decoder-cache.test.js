@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openStore } from '../chronozarr/decoder.js';
-import { buildSyntheticStore, defaultValues } from '../support/synthetic-store.js';
+import { buildSyntheticStore, defaultValues, maskValue } from '../support/synthetic-store.js';
 
 const SMALL = { nTime: 12, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 4, sharded: true };
 const SMALL_CHUNK = 32 * 32 * 2;
@@ -54,7 +54,7 @@ test('prefetch keeps far timesteps as compressed bytes only and reaches further 
   const readable = buildSyntheticStore({ ...SMALL, nTime: 24 });
   const store = await openStore('memory://far', { store: readable, workers: 0, maxCacheBytes: SMALL_CHUNK * 4, compressedBytes: SMALL_CHUNK * 100, speculativeBytesInitial: 1e9 });
   store.evictionScore = (entry) => Math.abs(entry.t - 10);
-  const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 10, concurrency: 1 });
+  const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 10, playing: true, concurrency: 1 });
   assert.equal(result.planned, 24, 'the whole axis fits the compressed tier');
   assert.equal(result.fetched, 24);
   assert.ok(result.compressedOnly >= 18, `most chunks are far from t=10 and were not decoded (${result.compressedOnly})`);
@@ -71,7 +71,7 @@ test('prefetch keeps far timesteps as compressed bytes only and reaches further 
 test('budgets can be read and changed at any time', async () => {
   const readable = buildSyntheticStore(SMALL);
   const store = await openStore('memory://budgets', { store: readable, workers: 0, maxCacheBytes: SMALL_CHUNK * 8, compressedBytes: SMALL_CHUNK * 8, speculativeBytesInitial: 1234 });
-  assert.deepEqual(store.budgets(), { decodedBytes: SMALL_CHUNK * 8, compressedBytes: SMALL_CHUNK * 8, speculativeBytesInitial: 1234 });
+  assert.deepEqual(store.budgets(), { totalBytes: SMALL_CHUNK * 16, decodedBytes: SMALL_CHUNK * 8, compressedBytes: SMALL_CHUNK * 8, auxBytes: 64 * 1024 * 1024, speculativeBytesInitial: 1234 });
   assert.equal(store.maxCacheBytes, SMALL_CHUNK * 8);
   for (let t = 0; t < 8; t++) await store.getRaw(0, 0, 0, t);
   assert.equal(store.cacheInfo().entries, 8);
@@ -80,7 +80,7 @@ test('budgets can be read and changed at any time', async () => {
   assert.equal(store.cacheInfo().compressedEntries, 8, 'the other tier is untouched');
   store.setBudgets({ compressedBytes: SMALL_CHUNK * 2 });
   assert.ok(store.cacheInfo().compressedEntries <= 2);
-  assert.deepEqual(store.budgets(), { decodedBytes: SMALL_CHUNK * 3, compressedBytes: SMALL_CHUNK * 2, speculativeBytesInitial: 1234 });
+  assert.deepEqual(store.budgets(), { totalBytes: SMALL_CHUNK * 16, decodedBytes: SMALL_CHUNK * 3, compressedBytes: SMALL_CHUNK * 2, auxBytes: 64 * 1024 * 1024, speculativeBytesInitial: 1234 });
   assert.equal(store.maxCacheBytes, SMALL_CHUNK * 3);
   assert.throws(() => store.setBudgets({ decodedBytes: -1 }), /decodedBytes must be a number of bytes >= 0/);
   assert.throws(() => store.setBudgets({ compressedBytes: NaN }), /compressedBytes/);
@@ -150,7 +150,7 @@ async function prefetchOnFakeLink(t, { rate, steps, warmup, nTime = 200 }) {
   const shareBefore = store.stats.cache.speculativeShare;
   store.resetStats();
   const abort = new AbortController();
-  const done = store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, concurrency: 1, signal: abort.signal });
+  const done = store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, playing: true, concurrency: 1, signal: abort.signal });
   await settle();
   for (let step = 0; step < steps; step++) {
     link.now += 100;
@@ -449,4 +449,383 @@ test('the two tiers add up: decoded chunks plus chunks held only compressed', as
   const before = chunkReads(readable).length;
   for (const t of [28, 29, 30, 31]) await store.getRaw(0, 0, 0, t);
   assert.equal(chunkReads(readable).length, before, 'no refetch for the decoded ones');
+});
+
+// ---- joint budget ----
+
+/** Run `body` with navigator.deviceMemory reporting `gb` (Node has no such property: browsers do). */
+async function withDeviceMemory(gb, body) {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { value: { deviceMemory: gb, hardwareConcurrency: 4 }, configurable: true, writable: true });
+  try {
+    return await body();
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'navigator', original);
+    else delete globalThis.navigator;
+  }
+}
+
+test('one joint cap by default: 1.5 GiB from 8 GB of device memory, 768 MiB below, split reported in stats', async () => {
+  const MIB = 1024 * 1024;
+  const readable = buildSyntheticStore(SMALL);
+  const big = await withDeviceMemory(8, () => openStore('memory://big', { store: readable, workers: 0 }));
+  assert.deepEqual(big.budgets(), { totalBytes: 1536 * MIB, decodedBytes: 1536 * MIB, compressedBytes: 1536 * MIB, auxBytes: Math.round(153.6 * MIB), speculativeBytesInitial: 16 * MIB });
+  assert.equal(big.maxCacheBytes, 1536 * MIB, 'the decoded tier may use all of it');
+  const small = await withDeviceMemory(4, () => openStore('memory://small', { store: readable, workers: 0 }));
+  assert.equal(small.budgets().totalBytes, 768 * MIB);
+  const unknown = await openStore('memory://unknown', { store: readable, workers: 0 });
+  assert.equal(unknown.budgets().totalBytes, 768 * MIB, 'no navigator.deviceMemory');
+
+  for (let t = 0; t < 6; t++) await unknown.getRaw(0, 0, 0, t);
+  const { cache } = unknown.stats();
+  assert.equal(cache.budgetBytes, 768 * MIB);
+  assert.equal(cache.usedBytes, cache.decodedBytes + cache.compressedBytes);
+  assert.equal(cache.decodedBytes, 6 * SMALL_CHUNK);
+  assert.ok(cache.compressedBytes > 0, 'compressed copies of what was fetched');
+  assert.equal(unknown.estimatedBytes(), cache.usedBytes, 'no mask or coverage here: the estimate is the two tiers');
+});
+
+test('tier budgets are overrides: naming both makes their sum the cap, naming one raises the default cap to it', async () => {
+  const MIB = 1024 * 1024;
+  const readable = buildSyntheticStore(SMALL);
+  const both = await openStore('memory://both', { store: readable, workers: 0, maxCacheBytes: 3000 * MIB, compressedBytes: 500 * MIB });
+  assert.equal(both.budgets().totalBytes, 3500 * MIB);
+  const one = await openStore('memory://one', { store: readable, workers: 0, decodedBytes: 2000 * MIB });
+  assert.deepEqual([one.budgets().totalBytes, one.maxCacheBytes], [2000 * MIB, 2000 * MIB]);
+  const below = await openStore('memory://below', { store: readable, workers: 0, decodedBytes: 100 * MIB });
+  assert.deepEqual([below.budgets().totalBytes, below.maxCacheBytes], [768 * MIB, 100 * MIB], 'a ceiling under the default cap leaves the cap alone');
+  const explicit = await openStore('memory://explicit', { store: readable, workers: 0, totalBytes: 50 * MIB, decodedBytes: 100 * MIB });
+  assert.deepEqual([explicit.budgets().totalBytes, explicit.maxCacheBytes], [50 * MIB, 50 * MIB], 'the cap wins over a larger ceiling');
+  explicit.setBudgets({ totalBytes: 10 * MIB });
+  assert.equal(explicit.budgets().totalBytes, 10 * MIB);
+  assert.throws(() => explicit.setBudgets({ totalBytes: -1 }), /totalBytes must be a number of bytes >= 0/);
+});
+
+test('joint cap: decoded plus compressed never exceeds it, and the compressed tier holds what the decoded tier leaves', async () => {
+  // Synthetic chunks do not compress, so a compressed chunk costs as much as a decoded one: a cap of 10 chunks.
+  const spec = { nTime: 24, nBand: 1, height: 16, width: 16, chunk: 32, anchorInterval: 4, sharded: true, encoding: 'none' };
+  const cached = (store) => {
+    const decoded = [];
+    for (let t = 0; t < 24; t++) if (store.peekRaw(0, 0, 0, t)) decoded.push(t);
+    return decoded;
+  };
+  const fetchAll = async (store) => {
+    store.evictionScore = (entry) => Math.abs(entry.t - 11);
+    let peak = 0;
+    for (let t = 0; t < 24; t++) {
+      await store.getRaw(0, 0, 0, t);
+      peak = Math.max(peak, store.stats.cache.usedBytes);
+      assert.equal(store.stats.cache.usedBytes, store.stats.cache.decodedBytes + store.stats.cache.compressedBytes);
+    }
+    return peak;
+  };
+
+  const readable = buildSyntheticStore(spec);
+  const open = (options) => openStore('memory://joint', { store: readable, workers: 0, ...options });
+  const alone = await open({ totalBytes: SMALL_CHUNK * 10 });
+  assert.ok((await fetchAll(alone)) <= SMALL_CHUNK * 10, 'never over the cap');
+  assert.equal(alone.cacheInfo().entries, 9, 'with no decoded ceiling the decoded tier takes the cap (the newest chunk also holds its copy)');
+  assert.equal(alone.cacheInfo().compressedEntries, 1);
+
+  const split = await open({ totalBytes: SMALL_CHUNK * 10, decodedBytes: SMALL_CHUNK * 4 });
+  assert.ok((await fetchAll(split)) <= SMALL_CHUNK * 10);
+  const info = split.cacheInfo();
+  assert.equal(info.entries, 4, 'four decoded, at the ceiling');
+  assert.equal(info.compressedEntries, 6, 'the compressed tier holds the other six chunks of the cap: 4 + 6 chunks cached in the memory of 10');
+  assert.deepEqual(cached(split), [10, 11, 12, 23], 'the decoded ones are those nearest t=11, and the newest demand chunk');
+  const reads = chunkReads(readable).length;
+  // Fetched in ascending order, so what the cap kept besides the decoded four is 13..17 as compressed bytes.
+  for (const t of [13, 14]) assert.equal(split.peekRaw(0, 0, 0, t), undefined, 'held compressed only');
+  for (const t of [13, 14]) assert.ok((await split.getRaw(0, 0, 0, t)) instanceof Uint16Array);
+  assert.equal(chunkReads(readable).length, reads, 'a compressed-only chunk decodes again without a request');
+  assert.ok(split.stats.cache.usedBytes <= SMALL_CHUNK * 10);
+});
+
+// ---- idle horizon and expansion ----
+
+const AXIS = { nTime: 60, nBand: 1, height: 64, width: 64, chunk: 32, anchorInterval: 4, sharded: true };
+
+/** A store on a clock the test owns (the speculative allowance and the idle timer both read it), with an allowance that never limits. */
+async function openOnFakeClock(options = {}) {
+  const readable = buildSyntheticStore(AXIS);
+  const time = { now: 0 };
+  const store = await openStore('memory://horizon', { store: readable, workers: 0, clock: () => time.now, speculativeBytesInitial: 1e12, ...options });
+  return { store, readable, time };
+}
+
+/** Timesteps of cell (0, 0) with a decoded chunk. */
+function decodedTimes(store) {
+  const times = [];
+  for (let t = 0; t < AXIS.nTime; t++) if (store.peekRaw(0, 0, 0, t)) times.push(t);
+  return times;
+}
+
+/** The chunks a window of timesteps lo..hi needs: each timestep and its anchor. */
+function windowChunks(store, lo, hi) {
+  const chunks = new Set();
+  for (let t = lo; t <= hi; t++) chunks.add(t).add(store.anchorOf(t));
+  return [...chunks].sort((a, b) => a - b);
+}
+
+test('idle: the window stops at the horizon, 12 timesteps either side of t and the anchors they need', async () => {
+  const { store } = await openOnFakeClock({ idleBytes: 1e12 });
+  const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, concurrency: 1 });
+  const expected = windowChunks(store, 18, 42);
+  assert.equal(result.planned, expected.length);
+  assert.equal(result.fetched, expected.length);
+  assert.equal(result.budgetReached, false);
+  assert.deepEqual(decodedTimes(store), expected, 'nothing beyond the horizon');
+  assert.equal(expected[0], 16, 'the anchor of t=18 is inside the window although it is 14 away');
+  assert.equal(store.peekRaw(0, 0, 0, 59), undefined);
+  assert.equal(store.peekRaw(0, 0, 0, 0), undefined);
+});
+
+test('the horizon is an option, and it is not centred past the ends of the axis', async () => {
+  const { store } = await openOnFakeClock({ horizonSteps: 2, idleBytes: 1e12 });
+  await store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, concurrency: 1 });
+  assert.deepEqual(decodedTimes(store), windowChunks(store, 28, 32));
+  const edge = await openOnFakeClock({ horizonSteps: 3, idleBytes: 1e12 });
+  const result = await edge.store.prefetch({ lod: 0, cells: [[0, 0]], t: 58, concurrency: 1 });
+  assert.deepEqual(decodedTimes(edge.store), windowChunks(edge.store, 55, 59));
+  assert.equal(result.planned, windowChunks(edge.store, 55, 59).length);
+});
+
+test('idle: at most idleBytes of speculative traffic per view, then it stops and stays stopped', async () => {
+  const { store, time } = await openOnFakeClock({ idleBytes: SMALL_CHUNK * 3.5 });
+  const first = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, concurrency: 1 });
+  assert.equal(first.budgetReached, true);
+  assert.ok(first.fetched >= 3 && first.fetched <= 4, `3.5 chunks of allowance start 3 or 4 chunks (${first.fetched})`);
+  assert.ok(first.fetched < first.planned);
+  assert.ok(store.peekRaw(0, 0, 0, 30) && store.peekRaw(0, 0, 0, store.anchorOf(30)), 'nearest first: t and its anchor');
+  assert.equal(store.peekRaw(0, 0, 0, 18), undefined);
+
+  time.now += 60_000;
+  const later = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, concurrency: 1 });
+  assert.equal(later.fetched, 0, 'a minute later, same view and timestep: nothing more');
+  assert.equal(later.budgetReached, true);
+  assert.equal(decodedTimes(store).length, first.fetched);
+
+  const otherView = await store.prefetch({ lod: 0, cells: [[0, 0], [0, 1]], t: 30, concurrency: 1 });
+  assert.ok(otherView.fetched >= 3, 'a different set of visible cells is a new view with a new allowance');
+});
+
+test('scrubbing is held to the horizon but not to the idle allowance; the viewer is idle again idleMs after the last move', async () => {
+  const { store, time } = await openOnFakeClock({ idleBytes: SMALL_CHUNK * 3.5, idleMs: 3000 });
+  await store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, concurrency: 1 });
+  const idleChunks = decodedTimes(store).length;
+
+  time.now += 500;
+  const scrub = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 31, direction: 1, concurrency: 1 });
+  assert.equal(scrub.budgetReached, false, 'a moved timestep is a scrub: no idle cap');
+  const expected = windowChunks(store, 19, 43);
+  assert.deepEqual(decodedTimes(store), expected, 'the whole horizon around the new t, no further');
+  assert.ok(expected.length > idleChunks + 10);
+
+  time.now += 2900;
+  const stillScrubbing = await store.prefetch({ lod: 0, cells: [[0, 0], [0, 1]], t: 31, concurrency: 1 });
+  assert.equal(stillScrubbing.budgetReached, false, '2.9 s after the last move is still within idleMs');
+
+  time.now += 100;
+  const idle = await store.prefetch({ lod: 0, cells: [[1, 0]], t: 31, concurrency: 1 });
+  assert.equal(idle.budgetReached, true, '3 s of quiet: idle, with the idle allowance of a new view');
+  assert.ok(idle.fetched >= 3 && idle.fetched < idle.planned);
+});
+
+test('playing or looping covers the whole axis whatever the idle allowance and horizon', async () => {
+  for (const flag of [{ playing: true }, { loop: true }]) {
+    const { store } = await openOnFakeClock({ idleBytes: SMALL_CHUNK, horizonSteps: 2 });
+    const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, concurrency: 1, ...flag });
+    assert.equal(result.planned, AXIS.nTime, `${JSON.stringify(flag)}: all 60 timesteps`);
+    assert.equal(result.fetched, AXIS.nTime);
+    assert.equal(result.budgetReached, false);
+    assert.equal(decodedTimes(store).length, AXIS.nTime);
+  }
+});
+
+test('seek does not widen the window: it only cancels stale speculative requests and fetches the target first', async () => {
+  const { store, readable } = await openOnFakeClock({ idleBytes: 1e12 });
+  const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 40, seek: true, concurrency: 1 });
+  assert.equal(result.planned, windowChunks(store, 28, 52).length);
+  assert.deepEqual(decodedTimes(store), windowChunks(store, 28, 52));
+  const firstReads = chunkReads(readable).slice(0, 2).map((c) => c.range.offset);
+  assert.equal(firstReads.length, 2);
+  assert.ok(store.peekRaw(0, 0, 0, 40) && store.peekRaw(0, 0, 0, store.anchorOf(40)));
+});
+
+test('after playback the viewer stays out of idle for idleMs, then a new allowance applies', async () => {
+  const { store, time } = await openOnFakeClock({ idleBytes: SMALL_CHUNK * 3.5, idleMs: 3000 });
+  await store.prefetch({ lod: 0, cells: [[0, 0]], t: 10, playing: true, concurrency: 1 });
+  time.now += 1000;
+  const justStopped = await store.prefetch({ lod: 0, cells: [[0, 0], [0, 1]], t: 10, concurrency: 1 });
+  assert.equal(justStopped.budgetReached, false, 'one second after playback: no idle cap (the horizon of the new cell is fetched)');
+  time.now += 3000;
+  const idle = await store.prefetch({ lod: 0, cells: [[1, 1]], t: 10, concurrency: 1 });
+  assert.equal(idle.budgetReached, true);
+});
+
+test('aborted idle fetches give their allowance back', async () => {
+  const readable = buildSyntheticStore({ ...AXIS, delayMs: 30 });
+  const store = await openStore('memory://refund', { store: readable, workers: 0, clock: () => 0, speculativeBytesInitial: 1e12, idleBytes: SMALL_CHUNK * 3.5 });
+  const abort = new AbortController();
+  const pending = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, concurrency: 3, signal: abort.signal });
+  await sleep(10);
+  abort.abort();
+  await pending;
+  const retry = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, concurrency: 1 });
+  assert.ok(retry.fetched >= 3, `the cancelled requests did not use up the allowance (${retry.fetched} fetched)`);
+});
+
+test('a window larger than the joint cap stops when the cap holds nothing worse, and never goes over it', async () => {
+  const readable = buildSyntheticStore({ ...AXIS, nTime: 60, encoding: 'none' });
+  const store = await openStore('memory://cap-stop', { store: readable, workers: 0, clock: () => 0, speculativeBytesInitial: 1e12, totalBytes: SMALL_CHUNK * 20 });
+  store.evictionScore = (entry) => Math.abs(entry.t - 30);
+  const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, playing: true, concurrency: 1 });
+  assert.equal(result.budgetReached, true);
+  assert.ok(result.fetched >= 18 && result.fetched < result.planned, `about the cap's worth of chunks, not the whole window (${result.fetched} of ${result.planned})`);
+  assert.ok(store.stats.cache.usedBytes <= SMALL_CHUNK * 20);
+  assert.ok(store.peekRaw(0, 0, 0, 30) && store.peekRaw(0, 0, 0, 29) && store.peekRaw(0, 0, 0, 31), 'the nearest chunks are the ones kept');
+  assert.equal(store.peekRaw(0, 0, 0, 59), undefined);
+});
+
+// ---- cancelled entries ----
+
+/** Collect unhandled promise rejections while `body` runs and the event loop settles. */
+async function unhandledRejectionsDuring(body) {
+  const reasons = [];
+  const listener = (reason) => reasons.push(reason);
+  process.on('unhandledRejection', listener);
+  try {
+    await body();
+    for (let i = 0; i < 5; i++) await sleep(30);
+  } finally {
+    process.off('unhandledRejection', listener);
+  }
+  return reasons;
+}
+
+test('cancelling an entry nobody waits for leaves no unhandled rejection', async () => {
+  const readable = buildSyntheticStore({ ...AXIS, delayMs: 20 });
+  const store = await openStore('memory://unhandled', { store: readable, workers: 0, speculativeBytesInitial: 1e12 });
+  const reasons = await unhandledRejectionsDuring(async () => {
+    // A caller whose signal is already aborted starts the fetch and gives it up at once: no waiter, no owner.
+    const aborted = new AbortController();
+    aborted.abort();
+    await assert.rejects(store.getRaw(0, 0, 0, 3, { signal: aborted.signal }), { name: 'AbortError' });
+    // A speculative fetch cancelled by a seek while in flight.
+    const prefetch = store.prefetch({ lod: 0, cells: [[0, 0]], t: 20, concurrency: 4 });
+    await sleep(5);
+    store.prefetch({ lod: 0, cells: [[0, 0]], t: 40, seek: true, concurrency: 1, signal: AbortSignal.abort() });
+    await prefetch;
+    // A masked-style read with a signal that aborts while the fetch is queued.
+    const late = new AbortController();
+    const read = store.getRaw(0, 0, 0, 55, { signal: late.signal });
+    late.abort();
+    await assert.rejects(read, { name: 'AbortError' });
+  });
+  assert.deepEqual(reasons.map(String), [], 'no AbortError (or anything else) escaped');
+});
+
+// ---- masks ----
+
+const MASKED = { nTime: 24, nBand: 1, height: 64, width: 64, chunk: 32, anchorInterval: 4, sharded: true, specVersion: '0.2.0', mask: true };
+
+test('the mask cache is a tenth of the joint cap, at least 64 MiB, and follows setBudgets', async () => {
+  const MIB = 1024 * 1024;
+  const readable = buildSyntheticStore(MASKED);
+  const small = await openStore('memory://aux-small', { store: readable, workers: 0, totalBytes: 100 * MIB });
+  assert.equal(small.budgets().auxBytes, 64 * MIB, 'a tenth would be 10 MiB: the minimum applies');
+  const big = await openStore('memory://aux-big', { store: readable, workers: 0, totalBytes: 3000 * MIB });
+  assert.equal(big.budgets().auxBytes, 300 * MIB);
+  big.setBudgets({ totalBytes: 1000 * MIB });
+  assert.equal(big.budgets().auxBytes, 100 * MIB);
+  big.setBudgets({ totalBytes: 200 * MIB });
+  assert.equal(big.budgets().auxBytes, 64 * MIB);
+});
+
+test('prefetch with masks fetches every chunk\'s mask alongside it, at speculative priority', async () => {
+  const readable = buildSyntheticStore(MASKED);
+  const store = await openStore('memory://masks', { store: readable, workers: 0, clock: () => 0, speculativeBytesInitial: 1e12, idleBytes: 1e12 });
+  const events = [];
+  store.probe = (event) => events.push(event);
+  const seen = [];
+  const result = await store.prefetch({
+    lod: 0,
+    cells: [[0, 0], [1, 1]],
+    t: 12,
+    masks: true,
+    concurrency: 3,
+    onChunk: (lod, row, col, t) => seen.push({ row, col, t, mask: store.peekMask(lod, row, col, t) }),
+  });
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.masks, result.fetched, 'one mask per chunk fetched');
+  assert.ok(result.fetched > 20);
+  assert.equal(events.filter((e) => e.key.startsWith('mask/')).length, result.masks);
+  assert.ok(events.every((e) => e.background === true), 'masks never took a demand slot: prefetch workers did not wait for them');
+  assert.equal(seen.length, result.fetched);
+  for (const { row, col, t, mask } of seen) {
+    assert.ok(mask instanceof Uint8Array, `mask of ${row}/${col}/${t} was in when onChunk fired`);
+    assert.equal(mask[5 * 32 + 3], maskValue(t, row * 32 + 5, col * 32 + 3, 0));
+  }
+});
+
+test('masks: true on a store without a mask changes nothing, and without it no mask is fetched', async () => {
+  const plain = await openStore('memory://no-mask', { store: buildSyntheticStore({ ...MASKED, mask: false }), workers: 0, clock: () => 0, speculativeBytesInitial: 1e12 });
+  const result = await plain.prefetch({ lod: 0, cells: [[0, 0]], t: 12, masks: true, concurrency: 2 });
+  assert.equal(result.masks, 0);
+  assert.ok(result.fetched > 5);
+
+  const readable = buildSyntheticStore(MASKED);
+  const without = await openStore('memory://masks-off', { store: readable, workers: 0, clock: () => 0, speculativeBytesInitial: 1e12 });
+  const off = await without.prefetch({ lod: 0, cells: [[0, 0]], t: 12, concurrency: 2 });
+  assert.equal(off.masks, 0);
+  assert.equal(without.peekMask(0, 0, 0, 12), undefined);
+  assert.equal(chunkReads(readable).filter((c) => c.key.includes('/mask/')).length, 0, 'no mask chunk was read');
+});
+
+test('masks are charged to the speculative allowance, and a chunk that is already cached gets its missing mask', async () => {
+  const readable = buildSyntheticStore(MASKED);
+  const open = () => openStore('memory://mask-budget', { store: readable, workers: 0, clock: () => 0, speculativeBytesInitial: 1e12, idleBytes: 1e12 });
+  const plain = await open();
+  await plain.prefetch({ lod: 0, cells: [[0, 0]], t: 12, concurrency: 1 });
+  const masked = await open();
+  await masked.prefetch({ lod: 0, cells: [[0, 0]], t: 12, masks: true, concurrency: 1 });
+  assert.ok(masked.stats.cache.speculativeBytes > plain.stats.cache.speculativeBytes, 'the mask bytes are counted as speculative traffic');
+
+  const second = await plain.prefetch({ lod: 0, cells: [[0, 0]], t: 12, masks: true, concurrency: 1 });
+  assert.equal(second.fetched, 0, 'every chunk was cached already');
+  assert.equal(second.skipped, second.planned);
+  assert.equal(second.masks, second.planned, 'but the masks were missing: fetched now');
+  assert.ok(plain.peekMask(0, 0, 0, 12) instanceof Uint8Array);
+  const again = await plain.prefetch({ lod: 0, cells: [[0, 0]], t: 12, masks: true, concurrency: 1 });
+  assert.equal(again.masks, 0, 'and not fetched twice');
+});
+
+test('masks are paid for from the speculative allowance: the same allowance buys fewer chunks', async () => {
+  const readable = buildSyntheticStore(MASKED);
+  const initial = SMALL_CHUNK * 0.7 * 8.5;
+  const fetchedWith = async (masks) => {
+    // A frozen clock: no bandwidth is ever measured, so the initial allowance is all there is.
+    const store = await openStore('memory://allowance-masks', { store: readable, workers: 0, clock: () => 0, speculativeBytesInitial: initial, idleBytes: 1e12 });
+    const abort = new AbortController();
+    const done = store.prefetch({ lod: 0, cells: [[0, 0]], t: 12, masks, concurrency: 1, signal: abort.signal });
+    await sleep(80);
+    abort.abort();
+    return (await done).fetched;
+  };
+  const plain = await fetchedWith(false);
+  const masked = await fetchedWith(true);
+  assert.ok(plain >= 6, `the allowance buys 6 to 8 chunks (${plain})`);
+  assert.ok(masked < plain, `each mask took some of it: ${masked} chunks with masks, ${plain} without`);
+});
+
+test('masks count against the idle allowance too', async () => {
+  const readable = buildSyntheticStore(MASKED);
+  const budget = SMALL_CHUNK * 3.5;
+  const plain = await openStore('memory://idle-plain', { store: readable, workers: 0, clock: () => 0, speculativeBytesInitial: 1e12, idleBytes: budget });
+  const withoutMasks = await plain.prefetch({ lod: 0, cells: [[0, 0]], t: 12, concurrency: 1 });
+  const masked = await openStore('memory://idle-masked', { store: readable, workers: 0, clock: () => 0, speculativeBytesInitial: 1e12, idleBytes: budget });
+  const withMasks = await masked.prefetch({ lod: 0, cells: [[0, 0]], t: 12, masks: true, concurrency: 1 });
+  assert.equal(withMasks.budgetReached, true);
+  assert.ok(withMasks.fetched <= withoutMasks.fetched, 'masks used part of the same allowance');
+  assert.ok(masked.stats.cache.speculativeBytes <= budget + SMALL_CHUNK * 2, `speculative bytes stay near the cap (${masked.stats.cache.speculativeBytes})`);
 });

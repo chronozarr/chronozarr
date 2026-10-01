@@ -306,3 +306,101 @@ test('a priority handle lowered later moves a queued job ahead of other backgrou
   await Promise.all([running, first, promoted]);
   assert.deepEqual(order, ['running', 'promoted', 'first']);
 });
+
+// ---- joint cap ----
+
+/** Tier ceilings left open: only the joint cap limits. */
+const jointCache = (totalBytes, extra = {}) => new ChunkCache({ totalBytes, score: farFrom(0), ...extra });
+
+test('joint cap: the compressed tier holds what the decoded tier leaves, and gives way as decoded grows', () => {
+  const c = jointCache(100);
+  c.insert('d0', meta(0), { data: decoded(40) });
+  c.insert('c1', meta(1), { compressed: compressed(25) });
+  c.insert('c2', meta(2), { compressed: compressed(25) });
+  assert.equal(c.usedBytes, 90);
+  c.insert('c3', meta(3), { compressed: compressed(25) });
+  assert.equal(c.has('c2'), false, 'over the cap: the farthest compressed-only chunk goes');
+  assert.equal(c.usedBytes, 90);
+  c.insert('d1', meta(0.5), { data: decoded(40) });
+  assert.equal(c.decodedBytes, 80, 'a second array fits: the decoded tier is only limited by the cap');
+  assert.equal(c.compressedBytes, 0, 'and the compressed chunks, farther than both, made room for it');
+  assert.equal(c.usedBytes, 80);
+  c.insert('c9', meta(9), { compressed: compressed(15) });
+  assert.equal(c.compressedBytes, 15, 'what the decoded tier does not use is the compressed tier\'s');
+  assert.equal(c.evictions.decoded, 0);
+  assert.equal(c.evictions.compressed, 3);
+});
+
+test('joint cap: copies of decoded chunks go before anything that exists nowhere else, however far it is', () => {
+  const c = jointCache(100);
+  c.insert('far', meta(9), { compressed: compressed(25) });
+  c.insert('a', meta(0), { data: decoded(40), compressed: compressed(20) });
+  assert.equal(c.usedBytes, 85);
+  c.insert('b', meta(1), { data: decoded(30) });
+  assert.equal(c.get('a').compressed, null, 'the copy of the nearest chunk was dropped...');
+  assert.equal(c.get('far').compressed.length, 25, '...rather than the farthest chunk, which exists nowhere else');
+  assert.ok(c.decoded('a') && c.decoded('b'), 'the arrays are untouched');
+  assert.equal(c.usedBytes, 95);
+  assert.equal(c.evictions.compressed, 1);
+  assert.equal(c.evictions.decoded, 0);
+});
+
+test('joint cap: a background chunk never displaces a better one; it keeps its bytes if only its array does not fit', () => {
+  const c = jointCache(100);
+  c.insert('n0', meta(0), { data: decoded(40) });
+  c.insert('n1', meta(1), { data: decoded(40) });
+  c.insert('far9', meta(9), { data: decoded(40), compressed: compressed(15) }, { background: true });
+  assert.equal(c.decoded('far9'), undefined, 'its array would have cost a better chunk its place');
+  assert.equal(c.get('far9').compressed.length, 15, 'but its bytes fit and are kept');
+  assert.ok(c.decoded('n0') && c.decoded('n1'));
+  assert.equal(c.usedBytes, 95);
+  assert.equal(c.evictions.decoded + c.evictions.compressed, 0, 'it shed its own copy; nothing was evicted');
+  c.insert('far10', meta(10), { compressed: compressed(15) }, { background: true });
+  assert.equal(c.get('far10'), undefined, 'no room and nothing worse to evict: it does not get in');
+  assert.equal(c.get('far9').compressed.length, 15);
+});
+
+test('joint cap: a demand chunk always gets in; the worst chunk loses what it holds, an array without bytes disappears', () => {
+  const c = jointCache(100);
+  c.insert('n0', meta(0), { data: decoded(40) });
+  c.insert('n5', meta(5), { data: decoded(40) });
+  c.insert('d1', meta(1), { data: decoded(40) });
+  assert.equal(c.has('n5'), false, 'the farthest array went, whole');
+  assert.ok(c.decoded('n0') && c.decoded('d1'));
+  assert.equal(c.usedBytes, 80);
+  assert.equal(c.evictions.decoded, 1);
+});
+
+test('joint cap: setBudgets with a smaller cap evicts at once, worst first; pinned chunks stay', () => {
+  const c = jointCache(300);
+  for (const t of [0, 1]) c.insert(`d${t}`, meta(t), { data: decoded(40) });
+  for (const t of [2, 3, 4, 5]) c.insert(`c${t}`, meta(t), { compressed: compressed(25) });
+  c.pin(['c5']);
+  assert.equal(c.usedBytes, 180);
+  c.setBudgets({ totalBytes: 110 });
+  assert.equal(c.maxTotal, 110);
+  assert.ok(c.usedBytes <= 110);
+  assert.ok(c.decoded('d0') && c.decoded('d1'), 'the nearest chunks stay');
+  assert.ok(c.get('c5')?.compressed, 'pinned although it is the farthest');
+  assert.equal(c.has('c4'), false);
+  assert.equal(c.has('c3'), false);
+});
+
+test('joint cap: canHoldDecoded and canHoldCompressed ask whether room, a copy to drop, or a worse chunk exists', () => {
+  const c = jointCache(100);
+  c.insert('n0', meta(0), { data: decoded(40) });
+  c.insert('n1', meta(1), { data: decoded(40) });
+  assert.equal(c.canHoldCompressed(meta(0.5), 25), true, 'n1 is worse and can be evicted');
+  assert.equal(c.canHoldCompressed(meta(9), 25), false, 'full, and worse than everything');
+  assert.equal(c.canHoldDecoded(meta(9), 40), false);
+  assert.equal(c.canHoldDecoded(meta(0.5), 40), true);
+  assert.equal(c.canHoldCompressed(meta(9), 15), true, '80 + 15 fits the cap: room, however far the chunk');
+});
+
+test('tier budgets that add up to no more than the total leave the joint cap inert', () => {
+  const c = new ChunkCache({ totalBytes: 100, decodedBytes: 60, compressedBytes: 40, score: farFrom(0) });
+  for (const t of [0, 1]) c.insert(`k${t}`, meta(t), { data: decoded(30), compressed: compressed(20) });
+  assert.equal(c.usedBytes, 100);
+  assert.equal(c.canHoldCompressed(meta(0.5), 20), true, 'the copy of a decoded chunk always makes room');
+  assert.equal(c.evictions.decoded + c.evictions.compressed, 0);
+});

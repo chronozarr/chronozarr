@@ -11,8 +11,10 @@
 // decoded in a worker pool. zarrita's codec registry (zstd, gzip, blosc) comes from js/vendor, never a CDN.
 //
 // Memory is tiered (cache.js): decoded arrays for chunks near the view, compressed bytes for chunks farther
-// away. Background prefetch draws from a speculative allowance (16 MB at open, then a share of the measured
-// bandwidth) and never takes the last request slots from demand reads.
+// away, under one joint cap (1.5 GiB from 8 GB of device memory, 768 MiB below). Background prefetch draws from
+// a speculative allowance (16 MB at open, then a share of the measured bandwidth) and never takes the last
+// request slots from demand reads. It is modest while the viewer is idle (a horizon of timesteps around t and a
+// byte cap per idle episode) and covers the whole axis only for playback.
 
 import { BandwidthEstimator } from './bandwidth.js';
 import { ChunkCache, SpeculativeBudget } from './cache.js';
@@ -48,21 +50,37 @@ const DEFAULT_SPECULATIVE_INITIAL_BYTES = 16 * MIB;
  */
 const SPECULATIVE_SHARE_PENDING = 0.5;
 const SPECULATIVE_SHARE_IDLE = 1.0;
-const AUX_CACHE_BYTES = 128 * MIB;
+/** Idle prefetch: timesteps either side of t it covers, bytes it may start per idle episode, and the quiet time after the last scrub or playback that makes the viewer idle. */
+const DEFAULT_HORIZON_STEPS = 12;
+const DEFAULT_IDLE_BYTES = 64 * MIB;
+const DEFAULT_IDLE_MS = 3000;
+/** The mask and coverage cache: a tenth of the joint cap, at least 64 MiB. It is held on top of the cap. */
+const AUX_SHARE = 0.1;
+const AUX_MIN_BYTES = 64 * MIB;
 /** Compressed size over decoded size assumed until chunks have been seen (Sentinel-2 reflectance: 0.65 to 0.72). */
 const INITIAL_COMPRESSION_RATIO = 0.7;
 
 /**
- * Decoded-chunk cache budget: 2 GiB on machines reporting at least 8 GB of memory (navigator.deviceMemory, which
- * browsers cap at 8 and which Firefox and Safari do not provide), otherwise 1 GiB.
+ * The one cap on decoded plus compressed chunk bytes: 1.5 GiB on machines reporting at least 8 GB of memory
+ * (navigator.deviceMemory, which browsers cap at 8 and which Firefox and Safari do not provide), otherwise
+ * 768 MiB. The compressed tier takes whatever the decoded tier does not use.
  */
-export function defaultCacheBytes(deviceMemoryGb) {
-  return deviceMemoryGb >= 8 ? 2 * GIB : GIB;
+export function defaultTotalBytes(deviceMemoryGb) {
+  return deviceMemoryGb >= 8 ? 1.5 * GIB : 768 * MIB;
 }
 
-/** Compressed-chunk cache budget: 1 GiB from 8 GB of device memory, otherwise 512 MiB. */
-export function defaultCompressedBytes(deviceMemoryGb) {
-  return deviceMemoryGb >= 8 ? GIB : 512 * MIB;
+function auxBudget(totalBytes) {
+  return Math.max(AUX_MIN_BYTES, Math.round(AUX_SHARE * totalBytes));
+}
+
+/**
+ * The joint cap for the budgets a caller gave: `totalBytes` itself; the sum when both tiers were sized; else
+ * `fallback`, raised to a single tier budget that is larger than it.
+ */
+function jointCap({ totalBytes, decodedBytes, compressedBytes }, fallback) {
+  if (totalBytes !== undefined) return totalBytes;
+  if (decodedBytes !== undefined && compressedBytes !== undefined) return decodedBytes + compressedBytes;
+  return Math.max(fallback, decodedBytes ?? 0, compressedBytes ?? 0);
 }
 
 export function chunkKey(lod, row, col, t) {
@@ -119,6 +137,26 @@ function defaultWorkerCount() {
   return Math.max(1, Math.min(MAX_DEFAULT_WORKERS, (globalThis.navigator?.hardwareConcurrency ?? 4) - 1));
 }
 
+let crossOriginBootstrapUrl = null;
+
+/**
+ * A module Worker running decode-worker.js. A page cannot start a worker from another origin (this package loaded
+ * from a CDN): the constructor throws SecurityError, and the worker is started through a same-origin blob that
+ * imports the real script instead. The `new Worker(new URL(...))` form stays literal so bundlers find the script.
+ */
+function spawnDecodeWorker() {
+  if (crossOriginBootstrapUrl === null) {
+    try {
+      return new Worker(new URL('./decode-worker.js', import.meta.url), { type: 'module' });
+    } catch (error) {
+      if (error?.name !== 'SecurityError') throw error;
+      const script = `import ${JSON.stringify(new URL('./decode-worker.js', import.meta.url).href)};`;
+      crossOriginBootstrapUrl = URL.createObjectURL(new Blob([script], { type: 'text/javascript' }));
+    }
+  }
+  return new Worker(crossOriginBootstrapUrl, { type: 'module' });
+}
+
 /**
  * Open a chronozarr store.
  *
@@ -126,13 +164,19 @@ function defaultWorkerCount() {
  * @param {object} [options]
  * @param {typeof fetch} [options.fetch]   fetch implementation (default: globalThis.fetch at call time).
  * @param {object} [options.store]         a zarrita AsyncReadable to use instead of HTTP.
- * @param {number} [options.decodedBytes]  decoded-chunk cache budget (default: see defaultCacheBytes). `maxCacheBytes` is the same setting.
- * @param {number} [options.compressedBytes] compressed-chunk cache budget (default: see defaultCompressedBytes; 0 turns the tier off).
+ * @param {number} [options.totalBytes]    cap on decoded plus compressed chunk bytes (default: see defaultTotalBytes). Naming both
+ *   tier budgets below without this makes their sum the cap; naming one raises the default cap to it if it is larger.
+ * @param {number} [options.decodedBytes]  ceiling on the decoded tier (default: none beyond the cap). `maxCacheBytes` is the same setting.
+ * @param {number} [options.compressedBytes] ceiling on the compressed tier (default: none beyond the cap; 0 turns the tier off).
+ * @param {number} [options.horizonSteps]  timesteps either side of t that idle prefetch covers (default 12).
+ * @param {number} [options.idleBytes]     bytes of speculative traffic idle prefetch may start per idle episode (default 64 MiB).
+ * @param {number} [options.idleMs]        quiet time after the last scrub or playback after which the viewer counts as idle (default 3000).
  * @param {number} [options.speculativeBytesInitial] bytes of prefetch allowed before bandwidth is measured (default 16 MB).
  * @param {number} [options.maxRequests]   cap on concurrent requests to the store (default 12).
  * @param {number[]} [options.retryDelaysMs] delays before each retry of a failed request (default [200, 600, 1500]).
  * @param {number} [options.workers]       decode workers (default: cores - 1, at most 8, none without Worker).
- * @param {() => object} [options.spawnWorker] creates a worker (tests); default: js/chronozarr/decode-worker.js.
+ * @param {() => object} [options.spawnWorker] creates a worker (tests); default: js/chronozarr/decode-worker.js. Workers that cannot
+ *   be started (not even through the cross-origin bootstrap) are logged once and decoding happens on the main thread.
  * @param {boolean} [options.suffixRequests] send `Range: bytes=-N` for shard indexes when the shard's size is not
  *   known (one request, but a CORS preflight on cross-origin hosts) instead of HEAD + range (two simple requests).
  * @param {() => number} [options.clock]   millisecond clock for bandwidth and the speculative allowance (default performance.now).
@@ -194,10 +238,17 @@ export async function openStore(baseUrl, options = {}) {
   }
 
   const mem = globalThis.navigator?.deviceMemory;
+  const decodedBytes = options.decodedBytes ?? options.maxCacheBytes;
   const budgets = {
-    decodedBytes: options.decodedBytes ?? options.maxCacheBytes ?? defaultCacheBytes(mem),
-    compressedBytes: options.compressedBytes ?? defaultCompressedBytes(mem),
+    totalBytes: jointCap({ totalBytes: options.totalBytes, decodedBytes, compressedBytes: options.compressedBytes }, defaultTotalBytes(mem)),
+    decodedBytes,
+    compressedBytes: options.compressedBytes,
     speculativeBytesInitial: options.speculativeBytesInitial ?? DEFAULT_SPECULATIVE_INITIAL_BYTES,
+  };
+  const policy = {
+    horizonSteps: options.horizonSteps ?? DEFAULT_HORIZON_STEPS,
+    idleBytes: options.idleBytes ?? DEFAULT_IDLE_BYTES,
+    idleMs: options.idleMs ?? DEFAULT_IDLE_MS,
   };
 
   const workers = options.workers ?? defaultWorkerCount();
@@ -205,9 +256,14 @@ export async function openStore(baseUrl, options = {}) {
   if (workers > 0) {
     const fallback = new MainThreadDecoder(ZARRITA_CODECS);
     const init = { type: 'init', zarritaUrl: ZARRITA_CODECS_URL };
-    decoder = options.spawnWorker
-      ? new DecodePool({ size: workers, spawn: options.spawnWorker, init, fallback })
-      : leaseDecodePool({ key: `${ZARRITA_CODECS_URL}|${workers}`, size: workers, spawn: () => new Worker(new URL('./decode-worker.js', import.meta.url), { type: 'module' }), init, fallback });
+    try {
+      decoder = options.spawnWorker
+        ? new DecodePool({ size: workers, spawn: options.spawnWorker, init, fallback })
+        : leaseDecodePool({ key: `${ZARRITA_CODECS_URL}|${workers}`, size: workers, spawn: spawnDecodeWorker, init, fallback });
+    } catch (error) {
+      console.warn(`chronozarr: cannot start decode workers (${error.name}: ${error.message}); decoding on the main thread`);
+      decoder = fallback;
+    }
   } else {
     decoder = new MainThreadDecoder(ZARRITA_CODECS);
   }
@@ -231,6 +287,7 @@ export async function openStore(baseUrl, options = {}) {
     limiter,
     clock,
     budgets,
+    policy,
   });
 }
 
@@ -243,8 +300,7 @@ export class ChronoStore {
   #anchors;
   #deltaReference;
   #cache;
-  #aux = new Map();
-  #auxBytes = 0;
+  #auxCache;
   #clock;
   #now;
   #inflight = new Map();
@@ -259,6 +315,9 @@ export class ChronoStore {
   #cellFailures = new Map();
   #network;
   #counters;
+  #policy;
+  /** What the last prefetch call saw: its timestep and view, until when the viewer counts as scrubbing or playing, and the idle bytes started in this view since. */
+  #activity = { t: null, viewKey: null, activeUntil: -Infinity, idleSpent: 0 };
 
   /**
    * Eviction order: called with {lod,row,col,t,anchor,used}; the highest score is evicted first, in both cache
@@ -268,7 +327,7 @@ export class ChronoStore {
   /** Called with {type:'chunk', key, background, requestedAt, fetchedAt, decodedAt, bytes} per loaded chunk. */
   probe = null;
 
-  constructor({ url, cz, datasets, names, levelMirror, transform, dataMetas, storage, specs, readable, decoder, network, bandwidth, limiter, clock, budgets }) {
+  constructor({ url, cz, datasets, names, levelMirror, transform, dataMetas, storage, specs, readable, decoder, network, bandwidth, limiter, clock, budgets, policy }) {
     this.url = url;
     this.variable = names.data;
     this.times = cz.times;
@@ -287,7 +346,9 @@ export class ChronoStore {
     this.#specs = specs;
     this.#names = names;
     this.#shardBytes = cz.shard_bytes ?? null;
-    this.#cache = new ChunkCache({ decodedBytes: budgets.decodedBytes, compressedBytes: budgets.compressedBytes, score: (entry) => this.evictionScore(entry) });
+    this.#policy = policy;
+    this.#cache = new ChunkCache({ totalBytes: budgets.totalBytes, decodedBytes: budgets.decodedBytes, compressedBytes: budgets.compressedBytes, score: (entry) => this.evictionScore(entry) });
+    this.#auxCache = new ChunkCache({ decodedBytes: auxBudget(budgets.totalBytes), compressedBytes: 0, score: (entry) => this.evictionScore(entry) });
     this.#speculative = new SpeculativeBudget({ initial: budgets.speculativeBytesInitial, share: SPECULATIVE_SHARE_PENDING, clock });
 
     const { bands, bandNames } = normalizeBands(cz, url);
@@ -369,6 +430,8 @@ export class ChronoStore {
       decodedBytes: { get: () => this.#cache.decodedBytes, enumerable: true },
       speculativeShare: { get: () => this.#speculative.share, enumerable: true },
       compressedBytes: { get: () => this.#cache.compressedBytes, enumerable: true },
+      usedBytes: { get: () => this.#cache.usedBytes, enumerable: true },
+      budgetBytes: { get: () => this.#cache.maxTotal, enumerable: true },
       evictions: { get: () => this.#cache.evictions.decoded, enumerable: true },
       compressedEvictions: { get: () => this.#cache.evictions.compressed, enumerable: true },
     });
@@ -393,22 +456,43 @@ export class ChronoStore {
     return [...this.#anchors].sort((a, b) => a - b);
   }
 
-  /** The decoded-tier byte budget (what `loopFits` and the prefetch window are sized by). */
+  /** The most decoded bytes the cache can hold (what `loopFits` and the prefetch window are sized by). */
   get maxCacheBytes() {
-    return this.#cache.maxDecoded;
+    return this.#cache.decodedLimit;
   }
 
+  /**
+   * The cap on decoded plus compressed bytes, the most each tier can hold within it, the mask and coverage cache
+   * (held on top of the cap: a tenth of it, at least 64 MiB) and the prefetch allowance. The compressed tier holds
+   * what the decoded tier leaves of the cap, so the two tier limits overlap; see `stats.cache` for what each holds now.
+   */
   budgets() {
-    return { decodedBytes: this.#cache.maxDecoded, compressedBytes: this.#cache.maxCompressed, speculativeBytesInitial: this.#speculative.initial };
+    return {
+      totalBytes: this.#cache.maxTotal,
+      decodedBytes: this.#cache.decodedLimit,
+      compressedBytes: this.#cache.compressedLimit,
+      auxBytes: this.#auxCache.maxDecoded,
+      speculativeBytesInitial: this.#speculative.initial,
+    };
   }
 
-  /** Change any of the three budgets; the caches evict down to smaller ones at once. */
-  setBudgets({ decodedBytes, compressedBytes, speculativeBytesInitial } = {}) {
-    for (const [name, value] of Object.entries({ decodedBytes, compressedBytes, speculativeBytesInitial })) {
+  /**
+   * Change any of the budgets; the cache evicts down to smaller ones at once. Naming both tiers without
+   * `totalBytes` makes their sum the cap, naming one raises the cap to it if it is larger (as openStore does).
+   */
+  setBudgets({ totalBytes, decodedBytes, compressedBytes, speculativeBytesInitial } = {}) {
+    for (const [name, value] of Object.entries({ totalBytes, decodedBytes, compressedBytes, speculativeBytesInitial })) {
       if (value !== undefined && !(Number.isFinite(value) && value >= 0)) throw new RangeError(`${name} must be a number of bytes >= 0, got ${value}`);
     }
-    this.#cache.setBudgets({ decodedBytes, compressedBytes });
+    this.#cache.setBudgets({ totalBytes: jointCap({ totalBytes, decodedBytes, compressedBytes }, this.#cache.maxTotal), decodedBytes, compressedBytes });
+    const aux = auxBudget(this.#cache.maxTotal);
+    this.#auxCache.setBudgets({ totalBytes: aux, decodedBytes: aux, compressedBytes: 0 });
     if (speculativeBytesInitial !== undefined) this.#speculative.setInitial(speculativeBytesInitial);
+  }
+
+  /** Bytes the reader holds for chunks: decoded arrays, compressed bytes and the mask and coverage cache. GPU memory is the viewer's to add. */
+  estimatedBytes() {
+    return this.#cache.usedBytes + this.#auxCache.usedBytes;
   }
 
   /** Download rate in bytes per second (smoothed over recent transfers), or null before anything was measured. */
@@ -443,13 +527,12 @@ export class ChronoStore {
 
   clearCache() {
     this.#cache.clear();
-    this.#aux.clear();
-    this.#auxBytes = 0;
+    this.#auxCache.clear();
   }
 
   /** Abort every in-flight fetch and release the decode workers. The store cannot be used afterwards. */
   close() {
-    for (const entry of this.#inflight.values()) entry.controller.abort();
+    for (const entry of this.#inflight.values()) this.#abortEntry(entry);
     this.#decoder.close();
   }
 
@@ -505,8 +588,9 @@ export class ChronoStore {
   }
 
   /**
-   * Decoded values for (lod,row,col,t): a typed array [band][y][x] over the padded chunk
-   * (the cached array itself for anchors). Fetches the anchor and delta chunks in parallel.
+   * Decoded values for (lod,row,col,t) as `{ data, bands, chunkWidth, chunkHeight, width, height }`: `data` is a typed
+   * array [band][y][x] over the padded chunk (the cached array itself for anchors), `width` and `height` the valid
+   * (unpadded) extent of the cell. Fetches the anchor and delta chunks in parallel.
    */
   async getCell(lod, row, col, t) {
     const level = this.level(lod);
@@ -599,38 +683,63 @@ export class ChronoStore {
   /**
    * Background fetch of a time window around t for the given cells at one level, nearest first
    * (scrubCost order, so the scrub direction reaches further), pulling in a delta's anchor just before
-   * the delta itself. The window is as wide as the cache budgets allow for these cells: the whole time
-   * axis when it fits, otherwise a slice around t. Chunks near t are decoded; chunks the decoded tier cannot
-   * hold are kept as compressed bytes when that tier has room. A new chunk only displaces cached ones that
-   * score worse (see `evictionScore`).
+   * the delta itself. Chunks near t are decoded; chunks the decoded tier cannot hold are kept as compressed
+   * bytes when the cache has room. A new chunk only displaces cached ones that score worse (see `evictionScore`).
+   *
+   * How far the window reaches depends on what the viewer is doing. While it plays (`playing`, or `loop`, which
+   * plans a looping movie) the window is as wide as the cache allows for these cells: the whole time axis when it
+   * fits. Otherwise it stops at the horizon, `horizonSteps` timesteps either side of t (12 by default) and the
+   * anchors they need; when scrubbing it reaches further in the scrub direction within that. If nothing has
+   * moved t for `idleMs` (3 s), the viewer is idle, and prefetch also stops once it has started `idleBytes` (64 MiB)
+   * of speculative traffic for this view and timestep; a scrub, playback or new view starts a new allowance. A
+   * `seek` (the view just jumped) does not widen anything: it only cancels the other speculative requests.
    *
    * Speculative traffic is metered: 16 MB may start at once, after that half the measured bandwidth. Prefetch
    * waits while any demand fetch is in flight and never takes the last request slots. A cell whose chunk
    * failed is left alone for PREFETCH_COOLDOWN_MS. Aborting `signal` cancels this job's fetches that nobody else
-   * waits for. With `seek`, the view just jumped: every other speculative request is cancelled, and the chunks
-   * of timestep `t` itself (its anchor and delta) are fetched at demand priority outside the allowance before
-   * the rest of the window. Resolves with counts and per-chunk errors (nothing is thrown or hidden).
+   * waits for. With `seek`, the chunks of timestep `t` itself (its anchor and delta) are fetched at demand
+   * priority outside the allowance before the rest of the window. Resolves with counts and per-chunk errors
+   * (nothing is thrown or hidden); `budgetReached` says the cache or the idle allowance stopped it early.
    *
-   * @param {{lod:number, cells:Array<[number, number]>, t:number, direction?:1|-1, behindFactor?:number, loop?:boolean, seek?:boolean,
-   *   concurrency?:number, signal?:AbortSignal, onChunk?:(lod,row,col,t)=>void}} job
+   * With `masks`, the validity mask of every chunk of the window is fetched alongside it (same priority, same
+   * allowances; a mask is cached under its own budget and `peekMask` returns it once it is in). `onChunk` fires when
+   * the chunk and its mask are both loaded.
+   *
+   * @param {{lod:number, cells:Array<[number, number]>, t:number, direction?:1|-1, behindFactor?:number, loop?:boolean, playing?:boolean,
+   *   seek?:boolean, masks?:boolean, concurrency?:number, signal?:AbortSignal, onChunk?:(lod,row,col,t)=>void}} job
    */
-  async prefetch({ lod, cells, t, direction = 1, behindFactor = 2, loop = false, seek = false, concurrency = DEFAULT_PREFETCH_CONCURRENCY, signal, onChunk }) {
+  async prefetch({ lod, cells, t, direction = 1, behindFactor = 2, loop = false, playing = false, seek = false, masks = false, concurrency = DEFAULT_PREFETCH_CONCURRENCY, signal, onChunk }) {
     const level = this.level(lod);
+    const wholeAxis = playing || loop;
+    const withMasks = masks && this.hasMask;
+    this.#noteActivity({ lod, cells, t, wholeAxis });
     if (seek) this.#cancelSpeculative();
     const targets = new Set([this.anchorOf(t), t]);
-    const queue = this.#windowPlan(level, cells, t, { direction, behindFactor, loop }).map(([row, col, ct]) => ({ row, col, t: ct, free: seek && targets.has(ct) }));
-    const result = { planned: queue.length, fetched: 0, skipped: 0, compressedOnly: 0, budgetReached: false, errors: [] };
+    const horizon = wholeAxis ? null : this.#policy.horizonSteps;
+    const queue = this.#windowPlan(level, cells, t, { direction, behindFactor, loop }, horizon).map(([row, col, ct]) => ({ row, col, t: ct, free: seek && targets.has(ct) }));
+    const result = { planned: queue.length, fetched: 0, skipped: 0, compressedOnly: 0, masks: 0, budgetReached: false, errors: [] };
     let next = 0;
     const worker = async () => {
       while (next < queue.length && !signal?.aborted && !result.budgetReached) {
         const { row, col, t: tt, free } = queue[next++];
         const key = chunkKey(lod, row, col, tt);
         const failedAt = this.#cellFailures.get(`${lod}/${row}/${col}`);
-        if (this.#cache.has(key) || this.#inflight.has(key) || (failedAt !== undefined && this.#now() - failedAt < PREFETCH_COOLDOWN_MS)) {
-          result.skipped++;
-          continue;
-        }
+        const failed = failedAt !== undefined && this.#now() - failedAt < PREFETCH_COOLDOWN_MS;
+        let idleCharge = 0;
         try {
+          if (this.#cache.has(key) || this.#inflight.has(key) || failed) {
+            result.skipped++;
+            // A chunk that is already here may have lost its mask to eviction; a failed cell is left alone.
+            if (withMasks && !failed && this.#maskAllowed(wholeAxis)) {
+              const maskEntry = this.#prefetchMask(lod, row, col, tt, signal);
+              if (maskEntry) {
+                await this.#settle([maskEntry.promise]);
+                this.#chargeMask(maskEntry, wholeAxis);
+                result.masks++;
+              }
+            }
+            continue;
+          }
           if (!free) await this.#demandIdle(signal);
           if (signal?.aborted) return;
           const meta = { kind: 'data', lod, row, col, t: tt, anchor: this.isAnchor(tt) };
@@ -638,13 +747,30 @@ export class ChronoStore {
             result.budgetReached = true;
             return;
           }
-          if (!free) await this.#awaitSpeculative(level.chunkBytes * this.#compressionRatio, signal);
-          if (signal?.aborted) return;
-          const data = await this.#start(key, meta, { background: !free, owner: signal ?? true }).promise;
+          if (!free) {
+            const estimate = level.chunkBytes * this.#compressionRatio;
+            await this.#awaitSpeculative(estimate, signal);
+            if (signal?.aborted) return;
+            idleCharge = wholeAxis ? 0 : this.#chargeIdle(estimate);
+            if (idleCharge === null) {
+              this.#speculative.spend(-estimate);
+              result.budgetReached = true;
+              return;
+            }
+          }
+          // The mask of the chunk is fetched alongside it, charged to the same allowances once its size is known.
+          const maskEntry = withMasks ? this.#prefetchMask(lod, row, col, tt, signal) : null;
+          const dataEntry = this.#start(key, meta, { background: !free, owner: signal ?? true });
+          const [data] = await this.#settle([dataEntry.promise, maskEntry?.promise]);
+          if (maskEntry) {
+            this.#chargeMask(maskEntry, wholeAxis);
+            result.masks++;
+          }
           result.fetched++;
           if (data) onChunk?.(lod, row, col, tt);
           else result.compressedOnly++;
         } catch (error) {
+          this.#refundIdle(idleCharge);
           if (isAbort(error)) continue;
           result.errors.push({ key, error });
           this.#cellFailures.set(`${lod}/${row}/${col}`, this.#now());
@@ -655,14 +781,73 @@ export class ChronoStore {
     return result;
   }
 
-  /** Chunks [row, col, t] to prefetch, in fetch order. */
-  #windowPlan(level, cells, t, order) {
-    const decodedChunks = this.#cache.maxDecoded / level.chunkBytes;
-    const compressedChunks = this.#cache.maxCompressed / (level.chunkBytes * this.#compressionRatio);
-    // Decoded chunks plus chunks held only compressed: copies of decoded chunks give way when the compressed tier fills.
-    const capacity = this.#cache.maxCompressed > 0 ? decodedChunks + compressedChunks : decodedChunks;
+  /** Wait for every promise (absent ones count as resolved with undefined), then throw the first rejection or return the values. */
+  async #settle(promises) {
+    const outcomes = await Promise.allSettled(promises);
+    const failure = outcomes.find((outcome) => outcome.status === 'rejected');
+    if (failure) throw failure.reason;
+    return outcomes.map((outcome) => outcome.value);
+  }
+
+  /** Start the mask of a chunk at speculative priority, unless it is cached, in flight, or would not be kept. Returns the in-flight entry or null. */
+  #prefetchMask(lod, row, col, t, owner) {
+    const key = this.#auxKey('mask', lod, row, col, t);
+    const level = this.levels[lod];
+    const meta = { kind: 'mask', lod, row, col, t, anchor: false };
+    if (this.#auxCache.has(key) || this.#inflight.has(key) || !this.#auxCache.canHoldDecoded(meta, level.chunkHeight * level.chunkWidth)) return null;
+    return this.#start(key, meta, { background: true, owner: owner ?? true });
+  }
+
+  /** A mask on its own (its chunk is already cached) starts only while the speculative allowance and the idle allowance have room. */
+  #maskAllowed(wholeAxis) {
+    const idleLeft = wholeAxis || this.#clock() < this.#activity.activeUntil || this.#activity.idleSpent < this.#policy.idleBytes;
+    return idleLeft && this.#speculative.waitMs(1, this.#bandwidth.estimate) === 0;
+  }
+
+  /** What a mask turned out to cost goes against the speculative allowance and, while idle, the idle allowance. */
+  #chargeMask(entry, wholeAxis) {
+    const bytes = entry.fetchedBytes ?? 0;
+    this.#speculative.spend(bytes);
+    if (!wholeAxis && this.#clock() >= this.#activity.activeUntil) this.#activity.idleSpent += bytes;
+  }
+
+  /**
+   * What the viewer is doing, from the prefetch calls it makes: a timestep that differs from the last call's is a
+   * scrub, playback is playback; both keep the store out of idle for `idleMs` and give the next idle episode a new
+   * byte allowance, as does a different view (level or cells). The first call after open is not activity.
+   */
+  #noteActivity({ lod, cells, t, wholeAxis }) {
+    const activity = this.#activity;
+    const viewKey = `${lod}:${cells.map(([row, col]) => `${row}/${col}`).sort().join(',')}`;
+    const moved = activity.t !== null && activity.t !== t;
+    if (moved || wholeAxis) activity.activeUntil = this.#clock() + this.#policy.idleMs;
+    if (moved || wholeAxis || viewKey !== activity.viewKey) activity.idleSpent = 0;
+    activity.t = t;
+    activity.viewKey = viewKey;
+  }
+
+  /** Idle prefetch may start `idleBytes` per episode. Returns the bytes charged (0 while scrubbing), or null when the allowance is used up. */
+  #chargeIdle(bytes) {
+    const activity = this.#activity;
+    if (this.#clock() < activity.activeUntil) return 0;
+    if (activity.idleSpent + bytes > this.#policy.idleBytes) return null;
+    activity.idleSpent += bytes;
+    return bytes;
+  }
+
+  #refundIdle(bytes) {
+    this.#activity.idleSpent = Math.max(0, this.#activity.idleSpent - bytes);
+  }
+
+  /** Chunks [row, col, t] to prefetch, in fetch order; with a `horizon`, only timesteps within that many of t (and the anchors they need). */
+  #windowPlan(level, cells, t, order, horizon) {
+    const decodedChunks = this.#cache.decodedLimit / level.chunkBytes;
+    const compressedChunks = this.#cache.compressedLimit / (level.chunkBytes * this.#compressionRatio);
+    // Decoded chunks plus chunks held only compressed (copies of decoded chunks give way when the cache fills), at most
+    // as many as the joint cap holds when every one of them is compressed.
+    const capacity = this.#cache.compressedLimit > 0 ? Math.min(decodedChunks + compressedChunks, this.#cache.maxTotal / (level.chunkBytes * this.#compressionRatio)) : decodedChunks;
     const perCellLimit = Math.max(1, Math.floor((capacity * WINDOW_BUDGET_FRACTION) / Math.max(1, cells.length)));
-    const timesteps = windowOrder(level.nTime, t, order);
+    const timesteps = windowOrder(level.nTime, t, order).filter((tt) => horizon === null || Math.abs(tt - t) <= horizon);
     const chosen = [];
     const seen = new Set();
     outer: for (const tt of timesteps) {
@@ -712,13 +897,8 @@ export class ChronoStore {
   }
 
   #peekAux(kind, lod, row, col, t) {
-    const entry = this.#aux.get(this.#auxKey(kind, lod, row, col, t));
-    if (!entry) return undefined;
-    entry.used = ++this.#auxClock;
-    return entry.data;
+    return this.#auxCache.decoded(this.#auxKey(kind, lod, row, col, t));
   }
-
-  #auxClock = 0;
 
   async #getAux(kind, lod, row, col, t, signal) {
     if (this.#storage[kind] === null) return null;
@@ -732,17 +912,6 @@ export class ChronoStore {
     if (entry && !entry.controller.signal.aborted) this.#join(entry);
     else entry = this.#start(key, { kind, lod, row, col, t, anchor: false }, { background: false });
     return this.#subscribe(entry, signal);
-  }
-
-  #insertAux(key, data) {
-    this.#aux.set(key, { data, used: ++this.#auxClock });
-    this.#auxBytes += data.byteLength;
-    while (this.#auxBytes > AUX_CACHE_BYTES && this.#aux.size > 1) {
-      let oldest = null;
-      for (const [k, entry] of this.#aux) if (k !== key && (oldest === null || entry.used < this.#aux.get(oldest).used)) oldest = k;
-      this.#auxBytes -= this.#aux.get(oldest).data.byteLength;
-      this.#aux.delete(oldest);
-    }
   }
 
   // ---- loading ----
@@ -795,7 +964,13 @@ export class ChronoStore {
   }
 
   #cancelIfUnwanted(entry) {
-    if (entry.waiters === 0 && !entry.sticky && !entry.owned) entry.controller.abort();
+    if (entry.waiters === 0 && !entry.sticky && !entry.owned) this.#abortEntry(entry);
+  }
+
+  /** Abort a fetch that nobody wants any more. Its rejection (an AbortError) has no one left to handle it, so it is marked handled here. */
+  #abortEntry(entry) {
+    entry.promise.catch(() => {});
+    entry.controller.abort();
   }
 
   /** The view jumped: cancel every speculative fetch nobody is waiting for. */
@@ -825,8 +1000,9 @@ export class ChronoStore {
       data = new TypedArray(size / DTYPES[storage.dtype].bytes).fill(storage.fillValue);
     } else {
       const keepCompressed = kind === 'data' && this.#cache.maxCompressed > 0;
-      if (!held && kind === 'data') {
-        this.#compressionRatio = 0.9 * this.#compressionRatio + 0.1 * (bytes.length / size);
+      if (!held) {
+        entry.fetchedBytes = bytes.length;
+        if (kind === 'data') this.#compressionRatio = 0.9 * this.#compressionRatio + 0.1 * (bytes.length / size);
         if (entry.background) this.#counters.cache.speculativeBytes += bytes.length;
       }
       // The pool takes ownership of what it decodes, so a copy goes in when the bytes are also being kept.
@@ -842,7 +1018,7 @@ export class ChronoStore {
     if (kind === 'data') {
       this.#cache.insert(key, { kind, lod, row: meta.row, col: meta.col, t: meta.t, anchor: meta.anchor }, { data, compressed: held ? null : retained }, { background: entry.background && entry.priority.value !== 0 });
     } else {
-      this.#insertAux(key, data);
+      this.#auxCache.insert(key, { kind, lod, row: meta.row, col: meta.col, t: meta.t, anchor: false }, { data }, { background: entry.background && entry.priority.value !== 0 });
     }
     return data ?? undefined;
   }

@@ -65,15 +65,22 @@ export class DecodePool {
   #fallback;
   #warm = new Map();
 
+  /** Throws what `spawn()` throws, after terminating the workers it had already started. */
   constructor({ size, spawn, init, fallback = null }) {
     this.#fallback = fallback;
-    this.#workers = Array.from({ length: size }, () => {
-      const worker = { handle: spawn(), ready: false, busy: false, current: null };
-      worker.handle.onmessage = ({ data }) => this.#onMessage(worker, data);
-      worker.handle.onerror = (event) => this.#fail(new Error(`decode worker failed: ${event.message ?? event}`));
-      worker.handle.postMessage(init);
-      return worker;
-    });
+    this.#workers = [];
+    try {
+      for (let i = 0; i < size; i++) {
+        const worker = { handle: spawn(), ready: false, busy: false, current: null };
+        this.#workers.push(worker);
+        worker.handle.onmessage = ({ data }) => this.#onMessage(worker, data);
+        worker.handle.onerror = (event) => this.#fail(new Error(`decode worker failed: ${event.message ?? event}`));
+        worker.handle.postMessage(init);
+      }
+    } catch (error) {
+      for (const worker of this.#workers) worker.handle.terminate();
+      throw error;
+    }
   }
 
   get size() {
