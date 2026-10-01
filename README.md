@@ -10,7 +10,7 @@ Reading a store without chronozarr:
 - GDAL reads the layout through its Zarr driver. Stores without sharding open in GDAL 3.12 as a raster of time-major bands; sharded stores need GDAL 3.13 or newer, where the driver documents sharding support ([GDAL Zarr driver](https://gdal.org/en/stable/drivers/raster/zarr.html)). The writer emits the `_CRS` array attribute that GDAL reads, so GDAL assigns the CRS of an EPSG store. In a star-delta store GDAL sees residuals for non-anchor timesteps. `chronozarr export-cog STORE OUT_DIR` writes true-value Cloud Optimized GeoTIFFs for GDAL and QGIS from any store, including for GDAL versions that cannot read the store directly (extra `geo`).
 - CarbonPlan zarr-layer reads the ndpyramid `multiscales` layout. A store without the temporal profile is meant to open unchanged (not yet tested against zarr-layer in this repository); a star-delta store needs an adapter that reconstructs the residuals.
 
-Spec: [spec/CHRONOZARR.md](https://github.com/jameshgrn/tile-ripper/blob/main/spec/CHRONOZARR.md) (v0.2, draft). Hosting: [docs/hosting.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/hosting.md). Comparison with other formats: [docs/format-comparison.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/format-comparison.md).
+Spec: [spec/CHRONOZARR.md](https://github.com/jameshgrn/tile-ripper/blob/main/spec/CHRONOZARR.md) (v0.2, draft). Hosting: [docs/hosting.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/hosting.md). Growing a store: [docs/append.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/append.md). Embedding the viewer: [docs/embedding.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/embedding.md). Comparison with other formats: [docs/format-comparison.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/format-comparison.md).
 
 ## Who this is for
 
@@ -24,12 +24,14 @@ Spec: [spec/CHRONOZARR.md](https://github.com/jameshgrn/tile-ripper/blob/main/sp
 | Part | Path | What it does |
 |------|------|--------------|
 | Format spec | `spec/CHRONOZARR.md` | Normative layout, attributes, temporal encoding, pyramid, sharding, hosting rules |
-| Python package `chronozarr` | `src/chronozarr/` | `encode()`, `open_store()`, `validate()`, `view()`; CLI `chronozarr encode / convert / validate / info / doctor / export-cog / stac`; xarray engine `chronozarr` |
+| Python package `chronozarr` | `src/chronozarr/` | `encode()`, `open_store()`, `validate()`, `view()`; CLI `chronozarr encode / convert / append / validate / info / doctor / export-cog / stac`; xarray engine `chronozarr` |
 | JS reader | `js/chronozarr/` | DOM-free reader on top of zarrita: cells by (lod, row, col, t), cache, prefetch |
 | MapLibre layer | `js/maplibre/` | Custom layer that renders a store through the JS reader |
-| TileRipper viewer | `js/tileripper/` | WebGL2 viewer: time scrub, looping playback up to 60 steps per second, click for values and a time-series chart, permalinks, WebM and GIF export |
+| TileRipper viewer | `js/tileripper/` | WebGL2 viewer: time scrub, looping playback up to 60 steps per second, click for values and a time-series chart, permalinks, WebM and GIF export; `?embed=1` compact mode with a postMessage API for host pages |
 | Ingest example | `examples/sentinel2_pc/` | Monthly Sentinel-2 median composites from Planetary Computer |
-| Hosting and comparison | `docs/` | Host recipes and the format comparison |
+| Water-mask example | `examples/water_masks/` | Derived NDWI and water-fraction stores with validity masks from the monthly mosaics ([docs/user-zero.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/user-zero.md)) |
+| PNG frames example | `examples/png_frames/` | Georeferenced PNG frames converted into a store with no GeoTIFF step ([docs/png-frames.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/png-frames.md)) |
+| Docs | `docs/` | Host recipes, appending, embedding, the format comparison, the PNG rules and the user-zero write-up |
 
 ## How it compares
 
@@ -97,7 +99,8 @@ js/tileripper/index.html?store=https://your-bucket/my_store
 | Command | What it does |
 |---------|--------------|
 | `encode INPUT OUT` | Encode a Zarr store or NetCDF file with dims `(time, band, y, x)`, or a quoted glob of GeoTIFFs with the date in the file name, into a store. Options include `--encoding auto\|none\|star-delta`, `--codec`, `--level`, `--chunk-size`, `--shard-time`, `--no-shard`, `--lods`. |
-| `convert SOURCE OUT` | Convert a COG manifest (`.csv` with `uri,datetime[,bands]`, or `.json`), a Zarr store or a NetCDF file into a store one timestep at a time, without loading the whole stack. Warps COGs that are off the target grid (`--crs`, `--transform`, `--shape`, `--resampling`), stages timesteps so `--resume` can continue an interrupted run, and `--dry-run` prints the size and time estimate only. Takes the encode options too (`--encoding`, `--codec`, `--chunk-size`, `--shard-time`, `--read-ahead`). |
+| `convert SOURCE OUT` | Convert a manifest (`.csv` with `uri,datetime[,bands]`, or `.json`) of COGs or georeferenced PNG frames (world file plus `--crs`, `.aux.xml`, or `--bounds` with `--crs`; RGBA alpha becomes the mask), a Zarr store or a NetCDF file into a store one timestep at a time, without loading the whole stack. Warps COGs that are off the target grid (`--crs`, `--transform`, `--shape`, `--resampling`), stages timesteps so `--resume` can continue an interrupted run, and `--dry-run` prints the size and time estimate only. Takes the encode options too (`--encoding`, `--codec`, `--chunk-size`, `--shard-time`, `--read-ahead`). |
+| `append STORE INPUT` | Add timesteps at the end of an existing store: another store (for example one month written by `convert`), a Zarr store, a NetCDF file or a GeoTIFF glob. Writes only the objects that gain data and leaves every existing chunk byte-identical. Stores meant to grow should be encoded with `--no-shard`; see [docs/append.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/append.md). |
 | `validate STORE` | Check a store against the spec. Exit status 1 if it does not conform. |
 | `info STORE` | Summarise a store: times, bands, temporal encoding and pyramid levels. |
 | `doctor TARGET` | Diagnose an https URL or a local store path. A URL is probed as a browser would: root `zarr.json`, byte ranges, CORS, `HEAD` and caching headers. Both kinds then get the layout validated and one cell per level decoded and compared with a plain Zarr read. Exit status 1 only if a check fails; warnings and info lines are advice. `--origin` sets the `Origin` header. |
@@ -181,6 +184,14 @@ Whole frames and buffered playback, live Ucayali store, cold, device pixel ratio
 
 The cost is the full-resolution frame of a scrub step on a slow link, which lands later (median 3.7 to 4.5 s against 2.9 to 3.2 s at 50 Mbit/s) because a whole coarse frame of the right timestep is fetched first.
 
+Appending one month to a 12-month Ucayali store (4 bands, 36 cells at level 0), against a re-encode of 32 s and 6.3 GB written, 2026-10-01 (full tables in [docs/append.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/append.md)):
+
+| Layout | Append wall time | Bytes written per month | Rewritten |
+|---|---:|---:|---|
+| Unsharded | 0.6 s | 55 MB | metadata only |
+| Yearly time shards | 0.6 s | 55 to 660 MB, 4.4 GB over a 12-month cycle | the trailing shard, whole |
+| Whole-axis shard (default) | 0.6 s | 55 MB, then 111 MB and growing | a second shard that grows every month |
+
 Star-delta reconstruction runs in the fragment shader; the CPU loop it replaces cost 54 ms per 36-cell frame. Known limits: the coarse loop pulls the whole time axis at its level after the first frame (tens of MB for a store a few cells wide); cold open of very small stores costs 30 to 40 ms for worker startup.
 
 ## Status
@@ -188,3 +199,5 @@ Star-delta reconstruction runs in the fragment shader; the CPU loop it replaces 
 v0.2 draft (spec version `0.2.0`; every v0.1 store is a valid v0.2 store and readers accept both). The layout is Zarr v3 groups per level, sharded by default so one file per spatial cell and time shard holds the time axis and a timestep is one range read.
 
 The public demo store is `ucayali_santa_maria/chronozarr-3`: the Ucayali River near Santa María, Peru, 117 monthly Sentinel-2 composites from 2015 to 2026 over one of the fastest-migrating meandering reaches on Earth, served from an R2 bucket at data.tileripper.com. It is a v0.2 store. The writer's auto rule chose temporal encoding `none`: star-delta compressed to 0.988 of the plain size on the sampled cells, far short of the 0.85 needed to keep it. The store is 6,451.9 MB in 93 files; the same data with star-delta forced is 6,285.2 MB, so the plain store is 166.7 MB (about 2.7%) larger. That is the price of a store any Zarr v3 reader decodes without an adapter. The Measured tables above were taken on earlier stores of this reach and of the Sahara. Sahara and Iowa remain the benchmark pair and can be re-encoded from the ingest example.
+
+A second public store, `ucayali_santa_maria/water-1`, is derived from the same mosaics: NDWI as int16 with a scale of 1e-4, water as a scaled fraction, a validity mask where no scene was observed, 1.73 GB in 201 files, built by `examples/water_masks/`. It is the first store with a dtype other than uint16, explicit masks and physical units through the whole path, and the viewer lists both stores. Stores can now grow with `chronozarr append`, the viewer embeds in other pages with `?embed=1`, and georeferenced PNG frames convert directly.
