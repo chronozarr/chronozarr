@@ -15,6 +15,16 @@
 // a speculative allowance (16 MB at open, then a share of the measured bandwidth) and never takes the last
 // request slots from demand reads. It is modest while the viewer is idle (a horizon of timesteps around t and a
 // byte cap per idle episode) and covers the whole axis only for playback.
+//
+// An open store is a snapshot of the root zarr.json it was opened with: `times`, the level shapes, the anchors and
+// the delta references never change afterwards. When the store grows (spec section 14, `chronozarr append`), every
+// chunk the reader knows keeps decoding, but the new timesteps stay invisible until the store is opened again: a
+// reader does not extend its own `times`, so showing them is a reload (call openStore again). One thing does move
+// under a running reader: the trailing time shard of each cell is replaced by a longer object, so the length
+// `shard_bytes` lists for it goes stale, and an end-located index read with that length lands on the wrong bytes.
+// The reader heals this itself (see #readShardIndex): it re-reads the root past the HTTP cache, adopts the new
+// lengths and retries, and falls back to a suffix read when the lengths are still wrong. Old chunks keep their
+// offsets, so indexes already cached stay valid and what a chunk decodes to never changes. `stats.recoveries` counts it.
 
 import { BandwidthEstimator } from './bandwidth.js';
 import { ChunkCache, SpeculativeBudget } from './cache.js';
@@ -22,7 +32,7 @@ import { FetchError, HttpStore, LimitedReadable, abortError, isAbort, sleep } fr
 import { RequestLimiter } from './limiter.js';
 import { DTYPES, decodeSpec, normalizeBands, parseRoot, parseStorage, requireStore } from './metadata.js';
 import { DecodePool, MainThreadDecoder, leaseDecodePool } from './pool.js';
-import { parseShardIndex, shardIndexRange } from './shard.js';
+import { ShardIndexError, parseShardIndex, shardIndexRange } from './shard.js';
 import { registry } from '../vendor/zarrita/codecs.js';
 
 export { FetchError };
@@ -37,6 +47,11 @@ const WINDOW_BUDGET_FRACTION = 0.9;
 const MAX_DEFAULT_WORKERS = 8;
 const DEFAULT_MAX_REQUESTS = 12;
 const PREFETCH_COOLDOWN_MS = 30000;
+/**
+ * A shard whose index read disagreed with `shard_bytes` may have the root zarr.json re-read for it once per this interval,
+ * and once a re-read has brought no new lengths (root unchanged, or unreadable) none is started for any shard for as long.
+ */
+const ROOT_REFETCH_INTERVAL_MS = 60000;
 const DEFAULT_RETRY_DELAYS_MS = [200, 600, 1500];
 const DEFAULT_SPECULATIVE_INITIAL_BYTES = 16 * MIB;
 /**
@@ -85,6 +100,11 @@ function jointCap({ totalBytes, decodedBytes, compressedBytes }, fallback) {
 
 export function chunkKey(lod, row, col, t) {
   return `${lod}/${row}/${col}/${t}`;
+}
+
+/** Whether a failed index read looks like a stale `shard_bytes` length: unreadable or inconsistent bytes, or a 416 for the range. */
+function isStaleHint(error) {
+  return error instanceof ShardIndexError || error?.status === 416;
 }
 
 /**
@@ -306,6 +326,15 @@ export class ChronoStore {
   #inflight = new Map();
   #shardIndexes = new Map();
   #shardBytes;
+  /** Bumped each time a re-read root replaces `#shardBytes`; an index read compares it with the value it started under. */
+  #hintEpoch = 0;
+  /** The root re-read in flight (never rejects), shared by every shard that fails while it runs. */
+  #rootRefresh = null;
+  /** Clock time of the last root re-read started for each shard (by its cache key). */
+  #recoveredAt = new Map();
+  /** Clock time of the last root re-read that brought no new `shard_bytes`, or null. */
+  #noNewHintsAt = null;
+  #recoveries = { rootRefetches: 0, retried: 0, suffixFallbacks: 0, suppressed: 0 };
   #demandInflight = 0;
   #demandIdleWaiters = [];
   #limiter;
@@ -435,9 +464,15 @@ export class ChronoStore {
       evictions: { get: () => this.#cache.evictions.decoded, enumerable: true },
       compressedEvictions: { get: () => this.#cache.evictions.compressed, enumerable: true },
     });
-    const snapshot = () => ({ network: { ...network }, cache: { ...cacheStats }, loads: { ...this.#counters.loads } });
-    /** `stats()` is a snapshot; `stats.network`, `stats.cache` and `stats.loads` are live objects. */
-    this.stats = Object.assign(snapshot, { network, cache: cacheStats, loads: this.#counters.loads });
+    const snapshot = () => ({ network: { ...network }, cache: { ...cacheStats }, loads: { ...this.#counters.loads }, recoveries: { ...this.#recoveries } });
+    /**
+     * `stats()` is a snapshot; `stats.network`, `stats.cache`, `stats.loads` and `stats.recoveries` are live objects.
+     * `recoveries` counts what the reader did when a shard index read disagreed with `shard_bytes` (a store that was appended
+     * to since it was opened): `rootRefetches` root zarr.json re-reads, `retried` index reads that then succeeded with the
+     * refreshed length, `suffixFallbacks` index reads that fell back to a suffix read, `suppressed` recoveries that skipped the
+     * re-read because of the once-a-minute cap.
+     */
+    this.stats = Object.assign(snapshot, { network, cache: cacheStats, loads: this.#counters.loads, recoveries: this.#recoveries });
   }
 
   isAnchor(t) {
@@ -521,6 +556,7 @@ export class ChronoStore {
     for (const name of ['hits', 'misses', 'joins', 'anchorHits', 'anchorMisses', 'compressedHits', 'speculativeBytes']) cache[name] = 0;
     Object.assign(loads, { count: 0, fetchMs: 0, decodeMs: 0 });
     Object.assign(this.#network, { requests: 0, bytes: 0, deduped: 0 });
+    Object.assign(this.#recoveries, { rootRefetches: 0, retried: 0, suffixFallbacks: 0, suppressed: 0 });
     this.#cache.evictions.decoded = 0;
     this.#cache.evictions.compressed = 0;
   }
@@ -1041,7 +1077,7 @@ export class ChronoStore {
     return this.#readable.getRange(shardKey, { offset, length: index[2 * at + 1] }, { signal, priority });
   }
 
-  /** Shard index: read once, shared by every chunk of the shard, never tied to one caller's signal. */
+  /** Shard index: read once, shared by every chunk of the shard, never tied to one caller's signal (see #readShardIndex). */
   #shardIndex(kind, lod, row, col, shardIndex, shardKey, storage, priority) {
     const cacheKey = `${lod}/${shardKey}`;
     const cached = this.#shardIndexes.get(cacheKey);
@@ -1056,12 +1092,9 @@ export class ChronoStore {
       return cached.promise;
     }
     const handle = { value: priority.value };
-    const shardBytes = kind === 'data' ? this.#shardBytes?.[this.levels[lod].path]?.[`${shardIndex}/${row}/${col}`] : undefined;
-    const range = shardIndexRange(storage.shardTime, storage.indexHasCrc, storage.indexAtStart, shardBytes);
-    const promise = (async () => {
-      const bytes = await this.#readable.getRange(shardKey, range, { priority: handle });
-      return bytes && parseShardIndex(bytes, storage.shardTime, storage.indexHasCrc, `${this.url}${shardKey}`);
-    })();
+    // shard_bytes covers the data array only.
+    const hintAt = kind === 'data' ? { path: this.levels[lod].path, key: `${shardIndex}/${row}/${col}` } : null;
+    const promise = this.#readShardIndex({ cacheKey, shardKey, storage, handle, hintAt });
     const cacheEntry = { promise, priority: handle, settled: false };
     promise.then(
       () => (cacheEntry.settled = true),
@@ -1069,6 +1102,113 @@ export class ChronoStore {
     );
     this.#shardIndexes.set(cacheKey, cacheEntry);
     return promise;
+  }
+
+  /**
+   * Read one shard index. With a `shard_bytes` length (end-located index) it is the bounded range for that length;
+   * otherwise a suffix read (HEAD then range, or `bytes=-N` with suffixRequests). The length is a hint that goes
+   * stale when the store is appended to (the trailing shard grows), and then the read lands on chunk bytes: the
+   * checksum or length check fails, or the server answers 416. That, and only that, starts a recovery:
+   *
+   * 1. If a re-read root has replaced the lengths since this read started (or one is in flight), use those; else
+   *    re-read the root zarr.json once (past the HTTP cache, `cache: 'reload'`) and adopt its `shard_bytes`. At most once
+   *    per shard per minute, and not at all for a minute after a re-read that brought no new lengths (ROOT_REFETCH_INTERVAL_MS),
+   *    so a broken store costs a bounded number of reads.
+   * 2. Retry the index read with the length for this shard, if the root gave a different one.
+   * 3. Still failing, or nothing new to try: read the index with a suffix range, which needs no hint.
+   *
+   * Chunks the reader already holds an index for are untouched: appends keep old chunks at their offsets. A failure
+   * of another kind (network, 5xx, a shard without hint whose checksum fails) is not a stale length and is thrown as is.
+   */
+  async #readShardIndex({ cacheKey, shardKey, storage, handle, hintAt }) {
+    const where = `${this.url}${shardKey}`;
+    const lookup = () => (hintAt ? this.#shardBytes?.[hintAt.path]?.[hintAt.key] : undefined);
+    const rangeFor = (shardBytes) => shardIndexRange(storage.shardTime, storage.indexHasCrc, storage.indexAtStart, shardBytes);
+    // Only an end-located index read with a known shard length can go stale.
+    const hinted = (range) => !storage.indexAtStart && 'offset' in range;
+    const read = async (shardBytes) => {
+      const range = rangeFor(shardBytes);
+      const bytes = await this.#readable.getRange(shardKey, range, { priority: handle, rangeMiss: hinted(range) });
+      if (bytes === null) throw new ShardIndexError(`${where}: HTTP 416 for shard index range bytes=${range.offset}-${range.offset + range.length - 1}, the shard is shorter than shard_bytes says (${shardBytes})`);
+      return bytes && parseShardIndex(bytes, storage.shardTime, storage.indexHasCrc, where, hinted(range) ? shardBytes : undefined);
+    };
+
+    const hint = lookup();
+    if (!hinted(rangeFor(hint))) return read(hint);
+    const epoch = this.#hintEpoch;
+    try {
+      return await read(hint);
+    } catch (error) {
+      if (!isStaleHint(error)) throw error;
+    }
+
+    const recoveries = this.#recoveries;
+    if (this.#hintEpoch === epoch) {
+      if (this.#rootRefresh) await this.#rootRefresh;
+      else if (this.#mayRefetchRoot(cacheKey)) await this.#refetchRoot();
+      else recoveries.suppressed++;
+    }
+    const fresh = lookup();
+    if (this.#hintEpoch !== epoch && fresh !== hint && hinted(rangeFor(fresh))) {
+      try {
+        const index = await read(fresh);
+        recoveries.retried++;
+        return index;
+      } catch (error) {
+        if (!isStaleHint(error)) throw error;
+      }
+    }
+    recoveries.suffixFallbacks++;
+    console.warn(`chronozarr: ${where}: shard_bytes (${hint}) does not match the shard object; reading its index with a suffix range instead`);
+    return read(undefined);
+  }
+
+  /**
+   * True, and recorded, when the root may be re-read on behalf of this shard: once per shard per ROOT_REFETCH_INTERVAL_MS,
+   * and not at all for that long after a re-read that found nothing new (a root that stays stale, or cannot be read,
+   * would otherwise be asked once for every shard that disagrees with it).
+   */
+  #mayRefetchRoot(cacheKey) {
+    const now = this.#clock();
+    if (this.#noNewHintsAt !== null && now - this.#noNewHintsAt < ROOT_REFETCH_INTERVAL_MS) return false;
+    const last = this.#recoveredAt.get(cacheKey);
+    if (last !== undefined && now - last < ROOT_REFETCH_INTERVAL_MS) return false;
+    this.#recoveredAt.set(cacheKey, now);
+    return true;
+  }
+
+  /**
+   * Re-read the root zarr.json past the browser's HTTP cache and adopt its `shard_bytes` (nothing else of it: an index
+   * read needs no time axis length, since a shard index always has shard_time entries, and `times` stays as opened).
+   * Demand priority: a read is waiting. Never rejects; when the root cannot be read, has no chronozarr block or lists
+   * the same lengths as before, they stay as they were and the caller falls back to a suffix read. Shards that fail
+   * meanwhile share this read.
+   */
+  #refetchRoot() {
+    this.#recoveries.rootRefetches++;
+    const refresh = (async () => {
+      try {
+        const bytes = await this.#readable.get('/zarr.json', { priority: 0, reload: true });
+        if (!bytes) throw new Error('root zarr.json not found');
+        const cz = JSON.parse(new TextDecoder().decode(bytes)).attributes?.chronozarr;
+        if (!cz) throw new Error('the root has no chronozarr attributes');
+        const hints = cz.shard_bytes ?? null;
+        if (JSON.stringify(hints) !== JSON.stringify(this.#shardBytes)) {
+          this.#shardBytes = hints;
+          this.#hintEpoch++;
+          this.#noNewHintsAt = null;
+          return;
+        }
+      } catch (error) {
+        console.warn(`chronozarr: ${this.url}: cannot reload zarr.json to refresh shard_bytes (${error.name}: ${error.message})`);
+      }
+      this.#noNewHintsAt = this.#clock();
+    })();
+    this.#rootRefresh = refresh;
+    refresh.then(() => {
+      if (this.#rootRefresh === refresh) this.#rootRefresh = null;
+    });
+    return refresh;
   }
 
   /** Each caller gets its own promise; a caller that aborts is released, and the last one out cancels the fetch. */

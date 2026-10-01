@@ -365,8 +365,9 @@ test('decoding a v0.1 store is unchanged: numbers, flags and stats shape', async
   assert.equal(store.hasCoverage, false);
   for (let t = 0; t < 7; t++) await assertLossless(store, spec, t);
   const stats = store.stats();
-  assert.deepEqual(Object.keys(stats), ['network', 'cache', 'loads']);
+  assert.deepEqual(Object.keys(stats), ['network', 'cache', 'loads', 'recoveries']);
   assert.deepEqual(Object.keys(stats.network).sort(), ['bytes', 'deduped', 'inflight', 'requests']);
+  assert.deepEqual(stats.recoveries, { rootRefetches: 0, retried: 0, suffixFallbacks: 0, suppressed: 0 }, 'nothing to recover from in a store that did not change');
   for (const name of ['hits', 'misses', 'joins', 'evictions', 'decodedBytes', 'compressedBytes', 'speculativeBytes']) assert.equal(typeof stats.cache[name], 'number', name);
   assert.equal(store.stats.cache, store.stats.cache, 'stats.cache is one live object');
 });

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { indexByteLength, parseShardIndex, shardIndexRange } from '../chronozarr/shard.js';
+import { ShardIndexError, crc32c, indexByteLength, parseShardIndex, shardIndexRange } from '../chronozarr/shard.js';
 
 test('the index read: prefix for a start index; exact range when the shard size is known; suffix otherwise', () => {
   assert.equal(indexByteLength(4, true), 68);
@@ -28,4 +28,35 @@ test('the index of a partial last time shard has the full number of entries, the
   bytes.set(new Uint8Array(view.buffer));
   const entries = parseShardIndex(bytes, 4, false, 'partial');
   assert.deepEqual([...entries], [0, 50, -1, 0, -1, 0, -1, 0]);
+});
+
+test('index errors are ShardIndexError: wrong length, wrong checksum, and chunks beyond the shard they were read from', () => {
+  const entries = (pairs) => {
+    const view = new DataView(new ArrayBuffer(16 * pairs.length));
+    pairs.forEach(([offset, length], i) => {
+      view.setBigUint64(16 * i, BigInt(offset), true);
+      view.setBigUint64(16 * i + 8, BigInt(length), true);
+    });
+    return new Uint8Array(view.buffer);
+  };
+  const withCrc = (raw) => {
+    const out = new Uint8Array(raw.length + 4);
+    out.set(raw);
+    new DataView(out.buffer).setUint32(raw.length, crc32c(raw), true);
+    return out;
+  };
+  const raw = entries([[0, 50], [60, 30]]);
+  assert.deepEqual([...parseShardIndex(withCrc(raw), 2, true, 'ok', 130)], [0, 50, 60, 30]);
+  assert.throws(() => parseShardIndex(withCrc(raw).subarray(1), 2, true, 'short'), ShardIndexError);
+  const flipped = withCrc(raw);
+  flipped[3] ^= 0xff;
+  assert.throws(() => parseShardIndex(flipped, 2, true, 'crc'), (error) => error instanceof ShardIndexError && /checksum mismatch/.test(error.message));
+
+  // Without a checksum (index codecs of just `bytes`) the bounds are the only guard: bytes from inside a longer shard's data do not pass for an index.
+  assert.deepEqual([...parseShardIndex(raw, 2, false, 'edge', 90)], [0, 50, 60, 30], 'a chunk ending exactly at the shard length is fine');
+  assert.throws(() => parseShardIndex(raw, 2, false, 'beyond', 89), (error) => error instanceof ShardIndexError && /entry 1 ends at byte 90, beyond the 89-byte shard/.test(error.message));
+  const garbage = new Uint8Array(32).fill(0xa5);
+  assert.throws(() => parseShardIndex(garbage, 2, false, 'garbage', 5000), ShardIndexError);
+  assert.deepEqual([...parseShardIndex(garbage.fill(0xff), 2, false, 'empty', 10)], [-1, 0, -1, 0], 'empty entries have no extent');
+  assert.deepEqual([...parseShardIndex(raw, 2, false, 'unchecked')], [0, 50, 60, 30], 'no length given: no bounds check');
 });

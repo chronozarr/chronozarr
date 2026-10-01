@@ -1,5 +1,6 @@
-// Minimal static file server with GET, HEAD and byte ranges (single range, including suffix).
-// Used to test the decoder over real HTTP against the fixture stores.
+// Minimal static file server with GET, HEAD and byte ranges (single range, including suffix; a range that starts
+// beyond the end of the file answers 416 like real hosts do). Used to test the decoder over real HTTP against the
+// fixture stores.
 
 import http from 'node:http';
 import { createReadStream } from 'node:fs';
@@ -20,7 +21,7 @@ export async function startStaticServer(rootDir, port = 0) {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     const file = path.join(rootDir, decodeURIComponent(url.pathname));
-    requests.push({ method: req.method, path: url.pathname, range: req.headers.range ?? null });
+    requests.push({ method: req.method, path: url.pathname, range: req.headers.range ?? null, cacheControl: req.headers['cache-control'] ?? null });
     try {
       const info = await stat(file);
       if (!info.isFile()) throw new Error('not a file');
@@ -35,6 +36,10 @@ export async function startStaticServer(rootDir, port = 0) {
         else {
           start = Number(match[1]);
           if (match[2] !== '') end = Math.min(size - 1, Number(match[2]));
+        }
+        if (start >= size) {
+          res.writeHead(416, { 'Content-Range': `bytes */${size}`, 'Access-Control-Allow-Origin': '*' });
+          return res.end();
         }
       }
       const headers = {

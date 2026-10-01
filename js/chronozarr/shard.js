@@ -20,6 +20,18 @@ export function crc32c(bytes) {
 
 const EMPTY = 0xffffffffffffffffn;
 
+/**
+ * A shard index that cannot be trusted: wrong length, failed checksum, or entries that point outside a shard of
+ * the length it was read against. When the read used a `shard_bytes` length the reader takes this as a sign that
+ * the length is stale (the store grew by an append) and recovers; otherwise it is a corrupt store.
+ */
+export class ShardIndexError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ShardIndexError';
+  }
+}
+
 /** Encoded size of an index for `nChunks` inner chunks. */
 export function indexByteLength(nChunks, hasCrc) {
   return 16 * nChunks + (hasCrc ? 4 : 0);
@@ -27,17 +39,19 @@ export function indexByteLength(nChunks, hasCrc) {
 
 /**
  * Parse and verify a shard index. Returns a Float64Array [offset0, nbytes0, offset1, ...] with -1 for
- * empty chunks. Throws when the length or checksum is wrong (typically a wrong index_location).
+ * empty chunks. Throws a ShardIndexError when the length or checksum is wrong (typically a wrong index_location,
+ * or an index read with a stale shard length). With `shardBytes`, the length of the shard object the index was
+ * read against, every chunk must also end inside it: the only check left when the index codecs carry no checksum.
  */
-export function parseShardIndex(bytes, nChunks, hasCrc, where) {
+export function parseShardIndex(bytes, nChunks, hasCrc, where, shardBytes) {
   const expected = indexByteLength(nChunks, hasCrc);
-  if (bytes.length !== expected) throw new Error(`${where}: shard index is ${bytes.length} bytes, expected ${expected}`);
+  if (bytes.length !== expected) throw new ShardIndexError(`${where}: shard index is ${bytes.length} bytes, expected ${expected}`);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (hasCrc) {
     const stored = view.getUint32(16 * nChunks, true);
     const actual = crc32c(bytes.subarray(0, 16 * nChunks));
     if (stored !== actual) {
-      throw new Error(`${where}: shard index checksum mismatch (stored ${stored.toString(16)}, computed ${actual.toString(16)}); check index_location`);
+      throw new ShardIndexError(`${where}: shard index checksum mismatch (stored ${stored.toString(16)}, computed ${actual.toString(16)}); check index_location`);
     }
   }
   const entries = new Float64Array(2 * nChunks);
@@ -50,6 +64,10 @@ export function parseShardIndex(bytes, nChunks, hasCrc, where) {
     } else {
       entries[2 * i] = Number(offset);
       entries[2 * i + 1] = Number(length);
+      const end = entries[2 * i] + entries[2 * i + 1];
+      if (shardBytes !== undefined && end > shardBytes) {
+        throw new ShardIndexError(`${where}: shard index entry ${i} ends at byte ${end}, beyond the ${shardBytes}-byte shard it was read from`);
+      }
     }
   }
   return entries;

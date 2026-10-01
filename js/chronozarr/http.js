@@ -32,7 +32,11 @@ export function sleep(ms, signal) {
 
 /**
  * Store over HTTP. `get(key)` and `getRange(key, range)` resolve to a Uint8Array, or undefined on 404. Keys
- * start with '/'. Options per call: `signal`, and `priority` (0 = a frame waits, 1 = background).
+ * start with '/'. Options per call: `signal`, and `priority` (0 = a frame waits, 1 = background). Two more for
+ * the reader's recovery from a changed store: `get` with `reload` skips the browser's HTTP cache and refreshes it
+ * with the answer (`cache: 'reload'`; the browser adds `Cache-Control: no-cache` itself, which is not an author
+ * header, so a cross-origin read stays a simple request with no preflight), and `getRange` with `rangeMiss`
+ * resolves to `null` instead of failing when the server answers 416 (the range starts beyond the object).
  *
  * Every attempt takes a limiter slot and counts toward `network.requests`; network errors, 5xx and 429 are
  * retried after each delay in `retryDelaysMs` (jittered +-30%); everything else that is not 200/206/404 fails
@@ -65,13 +69,13 @@ export class HttpStore {
     return url;
   }
 
-  async get(key, { signal, priority = 0 } = {}) {
-    const { bytes } = await this.#send(this.#url(key), 'GET', undefined, signal, priority);
+  async get(key, { signal, priority = 0, reload = false } = {}) {
+    const { bytes } = await this.#send(this.#url(key), 'GET', undefined, signal, priority, { reload });
     return bytes;
   }
 
   /** `range` is {offset, length} or {suffixLength}. A suffix costs a HEAD first unless the store sends suffix ranges. */
-  async getRange(key, range, { signal, priority = 0 } = {}) {
+  async getRange(key, range, { signal, priority = 0, rangeMiss = false } = {}) {
     const url = this.#url(key);
     let start;
     let end;
@@ -90,15 +94,16 @@ export class HttpStore {
       start = range.offset;
       end = range.offset + range.length - 1;
     }
-    const { bytes, status } = await this.#send(url, 'GET', `bytes=${start}-${end}`, signal, priority);
+    const { bytes, status } = await this.#send(url, 'GET', `bytes=${start}-${end}`, signal, priority, { rangeMiss });
+    if (status === 416) return null;
     // A server that ignores Range answers 200 with the whole object.
     return bytes && status === 200 ? bytes.slice(start, end + 1) : bytes;
   }
 
-  async #send(url, method, range, signal, priority) {
-    const request = new Request(url, { method, signal, headers: range ? { Range: range } : undefined });
+  async #send(url, method, range, signal, priority, { reload = false, rangeMiss = false } = {}) {
+    const request = new Request(url, { method, signal, headers: range ? { Range: range } : undefined, ...(reload ? { cache: 'reload' } : {}) });
     for (let attempt = 1; ; attempt++) {
-      const outcome = await this.#limiter.run(priority, signal, () => this.#attempt(request, method));
+      const outcome = await this.#limiter.run(priority, signal, () => this.#attempt(request, method, rangeMiss));
       if (outcome.ok) return outcome;
       const { status, statusText, cause } = outcome;
       const retryable = status === undefined || status >= 500 || status === 429;
@@ -114,12 +119,16 @@ export class HttpStore {
   }
 
   /** One trip to the server, inside a limiter slot. Never throws except on abort: failures come back as data. */
-  async #attempt(request, method) {
+  async #attempt(request, method, rangeMiss) {
     this.#network.requests++;
     this.#bandwidth.begin();
     let received = 0;
     try {
       const response = await this.#fetch(request);
+      if (response.status === 416 && rangeMiss) {
+        await response.arrayBuffer();
+        return { ok: true, status: 416, bytes: undefined };
+      }
       if (response.status !== 200 && response.status !== 206 && response.status !== 404) {
         return { ok: false, status: response.status, statusText: response.statusText, cause: new Error(`HTTP ${response.status}`) };
       }
@@ -155,8 +164,9 @@ export class LimitedReadable {
     this.#bandwidth = bandwidth;
   }
 
+  /** `reload` is passed on as `cache: 'reload'` (a zarrita FetchStore hands it to fetch); other readables ignore it. */
   get(key, options = {}) {
-    return this.#call(options, () => this.#readable.get(key, { signal: options.signal }));
+    return this.#call(options, () => this.#readable.get(key, { signal: options.signal, ...(options.reload ? { cache: 'reload' } : {}) }));
   }
 
   getRange(key, range, options = {}) {
