@@ -6,3 +6,5 @@ package-lock.json
 .gitignore
 .assetsignore
 maplibre/verify/
+e2e/
+playwright.config.js

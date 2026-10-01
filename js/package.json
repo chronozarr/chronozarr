@@ -1,16 +1,62 @@
 {
   "name": "chronozarr-js",
   "version": "0.2.0",
-  "private": true,
-  "description": "Browser and Node reader for chronozarr stores (spec 0.1 and 0.2), plus the TileRipper viewer",
+  "description": "Browser and Node reader for chronozarr stores (spec 0.1 and 0.2), plus a MapLibre GL JS custom layer",
+  "keywords": [
+    "chronozarr",
+    "zarr",
+    "zarr-v3",
+    "sharding",
+    "raster",
+    "geospatial",
+    "earth-observation",
+    "time-series",
+    "sentinel-2",
+    "webgl",
+    "maplibre",
+    "maplibre-gl",
+    "custom-layer"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jameshgrn/tile-ripper.git",
+    "directory": "js"
+  },
   "type": "module",
+  "exports": {
+    ".": "./chronozarr/decoder.js",
+    "./maplibre": "./maplibre/layer.js",
+    "./decode-worker": "./chronozarr/decode-worker.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "chronozarr/",
+    "maplibre/layer.js",
+    "maplibre/mesh.js",
+    "maplibre/projection.js",
+    "maplibre/shader.js",
+    "maplibre/slots.js",
+    "maplibre/view.js",
+    "tileripper/products.js",
+    "tileripper/products-glsl.js",
+    "tileripper/renderer.js",
+    "vendor/numcodecs/",
+    "vendor/zarrita/",
+    "vendor/zarrita-storage/"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "test": "node --test",
+    "pretest": "node e2e/make-node-fixtures.mjs",
+    "test": "node --test \"test/*.test.js\"",
+    "test:browser": "playwright test",
     "vendor": "node support/vendor.mjs",
     "vendor:check": "node support/vendor.mjs --check"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "zarrita": "0.7.5"
-  },
-  "license": "Apache-2.0"
+  }
 }
