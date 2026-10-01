@@ -38,9 +38,9 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://tileripper.com"
-Documentation = "https://github.com/jameshgrn/tile-ripper/blob/main/spec/CHRONOZARR.md"
-Repository = "https://github.com/jameshgrn/tile-ripper"
-Issues = "https://github.com/jameshgrn/tile-ripper/issues"
+Documentation = "https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md"
+Repository = "https://github.com/chronozarr/chronozarr"
+Issues = "https://github.com/chronozarr/chronozarr/issues"
 
 [project.optional-dependencies]
 # rasterio: GeoTIFF/COG input for `convert`, `export-cog`, and the WGS84 extent for `stac`.

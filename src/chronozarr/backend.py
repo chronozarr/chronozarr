@@ -166,7 +166,7 @@ class ChronozarrBackendEntrypoint(BackendEntrypoint):
     """xarray entry point for engine="chronozarr"."""
 
     description = "Open chronozarr stores (Zarr v3 raster time-series pyramids) lazily"
-    url = "https://github.com/jameshgrn/tile-ripper/blob/main/spec/CHRONOZARR.md"
+    url = "https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md"
 
     def open_dataset(
         self,

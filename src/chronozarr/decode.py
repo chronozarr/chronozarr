@@ -247,7 +247,7 @@ class ChronoStore:
 
 _RETRY_DELAYS_S = (0.2, 0.6, 1.5)
 # Some CDNs reject urllib's default "Python-urllib" agent with a 403.
-_USER_AGENT = "chronozarr (+https://github.com/jameshgrn/tile-ripper)"
+_USER_AGENT = "chronozarr (+https://github.com/chronozarr/chronozarr)"
 
 
 def _range_header(byte_range: ByteRequest) -> str:

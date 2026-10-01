@@ -10,12 +10,12 @@ Reading a store without chronozarr:
 - GDAL reads the layout through its Zarr driver. Stores without sharding (the default) open in GDAL 3.12 as a raster of time-major bands; sharded stores need GDAL 3.13 or newer, where the driver documents sharding support ([GDAL Zarr driver](https://gdal.org/en/stable/drivers/raster/zarr.html)). The writer emits the `_CRS` array attribute that GDAL reads, so GDAL assigns the CRS of an EPSG store. In a star-delta store GDAL sees residuals for non-anchor timesteps. `chronozarr export-cog STORE OUT_DIR` writes true-value Cloud Optimized GeoTIFFs for GDAL and QGIS from any store, including for GDAL versions that cannot read the store directly (extra `geo`).
 - CarbonPlan zarr-layer reads the ndpyramid `multiscales` layout. A store without the temporal profile that was written after `pixels_per_tile` was dropped from `multiscales` (spec section 13) opens in zarr-layer unmodified (verified on the Ucayali store at level 1, point values equal to a direct Zarr read); a store written earlier opens with zarr-layer's `crs` and `bounds` constructor options; a star-delta store needs an adapter that reconstructs the residuals.
 
-Spec: [spec/CHRONOZARR.md](https://github.com/jameshgrn/tile-ripper/blob/main/spec/CHRONOZARR.md) (v0.2, draft). Hosting: [docs/hosting.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/hosting.md). Growing a store: [docs/append.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/append.md). Embedding the viewer: [docs/embedding.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/embedding.md). Comparison with other formats: [docs/format-comparison.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/format-comparison.md).
+Spec: [spec/CHRONOZARR.md](https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md) (v0.2, draft). Hosting: [docs/hosting.md](https://github.com/chronozarr/chronozarr/blob/main/docs/hosting.md). Growing a store: [docs/append.md](https://github.com/chronozarr/chronozarr/blob/main/docs/append.md). Embedding the viewer: [docs/embedding.md](https://github.com/chronozarr/chronozarr/blob/main/docs/embedding.md). Comparison with other formats: [docs/format-comparison.md](https://github.com/chronozarr/chronozarr/blob/main/docs/format-comparison.md).
 
 ## Who this is for
 
 - **Researchers with stacks.** You have a Sentinel-2, Landsat or model time series in xarray, NetCDF or GeoTIFFs. `chronozarr encode` writes a store from an array in memory, `chronozarr convert` streams a COG manifest, a Zarr variable or a NetCDF file into one a timestep at a time, `xarray.open_zarr` or the `chronozarr` engine reads it back, and the viewer scrubs it.
-- **Data publishers.** A store is one immutable prefix in a bucket with byte ranges and CORS, and nothing to run. `chronozarr doctor <url>` checks CORS, ranges, caching and decoding against the live URL. Recipes for S3 with CloudFront, R2, GCS and Source Cooperative are in [docs/hosting.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/hosting.md).
+- **Data publishers.** A store is one immutable prefix in a bucket with byte ranges and CORS, and nothing to run. `chronozarr doctor <url>` checks CORS, ranges, caching and decoding against the live URL. Recipes for S3 with CloudFront, R2, GCS and Source Cooperative are in [docs/hosting.md](https://github.com/chronozarr/chronozarr/blob/main/docs/hosting.md).
 - **Map libraries integrating the decoder.** `js/chronozarr/` is a DOM-free reader on zarrita: `(lod, row, col, t)` to a typed-array cell, shard index cache, worker-pool decode and prefetch. A MapLibre custom layer built on it is in `js/maplibre/`.
 - **Notebooks.** `chronozarr.open_store(path_or_url).to_xarray()` for arrays, and `chronozarr.view(store)` to look at a local store in the viewer from Jupyter (extra `notebook`).
 
@@ -29,8 +29,8 @@ Spec: [spec/CHRONOZARR.md](https://github.com/jameshgrn/tile-ripper/blob/main/sp
 | MapLibre layer | `js/maplibre/` | Custom layer that renders a store through the JS reader |
 | TileRipper viewer | `js/tileripper/` | WebGL2 viewer: time scrub, looping playback up to 60 steps per second, click for values and a time-series chart, permalinks, WebM and GIF export; `?embed=1` compact mode with a postMessage API for host pages |
 | Ingest example | `examples/sentinel2_pc/` | Monthly Sentinel-2 median composites from Planetary Computer |
-| Water-mask example | `examples/water_masks/` | Derived NDWI and water-fraction stores with validity masks from the monthly mosaics ([docs/user-zero.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/user-zero.md)) |
-| PNG frames example | `examples/png_frames/` | Georeferenced PNG frames converted into a store with no GeoTIFF step ([docs/png-frames.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/png-frames.md)) |
+| Water-mask example | `examples/water_masks/` | Derived NDWI and water-fraction stores with validity masks from the monthly mosaics ([docs/user-zero.md](https://github.com/chronozarr/chronozarr/blob/main/docs/user-zero.md)) |
+| PNG frames example | `examples/png_frames/` | Georeferenced PNG frames converted into a store with no GeoTIFF step ([docs/png-frames.md](https://github.com/chronozarr/chronozarr/blob/main/docs/png-frames.md)) |
 | Docs | `docs/` | Host recipes, appending, embedding, the format comparison, the PNG rules and the user-zero write-up |
 
 ## How it compares
@@ -39,15 +39,15 @@ Spec: [spec/CHRONOZARR.md](https://github.com/jameshgrn/tile-ripper/blob/main/sp
 - **Mapbox raster-array** (MRT) is multi-band numeric tiles with a time series. Its decoder code is published in mapbox-gl-js (`src/data/mrt`), but the format is tied to Mapbox's tiling service and renderer.
 - **CarbonPlan ndpyramid + zarr-layer** put Zarr pyramids in MapLibre with a time selector. zarr-layer supports arbitrary CRS through proj4 reprojection. Each timestep is its own chunk fetch, and stock zarr-layer needs an adapter to reconstruct star-delta residuals.
 
-chronozarr keeps native projection and lossless values, serves a timestep as one plain `GET` of one chunk, and pre-stages a window of the time axis in the client so a timestep switch costs zero bytes on the wire once cached. The temporal encoding is the optional part: it was about 25% smaller on arid scenes, about 6% on vegetated ones, and 2.6% on the whole Ucayali demo store, so the writer decides per store. The layout is a trade the writer makes too: unsharded (the default) is one object per cell, level and timestep (about 5,900 for the 117-month imagery store), with no index reads, cheap CDN misses and appends that write only new objects; sharded (`--shard`) is 93 objects and one range read per timestep once the shard index is cached, with a CDN miss that costs time proportional to the shard size. [docs/format-comparison.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/format-comparison.md) has the row-by-row table, including when to choose each of the other tools.
+chronozarr keeps native projection and lossless values, serves a timestep as one plain `GET` of one chunk, and pre-stages a window of the time axis in the client so a timestep switch costs zero bytes on the wire once cached. The temporal encoding is the optional part: it was about 25% smaller on arid scenes, about 6% on vegetated ones, and 2.6% on the whole Ucayali demo store, so the writer decides per store. The layout is a trade the writer makes too: unsharded (the default) is one object per cell, level and timestep (about 5,900 for the 117-month imagery store), with no index reads, cheap CDN misses and appends that write only new objects; sharded (`--shard`) is 93 objects and one range read per timestep once the shard index is cached, with a CDN miss that costs time proportional to the shard size. [docs/format-comparison.md](https://github.com/chronozarr/chronozarr/blob/main/docs/format-comparison.md) has the row-by-row table, including when to choose each of the other tools.
 
 ## Install
 
-The first release (0.2.0 of both packages) is pending: `chronozarr` is not on PyPI and `chronozarr-js` is not on npm yet, so the install commands below fail until the `v0.2.0` tag is published. Both packages release from one `v*` tag, so their versions move together.
+The first release (0.2.0 of both packages) is pending: `chronozarr` is not on PyPI and `chronozarr` is not on npm yet, so the install commands below fail until the `v0.2.0` tag is published. Both packages release from one `v*` tag, so their versions move together.
 
 ```bash
 pip install chronozarr              # Python package and CLI; extras: geo (GeoTIFF input), notebook (view()), netcdf, dask
-npm install chronozarr-js           # JavaScript reader and MapLibre layer
+npm install chronozarr           # JavaScript reader and MapLibre layer
 ```
 
 Until then, work from a checkout of this repository:
@@ -57,7 +57,7 @@ uv sync                      # Python package and CLI; add --extra geo for GeoTI
 uv run chronozarr --help
 ```
 
-`chronozarr-js` is the ES modules under `js/chronozarr/` and `js/maplibre/`, published as they are (no build step, no runtime dependency): `import { openStore } from 'chronozarr-js'` and `import { ChronozarrLayer } from 'chronozarr-js/maplibre'`. From a checkout, `cd js && npm install` installs only the test tooling. zarrita and its codecs are vendored under `js/vendor` (zarrita 0.7.5, @zarrita/storage 0.2.0, numcodecs 0.3.2, all MIT), so the viewer has no runtime third-party host; each vendored file header records its version, license and the SHA-256 of the published file, and the page loads no web font. The MapLibre demo page (`js/maplibre/index.html`) is the exception by design: it loads maplibre-gl from a pinned CDN version. Usage examples are in [js/README.md](https://github.com/jameshgrn/tile-ripper/blob/main/js/README.md).
+`chronozarr` is the ES modules under `js/chronozarr/` and `js/maplibre/`, published as they are (no build step, no runtime dependency): `import { openStore } from 'chronozarr'` and `import { ChronozarrLayer } from 'chronozarr/maplibre'`. From a checkout, `cd js && npm install` installs only the test tooling. zarrita and its codecs are vendored under `js/vendor` (zarrita 0.7.5, @zarrita/storage 0.2.0, numcodecs 0.3.2, all MIT), so the viewer has no runtime third-party host; each vendored file header records its version, license and the SHA-256 of the published file, and the page loads no web font. The MapLibre demo page (`js/maplibre/index.html`) is the exception by design: it loads maplibre-gl from a pinned CDN version. Usage examples are in [js/README.md](https://github.com/chronozarr/chronozarr/blob/main/js/README.md).
 
 ## Quickstart
 
@@ -100,7 +100,7 @@ js/tileripper/index.html?store=https://your-bucket/my_store
 |---------|--------------|
 | `encode INPUT OUT` | Encode a Zarr store or NetCDF file with dims `(time, band, y, x)`, or a quoted glob of GeoTIFFs with the date in the file name, into a store. Options include `--encoding auto\|none\|star-delta`, `--codec`, `--level`, `--chunk-size`, `--shard/--no-shard` (default off), `--shard-time` (needs `--shard`), `--lods`. |
 | `convert SOURCE OUT` | Convert a manifest (`.csv` with `uri,datetime[,bands]`, or `.json`) of COGs or georeferenced PNG frames (world file plus `--crs`, `.aux.xml`, or `--bounds` with `--crs`; RGBA alpha becomes the mask), a Zarr store or a NetCDF file into a store one timestep at a time, without loading the whole stack. Warps COGs that are off the target grid (`--crs`, `--transform`, `--shape`, `--resampling`), stages timesteps so `--resume` can continue an interrupted run, and `--dry-run` prints the size and time estimate only. Takes the encode options too (`--encoding`, `--codec`, `--chunk-size`, `--shard-time`, `--read-ahead`). |
-| `append STORE INPUT` | Add timesteps at the end of an existing store: another store (for example one month written by `convert`), a Zarr store, a NetCDF file or a GeoTIFF glob. Writes only the objects that gain data and leaves every existing chunk byte-identical. The default unsharded layout appends by writing only new objects, where a sharded store rewrites its trailing shard; see [docs/append.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/append.md). |
+| `append STORE INPUT` | Add timesteps at the end of an existing store: another store (for example one month written by `convert`), a Zarr store, a NetCDF file or a GeoTIFF glob. Writes only the objects that gain data and leaves every existing chunk byte-identical. The default unsharded layout appends by writing only new objects, where a sharded store rewrites its trailing shard; see [docs/append.md](https://github.com/chronozarr/chronozarr/blob/main/docs/append.md). |
 | `validate STORE` | Check a store against the spec. Exit status 1 if it does not conform. |
 | `info STORE` | Summarise a store: times, bands, temporal encoding and pyramid levels. |
 | `doctor TARGET` | Diagnose an https URL or a local store path. A URL is probed as a browser would: root `zarr.json`, byte ranges, CORS, `HEAD` and caching headers. Both kinds then get the layout validated and one cell per level decoded and compared with a plain Zarr read. Exit status 1 only if a check fails; warnings and info lines are advice. `--origin` sets the `Origin` header. |
@@ -184,7 +184,7 @@ Whole frames and buffered playback, live Ucayali store, cold, device pixel ratio
 
 The cost is the full-resolution frame of a scrub step on a slow link, which lands later (median 3.7 to 4.5 s against 2.9 to 3.2 s at 50 Mbit/s) because a whole coarse frame of the right timestep is fetched first.
 
-Appending one month to a 12-month Ucayali store (4 bands, 36 cells at level 0), against a re-encode of 32 s and 6.3 GB written, 2026-10-01 (full tables in [docs/append.md](https://github.com/jameshgrn/tile-ripper/blob/main/docs/append.md)):
+Appending one month to a 12-month Ucayali store (4 bands, 36 cells at level 0), against a re-encode of 32 s and 6.3 GB written, 2026-10-01 (full tables in [docs/append.md](https://github.com/chronozarr/chronozarr/blob/main/docs/append.md)):
 
 | Layout | Append wall time | Bytes written per month | Rewritten |
 |---|---:|---:|---|
