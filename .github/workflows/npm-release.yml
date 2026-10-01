@@ -1,17 +1,25 @@
 name: npm release
 
-# Publishes chronozarr-js (js/) to npm with trusted publishing (OIDC). No token is stored in the repository.
+# Publishes chronozarr (js/) to npm with trusted publishing (OIDC). No token is stored in the repository.
 #
 # One-time setup. npmjs.com attaches a trusted publisher only to a package that already exists, so:
 #   1. Publish a bootstrap version by hand (npm publish <tarball> --access public, 2FA in the browser).
-#   2. npmjs.com > chronozarr-js > Settings > Trusted Publisher > GitHub Actions: user jameshgrn, repository
-#      tile-ripper, workflow npm-release.yml, environment npm, allowed action "npm publish".
+#   2. npmjs.com > chronozarr > Settings > Trusted Publisher > GitHub Actions: organization chronozarr, repository
+#      chronozarr, workflow npm-release.yml, environment npm, allowed action "npm publish".
+# A manual run (workflow_dispatch with a tag) re-publishes an existing tag with the workflow file from the
+# branch it is started on, for when a release fails for a reason fixed after the tag was pushed.
 # The tag that triggers this workflow also triggers release.yml (PyPI), so one v* tag releases both packages
 # and both package versions must equal the tag.
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to publish, e.g. v0.2.0"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -27,12 +35,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
       - name: Check the tag matches the package version
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
           version="$(node -p "require('./package.json').version")"
@@ -45,10 +54,10 @@ jobs:
       - name: Node tests
         run: node --test
       - name: Pack
-        run: npm pack --pack-destination ../dist
+        run: mkdir -p ../dist && npm pack --pack-destination ../dist
       - name: Install the tarball into an empty project and import both entry points
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
           tarball="${GITHUB_WORKSPACE}/dist/chronozarr-${TAG#v}.tgz"
@@ -57,8 +66,8 @@ jobs:
           npm init -y >/dev/null
           npm install "${tarball}"
           node --input-type=module -e "
-            const { openStore } = await import('chronozarr-js');
-            const { ChronozarrLayer } = await import('chronozarr-js/maplibre');
+            const { openStore } = await import('chronozarr');
+            const { ChronozarrLayer } = await import('chronozarr/maplibre');
             if (typeof openStore !== 'function' || typeof ChronozarrLayer !== 'function') throw new Error('entry points do not export openStore and ChronozarrLayer');
           "
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -73,7 +82,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: npm
-      url: https://www.npmjs.com/package/chronozarr-js
+      url: https://www.npmjs.com/package/chronozarr
     permissions:
       id-token: write
     steps:
@@ -95,5 +104,5 @@ jobs:
           fi
       - name: Publish with provenance
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: npm publish "dist/chronozarr-${TAG#v}.tgz" --provenance --access public
