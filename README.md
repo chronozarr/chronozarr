@@ -194,7 +194,7 @@ Appending one month to a 12-month Ucayali store (4 bands, 36 cells at level 0), 
 
 The encoder default is now unsharded: a cold open of the published sharded store spent 6.5 of 6.8 s on the nine shard-index reads, because a CDN miss on a 2 KB range at the end of an 83 to 174 MB shard pulls the whole object, and an append to a sharded store rewrites the trailing shard. The cold-open and append numbers for the unsharded layout will be measured on the live store after the re-upload.
 
-**TO FILL after the `chronozarr-4` re-upload:** cold open of the live unsharded store (time to first complete frame, requests, MB) and an append to it. Not measured yet.
+Cold open of the live unsharded store `chronozarr-4` from the deployed viewer with a cold edge cache, 2026-10-01: first whole frame 390 ms, complete frame at the target level 622 ms, against 6.8 s on the sharded store the same morning, where 6.5 s were the nine shard-index reads missing the edge cache. Publishing it took 274 s for 5,893 objects through the R2 S3 API (`scripts/r2_sync.py`), 150 s for the 17,088 objects of the water store. An append to a live store has not been exercised yet.
 
 Star-delta reconstruction runs in the fragment shader; the CPU loop it replaces cost 54 ms per 36-cell frame. Known limits: the coarse loop pulls the whole time axis at its level after the first frame (tens of MB for a store a few cells wide); cold open of very small stores costs 30 to 40 ms for worker startup.
 
