@@ -119,6 +119,8 @@ Burst scrub: neither tool keeps up with one step every 100 ms (a step is 9 chunk
 
 How the cold open divides: of the 6.8 s (natural link) both tools need, 6.5 to 6.6 s is the wait for the nine shard-index reads, the last request before any chunk can be asked for. Each is a 1,876-byte range read at the end of a shard object of 83 to 174 MB; at the CDN they are `cf-cache-status: MISS` and the body arrives 1.7 to 11 s after the headers (`curl` for one of them: 2.4, 4.5 and 5.2 s on a miss, 0.34 s on a hit). Both tools make the same nine reads, so the open times on the published store do not separate them; the spread is the CDN's. zarr-layer reads the shard sizes with 9 `HEAD` requests first and TileRipper takes them from the `shard_bytes` attribute, which is why it needs 19 requests at open and zarr-layer 30 (33 with its defaults).
 
+This measurement is why the encoder default became unsharded (spec section 13): an unsharded store has no shard index and its largest object is one 1.8 MB chunk. The cold-open numbers for the unsharded layout will be measured on the live store after its upload; every number in this document is for the sharded `chronozarr-3` unless it says otherwise.
+
 ### 1.6 Results: the same files from the local range server
 
 #### Cold open, level 1, 9 cells: same files, local range server

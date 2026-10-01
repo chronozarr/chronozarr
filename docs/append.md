@@ -4,9 +4,9 @@
 
 ## Which layout to append to
 
-Write a store that will grow unsharded (`--no-shard`). Measured on the Ucayali mosaics: an unsharded append writes 55 MB per month and rewrites nothing but metadata. A store sharded at `shard_time` 12 writes 4389 MB over a 12-month cycle against 686 MB unsharded (6.4x). The whole-axis default rewrites a growing second shard every month (116.9 MB for the second append to a 115-month store, and up to 115 chunks per cell by the end). An unsharded store has no shard index for an open viewer to hold stale, and costs the same chunk reads per timestep with no index read.
+The encoder default, unsharded, is the right layout for appends. Measured on the Ucayali mosaics: an unsharded append writes 55 MB per month and rewrites nothing but metadata. A store sharded at `shard_time` 12 writes 4389 MB over a 12-month cycle against 686 MB unsharded (6.4x). The whole-axis shard layout (`--shard`, `shard_time` = the timesteps at creation) rewrites a growing second shard every month (116.9 MB for the second append to a 115-month store, and up to 115 chunks per cell by the end). An unsharded store has no shard index for an open viewer to hold stale, and costs the same chunk reads per timestep with no index read.
 
-Sharding is the default because of object count: 93 objects for 117 months against about 5900 unsharded, one file per cell for the whole time axis. Choose a finite `shard_time` for an appendable store only when object count matters more than the rewrite cost, and keep the whole-axis default for archives that are not appended to. The first batch of a sharded store may be a single timestep, because `shard_time` may exceed the timesteps present.
+The price of unsharded is object count: about 5,900 objects for the 117 Ucayali months against 93 for the whole-axis shard, which is one object per cell and level for the whole time axis. Shard an appendable store (`--shard --shard-time 12` for monthly data) only when object count matters more than the rewrite cost, and use the whole-axis `--shard` for archives that are not appended to. The first batch of a sharded store may be a single timestep, because `shard_time` may exceed the timesteps present. (The tables below were measured when whole-axis sharding was still the encoder default; they are kept because they are the cost of the sharded layouts.)
 
 ## What an append writes
 
@@ -19,7 +19,7 @@ Nothing else is opened. Star-delta references already recorded are never changed
 
 Data: `data/mosaics/ucayali_santa_maria/*.npz`, 117 monthly Sentinel-2 mosaics, 4 bands uint16, 2765 x 2759 px, chunk 512, four levels, 50 cells (36 at level 0). Stores are built from the first months, then months 13 and 14 are appended one at a time. Every operation runs in its own process (`scripts/bench_append.py`), so peak RSS is per operation. After every step `chronozarr validate` passes and every timestep decodes equal to its source mosaic, bit for bit (level 0, all timesteps). Objects written come from file size, mtime and sha256 before and after. The machine is a 16-core Mac with 128 GB shared with other jobs (load average about 10), so wall seconds are the median of three runs of the whole matrix and carry roughly 20 % noise. Object counts and bytes come from the last two runs, which were identical; the first run also rewrote the unchanged `volatility` chunk at month 13, which `append` now skips.
 
-Three layouts: whole-axis shard (the encoder default, `shard_time` = the timesteps at creation), `shard_time=12`, and unsharded. At 12 months the first two are the same store, and the table shows identical numbers for them. Two encodings: `auto`, which chose `none` at 12 months (star-delta/plain 0.89 on the sample), and a forced `star-delta` with anchor interval 6.
+Three layouts: whole-axis shard (`shard=True`, `shard_time` = the timesteps at creation; the encoder default when these were measured), `shard_time=12`, and unsharded (the encoder default now). At 12 months the first two are the same store, and the table shows identical numbers for them. Two encodings: `auto`, which chose `none` at 12 months (star-delta/plain 0.89 on the sample), and a forced `star-delta` with anchor interval 6.
 
 ## Results: 12-month stores, month 13 and 14 appended
 
@@ -58,7 +58,7 @@ A sharded store writes the trailing shard again on each append, so month `k` of 
 
 ## Results: the production-sized store
 
-The live Ucayali store holds all its months in one shard per cell. Built the same way from the first 115 months (`--base-months 115`, `auto` chooses `none`), then months 116 and 117 appended:
+The published sharded Ucayali store (`chronozarr-3`) holds all its months in one shard per cell. Built the same way from the first 115 months (`--base-months 115`, `auto` chooses `none`), then months 116 and 117 appended:
 
 | operation | wall s | peak RSS MB | objects written | MB written |
 |---|---|---|---|---|
@@ -66,9 +66,9 @@ The live Ucayali store holds all its months in one shard per cell. Built the sam
 | append month 116 | 0.55 | 407 | 64 (50 new shards + 14 metadata) | 58.4 |
 | append month 117 | 0.57 | 392 | 64 (all rewritten) | 116.9 |
 
-Adding a month by re-encode writes and uploads 6.3 GB in 93 objects. Appending writes 58 MB (0.9 %). The first shard stays untouched, because its length was fixed at 115 timesteps when the store was created and the new timesteps start a second shard. The default layout therefore appends correctly, but the second shard is allowed to grow to 115 chunks per cell (the live 117-month store has shards of 161 MB at level 0) and is rewritten whole on every append until it fills. That is the cost of appending to the default layout: write an appendable store unsharded, or with a finite `shard_time` when object count matters.
+Adding a month by re-encode writes and uploads 6.3 GB (93 whole-axis shards). Appending writes 58 MB (0.9 %). The first shard stays untouched, because its length was fixed at 115 timesteps when the store was created and the new timesteps start a second shard. The whole-axis layout therefore appends correctly, but the second shard is allowed to grow to 115 chunks per cell (the sharded 117-month store has shards of 161 MB at level 0) and is rewritten whole on every append until it fills. That is the cost of appending to a whole-axis shard: write an appendable store unsharded (the default), or with a finite `shard_time` when object count matters.
 
-A fresh encode of 13 months (`shard_time` 12) takes 4.8 s, 557 MB, 143 objects with 1.3 GB peak RSS; the append of month 13 takes 0.6 s and writes 55 MB.
+A fresh encode of 13 months (`shard_time` 12) takes 4.8 s, 557 MB, 143 objects with 1.3 GB peak RSS; the append of month 13 takes 0.6 s and writes 55 MB. For reference, a fresh unsharded encode of all 117 months (`chronozarr-4`, `encoding` `auto` chose `none`) takes 41.9 s with 3.8 GB peak RSS and writes 6,451.8 MB in 5,893 objects; the sharded `chronozarr-3` is 6,451.9 MB in 93.
 
 ## Results: requests for a view
 
@@ -100,7 +100,7 @@ On this AOI star-delta barely beats plain storage (4687 MB against 4804 MB for t
 
 ## Limits found
 
-- An unsharded store is one object per timestep, cell and level: about 5900 for the 117 Ucayali months. The first upload is slow with wrangler (hosting.md section 3.2), but each append uploads only the 63 objects it wrote.
+- An unsharded store is one object per timestep, cell and level: 5,893 for the 117 Ucayali months (17,088 for the water store, which has `mask` and `coverage` too). The first upload is slow with wrangler (hosting.md section 3.2), but each append uploads only the 63 objects it wrote.
 - Append is not transactional. Inputs are checked and spilled before the store is touched; a failure after that leaves it partly modified, and `append` refuses a store that no longer validates. Work on a copy.
 - `volatility` is updated incrementally. It equals the spec definition over the recorded references up to float32 rounding, except for a cell already clipped at 1.0. For a `none` store the nominal schedule is not recorded, so appended timesteps use interval 6.
 - In a sharded store, a viewer open during an append keeps the old metadata until reload and can fail on the index of a trailing shard it had not read (hosting.md section 7). An unsharded store has no shard index.

@@ -18,7 +18,7 @@ MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are used as in RFC 2119.
 ## 1. Invariants
 
 1. **Lossless roundtrip.** `encode(data)` then a read of level 0 returns the exact input values in the stored dtype, under either temporal encoding. No quantization, no rounding, no lossy compression of the data; coarser levels are block means of it (§6).
-2. **O(1) random timestep access.** Any timestep at any level decodes with at most two chunk reads: one anchor plus one delta (one read under `none`). No chain accumulation, no sequential dependency. The two chunks may live in different shards (§7.4).
+2. **O(1) random timestep access.** Any timestep at any level decodes with at most two chunk reads: one anchor plus one delta (one read under `none`). No chain accumulation, no sequential dependency. In a sharded store the two chunks may live in different shards (§7.4).
 3. **dtype preservation.** Values are stored and served in the store's dtype (§2.3). The format never converts between integer and float and never quantizes. Physical values are derived at read time from `scale` and `offset` (§3.6); they are not stored.
 4. **Self-describing.** Group and array attributes fully describe layout, temporal encoding, CRS and chunk grid. No sidecar files, no external metadata.
 
@@ -36,11 +36,11 @@ A chronozarr store is a Zarr v3 hierarchy. Zarr v3 arrays are leaf nodes, so eac
     zarr.json                    level group; attrs: crs, transform, resolution            (§3.3)
     data/
       zarr.json                  array (time, band, y, x), chunks (1, n_band, cs, cs)      (§2.1)
-      c/{ts}/0/{r}/{c}           sharded (default): one object per (time shard, cell)      (§7)
-      c/{t}/0/{r}/{c}            unsharded: one object per (timestep, cell)
+      c/{t}/0/{r}/{c}            unsharded (default): one object per (timestep, cell)      (§7)
+      c/{ts}/0/{r}/{c}           sharded: one object per (time shard, cell)
     mask/                        optional: array (time, y, x) uint8                        (§2.4)
       zarr.json
-      c/{ts}/{r}/{c}             sharded; unsharded is c/{t}/{r}/{c}
+      c/{t}/{r}/{c}              unsharded (default); sharded is c/{ts}/{r}/{c}
     coverage/                    optional: array (time, y, x) uint8                        (§2.5)
       zarr.json
       c/{ts}/{r}/{c}
@@ -59,7 +59,7 @@ A chronozarr store is a Zarr v3 hierarchy. Zarr v3 arrays are leaf nodes, so eac
 |---|---|
 | `shape` | `[n_time, n_band, H_k, W_k]` |
 | `data_type` | `uint8`, `uint16`, `int16` or `float32` (§2.3). Identical at every level. |
-| `chunk_grid` | `regular`. Unsharded: `chunk_shape = [1, n_band, cs, cs]`. Sharded: §7. |
+| `chunk_grid` | `regular`. Unsharded (the writer default): `chunk_shape = [1, n_band, cs, cs]`. Sharded: §7. |
 | `chunk_key_encoding` | `default`, separator `/`, so keys are `c/...` |
 | `fill_value` | `chronozarr.nodata` when it is a number; otherwise `0` |
 | `codecs` | `bytes` (`endian: little`) then one compression codec (§8), inside `sharding_indexed` when sharded |
@@ -102,7 +102,7 @@ A chronozarr store is a Zarr v3 hierarchy. Zarr v3 arrays are leaf nodes, so eac
 
 ### 2.4 Mask `{level}/mask` (optional)
 
-`uint8`, dims `["time", "y", "x"]`, shape `[n_time, H_k, W_k]`, values 1 (valid) and 0 (invalid), `fill_value` 0, `_ARRAY_DIMENSIONS` set. Chunked like `data` without the band axis: unsharded `[1, cs, cs]`; sharded per §7 with shard shape `[shard_time, cs, cs]` and inner chunk `[1, cs, cs]`. Keys carry no band index: `c/{ts}/{r}/{c}`.
+`uint8`, dims `["time", "y", "x"]`, shape `[n_time, H_k, W_k]`, values 1 (valid) and 0 (invalid), `fill_value` 0, `_ARRAY_DIMENSIONS` set. Chunked like `data` without the band axis: unsharded `[1, cs, cs]`; sharded per §7 with shard shape `[shard_time, cs, cs]` and inner chunk `[1, cs, cs]`. Keys carry no band index: `c/{t}/{r}/{c}` unsharded, `c/{ts}/{r}/{c}` sharded.
 
 - A store has a mask at every level or at none. When present, root attr `chronozarr.mask_variable` is `"mask"`; when absent, that attribute is absent.
 - The mask is always stored as true values: it is never star-delta encoded.
@@ -220,7 +220,7 @@ The mirror MUST agree with the level group and array metadata; a validator check
 
 ### 3.9 Complete example
 
-Store: 5 monthly timesteps, 2 bands, 700 x 600 pixels, `cs = 512`, EPSG:32631 at 10 m, `star-delta` with `anchor_interval = 2`, `shard_time = 4` (two time shards), with `mask` and `coverage`. LOD 0 grid is 2 x 2; LOD 1 is 350 x 300, grid 1 x 1, so the pyramid stops there. Shard byte lengths are illustrative. The example uses `zstd` level 5, the writer default (§8).
+Store: 5 monthly timesteps, 2 bands, 700 x 600 pixels, `cs = 512`, EPSG:32631 at 10 m, `star-delta` with `anchor_interval = 2`, sharded with `shard_time = 4` (two time shards; the writer default is unsharded, §7.1), with `mask` and `coverage`. LOD 0 grid is 2 x 2; LOD 1 is 350 x 300, grid 1 x 1, so the pyramid stops there. Shard byte lengths are illustrative. The example uses `zstd` level 5, the writer default (§8).
 
 `zarr.json` (root):
 
@@ -438,7 +438,11 @@ Each level halves pixel dimensions and doubles ground sample distance by block a
 
 ### 7.1 Layout
 
-**Default: sharded.** The array uses the `sharding_indexed` codec with shard shape `(shard_time, n_band, cs, cs)` and inner chunk shape `(1, n_band, cs, cs)`. A shard object holds one spatial cell over `shard_time` consecutive timesteps, and one timestep is one HTTP byte-range read. Zarrita 0.7.5 read sharded stores over byte ranges with bytes transferred equal to the unsharded store and bit-exact reconstruction (spike, 2026-09-29).
+**Default: unsharded.** Each chunk `(1, n_band, cs, cs)` is its own object, key `c/{t}/0/{r}/{c}`: one object per timestep, cell and level (about 5,900 for a 117-month store of 36 level-0 cells). A timestep of a cell is one `GET` of one object, two for a `star-delta` delta timestep. There is no index to read, a CDN miss costs one chunk, and an append writes only new objects (§14).
+
+**Option: sharded.** The array uses the `sharding_indexed` codec with shard shape `(shard_time, n_band, cs, cs)` and inner chunk shape `(1, n_band, cs, cs)`. A shard object holds one spatial cell over `shard_time` consecutive timesteps (93 objects for the same store), and once its index is cached one timestep is one HTTP byte-range read. The index is a separate read at the end of an object that can be tens or hundreds of megabytes, and a CDN that fetches the whole object from the origin on a miss makes that read as slow as the object is large, so the cost of a cold read grows with the shard size (§13 gives the measurement). An append rewrites the shard that receives the new timestep (§14). Zarrita 0.7.5 read sharded stores over byte ranges with bytes transferred equal to the unsharded store and bit-exact reconstruction (spike, 2026-09-29).
+
+A sharded array:
 
 ```json
 "chunk_grid": { "name": "regular", "configuration": { "chunk_shape": [4, 2, 512, 512] } },
@@ -454,11 +458,11 @@ Each level halves pixel dimensions and doubles ground sample distance by block a
 ```
 
 - In Zarr v3 terms the array's `chunk_grid.chunk_shape` is the **shard** shape and the codec's `chunk_shape` is the **inner chunk** shape. Inner chunks are the same bytes an unsharded store would hold as separate objects.
-- **`shard_time`** is an integer `>= 1`; the writer default is `n_time` (one shard holds a cell's whole time axis). It MAY exceed `n_time`: the array then holds one partial shard, which a later append (§14) fills. The time grid has `n_shards_t = ceil(n_time / shard_time)` shards, so the shard grid of the data array is `(n_shards_t, 1, rows, cols)`. Readers MUST handle more than one shard along time.
+- **`shard_time`** is an integer `>= 1`; the writer default, when sharding is asked for, is `n_time` (one shard holds a cell's whole time axis). It MAY exceed `n_time`: the array then holds one partial shard, which a later append (§14) fills. The time grid has `n_shards_t = ceil(n_time / shard_time)` shards, so the shard grid of the data array is `(n_shards_t, 1, rows, cols)`. Readers MUST handle more than one shard along time.
 - Timestep `t` lives in time shard `ts = floor(t / shard_time)` at inner position `t mod shard_time`. The shard key is `c/{ts}/0/{r}/{c}`. When `shard_time = n_time`, `ts` is always 0 and the keys are `c/0/0/{r}/{c}`, as in v0.1. `mask` and `coverage` have no band axis: shard shape `(shard_time, cs, cs)`, key `c/{ts}/{r}/{c}`.
 - Objects per level drop from `n_time * grid_rows * grid_cols` to `n_shards_t * grid_rows * grid_cols`.
-- The writer SHOULD choose `shard_time` so that no shard object exceeds the largest object the intended host or CDN will cache or range-serve, and, for `star-delta` stores, SHOULD choose a multiple of `anchor_interval`.
-- **Both forms are valid.** Unsharded (§2.1) remains valid for hosts without byte-range support. A reader MUST handle both; it learns which from the `codecs` list.
+- The writer SHOULD choose `shard_time` so that no shard object exceeds the largest object the intended host or CDN will cache or range-serve, and so that a miss on one shard is tolerable (a CDN that pulls the whole object for a small range read charges the shard's size for its 2 KB index). For `star-delta` stores it SHOULD choose a multiple of `anchor_interval`.
+- **Both forms are valid.** A reader MUST handle both; it learns which from the `codecs` list. Every store written with the earlier sharded default stays valid. Unsharded (§2.1) also works on hosts without byte-range support.
 
 ### 7.2 Shard index
 
@@ -505,7 +509,7 @@ A chronozarr store is served by any HTTP server or object store that returns fil
 | Requirement | Level |
 |---|---|
 | `GET {store}/{key}` returns the object bytes; an absent key returns `404` (not a fallback page with `200`) | MUST |
-| `Range` requests honoured with `206 Partial Content` and `Content-Range` (needed for sharded stores; unsharded stores need only GET) | MUST for sharded |
+| `Range` requests honoured with `206 Partial Content` and `Content-Range` (needed for sharded stores; an unsharded store, the writer default, needs only GET) | MUST for sharded |
 | Chunk and shard objects served as stored: no `Content-Encoding` or other transformation, so byte offsets match the shard index | MUST |
 | `Access-Control-Allow-Origin: *` | MUST |
 | `Access-Control-Allow-Headers: Range` (or `*`) and a `200`/`204` answer to `OPTIONS` preflight | SHOULD |
@@ -572,10 +576,11 @@ A row-by-row comparison with guidance on when to choose each tool is in `docs/fo
 - **Hosting** (§9). `404` for absent keys, no `Content-Encoding` on chunk and shard objects, `Timing-Allow-Origin` as a MAY, a missing shard object decodes as fill, upload order with the root `zarr.json` last.
 - **GDAL CRS** (§3.3). The data array carries `_CRS` for EPSG stores so GDAL assigns the CRS.
 - **Prior art** (§12). Corrected statements about Mapbox raster-array and zarr-layer; COG + TiTiler added.
+- **Unsharded is the writer default** (§7.1, §14). `encode()` writes one object per chunk unless sharding is asked for (`shard=True`, `--shard`, with `shard_time`); `--no-shard` remains accepted. `spec_version` stays `0.2.0`: both layouts were valid and readers handle both, so every store written with the sharded default is still valid and readable. Reason, from two measurements on the published 117-month Ucayali store (`docs/comparisons.md`, `docs/append.md`). First, a cold open spent 6.5 of 6.8 s on the nine shard-index reads: each is a 1,876-byte range read at the end of a shard of 83 to 174 MB, and a Cloudflare cache miss on it pulled the whole object from R2 (2 to 11 s; 0.36 s on a 41 MB shard). Second, an append to a sharded store rewrites the trailing shard (4389 MB against 686 MB unsharded over a 12-month cycle). Sharding had been chosen for object count (93 against about 5,900), which object storage does not charge for. Unsharded costs one object per cell, level and timestep, no index read, one chunk per CDN miss, and only new objects per append; sharded costs far fewer objects and one range read per timestep once the index is cached, with a miss proportional to the shard size.
 - **Delta references are the recorded map** (§4.2). A reference is valid when it names an anchor at distance `0 < d < anchor_interval`; the nearest-anchor schedule is the writer's default for new timesteps, not a validity rule, so an append can keep every published reference. `spec_version` stays `0.2.0`: every store written under the earlier rule (nearest anchor for `n_time`) is valid under this one, and readers already decoded through the recorded map.
 - **Appending** (§14). A store may grow at the end of its time axis.
 - **`pixels_per_tile` is no longer written** (§2.1, §3.4). Writers MUST NOT write `multiscales[0].datasets[].pixels_per_tile`; readers MUST ignore it if present; a validator accepts stores with or without it. Reason: CarbonPlan zarr-layer 0.10.0 reads the key as the marker of a global Web Mercator slippy-map pyramid, so a native-CRS store that carries it opens as a blank map; with the key removed from the root `zarr.json` the Ucayali store opens georegistered within 1 px (`docs/comparisons.md`). The cell size was already the chunk shape of the data arrays and the grid is in `chronozarr.levels`, so no information is lost. `spec_version` stays `0.2.0`: stores written earlier carry the key and remain valid, and for zarr-layer they need its `crs` and `bounds` constructor options or a root `zarr.json` rewritten without the key. An append (§14) leaves `multiscales` as it found it, key included.
-- **Unchanged.** Zarr v3 groups per level, `multiscales` in the ndpyramid form, `dimension_names` everywhere, consolidated metadata, native CRS, sharded default with the index at the end, the anchor positions, the pyramid geometry.
+- **Unchanged.** Zarr v3 groups per level, `multiscales` in the ndpyramid form, `dimension_names` everywhere, consolidated metadata, native CRS, the index at the end of a sharded object, the anchor positions, the pyramid geometry. (The writer's layout default is the exception: the next entry.)
 
 ## 14. Appending
 
@@ -590,7 +595,7 @@ A store MAY grow at the end of its time axis (`chronozarr append`). The new time
 
 **What stays byte-identical.** Every chunk of an existing timestep, at every level; every time shard that receives no new timestep (all shards before the one holding the old last timestep, and that one too when the old axis ended exactly at its boundary); `band`, `x`, `y`; level and `multiscales` attributes; every existing `delta_reference` entry and anchor; and the `mask` and `coverage` planes of existing timesteps. Nothing a published chunk decodes to changes.
 
-**Choosing the layout.** A store meant for appends SHOULD be unsharded (`--no-shard`, §7.1). An unsharded append writes only new chunk objects and the metadata: 55 MB per month in the Ucayali measurement (`docs/append.md`), nothing rewritten, no shard index for an open reader to hold stale, and the same chunk reads per timestep with no index read. A sharded append rewrites the shard that receives each new timestep, whole: with `shard_time` S the k-th append into a shard writes k chunks per cell, an average of `(S + 1) / 2`, measured as 4389 MB against 686 MB unsharded over a 12-month cycle at S = 12. The default (`shard_time = n_time` at creation) opens a second shard of the same length, which grows and is rewritten on every append until it is full. Sharding is the default because of object count: the 117-month Ucayali store is 93 objects sharded against about 5900 unsharded, one file per cell for the whole time axis. So choose a finite `shard_time` (12 for monthly data) for an appendable store only when object count matters more than the rewrite cost, and keep the whole-axis default for archives that are not appended to. `shard_time` MAY exceed `n_time` (§7.1), so the first batch of a sharded store can be a single timestep.
+**Choosing the layout.** A store meant for appends SHOULD be unsharded (§7.1), which is the writer default. An unsharded append writes only new chunk objects and the metadata: 55 MB per month in the Ucayali measurement (`docs/append.md`), nothing rewritten, no shard index for an open reader to hold stale, and the same chunk reads per timestep with no index read. A sharded append rewrites the shard that receives each new timestep, whole: with `shard_time` S the k-th append into a shard writes k chunks per cell, an average of `(S + 1) / 2`, measured as 4389 MB against 686 MB unsharded over a 12-month cycle at S = 12. A sharded store written with the whole-axis `shard_time` (`n_time` at creation) opens a second shard of the same length, which grows and is rewritten on every append until it is full. The price of unsharded is object count: the 117-month Ucayali store is about 5,900 objects against 93 sharded. Choose a finite `shard_time` (12 for monthly data) for an appendable store only when object count matters more than the rewrite cost, and the whole-axis `shard_time` for archives that are not appended to. `shard_time` MAY exceed `n_time` (§7.1), so the first batch of a sharded store can be a single timestep.
 
 **Publishing.** An append is not atomic and not reversible: write it to a working copy, run validation, then publish (`docs/hosting.md`). Objects change in place only in these classes, and a host SHOULD give them a short cache lifetime: the root and every other `zarr.json`; `time/c/0` of every level; `volatility/c/0/0`; and, for each cell, level and variable, the shard holding the last timestep (or, unsharded, nothing: new chunks are new keys). Every other chunk and shard object is immutable. Upload shards and chunks first, then `time/c/0` and `volatility`, then the `zarr.json` objects below the root, then the root `zarr.json` (§9).
 

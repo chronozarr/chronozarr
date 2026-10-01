@@ -19,7 +19,7 @@ pixel, chart it. Nothing was downloaded.
 | Floor binding | 116 of 117 months | 9 of 94 months |
 
 `auto` did not measure anything: for `int16` data the writer always uses `none` (spec 4.3), so there
-is no star-delta ratio to report. Codec zstd level 5, shard (T, 2, 512, 512), 4 pyramid levels.
+is no star-delta ratio to report. Codec zstd level 5, 4 pyramid levels. Both `water-1` stores are sharded, (T, 2, 512, 512), the encoder default when they were built. `ucayali_santa_maria/water-2` is the Ucayali store rebuilt unsharded, the default now: 17,088 files, 1730.5 MB, and every value, mask plane and coverage plane identical to `water-1` at every level, timestep and cell. Lake Mead has no `water-2`.
 Both stores together are 2991 MB. With about 3.5 GB left in R2 they fit and leave about 0.5 GB.
 Publish Ucayali first (1.73 GB; it is the reach the project is for), Lake Mead second. Nothing has
 been uploaded; the script takes the store name from `STORE`:
@@ -35,6 +35,8 @@ STORE=water-1 scripts/upload_stores.sh ucayali_santa_maria
 uv run python examples/water_masks/build_water_stack.py --aoi ucayali_santa_maria --floor -0.15
 uv run python examples/water_masks/build_water_stack.py --aoi lake_mead --boa-offset-from 2022-02
 ```
+
+Those commands wrote `water-1` sharded because that was the encoder default. The default is now unsharded, so add `--shard` to reproduce `water-1`, or `--store-name water-2` for the unsharded layout.
 
 Per month, from `B03` (green) and `B08` (nir) of the monthly median mosaic:
 
@@ -330,8 +332,8 @@ Found while building; the mosaics were not modified.
   To recover: move `2023-06.npz` to `2026-03.npz` out of `data/mosaics/lake_mead/`, rerun
   `examples/sentinel2_pc/ingest.py --aoi lake_mead` (it skips months whose file exists), then rebuild.
   Until then the store ends in 2023-06. Appending the recovered months to this store would rewrite
-  its single whole-axis shard per cell (spec 14); a store built to grow should be unsharded
-  (`--no-shard`).
+  its single whole-axis shard per cell (spec 14); a store built to grow should be unsharded,
+  which is the encoder default now.
 - **Lake Mead from 2022-02 still carries the +1000 DN processing-baseline offset.** Band medians jump
   by about 1100 DN between 2022-01 and 2022-02 (B02 1166 to 2122) in every band; Ucayali, corrected,
   does not. NDWI is not invariant to an additive offset: the 99th percentile of NDWI went from 0.89 to

@@ -49,6 +49,9 @@ def with_headers(name: str, **changes: str | None) -> type[StoreRequestHandler]:
 NoCorsHandler = type("NoCorsHandler", (StoreRequestHandler,), {"response_headers": {}})
 NoExposeHandler = with_headers("NoExposeHandler", Access_Control_Expose_Headers=None)
 NoTimingHandler = with_headers("NoTimingHandler", Timing_Allow_Origin=None)
+NoRangePreflightHandler = with_headers(
+    "NoRangePreflightHandler", Access_Control_Allow_Headers=None
+)
 ImmutableHandler = with_headers(
     "ImmutableHandler",
     Cache_Control="public, max-age=31536000, immutable",
@@ -240,7 +243,39 @@ def test_ignored_range_only_warns_for_an_unsharded_store(unsharded_store):
         checks = diagnose(url)
     ranged = next(c for c in checks if c.name.startswith("byte range"))
     assert ranged.status == "warn"
-    assert not [c for c in failures(checks) if c.name != "suffix range"]
+    assert not failures(checks), failures(checks)
+    suffix = by_name(checks)["suffix range"]
+    assert suffix.status == "info"
+    assert "not used by an unsharded store" in suffix.detail
+
+
+def test_http_unsharded_store_passes_and_the_suffix_range_is_an_info_line(unsharded_store):
+    with serving(StoreRequestHandler, unsharded_store) as url:
+        checks = by_name(diagnose(url))
+    assert not [c for c in checks.values() if c.status == "fail"], checks
+    range_check = next(c for n, c in checks.items() if n.startswith("byte range"))
+    assert range_check.status == "ok"
+    assert "unsharded store" in range_check.detail
+    assert checks["suffix range"].status == "info"
+    assert checks["suffix range"].detail.startswith("206, Content-Range bytes ")
+    assert "no shard index" in checks["suffix range"].detail
+    levels = [c for n, c in checks.items() if n.startswith("decode level")]
+    assert len(levels) >= 2
+    assert all(c.status == "ok" for c in levels), levels
+    assert all("plain-Zarr pixel at t=0 matches" in c.detail for c in levels)
+
+
+def test_unsharded_store_does_not_need_the_range_header_allowed(unsharded_store):
+    with serving(NoRangePreflightHandler, unsharded_store) as url:
+        checks = by_name(diagnose(url))
+    assert checks["CORS preflight"].status == "info"
+    assert not [c for c in checks.values() if c.status == "fail"]
+
+
+def test_sharded_store_warns_when_the_range_header_is_not_allowed(sharded_store):
+    with serving(NoRangePreflightHandler, sharded_store) as url:
+        checks = by_name(diagnose(url))
+    assert checks["CORS preflight"].status == "warn"
 
 
 def test_missing_root_group_fails_early(tmp_path):

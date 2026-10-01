@@ -4,7 +4,7 @@ A chronozarr store is a directory of static files. Any host that returns a file 
 
 ## 1. Checklist
 
-`chronozarr doctor <store-url>` runs the HTTP and decode checks below against a live URL (and the decode checks against a local directory). It sends `Origin: https://tileripper.com` by default. The last column is what doctor reports when the requirement is missing (`fail` violates a MUST, `warn` a SHOULD, `info` is reported without judgement), read from `src/chronozarr/doctor.py` on 2026-09-30; if that file changes, it is the authority. The `edge cache` and `timing-allow-origin` lines are advice: doctor reports them as `info`, and only `fail` lines make it exit with status 1 (warnings and info do not).
+`chronozarr doctor <store-url>` runs the HTTP and decode checks below against a live URL (and the decode checks against a local directory). It sends `Origin: https://tileripper.com` by default. The last column is what doctor reports when the requirement is missing (`fail` violates a MUST, `warn` a SHOULD, `info` is reported without judgement), read from `src/chronozarr/doctor.py` on 2026-10-01; if that file changes, it is the authority. The `edge cache` and `timing-allow-origin` lines are advice: doctor reports them as `info`, and only `fail` lines make it exit with status 1 (warnings and info do not).
 
 | # | Requirement | doctor check | If missing |
 |---|---|---|---|
@@ -13,8 +13,8 @@ A chronozarr store is a directory of static files. Any host that returns a file 
 | 3 | Consolidated metadata in the root `zarr.json` | `consolidated metadata` | warn |
 | 4 | A bounded `Range: bytes=a-b` returns `206` with `Content-Range` | `byte range on <key>` | fail if sharded; warn if unsharded and the server answers 200 |
 | 5 | `Access-Control-Expose-Headers` lists `Content-Range` (or `*`) | `CORS expose Content-Range` | fail |
-| 6 | A suffix range `Range: bytes=-N` returns `206` with `Content-Range` (shard index reads) | `suffix range` | fail if sharded; warn otherwise |
-| 7 | `OPTIONS` preflight answers 200 or 204 with `Access-Control-Allow-Headers` containing `Range` (or `*`) | `CORS preflight` | warn |
+| 6 | A suffix range `Range: bytes=-N` returns `206` with `Content-Range` (shard index reads) | `suffix range` | fail if sharded; info if unsharded (an unsharded store has no shard index) |
+| 7 | `OPTIONS` preflight answers 200 or 204 with `Access-Control-Allow-Headers` containing `Range` (or `*`) | `CORS preflight` | warn if sharded; info if unsharded |
 | 8 | `HEAD` returns 200 with `Content-Length` and CORS headers | `HEAD` | fail if sharded without `shard_bytes`; warn otherwise |
 | 9 | `Cache-Control` contains `immutable`, or `max-age` of at least one day | `cache-control` | warn when the prefix looks versioned (last path segment ends in a version or date, such as `chronozarr-2`); info otherwise |
 | 10 | `Timing-Allow-Origin` is sent (MAY) | `timing-allow-origin` | info; reports the value or its absence |
@@ -27,10 +27,10 @@ Doctor does not check these; verify them with `curl` (section 4):
 |---|---|---|
 | An absent key returns `404`, not a fallback page with `200` | MUST | A missing shard, `mask` or `coverage` array is meaningful: readers decode a missing shard as fill. A host that answers 200 with HTML breaks that. |
 | Chunk and shard responses carry no `Content-Encoding` | MUST | The shard index stores byte offsets into the stored object. A CDN that gzips or re-encodes the body moves the bytes. |
-| Shards fit the host or CDN's cacheable object size | SHOULD | Choose `shard_time` at encode time (section 5). |
+| Shards fit the host or CDN's cacheable object size (sharded stores) | SHOULD | Choose `shard_time` at encode time (section 5). An unsharded store's objects are single chunks, about 2 MB. |
 | Metadata uploaded last; the prefix never rewritten | SHOULD / MUST | Section 2. |
 
-A preflight is sent only for a suffix range. Browsers do not preflight a bounded `bytes=a-b`. A store written with `shard_bytes` lets a reader fetch every shard index as a bounded range, so checks 6 and 7 cost nothing for it in practice, but doctor still reports them. Without `Timing-Allow-Origin`, `PerformanceResourceTiming.transferSize` is 0 for cross-origin requests, so in-page benchmarks under-report bytes; the viewer then counts bytes only from `Content-Length`.
+A preflight is sent only for a suffix range. Browsers do not preflight a bounded `bytes=a-b`. A store written with `shard_bytes` lets a reader fetch every shard index as a bounded range, so checks 6 and 7 cost nothing for it in practice, but doctor still reports them. An unsharded store, the encoder default, is read with plain `GET`s: no `Range` header at all, so for it check 4 is a warning at most, check 6 is always `info`, and check 7 is `info` instead of `warn` when it fails. Without `Timing-Allow-Origin`, `PerformanceResourceTiming.transferSize` is 0 for cross-origin requests, so in-page benchmarks under-report bytes; the viewer then counts bytes only from `Content-Length`.
 
 ## 2. Immutable prefixes and upload order
 
@@ -186,7 +186,7 @@ Upload with the section 2 script, using:
 put() { npx --no-install wrangler r2 object put "$BUCKET/$PREFIX/${1#./}" --file "$1" --cache-control "$CC" --remote > /dev/null; }
 ```
 
-Wrangler starts in about 2 seconds per object, so a store of around 100 objects at 8 parallel takes a minute or two; an unsharded store of thousands of objects is slow this way (use an S3 client against R2's S3 endpoint instead).
+Wrangler starts in about 2 seconds per object. An unsharded store (the encoder default) is thousands of objects: 5,893 for the 117-month Ucayali imagery store and 17,088 for its water store, which at 4 parallel is about 50 minutes and 2.4 hours. A sharded store of around 100 objects takes a minute or two. For the first upload of an unsharded store use an S3 client against R2's S3 endpoint instead; each later append uploads only the objects it wrote (section 7).
 
 Two Cloudflare rules on the hostname make the domain cache and time correctly. Both are created in the dashboard under Rules and need zone write access; the `wrangler login` token used for deploys does not have it.
 
@@ -199,7 +199,7 @@ Two Cloudflare rules on the hostname make the domain cache and time correctly. B
   Verified on `data.tileripper.com` on 2026-09-30: `zarr.json` returned MISS then HIT with an `age` header, and a `206` range request on a shard returned MISS then HIT. Overriding both TTLs is safe only because prefixes are immutable (section 2). Setting `Cache-Control` on each object at upload still matters for clients of the bare bucket and for any rule that respects the origin.
 - **`Timing-Allow-Origin`.** Add a Transform Rule, Modify Response Header, with the same hostname expression and the action Set static: `Timing-Allow-Origin` = `*`.
 - **Match on the hostname.** Put the expression in the expression editor, or use the `Hostname` field. Pasting it into a URI Full wildcard value silently matches nothing and every response stays `DYNAMIC`. The dashboard's warning that the rule "may not apply to your traffic" for the R2 hostname is a false alarm; ignore it.
-- **Object size.** Cloudflare documents a 512 MB cacheable object limit on the Free, Pro and Business plans; check the current figure. A shard is about `n_time` times the compressed size of one cell-timestep (the Ucayali store has 117 timesteps and shards up to 161 MB), so a long or dense series needs a smaller `shard_time` at encode time.
+- **Object size and miss cost.** Cloudflare documents a 512 MB cacheable object limit on the Free, Pro and Business plans; check the current figure. A shard is about `n_time` times the compressed size of one cell-timestep (the sharded Ucayali store has 117 timesteps and shards up to 174 MB). A miss on a range read of an object that is not yet cached pulled the whole object from R2: the 1,876-byte shard-index read at the end of an 83 to 174 MB shard took 2 to 11 s, and 0.36 s on a 41 MB shard; nine of them were 6.5 of a 6.8 s cold open (`docs/comparisons.md`). That cost grows with shard size, and is why the encoder default is unsharded, where a miss costs one chunk of about 2 MB (the largest object of the unsharded Ucayali store is 1.8 MB). If you shard, a smaller `shard_time` shrinks the miss.
 - **`r2.dev`.** The public development URL (`wrangler r2 bucket dev-url enable`) is rate limited and not for production. Use it for a first check only.
 
 ### 3.3 Google Cloud Storage
@@ -244,7 +244,7 @@ Observed on one public object on 2026-09-30 (`kerner-lab/fields-of-the-world`): 
 
 Upload needs an account and upload access for the product (contact hello@source.coop if the product page shows no upload option). Two routes:
 
-- **UI.** Product page, lock icon, Edit Mode, drag in files or directories. Uploads in the UI are not ordered: add the level directories (`0/`, `1/`, ...) and `volatility/` first, then the root `zarr.json` by itself. A sharded store has roughly a hundred objects, which is workable here; an unsharded store of thousands of objects is not.
+- **UI.** Product page, lock icon, Edit Mode, drag in files or directories. Uploads in the UI are not ordered: add the level directories (`0/`, `1/`, ...) and `volatility/` first, then the root `zarr.json` by itself. A sharded store (`--shard`) has roughly a hundred objects, which is workable here; an unsharded store, the default, has thousands and is not.
 - **S3 client through the proxy**, with temporary credentials from the Source CLI (`source-coop login`, then an AWS profile named `source-coop` as described in the Source docs). Use the section 2 script with:
 
 ```bash
@@ -263,42 +263,42 @@ Whether the proxy stores and serves the `--cache-control` value is untested here
 
 ```bash
 URL=https://data.example.com/aoi/chronozarr-2
-KEY=0/data/c/0/0/0/0          # level 0, time shard 0, cell (0, 0) of a sharded store
+KEY=0/data/c/0/0/0/0          # level 0, cell (0, 0): timestep 0 (unsharded) or time shard 0 (sharded)
 O='Origin: https://tileripper.com'
 
 # 206 + Content-Range + CORS + exposed headers + caching
 curl -s -D - -o /dev/null -H "$O" -H 'Range: bytes=0-99' "$URL/$KEY"
-# suffix range (shard index)
+# suffix range (shard index; only sharded stores need it)
 curl -s -D - -o /dev/null -H "$O" -H 'Range: bytes=-16' "$URL/$KEY"
 # preflight
 curl -s -D - -o /dev/null -X OPTIONS -H "$O" -H 'Access-Control-Request-Method: GET' \
   -H 'Access-Control-Request-Headers: range' "$URL/$KEY"
-# no Content-Encoding on a shard, even when the client offers compression
+# no Content-Encoding on a chunk or shard, even when the client offers compression
 curl -s -D - -o /dev/null -H "$O" -H 'Accept-Encoding: gzip, br' -H 'Range: bytes=0-99' "$URL/$KEY" | grep -i '^content-encoding' || echo "no content-encoding: ok"
 # absent keys are 404
 curl -s -o /dev/null -w '%{http_code}\n' "$URL/no-such-key"
 ```
 
-For an unsharded store the first data chunk is `0/data/c/0/0/0/0` as well (timestep 0, band 0, cell (0, 0)). The expected answers are `206` with `Content-Range: bytes 0-99/<length>`, `Access-Control-Allow-Origin: *`, an `Access-Control-Expose-Headers` that lists `Content-Range`, `204` or `200` for the preflight with `Range` allowed, and `404` for the missing key. Then run `chronozarr doctor "$URL"`.
+The key is the same in both layouts: for an unsharded store it is the chunk of timestep 0, band 0, cell (0, 0), for a sharded store the first shard. An all-fill chunk is not written, so a store that is empty at that cell answers `404` there; pick another cell. The expected answers are `206` with `Content-Range: bytes 0-99/<length>`, `Access-Control-Allow-Origin: *`, an `Access-Control-Expose-Headers` that lists `Content-Range`, `204` or `200` for the preflight with `Range` allowed, and `404` for the missing key. Then run `chronozarr doctor "$URL"`.
 
 ## 5. Pitfalls
 
-- **Compression in front of the store.** A CDN, proxy or bucket setting that adds `Content-Encoding` to shard objects breaks reads: the index offsets are in stored bytes and a `Range` header applies to the encoded representation. Turn compression off for the store path, or rely on content types the host does not compress.
+- **Compression in front of the store.** A CDN, proxy or bucket setting that adds `Content-Encoding` to chunk or shard objects breaks reads (a chunk is decoded by the codec chain, not by the HTTP layer; for shards the index offsets are in stored bytes and a `Range` header applies to the encoded representation). Turn compression off for the store path, or rely on content types the host does not compress.
 - **Cloudflare rules that match nothing.** A Cache Rule or Transform Rule whose expression was pasted into a URI wildcard value instead of matching `Hostname` applies to no request, and R2 responses stay `DYNAMIC` with no `Timing-Allow-Origin` (section 3.2).
 - **Fallback pages.** Static hosts configured for single-page apps answer unknown paths with `200` and `index.html`. The store then appears to have every shard. Serve the store from a host or prefix with real `404` behaviour.
 - **Rewriting a prefix.** With `immutable` and a one-year `max-age`, a rewritten object stays stale in browsers and CDNs for up to a year. Always re-encode to a new prefix. The only in-place change is an append, and only the objects of section 7 change.
-- **Local testing.** `python -m http.server` ignores `Range`, so sharded stores read whole shards (doctor reports it as a failure). Use `chronozarr.view(store)` from a notebook or any range-capable static server.
-- **Shard size.** `shard_time` defaults to `n_time`, so one shard holds a cell's whole time axis. Lower it (and keep it a multiple of `anchor_interval` for star-delta stores) when a shard would exceed what the host or CDN caches or serves in one object. A store that will grow should be unsharded (section 7).
+- **Local testing.** `python -m http.server` ignores `Range`, so sharded stores read whole shards (doctor reports it as a failure); an unsharded store reads fine from it. Use `chronozarr.view(store)` from a notebook or any range-capable static server.
+- **Shard size.** Stores are unsharded unless you pass `--shard`. With it, `shard_time` defaults to `n_time`, so one shard holds a cell's whole time axis. Lower it (and keep it a multiple of `anchor_interval` for star-delta stores) when a shard would exceed what the host or CDN caches or serves in one object, or when a CDN miss on a shard is too slow (section 3.2). A store that will grow should stay unsharded (section 7).
 
 ## 6. The live store
 
-The published demo store is `ucayali_santa_maria/chronozarr-3` (plain encoding; see the README status). It replaces `chronozarr-2`, which was live on 2026-09-30 when `chronozarr doctor` was run against `https://data.tileripper.com/ucayali_santa_maria/chronozarr-2`: 15 ok, 2 info, 0 warnings (`edge cache` HIT, `timing-allow-origin` `*`, `cache-control` `max-age=31536000`). The host is R2 with `deploy/r2-cors.json` plus the Cache Rule and the Transform Rule of section 3.2; both rules match the hostname, so they apply to every prefix under it.
+The published demo store is `ucayali_santa_maria/chronozarr-3` (plain encoding, sharded, 93 objects; see the README status). `chronozarr-4` is the same data written with the unsharded default (5,893 objects) and replaces it once uploaded. It replaces `chronozarr-2`, which was live on 2026-09-30 when `chronozarr doctor` was run against `https://data.tileripper.com/ucayali_santa_maria/chronozarr-2`: 15 ok, 2 info, 0 warnings (`edge cache` HIT, `timing-allow-origin` `*`, `cache-control` `max-age=31536000`). The host is R2 with `deploy/r2-cors.json` plus the Cache Rule and the Transform Rule of section 3.2; both rules match the hostname, so they apply to every prefix under it.
 
 ## 7. Appending to a live store
 
 `chronozarr append STORE INPUT` adds timesteps to the end of a store in place (spec section 14). It writes the shards or chunks that gain data and the metadata; every other object keeps its bytes and its cache entry.
 
-**Write the store for appends unsharded** (`--no-shard`). An unsharded append writes only new chunk objects, 55 MB per month on the Ucayali mosaics, with nothing rewritten but the metadata. It has no shard index for an open viewer to hold stale, and the same chunk reads per timestep with no index read. A sharded store rewrites the shard that receives each new timestep, whole: `(shard_time + 1) / 2` chunks per cell per append on average, 4389 MB against 686 MB over a 12-month cycle at `shard_time` 12. The default layout (one shard for the whole initial axis) opens a second shard as long as the first and rewrites it on every append, up to 117 chunks per cell for a 117-month store. Sharding is the default because of object count: 93 objects for 117 months against about 5900 unsharded, one file per cell for the whole time axis. So give an appendable store a finite `--shard-time` (12 for monthly data, a multiple of `--anchor-interval` for star-delta) only when object count matters more than the rewrite cost, and keep the whole-axis default for archives that are not appended to. The first batch may be a single timestep at any `--shard-time`. An unsharded store of thousands of objects is slow to upload for the first time (section 3.2 says how), but an append uploads only the objects it wrote, 63 in the measurement. Measured costs: `docs/append.md`.
+**The default layout is the right one for appends.** An unsharded store (the encoder default) appends by writing only new chunk objects, 55 MB per month on the Ucayali mosaics, with nothing rewritten but the metadata. It has no shard index for an open viewer to hold stale, and the same chunk reads per timestep with no index read. A sharded store (`--shard`) rewrites the shard that receives each new timestep, whole: `(shard_time + 1) / 2` chunks per cell per append on average, 4389 MB against 686 MB over a 12-month cycle at `shard_time` 12. A whole-axis shard (one shard for the initial axis) opens a second shard as long as the first and rewrites it on every append, up to 117 chunks per cell for a 117-month store. The price of unsharded is object count: about 5,900 objects for 117 months against 93 sharded. Choose a finite `--shard-time` (12 for monthly data, a multiple of `--anchor-interval` for star-delta) only when object count matters more than the rewrite cost, and the whole-axis `--shard-time` for archives that are not appended to. The first batch of a sharded store may be a single timestep at any `--shard-time`. An unsharded store of thousands of objects is slow to upload for the first time (section 3.2 says how), but an append uploads only the objects it wrote, 63 in the measurement. Measured costs: `docs/append.md`.
 
 **Procedure.**
 
@@ -330,4 +330,4 @@ The trailing shard of a cell is the one holding its last timestep. When the next
 
 **Open viewers.** A viewer keeps the root `zarr.json` it loaded until the page is reloaded, so it keeps showing the old timesteps and does not see the new ones. Everything it already reads stays correct: the chunks, offsets and references of existing timesteps do not change. The one failure, for a sharded store, is a shard index it fetches after an append using the old shard length from `shard_bytes`: the trailing shard is longer, the range lands on the wrong bytes and the index checksum fails. Reloading fixes it. An unsharded store has no shard index, so a stale viewer has no such failure. The same mismatch can occur for up to the short lifetime when a CDN holds an old shard object next to a new `zarr.json` (or the reverse), which is why the upload order is shards, then metadata, and why both lifetimes are the same.
 
-**What `doctor` says.** `chronozarr doctor` on an appended store passes the same checks. Its `cache-control` line reads the header of one object, `0/data/c/0/0/0/0` (time shard 0, cell (0, 0)). That shard is immutable once a second time shard exists. While the store still has one time shard it is the trailing shard with `max-age=300`, and doctor warns on a versioned prefix; that warning is expected then. Check `zarr.json` and a trailing shard with `curl -I` (section 4).
+**What `doctor` says.** `chronozarr doctor` on an appended store passes the same checks. Its `cache-control` line reads the header of one object, `0/data/c/0/0/0/0` (cell (0, 0)). In an unsharded store that is the chunk of timestep 0, immutable for good. In a sharded store it is time shard 0, immutable once a second time shard exists; while the store still has one time shard it is the trailing shard with `max-age=300`, and doctor warns on a versioned prefix; that warning is expected then. Check `zarr.json` and, for a sharded store, a trailing shard with `curl -I` (section 4).

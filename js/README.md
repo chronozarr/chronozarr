@@ -2,7 +2,7 @@
 
 Browser and Node reader for [chronozarr](https://github.com/jameshgrn/tile-ripper) stores, plus a MapLibre GL JS custom layer that draws one.
 
-A chronozarr store is a Zarr v3 time series of rasters with a multiscale pyramid and sharded chunks, laid out so a client reads one timestep of one map cell with one HTTP range request. The reader turns `(lod, row, col, t)` into a typed array: it caches shard indexes, decodes in a worker pool, reconstructs star-delta timesteps, and prefetches a window of the time axis around the current timestep. It reads spec 0.1 and 0.2 stores ([spec](https://github.com/jameshgrn/tile-ripper/blob/main/spec/CHRONOZARR.md)). The Python package `chronozarr` writes them.
+A chronozarr store is a Zarr v3 time series of rasters with a multiscale pyramid, written one object per chunk by default and optionally sharded, laid out so a client reads one timestep of one map cell with one HTTP request (a plain `GET` of one chunk; for a sharded store one range read of a shard once its index is cached). The reader turns `(lod, row, col, t)` into a typed array: it caches shard indexes (sharded stores), decodes in a worker pool, reconstructs star-delta timesteps, and prefetches a window of the time axis around the current timestep. It reads spec 0.1 and 0.2 stores ([spec](https://github.com/jameshgrn/tile-ripper/blob/main/spec/CHRONOZARR.md)). The Python package `chronozarr` writes them.
 
 The package is plain ES modules. There is no build step and no runtime dependency: zarrita and numcodecs are vendored (see [Licenses](#licenses)).
 

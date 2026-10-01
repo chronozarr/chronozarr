@@ -13,7 +13,7 @@ Read `.napkin.md` first every session.
 spec/CHRONOZARR.md        normative format spec (v0.2.0); spec/CHANGES-0.2.md only points to its section 13
 src/chronozarr/           Python package; CLI `chronozarr` (commands: encode | validate | info | doctor | export-cog | stac | convert)
   schema.py               attribute dataclasses, layout helpers, validate()
-  encode.py               encode(): pyramid, temporal encoding auto|none|star-delta, sharding, shard_bytes, mask/coverage
+  encode.py               encode(): pyramid, temporal encoding auto|none|star-delta, optional sharding (default off), shard_bytes, mask/coverage
   decode.py               open_store() / ChronoStore: lazy reads, to_xarray(); HttpStore (stdlib HTTP range store)
   backend.py              xarray backend: xr.open_dataset(path_or_url, engine="chronozarr")
   convert.py              streaming conversion of COG manifests, Zarr variables and NetCDF into a store
@@ -52,7 +52,7 @@ Always `uv run python`, never bare `python`. Never override uv's 7-day release-a
 ## Format decisions (do not relitigate without a measurement)
 
 - Zarr v3 group; levels are groups "0", "1", ... each with `data` (time, band, y, x) uint16 and coords `time` (int64 ms, CF attrs), `band` (str), `x`, `y`. Every array carries `dimension_names` or xarray refuses the store.
-- Sharded by default: shard (T, B, 512, 512), inner chunk (1, B, 512, 512), `index_location: "end"` (zarrita 0.7.5 mis-decodes "start"). Unsharded remains valid.
+- Unsharded by default (2026-10-01): one object per chunk (1, B, 512, 512), key `c/t/0/r/c`; about 5,900 objects for the 117-month imagery store. Why: a CDN miss on the 2 KB shard-index range at the end of an 83 to 174 MB shard pulls the whole object (2 to 11 s each; 6.5 of a 6.8 s cold open), and an append to a sharded store rewrites the trailing shard. Sharding stays valid and opt-in (`shard=True` / `--shard`, `shard_time`): shard (shard_time, B, 512, 512), inner chunk (1, B, 512, 512), `index_location: "end"` (zarrita 0.7.5 mis-decodes "start"); 93 objects and one range read per timestep once the index is cached, miss cost proportional to shard size. `shard_time` without `shard` is an error.
 - zstd level 5. Measured 4.5 ms per 2 MB chunk via zarrita's WASM codec, vs 6.7 ms native gzip and 14 ms fzstd.
 - Star-delta: anchors every 6 timesteps store true uint16; other timesteps store int16 residuals vs the nearest anchor, viewed as uint16 in the same array. Any timestep = at most 2 chunk reads. Not a Zarr codec; a layout convention plus reader.
 - Root attrs: `multiscales` (ndpyramid nested form) and `chronozarr {spec_version, variable, times, bands, nodata, crs, temporal, volatility_path}`; consolidated metadata written.

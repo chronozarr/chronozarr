@@ -73,9 +73,9 @@ def decoded(path: Path, lod: int = 0) -> np.ndarray:
 
 
 LAYOUTS = {
-    "shard-time-4": {"shard_time": 4},
-    "whole-axis": {},
-    "unsharded": {"shard": False},
+    "shard-time-4": {"shard": True, "shard_time": 4},
+    "whole-axis": {"shard": True},
+    "unsharded": {},  # the encoder default
 }
 
 
@@ -108,7 +108,7 @@ def test_appended_store_validates_and_decodes_every_timestep_and_level(
 
 def test_iterable_input_is_appended_like_a_dataarray(tmp_path, truth):
     store = tmp_path / "store"
-    encode_head(truth, store, 8, shard_time=4)
+    encode_head(truth, store, 8, shard=True, shard_time=4)
     steps = (truth[t] for t in range(8, 11))
     append(store, steps, times=make_times(N_TIME)[8:11])
     assert chronozarr.validate(store) == []
@@ -121,7 +121,9 @@ def test_one_timestep_store_with_a_long_shard_takes_appends_in_the_same_shard(
     tmp_path, truth, encoding
 ):
     store, fresh = tmp_path / "store", tmp_path / "fresh"
-    encode_head(truth, store, 1, shard_time=12, encoding=encoding)  # shard_time > n_time
+    encode_head(
+        truth, store, 1, shard=True, shard_time=12, encoding=encoding
+    )  # shard_time > n_time
     assert chronozarr.validate(store) == []
     assert chronozarr.open_store(store).levels[0].shard_time == 12
     before = digests(store)
@@ -135,7 +137,7 @@ def test_one_timestep_store_with_a_long_shard_takes_appends_in_the_same_shard(
     assert chronozarr.validate(store) == []
     assert np.array_equal(decoded(store), truth[:3])
 
-    encode_head(truth, fresh, 3, shard_time=12, encoding=encoding)
+    encode_head(truth, fresh, 3, shard=True, shard_time=12, encoding=encoding)
     for lod in range(1, len(chronozarr.open_store(store).levels)):
         assert np.array_equal(decoded(store, lod), decoded(fresh, lod))
     append(store, window(truth, 3, 12))  # fills the shard; the next append opens shard 1
@@ -150,9 +152,9 @@ def test_one_timestep_store_with_a_long_shard_takes_appends_in_the_same_shard(
 def test_edge_cells_and_odd_levels_match_a_fresh_encode(tmp_path):
     odd = make_truth(10, 2, 37, 53, seed=3)
     store, fresh = tmp_path / "store", tmp_path / "fresh"
-    encode_head(odd, store, 6, shard_time=3)
+    encode_head(odd, store, 6, shard=True, shard_time=3)
     append(store, window(odd, 6, 10))
-    encode_head(odd, fresh, 10, shard_time=3)
+    encode_head(odd, fresh, 10, shard=True, shard_time=3)
     assert chronozarr.validate(store) == []
     for lod in range(len(chronozarr.open_store(fresh).levels)):
         assert np.array_equal(decoded(store, lod), decoded(fresh, lod))
@@ -172,7 +174,7 @@ def is_metadata(key: str) -> bool:
 
 def test_sharded_append_writes_the_trailing_shard_and_metadata_only(tmp_path, truth):
     store = tmp_path / "store"
-    encode_head(truth, store, 8, shard_time=4)
+    encode_head(truth, store, 8, shard=True, shard_time=4)
     before, stamps = digests(store), mtimes(store)
     append(store, window(truth, 8, 9))
     after = digests(store)
@@ -183,7 +185,7 @@ def test_sharded_append_writes_the_trailing_shard_and_metadata_only(tmp_path, tr
     assert data_objects, "the new timestep writes new shards"
     assert all("/data/c/2/0/" in key for key in data_objects), sorted(data_objects)[:5]
     fresh = tmp_path / "fresh"
-    encode_head(truth, fresh, 9, shard_time=4)
+    encode_head(truth, fresh, 9, shard=True, shard_time=4)
     expected = {k for k in digests(fresh) if "/data/c/2/0/" in k}  # all-fill cells have no shard
     assert data_objects == expected
     assert all(after[k] == before[k] for k in before if "/data/c/0/" in k or "/data/c/1/" in k)
@@ -195,7 +197,7 @@ def test_sharded_append_writes_the_trailing_shard_and_metadata_only(tmp_path, tr
 
 def test_partial_shard_keeps_its_old_chunks_at_the_same_offsets(tmp_path, truth):
     store = tmp_path / "store"
-    encode_head(truth, store, 9, shard_time=4)  # time shard 2 holds one chunk
+    encode_head(truth, store, 9, shard=True, shard_time=4)  # time shard 2 holds one chunk
     key = "0/data/c/2/0/1/1"
     old = (store / key).read_bytes()
     index_len = 16 * 4 + 4
@@ -248,7 +250,7 @@ def test_append_leaves_multiscales_alone(tmp_path, truth):
 
 def test_shard_bytes_describe_the_shards_after_an_append(tmp_path, truth):
     store = tmp_path / "store"
-    encode_head(truth, store, 9, shard_time=4)
+    encode_head(truth, store, 9, shard=True, shard_time=4)
     append(store, window(truth, 9, 12))
     listed = chronozarr.open_store(store).attrs.shard_bytes
     assert listed is not None
@@ -258,7 +260,7 @@ def test_shard_bytes_describe_the_shards_after_an_append(tmp_path, truth):
 
 def test_report_counts_objects_and_bytes(tmp_path, truth):
     store = tmp_path / "store"
-    encode_head(truth, store, 8, shard_time=4)
+    encode_head(truth, store, 8, shard=True, shard_time=4)
     before = digests(store)
     report = append(store, window(truth, 8, 9))
     assert isinstance(report, AppendReport)
@@ -274,7 +276,7 @@ def test_report_counts_objects_and_bytes(tmp_path, truth):
 
 def test_existing_references_are_frozen_and_new_ones_use_nearest_existing_anchor(tmp_path, truth):
     store = tmp_path / "store"
-    encode_head(truth, store, 12, shard_time=12)
+    encode_head(truth, store, 12, shard=True, shard_time=12)
     old = dict(chronozarr.open_store(store).attrs.temporal.delta_reference)
     assert old[10] == old[11] == 6
     append(store, window(truth, 12, 14))  # anchor 12 arrives; 10 and 11 would be nearer to it
@@ -293,7 +295,7 @@ def test_existing_references_are_frozen_and_new_ones_use_nearest_existing_anchor
 
 def test_a_batch_may_reference_an_anchor_inside_the_batch(tmp_path, truth):
     store = tmp_path / "store"
-    encode_head(truth, store, 12, shard_time=12)
+    encode_head(truth, store, 12, shard=True, shard_time=12)
     append(
         store, window(truth, 12, 16)
     )  # anchor 12; steps 13..15 are nearest to it (18 is absent)
@@ -301,7 +303,7 @@ def test_a_batch_may_reference_an_anchor_inside_the_batch(tmp_path, truth):
     assert {t: temporal.delta_reference[t] for t in (13, 14, 15)} == {13: 12, 14: 12, 15: 12}
     wide = make_truth(20, 2, HEIGHT, WIDTH, seed=5)
     other = tmp_path / "other"
-    encode_head(wide, other, 12, shard_time=12)
+    encode_head(wide, other, 12, shard=True, shard_time=12)
     append(other, window(wide, 12, 20))  # 12..19 includes anchor 18 for steps 16 and 17
     refs = chronozarr.open_store(other).attrs.temporal.delta_reference
     assert refs[16] == refs[17] == 18
@@ -311,7 +313,7 @@ def test_a_batch_may_reference_an_anchor_inside_the_batch(tmp_path, truth):
 
 def test_store_with_non_nearest_references_decodes_exactly_everywhere(tmp_path, truth):
     store = tmp_path / "store"
-    encode_head(truth, store, 12, shard_time=12)
+    encode_head(truth, store, 12, shard=True, shard_time=12)
     append(store, window(truth, 12, 16))
     temporal = chronozarr.open_store(store).attrs.temporal
     nearest = reference_anchor_schedule(16, 6)
@@ -351,7 +353,7 @@ def read_volatility(path: Path) -> np.ndarray:
 
 def test_star_delta_volatility_follows_the_recorded_references(tmp_path, truth):
     store = tmp_path / "store"
-    encode_head(truth, store, 8, shard_time=4)
+    encode_head(truth, store, 8, shard=True, shard_time=4)
     append(store, window(truth, 8, 9))
     append(store, window(truth, 9, 14))
     refs = dict(chronozarr.open_store(store).attrs.temporal.delta_reference)
@@ -362,7 +364,7 @@ def test_star_delta_volatility_follows_the_recorded_references(tmp_path, truth):
 
 def test_plain_store_volatility_uses_the_nominal_schedule_for_new_steps(tmp_path, truth):
     store = tmp_path / "store"
-    encode_head(truth, store, 8, shard_time=4, encoding="none")
+    encode_head(truth, store, 8, shard=True, shard_time=4, encoding="none")
     append(store, window(truth, 8, 13))
     refs = {t: a for t, a in reference_anchor_schedule(8, 6).items()}
     refs.update({t: a for t, a in reference_anchor_schedule(13, 6).items() if t >= 8})
@@ -373,7 +375,7 @@ def test_plain_store_volatility_uses_the_nominal_schedule_for_new_steps(tmp_path
 
 def test_single_timestep_store_gains_its_first_deltas(tmp_path, truth):
     store = tmp_path / "store"
-    encode_head(truth, store, 1, shard_time=1, encoding="none")
+    encode_head(truth, store, 1, shard=True, shard_time=1, encoding="none")
     assert not read_volatility(store).any()
     append(store, window(truth, 1, 4))
     assert read_volatility(store).max() > 0
@@ -401,6 +403,7 @@ def test_mask_and_coverage_are_appended_at_every_level(tmp_path, truth, encoding
         chunk_size=CHUNK,
         anchor_interval=6,
         encoding=encoding,
+        shard=True,
         shard_time=4,
         mask=mask[:8],
         coverage=coverage[:8],
@@ -412,6 +415,7 @@ def test_mask_and_coverage_are_appended_at_every_level(tmp_path, truth, encoding
         chunk_size=CHUNK,
         anchor_interval=6,
         encoding=encoding,
+        shard=True,
         shard_time=4,
         mask=mask[:12],
         coverage=coverage[:12],
@@ -454,7 +458,7 @@ def test_mask_and_coverage_must_match_what_the_store_has(tmp_path, truth):
 
 def test_a_store_written_by_encode_can_be_appended(tmp_path, truth):
     store, month = tmp_path / "store", tmp_path / "month"
-    encode_head(truth, store, 8, shard_time=4)
+    encode_head(truth, store, 8, shard=True, shard_time=4)
     chronozarr.encode(
         window(truth, 8, 10), month, chunk_size=CHUNK, anchor_interval=2, encoding="star-delta"
     )
@@ -484,7 +488,7 @@ def test_a_store_input_carries_mask_and_coverage(tmp_path, truth):
 
 def test_a_converted_month_is_appended(tmp_path, truth):
     store, source = tmp_path / "store", tmp_path / "month.zarr"
-    encode_head(truth, store, 8, shard_time=4)
+    encode_head(truth, store, 8, shard=True, shard_time=4)
     y, x = schema.pixel_centers(TRANSFORM, HEIGHT, WIDTH)
     xr.DataArray(
         truth[8:10],
@@ -519,7 +523,7 @@ def test_store_input_refuses_other_arguments(tmp_path, truth):
 @pytest.fixture
 def base_store(tmp_path, truth) -> Path:
     store = tmp_path / "base"
-    encode_head(truth, store, 8, shard_time=4)
+    encode_head(truth, store, 8, shard=True, shard_time=4)
     return store
 
 
@@ -629,7 +633,7 @@ def run(*args: str):
 
 def test_cli_append_from_a_store_then_validate_info_and_doctor(tmp_path, truth):
     store, month = tmp_path / "store", tmp_path / "month"
-    encode_head(truth, store, 8, shard_time=4)
+    encode_head(truth, store, 8, shard=True, shard_time=4)
     chronozarr.encode(window(truth, 8, 9), month, chunk_size=CHUNK)
     result = run("append", str(store), str(month))
     assert result.exit_code == 0, result.output
@@ -643,7 +647,7 @@ def test_cli_append_from_a_store_then_validate_info_and_doctor(tmp_path, truth):
 
 def test_cli_append_from_a_zarr_input(tmp_path, truth):
     store, source = tmp_path / "store", tmp_path / "input.zarr"
-    encode_head(truth, store, 8, shard_time=4)
+    encode_head(truth, store, 8, shard=True, shard_time=4)
     window(truth, 8, 11).to_dataset(name="reflectance").to_zarr(
         source, zarr_format=2, consolidated=False
     )

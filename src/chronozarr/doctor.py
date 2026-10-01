@@ -280,19 +280,31 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
         )
 
     suffix = _probe(target, headers={**browser, "Range": "bytes=-16"}, read_limit=16)
-    if suffix.status == 206 and suffix.headers.get("content-range", "").startswith("bytes "):
+    suffix_range = suffix.headers.get("content-range", "")
+    suffix_works = suffix.status == 206 and suffix_range.startswith("bytes ")
+    if not sharded:
+        # Readers fetch an unsharded chunk with a plain GET; only shard indexes need `bytes=-N`.
+        outcome = (
+            f"206, Content-Range {suffix_range}"
+            if suffix_works
+            else f"`Range: bytes=-16` returned HTTP {suffix.status or suffix.error}"
+        )
         checks.append(
             Check(
                 "suffix range",
-                "ok",
-                f"206, Content-Range {suffix.headers['content-range']} (shard index reads)",
+                "info",
+                f"{outcome}; not used by an unsharded store (it has no shard index)",
             )
+        )
+    elif suffix_works:
+        checks.append(
+            Check("suffix range", "ok", f"206, Content-Range {suffix_range} (shard index reads)")
         )
     else:
         checks.append(
             Check(
                 "suffix range",
-                "fail" if sharded else "warn",
+                "fail",
                 f"`Range: bytes=-16` returned HTTP {suffix.status or suffix.error}",
                 "Sharded stores keep their shard index at the end of each shard and readers fetch "
                 "it with a suffix range; the host must support `bytes=-N`.",
@@ -321,9 +333,10 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
         checks.append(
             Check(
                 "CORS preflight",
-                "warn",
+                "warn" if sharded else "info",
                 f"OPTIONS returned HTTP {preflight.status or preflight.error}, "
-                f"Access-Control-Allow-Headers {sorted(allowed) or 'none'}",
+                f"Access-Control-Allow-Headers {sorted(allowed) or 'none'}"
+                + ("" if sharded else "; an unsharded store is read with plain GETs"),
                 "Browsers send a preflight for suffix ranges (`bytes=-N`). Allow the Range "
                 "header: `Access-Control-Allow-Headers: Range` and answer OPTIONS with 200 or "
                 "204.",

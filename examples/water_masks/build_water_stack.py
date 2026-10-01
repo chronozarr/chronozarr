@@ -387,6 +387,12 @@ def main() -> None:
         default=0.0,
         help="lowest NDWI threshold a month may use (default 0.0; Ucayali: -0.15)",
     )
+    parser.add_argument(
+        "--shard",
+        action="store_true",
+        help="one shard object per (time shard, cell) instead of one chunk object per (timestep, "
+        "cell); default off",
+    )
     parser.add_argument("--overwrite", action="store_true", help="replace an existing store")
     args = parser.parse_args()
     floor = round(args.floor / NDWI_SCALE)
@@ -448,6 +454,7 @@ def main() -> None:
         transform=grid.transform,
         mask=(d.mask for d in mask_view),
         coverage=(d.coverage for d in coverage_view),
+        shard=args.shard,
         provenance={
             "sources": ["sentinel-2-l2a"],
             "composite": "monthly median reflectance; NDWI and water derived per month",

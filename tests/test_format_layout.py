@@ -72,7 +72,7 @@ def test_mask_and_coverage_together(tmp_path):
     truth = make_truth(2, 1, 13, 11)
     mask = (truth[:, 0] != 0).astype(np.uint8)
     coverage = np.where(mask, 3, 0).astype(np.uint8)
-    store = _encode(tmp_path, truth, mask=mask, coverage=coverage, shard_time=1)
+    store = _encode(tmp_path, truth, mask=mask, coverage=coverage, shard=True, shard_time=1)
     assert store.attrs.mask_variable == "mask"
     assert store.attrs.coverage_variable == "coverage"
     assert np.array_equal(store.read_coverage(1), coverage[1])
@@ -165,7 +165,7 @@ def test_chunk_size_must_be_even(tmp_path, chunk_size):
 
 def test_shard_time_splits_the_time_axis_into_several_shards(tmp_path):
     truth = make_truth(7, 2, 13, 11)
-    store = _encode(tmp_path, truth, shard_time=3, anchor_interval=2)
+    store = _encode(tmp_path, truth, shard=True, shard_time=3, anchor_interval=2)
     data = zarr.open_group(str(tmp_path / "s"), mode="r")["0"]["data"]
     assert data.shards == (3, 2, CS, CS)
     assert data.chunks == (1, 2, CS, CS)
@@ -186,7 +186,7 @@ def test_reads_span_shards_along_time(tmp_path):
     # anchors 0, 4, 8; timestep 5 references anchor 4 which lives in shard 1 (t 3..5),
     # timestep 7 references anchor 8 which lives in shard 2 (t 6..8): a delta from another shard.
     truth = make_truth(9, 1, 13, 11)
-    _encode(tmp_path, truth, shard_time=3, anchor_interval=4)
+    _encode(tmp_path, truth, shard=True, shard_time=3, anchor_interval=4)
     counting = CountingStore(LocalStore(tmp_path / "s", read_only=True))
     store = chronozarr.open_store(counting)
     counting.reads.clear()
@@ -208,7 +208,7 @@ def test_reads_span_shards_along_time(tmp_path):
 
 def test_shard_index_has_shard_time_entries_even_in_a_partial_last_shard(tmp_path):
     truth = make_truth(7, 1, 13, 11)
-    _encode(tmp_path, truth, shard_time=3)
+    _encode(tmp_path, truth, shard=True, shard_time=3)
     counting = CountingStore(LocalStore(tmp_path / "s", read_only=True))
     store = chronozarr.open_store(counting)
     counting.reads.clear()
@@ -218,8 +218,32 @@ def test_shard_index_has_shard_time_entries_even_in_a_partial_last_shard(tmp_pat
     assert all(r.suffix == 16 * 3 + 4 for r in suffixes)
 
 
+def test_default_writes_plain_chunk_keys(tmp_path):
+    truth = make_truth(3, 2, 13, 11)
+    store = _encode(tmp_path, truth, encoding="none")  # shard is not passed: the default
+    data = zarr.open_group(str(tmp_path / "s"), mode="r")["0"]["data"]
+    assert data.shards is None
+    assert store.levels[0].shard_time is None
+    assert store.attrs.shard_bytes is None
+    base = tmp_path / "s" / "0" / "data" / "c"
+    keys = {"/".join(p.relative_to(base).parts) for p in base.rglob("*") if p.is_file()}
+    # c/<time>/<band chunk>/<row>/<col>: one object per timestep and cell, the bands in one chunk
+    assert keys == {f"{t}/0/{r}/{c}" for t in range(3) for r in range(2) for c in range(2)}
+    assert np.array_equal(store.to_xarray().values, truth)
+    assert chronozarr.validate(tmp_path / "s") == []
+
+
+def test_shard_true_writes_one_object_per_time_shard_and_cell(tmp_path):
+    store = _encode(tmp_path, make_truth(3, 2, 13, 11), encoding="none", shard=True)
+    base = tmp_path / "s" / "0" / "data" / "c"
+    keys = {"/".join(p.relative_to(base).parts) for p in base.rglob("*") if p.is_file()}
+    assert keys == {f"0/0/{r}/{c}" for r in range(2) for c in range(2)}  # all 3 timesteps in 1
+    assert store.levels[0].shard_time == 3
+    assert store.attrs.shard_bytes is not None
+
+
 def test_shard_time_defaults_to_all_timesteps(tmp_path):
-    store = _encode(tmp_path, make_truth(5, 1, 13, 11))
+    store = _encode(tmp_path, make_truth(5, 1, 13, 11), shard=True)
     assert store.levels[0].shard_time == 5
 
 
@@ -231,15 +255,31 @@ def test_shard_time_must_be_positive(tmp_path, shard_time):
         )
 
 
+def test_shard_time_needs_shard(tmp_path):
+    with pytest.raises(
+        ValueError, match=r"shard_time=3 applies to sharded stores; pass shard=True"
+    ):
+        chronozarr.encode(
+            make_da(make_truth(5, 1, 8, 8)), tmp_path / "s", chunk_size=CS, shard_time=3
+        )
+    assert not (tmp_path / "s").exists()
+
+
 def test_shard_time_may_exceed_the_timesteps_written(tmp_path):
-    store = _encode(tmp_path, make_truth(3, 1, 13, 11), shard_time=8)
+    store = _encode(tmp_path, make_truth(3, 1, 13, 11), shard=True, shard_time=8)
     assert store.levels[0].shard_time == 8
     assert store.levels[0].data.shape[0] == 3
     assert chronozarr.validate(tmp_path / "s") == []
 
 
 def test_shard_bytes_match_the_shard_objects(tmp_path):
-    _encode(tmp_path, make_truth(5, 2, 13, 11), shard_time=2, mask=np.ones((5, 13, 11), np.uint8))
+    _encode(
+        tmp_path,
+        make_truth(5, 2, 13, 11),
+        shard=True,
+        shard_time=2,
+        mask=np.ones((5, 13, 11), np.uint8),
+    )
     block = zarr.open_group(str(tmp_path / "s"), mode="r").attrs["chronozarr"]
     sizes = block["shard_bytes"]
     assert set(sizes) == {"0", "1"}
@@ -256,14 +296,14 @@ def test_shard_bytes_match_the_shard_objects(tmp_path):
 
 
 def test_shard_bytes_absent_when_unsharded(tmp_path):
-    store = _encode(tmp_path, make_truth(3, 1, 13, 11), shard=False)
+    store = _encode(tmp_path, make_truth(3, 1, 13, 11))
     assert store.attrs.shard_bytes is None
     assert "shard_bytes" not in zarr.open_group(str(tmp_path / "s"), mode="r").attrs["chronozarr"]
     assert chronozarr.validate(tmp_path / "s") == []
 
 
 def test_validator_flags_wrong_and_missing_shard_bytes(tmp_path):
-    _encode(tmp_path, make_truth(3, 1, 13, 11))
+    _encode(tmp_path, make_truth(3, 1, 13, 11), shard=True)
     root = zarr.open_group(str(tmp_path / "s"), mode="r+", zarr_format=3)
     block = json.loads(json.dumps(dict(root.attrs["chronozarr"])))
     block["shard_bytes"]["0"]["0/0/0"] += 1
@@ -309,21 +349,25 @@ def test_validator_flags_a_levels_attr_that_disagrees(tmp_path):
 
 
 def _inner_codecs(path) -> list[dict]:
-    meta = json.loads((path / "0" / "data" / "zarr.json").read_text())
-    (sharding,) = meta["codecs"]
-    return sharding["configuration"]["codecs"]
+    """The codec chain applied to each chunk: the inner codecs of a shard, or the array's own."""
+    codecs = json.loads((path / "0" / "data" / "zarr.json").read_text())["codecs"]
+    if len(codecs) == 1 and codecs[0]["name"] == "sharding_indexed":
+        return codecs[0]["configuration"]["codecs"]
+    return codecs
 
 
-def test_default_codec_is_zstd_level_5(tmp_path):
-    _encode(tmp_path, make_truth(2, 1, 13, 11))
+@pytest.mark.parametrize("shard", [False, True])
+def test_default_codec_is_zstd_level_5(tmp_path, shard):
+    _encode(tmp_path, make_truth(2, 1, 13, 11), shard=shard)
     assert _inner_codecs(tmp_path / "s")[1] == {
         "name": "zstd",
         "configuration": {"level": 5, "checksum": False},
     }
 
 
+@pytest.mark.parametrize("shard", [False, True])
 @pytest.mark.parametrize(("level", "expected"), [(None, 1), (3, 3)])
-def test_blosc_zstd_shuffle_codec(tmp_path, level, expected):
+def test_blosc_zstd_shuffle_codec(tmp_path, level, expected, shard):
     truth = make_truth(3, 2, 13, 11)
     chronozarr.encode(
         make_da(truth),
@@ -332,6 +376,7 @@ def test_blosc_zstd_shuffle_codec(tmp_path, level, expected):
         codec="blosc-zstd-shuffle",
         level=level,
         encoding="star-delta",
+        shard=shard,
     )
     codecs = _inner_codecs(tmp_path / "s")
     assert codecs[0]["name"] == "bytes"

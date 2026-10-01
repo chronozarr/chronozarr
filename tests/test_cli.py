@@ -60,6 +60,27 @@ def test_encode_validate_info_from_zarr(tmp_path, zarr_input):
         assert expected in info.output
 
 
+def test_encode_is_unsharded_unless_shard_is_given(tmp_path, zarr_input):
+    source, _ = zarr_input
+    default, sharded = tmp_path / "default", tmp_path / "sharded"
+    assert _run("encode", str(source), str(default), "--chunk-size", "16").exit_code == 0
+    assert (
+        _run("encode", str(source), str(sharded), "--chunk-size", "16", "--shard").exit_code == 0
+    )
+    assert chronozarr.open_store(default).levels[0].data.shards is None
+    assert chronozarr.open_store(sharded).levels[0].data.shards is not None
+
+
+def test_shard_time_without_shard_is_a_click_error(tmp_path, zarr_input):
+    source, _ = zarr_input
+    result = CliRunner().invoke(
+        main, ["encode", str(source), str(tmp_path / "out"), "--shard-time", "2"]
+    )
+    assert result.exit_code == 2
+    assert "--shard-time needs --shard" in result.output
+    assert not (tmp_path / "out").exists()
+
+
 def test_no_shard_and_lods_options(tmp_path, zarr_input):
     source, _ = zarr_input
     out = tmp_path / "out"
@@ -232,6 +253,7 @@ def test_encode_options_reach_the_writer(tmp_path, zarr_input):
         "blosc-zstd-shuffle",
         "--level",
         "2",
+        "--shard",
         "--shard-time",
         "2",
     )
@@ -240,6 +262,7 @@ def test_encode_options_reach_the_writer(tmp_path, zarr_input):
     assert "blosc-zstd-shuffle level 2" in result.output
     store = chronozarr.open_store(out)
     assert store.attrs.temporal.encoding == "none"
+    assert store.levels[0].shard_time == 2
     assert np.array_equal(store.to_xarray().values, truth)
     info = _run("info", str(out))
     assert "temporal:  none (every timestep stored as true values)" in info.output

@@ -170,12 +170,20 @@ def _encode_options(command: Any) -> Any:
             default=None,
             help="Compression level (default 5 for zstd, 1 for blosc).",
         ),
-        click.option("--no-shard", is_flag=True, help="One chunk object per (timestep, cell)."),
+        click.option(
+            "--shard/--no-shard",
+            default=False,
+            show_default=True,
+            help="One shard object per (time shard, cell) instead of one chunk object per "
+            "(timestep, cell). Fewer objects, but a CDN miss costs a whole shard and an append "
+            "rewrites the trailing one.",
+        ),
         click.option(
             "--shard-time",
             type=int,
             default=None,
-            help="Timesteps per shard along time (default: all; may exceed the timesteps given).",
+            help="Timesteps per shard along time; needs --shard (default: all; may exceed the "
+            "timesteps given).",
         ),
         click.option(
             "--lods", "n_lods", type=int, default=None, help="Pyramid levels including level 0."
@@ -191,13 +199,15 @@ def _encode_options(command: Any) -> Any:
 
 def _encode_kwargs(options: dict[str, Any]) -> dict[str, Any]:
     """`encode()` keywords from the parsed `_encode_options` values."""
+    if options["shard_time"] is not None and not options["shard"]:
+        raise click.UsageError("--shard-time needs --shard")
     return {
         "chunk_size": options["chunk_size"],
         "anchor_interval": options["anchor_interval"],
         "encoding": options["encoding"],
         "codec": options["codec"],
         "level": options["compression_level"],
-        "shard": not options["no_shard"],
+        "shard": options["shard"],
         "shard_time": options["shard_time"],
         "n_lods": options["n_lods"],
         "workers": options["workers"],
@@ -268,10 +278,9 @@ def append_command(
     times must come after the store's last one.
 
     Only the shards (or chunks, for an unsharded store) that gain a timestep are written, plus
-    the metadata; every other object keeps its bytes. A store meant for appends should be encoded
-    with --no-shard: an unsharded append writes only new chunk objects, while a sharded one
-    rewrites the shard that grows. Appending is not atomic: run it on a working copy and publish
-    after `chronozarr validate`.
+    the metadata; every other object keeps its bytes. An unsharded store (the encoder default)
+    writes only new chunk objects; a sharded one rewrites the shard that grows. Appending is not
+    atomic: run it on a working copy and publish after `chronozarr validate`.
     """
     with _command_errors():
         if is_store(input):

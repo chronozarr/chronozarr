@@ -5,7 +5,7 @@ data/stores/<aoi>/<store-name>/. Months are read lazily and handed to `chronozar
 iterable, so peak memory does not grow with the number of months. Prints wall time per phase.
 
 Usage:
-    uv run python scripts/reencode_aoi.py --aoi ucayali_santa_maria --store-name chronozarr-3
+    uv run python scripts/reencode_aoi.py --aoi ucayali_santa_maria --store-name chronozarr-4
     uv run python scripts/reencode_aoi.py --aoi sahara_tamanrasset --encoding none \
         --codec blosc-zstd-shuffle
 """
@@ -142,11 +142,21 @@ def main() -> None:
     parser.add_argument("--codec", choices=["zstd", "blosc-zstd-shuffle"], default="zstd")
     parser.add_argument("--level", type=int, default=None, help="default: 5 zstd, 1 blosc")
     parser.add_argument("--chunk-size", type=int, choices=[256, 512], default=512)
-    parser.add_argument("--shard-time", type=int, default=None, help="default: all timesteps")
+    parser.add_argument(
+        "--shard",
+        action="store_true",
+        help="one shard object per (time shard, cell) instead of one chunk object per (timestep, "
+        "cell); default off",
+    )
+    parser.add_argument(
+        "--shard-time", type=int, default=None, help="with --shard; default: all timesteps"
+    )
     parser.add_argument("--n-lods", type=int, default=None, help="default: until a 1x1 cell grid")
     parser.add_argument("--workers", type=int, default=None, help="cells encoded concurrently")
     parser.add_argument("--overwrite", action="store_true", help="replace an existing store")
     args = parser.parse_args()
+    if args.shard_time is not None and not args.shard:
+        parser.error("--shard-time needs --shard")
 
     paths = mosaic_paths(DATA / "mosaics" / args.aoi, args.months)
     out = args.out_root / args.aoi / args.store_name
@@ -174,6 +184,7 @@ def main() -> None:
         level=args.level,
         provenance=PROVENANCE,
         chunk_size=args.chunk_size,
+        shard=args.shard,
         shard_time=args.shard_time,
         n_lods=args.n_lods,
         workers=args.workers,

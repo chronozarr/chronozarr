@@ -40,9 +40,9 @@ from chronozarr.append import append
 
 MOSAICS = live.DATA / "mosaics"
 LAYOUTS = {
-    "whole-axis": {},  # shard_time = months at creation: today's default
-    "shard-time-12": {"shard_time": 12},
-    "unsharded": {"shard": False},
+    "whole-axis": {"shard": True},  # shard_time = months at creation
+    "shard-time-12": {"shard": True, "shard_time": 12},
+    "unsharded": {"shard": False},  # the encoder default
 }
 VIEW_ROWS, VIEW_COLS = (1, 2, 3), (1, 2, 3)  # a 3 x 3 block of level-0 cells
 MB = 1e6

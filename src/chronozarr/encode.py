@@ -1134,7 +1134,7 @@ def encode(
     coverage: object = None,
     provenance: Mapping | None = None,
     chunk_size: int = 512,
-    shard: bool = True,
+    shard: bool = False,
     shard_time: int | None = None,
     n_lods: int | None = None,
     workers: int | None = None,
@@ -1171,9 +1171,13 @@ def encode(
             "none", "notes": str}.
         chunk_size: Spatial chunk (and cell) edge in pixels; even. 512 (default) and 256 are
             the spec values; smaller even sizes exist for tests.
-        shard: One shard object per (time shard, cell) (default), or one object per chunk.
-        shard_time: Timesteps per shard along time. Default: all of them. A value larger than
-            the timesteps given is allowed: the first shard then holds them and any appended later.
+        shard: False (default): one object per (timestep, cell, level), no shard index, a CDN
+            miss costs one chunk and an append writes only new objects. True: one object per
+            (time shard, cell, level), far fewer objects, but a miss costs a whole shard and an
+            append rewrites the trailing one.
+        shard_time: Timesteps per shard along time; needs `shard=True`. Default: all of them. A
+            value larger than the timesteps given is allowed: the first shard then holds them
+            and any appended later.
         n_lods: Number of pyramid levels including level 0. Default: stop at the first level
             whose cell grid is 1 x 1.
         workers: Cells encoded concurrently (each holds about two copies of a cell in memory;
@@ -1210,6 +1214,8 @@ def encode(
     resolved_provenance = None if provenance is None else schema.parse_provenance(provenance)
     if shard_time is not None and shard_time < 1:
         raise ValueError(f"shard_time must be at least 1, got {shard_time}")
+    if shard_time is not None and not shard:
+        raise ValueError(f"shard_time={shard_time} applies to sharded stores; pass shard=True")
 
     layout = _Layout(
         n_time=prepared.n_time,
