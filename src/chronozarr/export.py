@@ -1,9 +1,25 @@
 """Export decoded timesteps of a store as Cloud Optimized GeoTIFFs for GDAL and QGIS.
 
 Each file holds every band of one timestep at one pyramid level, with star-delta encoding undone,
-so the values are the stored true values in the store's dtype. Band names, nodata, scale, offset
-and units become GeoTIFF band metadata. A store's `mask` and `coverage` variables are not
-exported. Needs rasterio (`chronozarr[geo]`).
+so the values are the stored true values in the store's dtype (or, with `physical`, float32
+physical values). Validity, scale, offset, units and band names become GeoTIFF metadata that GDAL
+and QGIS read without chronozarr. `coverage` is not exported. Needs rasterio (`chronozarr[geo]`).
+
+Rules, which keep every pixel's validity and value exactly as the store reads it:
+
+1. Stored values (default). Dtype, values, `scales`, `offsets`, `units` and `descriptions`
+   (band names) are written per band. A GDAL reader applies scale and offset itself.
+2. A store with a `mask` gets a per-dataset internal GeoTIFF mask, 255 where the mask is 1, so a
+   valid pixel is valid whatever its value and an invalid pixel is invalid whatever its value.
+   The store's nodata is also written, but only when no valid pixel of that timestep holds that
+   value; otherwise it is left out, because GDAL readers that look at nodata would hide valid
+   data.
+3. A store without a mask whose nodata is a number keeps nodata: the GeoTIFF nodata is that
+   value, no mask is written, and GDAL judges each band as the store does. A store with neither
+   writes neither (every pixel is valid; a stored 0 is data).
+4. `physical`: float32 values `stored * scale + offset`, NaN where the pixel is invalid, written
+   with nodata NaN. Scale and offset are not written again (the values already include them);
+   `units` and `descriptions` are. A store's mask is written as in rule 2.
 """
 
 from __future__ import annotations
@@ -102,18 +118,33 @@ def _band_metadata(store: ChronoStore) -> list[tuple[str, float, float, str | No
     return out
 
 
+def _nodata_tag(
+    nodata: int | float | None, values: np.ndarray, plane: np.ndarray | None
+) -> int | float | None:
+    """The GeoTIFF nodata for stored `values` (band, y, x): the store's nodata, unless the store
+    has a mask `plane` (y, x) and a valid pixel holds that value."""
+    if nodata is None:
+        return None
+    if plane is not None and (values[:, plane > 0] == nodata).any():
+        return None
+    return nodata
+
+
 def export_cog(
     store: ChronoStore | str | Path,
     out_dir: str | Path,
     *,
     level: int = 0,
     times: Sequence[int] | None = None,
+    physical: bool = False,
 ) -> list[Path]:
     """Write one COG per timestep into `out_dir` and return the paths, in time order.
 
     `store` is an opened store, a local path or an https URL. Files are named
     `L<level>_<date>.tif`. One timestep of the level is held in memory at a time, so pick a
     coarser `level` for very large stores. An existing file of the same name is an error.
+    `physical` writes float32 physical values instead of the stored values; see the module
+    docstring for how validity, scale and offset are written.
     """
     import rasterio
     import rasterio.shutil  # ty: ignore[unresolved-import]  # compiled module, no stub
@@ -139,9 +170,15 @@ def export_cog(
         )
     out.mkdir(parents=True, exist_ok=True)
 
-    nodata: Any = opened.attrs.nodata
     for t, target in zip(selected, targets, strict=True):
-        values = np.asarray(opened.read(t, level))
+        plane = opened.read_mask(t, level)
+        tag: Any
+        if physical:
+            values = np.asarray(opened.physical(t, level))
+            tag = float("nan")
+        else:
+            values = np.asarray(opened.read(t, level))
+            tag = _nodata_tag(opened.attrs.nodata, values, plane)
         n_band, height, width = values.shape
         with MemoryFile() as memory:
             with memory.open(
@@ -152,15 +189,18 @@ def export_cog(
                 dtype=values.dtype,
                 crs=opened.attrs.crs,
                 transform=Affine(*lod.transform),
-                nodata=nodata,
+                nodata=tag,
                 tiled=True,
                 blockxsize=512,
                 blockysize=512,
             ) as dst:
                 dst.write(values)
+                if plane is not None:
+                    dst.write_mask(np.where(plane > 0, 255, 0).astype(np.uint8))
                 dst.descriptions = [name for name, *_ in bands]
-                dst.scales = [scale for _, scale, _, _ in bands]
-                dst.offsets = [offset for _, _, offset, _ in bands]
+                if not physical:
+                    dst.scales = [scale for _, scale, _, _ in bands]
+                    dst.offsets = [offset for _, _, offset, _ in bands]
                 if any(units for *_, units in bands):
                     dst.units = [units or "" for *_, units in bands]
                 dst.update_tags(

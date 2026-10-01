@@ -12,6 +12,7 @@ import xarray as xr
 
 import chronozarr
 from chronozarr.convert import CogManifestSource, convert, plan_conversion, read_manifest
+from tests.fixtures import cog_sources as fx
 from tests.synthetic import CRS, TRANSFORM, make_times, make_truth
 
 pytestmark = pytest.mark.unit
@@ -32,6 +33,9 @@ def write_tif(
     crs: str | None = CRS,
     nodata: float | None = 0,
     descriptions: list[str] | None = None,
+    scales: list[float] | None = None,
+    offsets: list[float] | None = None,
+    units: list[str] | None = None,
 ) -> Path:
     with rasterio.open(
         path,
@@ -48,6 +52,12 @@ def write_tif(
         dst.write(array)
         if descriptions:
             dst.descriptions = descriptions
+        if scales:
+            dst.scales = scales
+        if offsets:
+            dst.offsets = offsets
+        if units:
+            dst.units = units
     return path
 
 
@@ -268,7 +278,9 @@ def test_grid_override_options_are_validated(tmp_path, tifs):
     [
         ("dtype", "All sources must share one dtype"),
         ("bands", "has 1 bands"),
-        ("nodata", "Pass --nodata"),
+        ("scales", r"has scales \[0.5, 1.0\]; .* has \[1.0, 1.0\]"),
+        ("offsets", r"has offsets \[0.0, 2.0\]; .* has \[0.0, 0.0\]"),
+        ("units", r"has units \['K', None\]; .* has \[None, None\]"),
         ("int32", "chronozarr stores hold"),
         ("nocrs", "cannot open source"),
     ],
@@ -281,8 +293,12 @@ def test_inconsistent_or_unsupported_sources_are_rejected_up_front(
         write_tif(bad, truth[3].astype(np.uint8))
     elif mutate == "bands":
         write_tif(bad, truth[3][:1])
-    elif mutate == "nodata":
-        write_tif(bad, truth[3], nodata=7)
+    elif mutate == "scales":
+        write_tif(bad, truth[3], scales=[0.5, 1.0])
+    elif mutate == "offsets":
+        write_tif(bad, truth[3], offsets=[0.0, 2.0])
+    elif mutate == "units":
+        write_tif(bad, truth[3], units=["K", ""])
     elif mutate == "int32":
         tifs = [write_tif(t, truth[i].astype(np.int32)) for i, t in enumerate(tifs)]
     else:
@@ -505,3 +521,432 @@ def test_plan_lines_mention_warped_timesteps(tmp_path, tifs, truth):
     write_tif(tifs[1], truth[1], transform=tuple(shifted))
     plan = plan_conversion(write_csv(tmp_path / "m.csv", tifs), resampling="average")
     assert "resampling: 1 of 5 timesteps are warped" in "\n".join(plan.lines())
+
+
+# --- fidelity: scale, offset, units and validity of COG sources -----------------------------
+
+
+def convert_cogs(tmp_path, cogs, *, bands=None, name="store", **kwargs):
+    out = tmp_path / name
+    manifest = fx.write_manifest(tmp_path / f"{name}.csv", cogs, bands)
+    convert(manifest, out, **{**OPTIONS, **kwargs})
+    return chronozarr.open_store(out)
+
+
+def stored_mask(store) -> np.ndarray:
+    return np.stack([store.read_mask(t) for t in range(len(store.times))]).astype(bool)
+
+
+def physical_nan(store) -> np.ndarray:
+    return np.stack([np.isnan(store.physical(t)) for t in range(len(store.times))])
+
+
+def band_attrs(store) -> list[tuple]:
+    return [(b.scale, b.offset, b.units) for b in store.attrs.bands]
+
+
+def test_internal_mask_and_band_scaling_survive_conversion(tmp_path):
+    """The reviewer's case: scaled reflectance whose invalid pixel carries a value."""
+    cogs = fx.scaled_masked(tmp_path)
+    store = convert_cogs(tmp_path, cogs)
+    assert store.bands == ("red", "nir")
+    assert band_attrs(store) == [
+        (0.0001, -0.1, "reflectance"),
+        (0.0002, 0.05, "reflectance"),
+    ]
+    assert store.attrs.nodata is None  # a mask carries validity; the encoder's 0 is not used
+    assert store.attrs.mask_variable == "mask"
+    assert np.array_equal(stored_mask(store), cogs.shared_valid)
+    for t in range(fx.N_TIME):
+        assert np.array_equal(store.read(t), cogs.data[t])  # the 777 under the mask is kept
+    assert np.array_equal(physical_nan(store), ~cogs.valid)
+    scale = np.array(cogs.scales, dtype=np.float32)[:, None, None]
+    offset = np.array(cogs.offsets, dtype=np.float32)[:, None, None]
+    expected = cogs.data[0].astype(np.float32) * scale + offset
+    keep = cogs.valid[0]
+    assert np.allclose(store.physical(0)[keep], expected[keep], rtol=1e-6)
+    assert store.levels[1].mask is not None
+    assert chronozarr.validate(tmp_path / "store") == []
+
+
+def test_alpha_band_becomes_the_mask_and_is_not_stored_as_data(tmp_path):
+    cogs = fx.rgba(tmp_path)
+    store = convert_cogs(tmp_path, cogs)
+    assert store.bands == ("red", "green", "blue")
+    assert store.dtype == np.uint8
+    assert store.attrs.nodata is None
+    assert np.array_equal(stored_mask(store), cogs.shared_valid)
+    assert store.read_mask(0)[2, 2] == 1  # alpha 128 is partly transparent, still valid
+    assert store.read_mask(0)[3, 4] == 0  # alpha 0
+    for t in range(fx.N_TIME):
+        assert np.array_equal(store.read(t), cogs.data[t])
+    with pytest.raises(ValueError, match="has 3 bands but 4 band names"):
+        plan_conversion(
+            fx.write_manifest(tmp_path / "four.csv", cogs, bands="r;g;b;a"), sample=False
+        )
+
+
+def test_a_nodata_sentinel_is_kept_when_it_is_faithful(tmp_path):
+    cogs = fx.nodata_zero(tmp_path)
+    store = convert_cogs(tmp_path, cogs)
+    assert store.attrs.nodata == 0
+    assert store.attrs.mask_variable is None
+    assert band_attrs(store) == [(0.0001, -0.1, "reflectance")] * 2
+    for t in range(fx.N_TIME):
+        assert np.array_equal(store.read(t), cogs.data[t])
+    # validity stays per band: (9, 9+t) is invalid in band 0 only
+    assert np.array_equal(physical_nan(store), ~cogs.valid)
+    assert not physical_nan(store)[0, 1, 9, 9]
+
+
+def test_no_declared_nodata_means_no_nodata_and_a_zero_is_data(tmp_path):
+    cogs = fx.valid_zero(tmp_path)
+    store = convert_cogs(tmp_path, cogs)
+    assert store.attrs.nodata is None
+    assert store.attrs.mask_variable is None
+    assert band_attrs(store) == [(1.0, 0.0, None)] * 2
+    assert np.array_equal(store.read(1), cogs.data[1])
+    assert store.read(1)[0, 5, 7] == 0
+    assert not physical_nan(store).any()
+
+
+def test_int16_negative_values_keep_their_sentinel_scale_and_units(tmp_path):
+    cogs = fx.int16_negative(tmp_path)
+    store = convert_cogs(tmp_path, cogs)
+    assert store.dtype == np.int16
+    assert store.attrs.nodata == -9999
+    assert store.attrs.mask_variable is None
+    assert store.attrs.temporal.encoding == "none"
+    assert band_attrs(store) == [(0.5, -10.0, "degC")] * 2
+    for t in range(fx.N_TIME):
+        assert np.array_equal(store.read(t), cogs.data[t])
+    assert (cogs.data < 0).any()
+    physical = store.physical(2)
+    assert np.allclose(physical[cogs.valid[2]], (cogs.data[2] * 0.5 - 10.0)[cogs.valid[2]])
+    assert np.isnan(physical[~cogs.valid[2]]).all()
+
+
+def test_float32_nan_nodata_becomes_a_mask_and_nan_is_never_stored(tmp_path):
+    cogs = fx.float32_nan(tmp_path)
+    store = convert_cogs(tmp_path, cogs)
+    assert store.dtype == np.float32
+    assert store.attrs.nodata is None
+    assert store.attrs.mask_variable == "mask"
+    assert band_attrs(store) == [(0.5, 1.0, "m")] * 2
+    # one plane for both bands: invalid where any band is NaN, so band 1 at (9, 9+t) is hidden
+    assert np.array_equal(stored_mask(store), cogs.shared_valid)
+    for t in range(fx.N_TIME):
+        stored = store.read(t)
+        assert not np.isnan(stored).any()
+        assert np.array_equal(stored, np.where(np.isnan(cogs.data[t]), 0, cogs.data[t]))
+    assert store.read(0)[1, 9, 9] == cogs.data[0, 1, 9, 9]  # the valid band keeps its value
+    assert (cogs.data < 0).any()
+
+
+def test_float32_finite_nodata_is_a_sentinel(tmp_path):
+    cogs = fx.float32_finite_nodata(tmp_path)
+    store = convert_cogs(tmp_path, cogs)
+    assert store.attrs.nodata == -9999.0
+    assert store.attrs.mask_variable is None
+    for t in range(fx.N_TIME):
+        assert np.array_equal(store.read(t), cogs.data[t])
+    assert np.array_equal(physical_nan(store), ~cogs.valid)
+
+
+def test_nodata_that_differs_between_sources_becomes_a_mask(tmp_path):
+    cogs = fx.nodata_changes(tmp_path)
+    store = convert_cogs(tmp_path, cogs)
+    assert store.attrs.nodata is None
+    assert np.array_equal(stored_mask(store), cogs.shared_valid)
+    for t in range(fx.N_TIME):
+        assert np.array_equal(store.read(t), cogs.data[t])
+    assert store.read_mask(0)[5, 6] == 1  # holds 7, valid where nodata is 0
+    assert store.read_mask(3)[5, 6] == 1  # holds 0, valid where nodata is 7
+
+
+def test_a_source_without_nodata_among_sources_with_nodata_gets_a_mask(tmp_path, tifs, truth):
+    write_tif(tifs[2], truth[2], nodata=None)
+    out = tmp_path / "store"
+    convert(write_csv(tmp_path / "m.csv", tifs), out, **OPTIONS)
+    store = chronozarr.open_store(out)
+    assert store.attrs.nodata is None
+    expected = (truth != 0).all(axis=1)
+    expected[2] = True  # that source declares nothing, so its zeros are data
+    assert np.array_equal(stored_mask(store), expected)
+    assert np.array_equal(store.read(2), truth[2])
+
+
+def test_explicit_nodata_replaces_the_declared_nodata(tmp_path):
+    cogs = fx.nodata_zero(tmp_path)
+    none = convert_cogs(tmp_path, cogs, nodata=None, name="none")
+    assert none.attrs.nodata is None
+    assert none.attrs.mask_variable is None
+    assert not physical_nan(none).any()  # the sources' 0 is now ordinary data
+    assert np.array_equal(none.read(1), cogs.data[1])
+
+    seven = convert_cogs(tmp_path, cogs, nodata=7, name="seven")
+    assert seven.attrs.nodata == 7
+    assert not physical_nan(seven).any()
+
+    masked = fx.scaled_masked(tmp_path)
+    store = convert_cogs(tmp_path, masked, nodata=777, name="kept")
+    assert store.attrs.nodata == 777  # asked for, so kept next to the mask
+    assert store.attrs.mask_variable == "mask"
+    # the explicit nodata adds to the source mask: valid pixels that hold 777 are now invalid
+    expected = masked.shared_valid & (masked.data != 777).all(axis=1)
+    assert np.array_equal(stored_mask(store), expected)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"nodata": "zero"}, "nodata must be a number, None or 'auto'"),
+        ({"nodata": 300}, "cannot be held by uint8"),
+        ({"nodata": float("inf")}, "nodata must be finite"),
+        ({"nodata": float("nan")}, "needs float data"),
+    ],
+)
+def test_bad_explicit_nodata_is_rejected_up_front(tmp_path, kwargs, message):
+    cogs = fx.rgba(tmp_path)
+    with pytest.raises(ValueError, match=message):
+        plan_conversion(fx.write_manifest(tmp_path / "m.csv", cogs), sample=False, **kwargs)
+
+
+def test_undeclared_nan_in_a_float_source_is_an_error_unless_nodata_is_nan(tmp_path):
+    cogs = fx.float32_undeclared_nan(tmp_path)
+    manifest = fx.write_manifest(tmp_path / "m.csv", cogs)
+    with pytest.raises(ValueError, match=r"holds \d+ NaN values.*pass --nodata nan"):
+        convert(manifest, tmp_path / "refused", **OPTIONS)
+    assert not (tmp_path / "refused").exists()
+
+    store = convert_cogs(tmp_path, cogs, nodata=float("nan"))
+    assert store.attrs.nodata is None
+    assert np.array_equal(stored_mask(store), ~np.isnan(cogs.data).any(axis=1))
+    assert not np.isnan(store.read(0)).any()
+
+
+def test_a_warped_source_without_nodata_gets_a_footprint_mask(tmp_path):
+    cogs = fx.valid_zero(tmp_path)
+    shifted = list(TRANSFORM)
+    shifted[2] += 5 * 10.0
+    write_tif(cogs.paths[2], cogs.data[2], transform=tuple(shifted), nodata=None)
+    manifest = fx.write_manifest(tmp_path / "m.csv", cogs)
+    with pytest.raises(ValueError, match="not on the target grid"):
+        plan_conversion(manifest, sample=False)
+
+    out = tmp_path / "store"
+    report = convert(manifest, out, resampling="nearest", **OPTIONS)
+    assert "warped timesteps leave pixels outside the source footprint" in "\n".join(
+        report.plan.lines()
+    )
+    store = chronozarr.open_store(out)
+    assert store.attrs.nodata is None
+    expected = np.ones((fx.N_TIME, fx.HEIGHT, fx.WIDTH), dtype=bool)
+    expected[2, :, :5] = False
+    assert np.array_equal(stored_mask(store), expected)
+    assert np.array_equal(store.read(2)[:, :, 5:], cogs.data[2][:, :, :-5])
+    assert not store.read(2)[:, :, :5].any()
+    assert np.array_equal(store.read(1), cogs.data[1])
+    assert store.read(1)[0, 5, 7] == 0  # a valid zero stays valid in an unwarped timestep
+
+
+def test_a_warped_source_with_an_internal_mask_keeps_its_validity(tmp_path):
+    cogs = fx.scaled_masked(tmp_path, shift={2: 5})
+    manifest = fx.write_manifest(tmp_path / "m.csv", cogs)
+    out = tmp_path / "store"
+    convert(manifest, out, resampling="nearest", **OPTIONS)
+    store = chronozarr.open_store(out)
+    mask = stored_mask(store)
+    expected = cogs.shared_valid.copy()
+    expected[2] = False
+    expected[2, :, 5:] = cogs.shared_valid[2][:, :-5]
+    assert np.array_equal(mask, expected)
+    moved = store.read(2)[:, :, 5:]
+    valid = cogs.shared_valid[2][:, :-5]
+    assert np.array_equal(moved[:, valid], cogs.data[2][:, :, :-5][:, valid])
+    assert band_attrs(store)[0] == (0.0001, -0.1, "reflectance")
+
+
+def test_band_descriptions_must_agree_unless_the_manifest_names_the_bands(tmp_path, truth):
+    files = [
+        write_tif(
+            tmp_path / f"d{t}.tif", truth[t], descriptions=["red", "swir" if t == 2 else "nir"]
+        )
+        for t in range(3)
+    ]
+    with pytest.raises(ValueError, match=r"band descriptions \['red', 'swir'\]"):
+        plan_conversion(write_csv(tmp_path / "a.csv", files, DATES[:3]), sample=False)
+    named = plan_conversion(write_csv(tmp_path / "b.csv", files, DATES[:3], "r;n"), sample=False)
+    assert named.source.info.band_names == ("r", "n")
+
+
+def test_plan_lines_state_scaling_and_the_validity_rule(tmp_path):
+    cogs = fx.scaled_masked(tmp_path)
+    text = "\n".join(plan_conversion(fx.write_manifest(tmp_path / "m.csv", cogs)).lines())
+    assert (
+        "scaling:    red = stored * 0.0001 -0.1 [reflectance], nir = stored * 0.0002 +0.05" in text
+    )
+    assert "validity:   mask (internal mask), no nodata" in text
+    plain = "\n".join(
+        plan_conversion(fx.write_manifest(tmp_path / "p.csv", fx.nodata_zero(tmp_path))).lines()
+    )
+    assert "validity:   nodata 0 sentinel, no mask" in plain
+
+
+def test_resume_reuses_staged_masks(tmp_path, monkeypatch):
+    cogs = fx.scaled_masked(tmp_path)
+    manifest = fx.write_manifest(tmp_path / "m.csv", cogs)
+    out = tmp_path / "store"
+    original = CogManifestSource.read
+    state = {"fail": True}
+
+    def flaky(self, t):
+        if t == 1 and state["fail"]:  # timesteps 0, 2 and 3 are read while planning
+            raise OSError("connection reset")
+        return original(self, t)
+
+    monkeypatch.setattr(CogManifestSource, "read", flaky)
+    with pytest.raises(OSError, match="connection reset"):
+        convert(manifest, out, read_ahead=1, **OPTIONS)
+    work = tmp_path / "store.convert-work"
+    assert (work / "t000000.npy").is_file()
+    assert (work / "m000000.npy").is_file()
+
+    (work / "m000000.npy").unlink()  # a staged timestep without its mask is read again
+    state["fail"] = False
+    report = convert(manifest, out, resume=True, **OPTIONS)
+    assert (report.n_reused, report.n_staged) == (0, 4)
+    store = chronozarr.open_store(out)
+    assert np.array_equal(stored_mask(store), cogs.shared_valid)
+    assert not work.exists()
+
+
+# --- fidelity: CF attributes and mask variables of Zarr sources -----------------------------
+
+
+def test_zarr_cf_fill_value_scale_offset_and_units(tmp_path):
+    zarr_set = fx.cf_zarr(tmp_path / "in.zarr")
+    out = tmp_path / "store"
+    report = convert(zarr_set.path, out, **OPTIONS)
+    store = chronozarr.open_store(out)
+    assert store.bands == zarr_set.bands
+    assert band_attrs(store) == [(0.01, 1.5, "m")] * 2
+    assert store.attrs.nodata == -9999  # the _FillValue, faithful as a sentinel
+    assert store.attrs.mask_variable is None
+    for t in range(fx.N_TIME):
+        assert np.array_equal(store.read(t), zarr_set.data[t])
+    assert np.array_equal(physical_nan(store), ~zarr_set.valid)
+    assert report.plan.source.info.validity == "nodata -9999 sentinel, no mask"
+    physical = store.physical(1)
+    keep = zarr_set.valid[1]
+    assert np.allclose(physical[keep], (zarr_set.data[1].astype(np.float64) * 0.01 + 1.5)[keep])
+
+
+def test_zarr_fill_value_and_missing_value_together_need_a_mask(tmp_path):
+    zarr_set = fx.cf_zarr(tmp_path / "in.zarr", missing=-8888)
+    out = tmp_path / "store"
+    convert(zarr_set.path, out, **OPTIONS)
+    store = chronozarr.open_store(out)
+    assert store.attrs.nodata is None
+    assert store.attrs.mask_variable == "mask"
+    assert np.array_equal(stored_mask(store), zarr_set.shared_valid)
+    for t in range(fx.N_TIME):
+        assert np.array_equal(store.read(t), zarr_set.data[t])
+    assert band_attrs(store) == [(0.01, 1.5, "m")] * 2
+
+
+@pytest.mark.parametrize("flip_y", [False, True])
+def test_zarr_mask_variable_combines_with_the_cf_fill_value(tmp_path, flip_y):
+    zarr_set = fx.cf_zarr(tmp_path / "in.zarr", flag_var=True, flip_y=flip_y)
+    with pytest.raises(ValueError, match="choose one with --variable"):
+        plan_conversion(zarr_set.path, sample=False)
+    out = tmp_path / "store"
+    convert(zarr_set.path, out, mask_var="ok", **OPTIONS)  # `ok` is not a candidate variable
+    store = chronozarr.open_store(out)
+    assert store.attrs.nodata is None
+    assert np.array_equal(stored_mask(store), zarr_set.shared_valid)
+    for t in range(fx.N_TIME):
+        assert np.array_equal(store.read(t), zarr_set.data[t])  # north-up, whatever the file
+
+
+def test_zarr_float_nan_fill_value_becomes_a_mask(tmp_path, truth):
+    values = truth.astype(np.float32)
+    values[:, :, 3, 4] = np.nan
+    source = tmp_path / "f.zarr"
+    dataset_from(values).to_zarr(source, zarr_format=2, consolidated=True)
+    out = tmp_path / "store"
+    convert(source, out, crs=CRS, **OPTIONS)
+    store = chronozarr.open_store(out)
+    assert store.attrs.nodata is None
+    assert store.attrs.mask_variable == "mask"
+    expected = ~np.isnan(values).any(axis=1)
+    assert np.array_equal(stored_mask(store), expected)
+    assert not np.isnan(store.read(0)).any()
+
+
+def test_zarr_undeclared_nan_is_an_error_unless_nodata_is_nan(tmp_path, truth):
+    values = truth.astype(np.float32)
+    values[:, :, 3, 4] = np.nan
+    source = tmp_path / "f.zarr"
+    dataset_from(values).to_zarr(
+        source, zarr_format=2, consolidated=True, encoding={"reflectance": {"_FillValue": None}}
+    )
+    with pytest.raises(ValueError, match=r"holds \d+ NaN values.*pass --nodata nan"):
+        convert(source, tmp_path / "refused", crs=CRS, **OPTIONS)
+    out = tmp_path / "store"
+    convert(source, out, crs=CRS, nodata=float("nan"), **OPTIONS)
+    assert np.array_equal(stored_mask(chronozarr.open_store(out)), ~np.isnan(values).any(axis=1))
+
+
+def test_zarr_mask_variable_is_validated(tmp_path, truth):
+    zarr_set = fx.cf_zarr(tmp_path / "in.zarr", flag_var=True)
+    with pytest.raises(ValueError, match=r"mask variable 'nope' is not in"):
+        plan_conversion(zarr_set.path, variable="v", mask_var="nope", sample=False)
+    with pytest.raises(ValueError, match="mask variable 'v' is the data variable"):
+        plan_conversion(zarr_set.path, variable="v", mask_var="v", sample=False)
+
+    ds = dataset_from(truth)
+    ds["columns"] = (("time", "x"), np.ones((N_TIME, WIDTH), dtype=np.uint8))
+    ds["real"] = (("time", "y", "x"), np.ones((N_TIME, HEIGHT, WIDTH), dtype=np.float32))
+    odd = tmp_path / "odd.zarr"
+    ds.to_zarr(odd, zarr_format=2, consolidated=True)
+    with pytest.raises(ValueError, match="must have exactly"):
+        plan_conversion(odd, crs=CRS, variable="reflectance", mask_var="columns", sample=False)
+    with pytest.raises(ValueError, match="use a boolean or integer variable"):
+        plan_conversion(odd, crs=CRS, variable="reflectance", mask_var="real", sample=False)
+
+
+def test_mask_variable_does_not_apply_to_manifests(tmp_path):
+    cogs = fx.valid_zero(tmp_path)
+    with pytest.raises(ValueError, match="apply to Zarr and NetCDF input, not manifests"):
+        plan_conversion(fx.write_manifest(tmp_path / "m.csv", cogs), mask_var="ok", sample=False)
+
+
+@pytest.mark.parametrize(
+    ("attrs", "message"),
+    [
+        ({"scale_factor": 0.0}, "scale must be finite and non-zero"),
+        ({"scale_factor": float("inf")}, "scale must be finite and non-zero"),
+        ({"add_offset": float("nan")}, "offset finite"),
+        ({"scale_factor": [0.1, 0.2]}, "must be one number"),
+    ],
+)
+def test_zarr_bad_cf_scaling_is_rejected(tmp_path, truth, attrs, message):
+    ds = dataset_from(truth)
+    ds["reflectance"].attrs.update({"crs": CRS, **attrs})
+    source = tmp_path / "in.zarr"
+    ds.to_zarr(source, zarr_format=2, consolidated=True)
+    with pytest.raises(ValueError, match=message):
+        plan_conversion(source, sample=False)
+
+
+def test_zarr_without_cf_attributes_writes_explicit_unit_scaling(tmp_path, truth):
+    source = tmp_path / "in.zarr"
+    ds = dataset_from(truth)
+    ds["reflectance"].attrs["crs"] = CRS
+    ds.to_zarr(source, zarr_format=2, consolidated=True)
+    out = tmp_path / "store"
+    convert(source, out, **OPTIONS)
+    store = chronozarr.open_store(out)
+    assert band_attrs(store) == [(1.0, 0.0, None)] * 2
+    assert store.attrs.nodata is None  # no _FillValue declared, so a stored 0 is data

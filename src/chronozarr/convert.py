@@ -13,6 +13,55 @@ Three input kinds are recognised from SOURCE:
 * a NetCDF file (`.nc`, `.nc4`, `.cdf`) with a chosen variable (needs an xarray NetCDF engine).
 
 Needs rasterio (`chronozarr[geo]`) for COG manifests and for the CRS handling of all kinds.
+
+Fidelity rules. The store carries the source's scale, offset, units and validity, or the
+conversion fails; nothing is guessed.
+
+Scale, offset and units:
+
+1. COG: rasterio's per-band `scales`, `offsets`, `units` and `descriptions` become the band
+   objects. Scale and offset are always written (1 and 0 when the source sets none). A store
+   holds one value per band for every timestep, so each must be identical in all sources, band by
+   band; the first source that differs fails the conversion and is named. Descriptions name the
+   bands unless the manifest does, and must agree too. An alpha band (colour interpretation
+   alpha) is not a data band: it is not stored as data and becomes the mask (rule 4).
+2. Zarr and NetCDF: the variable's CF `scale_factor`, `add_offset` and `units` apply to every
+   band (1 and 0 when absent); a scale that is zero or not finite fails.
+
+Validity. A store marks invalid pixels either with one `nodata` sentinel, judged per band with no
+mask, or with a `mask` variable shared by all bands (spec 2.3, 2.4).
+
+3. Sentinel, only when faithful: every source declares the same nodata value (representable in
+   the dtype and finite) on every data band and has no mask or alpha band, and no timestep is
+   warped. The store's nodata is that value and there is no `mask`. A source that declares no
+   nodata and has no mask yields a store with no nodata (every pixel valid, a stored 0 is data),
+   not the encoder default of 0.
+4. Mask otherwise: the store gets a `mask` variable when any source has an alpha band, an
+   internal or per-dataset mask, or a nodata value that cannot be the store's (NaN, infinite,
+   differing between sources or bands, or declared on only some of them); when a timestep is
+   warped and the store has no nodata sentinel (pixels outside the source footprint are invalid);
+   or when a Zarr/NetCDF variable names its mask with `--mask-var`. A store with a mask has no
+   nodata (so a valid value equal to the old sentinel stays valid), unless `--nodata` gives one.
+5. Mask content, 1 = valid. COG: the alpha band is nonzero (alpha wins over everything else, as
+   in GDAL; a partly transparent pixel is valid), else the pixel is valid in every data band
+   under GDAL's band masks (internal mask, per-dataset mask or nodata value). One plane cannot say
+   that bands disagree, so a pixel invalid in any band is invalid for all of them; the stored
+   values of the other bands are kept. Zarr/NetCDF: the `--mask-var` variable is nonzero (it must
+   be boolean or integer with dims time, y, x; invert a "1 = bad" flag first) and no band
+   holds a declared `_FillValue` or `missing_value`. valid_min, valid_max and valid_range are not
+   applied; fold them into a `--mask-var`.
+6. Values under a zero mask keep the source values, so the store loses no bytes, except NaN
+   (never stored; spec 2.3), which becomes the fill value (the nodata, else 0), and except in a
+   warped timestep, where the warper does not copy masked source pixels (they take the fill
+   value). A float source
+   with NaN in a sentinel store fails and names the timestep: declare NaN as the source nodata or
+   pass `--nodata nan`, which writes a mask.
+7. `--nodata N` replaces the nodata the sources declare: pixels equal to N are invalid and the
+   sources' own nodata values are ordinary data (alpha and mask bands still apply). `--nodata none`
+   ignores declared nodata values and stores none; `--nodata nan` (float data) marks NaN invalid
+   through a mask.
+8. Warped COG timesteps use the nearest-neighbour resampling of their validity plane, whatever
+   `--resampling` says for the values.
 """
 
 from __future__ import annotations
@@ -24,7 +73,7 @@ import math
 import shutil
 import time
 from collections import deque
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -53,6 +102,27 @@ RESAMPLING_METHODS = ("nearest", "bilinear", "cubic", "average", "mode", "min", 
 # laptop with other work running, 2026-09-30; set lower so estimates err on the long side.
 ENCODE_BYTES_PER_S = 150e6
 SAMPLE_TIMESTEPS = 3
+# The fidelity rules in the module docstring, as `chronozarr convert --help` text (click
+# paragraphs: a backspace line keeps the lines of the block that follows).
+FIDELITY_HELP = """\
+Scale, offset, units and validity are carried over from the source, or the conversion fails.
+
+\b
+Scale and offset: COG per-band scales, offsets, units and descriptions become the band objects
+and must be identical in every source; an alpha band is not data, it becomes the mask.
+Zarr/NetCDF: the CF scale_factor, add_offset and units of the variable apply to every band.
+
+\b
+Validity is either one nodata sentinel (judged per band, no mask) or one mask shared by all bands:
+  sentinel  every source declares the same finite nodata (or none), has no mask or alpha band,
+            and no timestep is warped. No nodata declared means no nodata: a stored 0 is data.
+  mask      any alpha band, internal mask or --mask-var; a nodata that cannot be the store's
+            (NaN, infinite, differing between sources or bands); or warped sources with no
+            nodata (pixels outside their footprint). The store then has no nodata unless
+            --nodata gives one. A pixel invalid in any band is invalid for all.
+  NaN is never stored: under a mask it becomes 0. A float source with undeclared NaN fails;
+  --nodata nan treats NaN as invalid. --nodata N replaces the declared nodata; none ignores it.
+"""
 _DIM_ALIASES = {
     "time": ("time", "t", "datetime", "valid_time"),
     "band": ("band", "bands", "channel", "variable"),
@@ -88,7 +158,11 @@ class Entry:
 
 @dataclass(frozen=True)
 class SourceInfo:
-    """What a source reports about itself before any pixel is read."""
+    """What a source reports about itself before any pixel is read.
+
+    `nodata` is the store's sentinel (None for none). `mask` says the store gets a `mask`
+    variable and every `Step` carries its plane; `validity` explains the choice in one line.
+    """
 
     grid: Grid
     n_band: int
@@ -96,6 +170,17 @@ class SourceInfo:
     nodata: float | int | None
     band_names: tuple[str, ...]
     bands: tuple[Band, ...]
+    mask: bool = False
+    validity: str = ""
+
+
+@dataclass
+class Step:
+    """One timestep: data (band, y, x) in the source dtype and, for a mask store, the (y, x)
+    uint8 validity plane (1 = valid)."""
+
+    data: np.ndarray
+    valid: np.ndarray | None = None
 
 
 class Source:
@@ -107,8 +192,8 @@ class Source:
     # Indices of timesteps that are not on the target grid and must be warped (COG only).
     warped: frozenset[int] = frozenset()
 
-    def read(self, t: int) -> np.ndarray:
-        """Timestep `t` as (band, y, x) in `info.dtype` on `info.grid`."""
+    def read(self, t: int) -> Step:
+        """Timestep `t` on `info.grid`: data in `info.dtype`, plus validity when `info.mask`."""
         raise NotImplementedError
 
     def fingerprint(self) -> Any:
@@ -264,43 +349,213 @@ def _grid_difference(found: Grid, wanted: Grid) -> str:
     return "; ".join(parts)
 
 
+# --- Validity and band metadata -----------------------------------------------------------------
+
+_NAN = "nan"  # token for a declared NaN nodata; the other tokens are None or a number
+
+
+def _declared_nodata(value: float | None, dtype: np.dtype) -> float | int | str | None:
+    """A declared nodata value as a token, or None when unset or when no pixel can hold it.
+
+    A number is what `dtype` stores it as (float32-rounded; int for integer dtypes); NaN is
+    `_NAN`. A value outside the dtype's range can never match a pixel, so it counts as unset.
+    """
+    if value is None:
+        return None
+    number = float(value)
+    if math.isnan(number):
+        return _NAN if dtype.kind == "f" else None
+    if dtype.kind == "f":
+        if math.isinf(number):
+            return number
+        if abs(number) > float(np.finfo(np.float32).max):
+            return None
+        return float(np.float32(number))
+    info = np.iinfo(dtype)
+    if not number.is_integer() or not info.min <= number <= info.max:
+        return None
+    return int(number)
+
+
+def _checked_nodata(value: float | int, dtype: np.dtype) -> float | int:
+    """The explicit `nodata` as `dtype` stores it; ValueError if it cannot be a store nodata."""
+    if not math.isfinite(float(value)):
+        raise ValueError(f"nodata must be finite, got {value!r}; NaN needs a mask (use nan)")
+    token = _declared_nodata(value, dtype)
+    if token is None:
+        raise ValueError(
+            f"nodata {value!r} cannot be held by {dtype.name} data; choose a value of that "
+            "dtype or flag invalid pixels with a mask"
+        )
+    assert isinstance(token, int | float)  # finite and in range, so a number
+    return token
+
+
+@dataclass(frozen=True)
+class Validity:
+    """How the store carries the sources' validity (rules 3 to 7 of the module docstring)."""
+
+    mask: bool
+    nodata: float | int | None
+    why: str
+
+
+def _decide_validity(
+    dtype: np.dtype,
+    declared: Collection[float | int | str | None],
+    *,
+    override: float | int | None | str,
+    explicit: Sequence[str],
+    footprint: bool,
+) -> Validity:
+    """Choose between a nodata sentinel and a mask.
+
+    `declared` are the nodata tokens of every source and band (None where a band declares
+    none); `override` is "auto", None or the explicit nodata; `explicit` names the sources'
+    own masks (alpha band, internal mask, `--mask-var`); `footprint` says warped timesteps
+    leave pixels with no source behind them.
+    """
+    reasons = list(explicit)
+    candidate: float | int | None = None
+    if override == "auto":
+        tokens = set(declared) or {None}
+        if len(tokens) > 1:
+            shown = ", ".join("none" if t is None else str(t) for t in sorted(tokens, key=str))
+            reasons.append(f"the declared nodata values differ ({shown})")
+        else:
+            (token,) = tokens
+            if token == _NAN or (isinstance(token, float) and math.isinf(token)):
+                reasons.append(f"nodata {token} cannot be a store nodata")
+            else:
+                assert not isinstance(token, str)
+                candidate = token
+    elif isinstance(override, str):
+        raise ValueError(f"nodata must be a number, None or 'auto', got {override!r}")
+    elif override is not None:
+        if math.isnan(float(override)):
+            if dtype.kind != "f":
+                raise ValueError(f"nodata nan needs float data; the sources are {dtype.name}")
+            reasons.append("nodata nan was requested")
+        else:
+            candidate = _checked_nodata(override, dtype)
+    if footprint and candidate is None:
+        reasons.append("warped timesteps leave pixels outside the source footprint")
+    if not reasons:
+        if candidate is None:
+            return Validity(False, None, "no nodata and no mask: every pixel is valid")
+        return Validity(False, candidate, f"nodata {candidate} sentinel, no mask")
+    kept = None if override == "auto" else candidate
+    note = "no nodata" if kept is None else f"nodata {kept}"
+    return Validity(True, kept, f"mask ({'; '.join(reasons)}), {note}")
+
+
+def _value_valid(data: np.ndarray, sentinels: Sequence[float | int]) -> np.ndarray:
+    """(y, x) bool from the values alone: no band equals a sentinel, and no float band is NaN."""
+    valid = np.ones(data.shape[1:], dtype=bool)
+    for sentinel in sentinels:
+        valid &= (data != np.asarray(sentinel, dtype=data.dtype)).all(axis=0)
+    if data.dtype.kind == "f":
+        valid &= ~np.isnan(data).any(axis=0)
+    return valid
+
+
+def _settle_nan(
+    data: np.ndarray, valid: np.ndarray | None, nodata: float | int | None, where: str
+) -> None:
+    """NaN is never stored (spec 2.3). In a mask store NaN pixels are already invalid and become
+    the fill value; in a sentinel store NaN is an error."""
+    if data.dtype.kind != "f":
+        return
+    nan = np.isnan(data)
+    if not nan.any():
+        return
+    if valid is None:
+        raise ValueError(
+            f"{where} holds {int(nan.sum())} NaN values, but the source declares no NaN nodata "
+            "and the store has no mask. Declare NaN as the source's nodata, or pass --nodata "
+            "nan to mark NaN pixels invalid with a mask"
+        )
+    data[nan] = 0 if nodata is None else nodata
+
+
+def _scaling(scale: float, offset: float, where: str) -> tuple[float, float]:
+    if not (math.isfinite(scale) and scale != 0 and math.isfinite(offset)):
+        raise ValueError(
+            f"{where} has scale {scale} and offset {offset}; the scale must be finite and "
+            "non-zero and the offset finite"
+        )
+    return scale, offset
+
+
 # --- COG manifest source ------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class _CogHeader:
     grid: Grid
-    count: int
+    data_indexes: tuple[int, ...]  # 1-based indexes of the data bands, the alpha band excluded
+    alpha: int | None  # 1-based index of the alpha band
+    internal_mask: bool  # the data bands share an internal or per-dataset mask (no alpha)
     dtype: np.dtype
-    nodata: float | int | None
+    nodata: tuple[float | int | str | None, ...]  # declared token per data band
+    warp_nodata: float | int | None  # first data band's nodata, for the warper
     descriptions: tuple[str | None, ...]
+    scales: tuple[float, ...]
+    offsets: tuple[float, ...]
+    units: tuple[str | None, ...]
+
+    @property
+    def count(self) -> int:
+        return len(self.data_indexes)
 
 
 def _read_header(uri: str) -> _CogHeader:
     import rasterio
+    from rasterio.enums import ColorInterp, MaskFlags
 
     try:
         with rasterio.Env(**GDAL_ENV), rasterio.open(uri) as src:
             if src.crs is None:
                 raise ValueError("no CRS")
-            transform = tuple(src.transform)[:6]
-            nodata = src.nodata
+            alphas = [i for i, c in enumerate(src.colorinterp, start=1) if c == ColorInterp.alpha]
+            if len(alphas) > 1:
+                raise ValueError(f"it has {len(alphas)} alpha bands; chronozarr reads one")
+            alpha = alphas[0] if alphas else None
+            indexes = tuple(i for i in range(1, src.count + 1) if i != alpha)
+            if not indexes:
+                raise ValueError("it has an alpha band and no data band")
+            dtypes = {src.dtypes[i - 1] for i in indexes}
+            if len(dtypes) > 1:
+                raise ValueError(f"its data bands have different dtypes {sorted(dtypes)}")
+            dtype = np.dtype(dtypes.pop())
+            internal_mask = alpha is None and any(
+                MaskFlags.per_dataset in src.mask_flag_enums[i - 1] for i in indexes
+            )
+            tokens = tuple(_declared_nodata(src.nodatavals[i - 1], dtype) for i in indexes)
+            scaling = [
+                _scaling(float(src.scales[i - 1]), float(src.offsets[i - 1]), f"band {i}")
+                for i in indexes
+            ]
             return _CogHeader(
-                Grid(_epsg(src.crs, uri), _check_north_up(transform, uri), src.height, src.width),
-                src.count,
-                np.dtype(src.dtypes[0]),
-                _plain_nodata(nodata, np.dtype(src.dtypes[0])),
-                tuple(src.descriptions),
+                grid=Grid(
+                    _epsg(src.crs, uri),
+                    _check_north_up(tuple(src.transform)[:6], uri),
+                    src.height,
+                    src.width,
+                ),
+                data_indexes=indexes,
+                alpha=alpha,
+                internal_mask=internal_mask,
+                dtype=dtype,
+                nodata=tokens,
+                warp_nodata=math.nan if isinstance(tokens[0], str) else tokens[0],
+                descriptions=tuple(src.descriptions[i - 1] or None for i in indexes),
+                scales=tuple(s for s, _ in scaling),
+                offsets=tuple(o for _, o in scaling),
+                units=tuple(src.units[i - 1] or None for i in indexes),
             )
     except (rasterio.errors.RasterioIOError, ValueError) as exc:
         raise ValueError(f"cannot open source {uri}: {exc}") from exc
-
-
-def _plain_nodata(value: float | None, dtype: np.dtype) -> float | int | None:
-    """A finite nodata value, as an int for integer dtypes (rasterio reports 0.0 for 0)."""
-    if value is None or not math.isfinite(value):
-        return None
-    return int(value) if dtype.kind in "iu" and float(value).is_integer() else value
 
 
 def _duration(seconds: float) -> str:
@@ -339,7 +594,8 @@ class CogManifestSource(Source):
             headers = list(pool.map(lambda e: _read_header(e.uri), entries))
         first = headers[0]
         self.grid = self._target_grid(first, target_crs, target_transform, target_shape)
-        self._check_consistent(headers, nodata)
+        self._check_consistent(headers, compare_descriptions=band_names is None)
+        self._headers = headers
         names = band_names or tuple(d or str(i + 1) for i, d in enumerate(first.descriptions))
         if len(names) != first.count:
             raise ValueError(
@@ -356,14 +612,35 @@ class CogManifestSource(Source):
                 self._explain_mismatch(headers)
             assert resampling is not None
             _parse_resampling(resampling)
-        source_nodata = first.nodata if nodata == "auto" else nodata
+        explicit = []
+        if any(h.alpha is not None for h in headers):
+            explicit.append("alpha band")
+        if any(h.internal_mask for h in headers):
+            explicit.append("internal mask")
+        validity = _decide_validity(
+            first.dtype,
+            {token for h in headers for token in h.nodata},
+            override=nodata,
+            explicit=explicit,
+            footprint=bool(self.warped),
+        )
+        self._auto_nodata = nodata == "auto"
+        # Values equal to an explicit --nodata are invalid; declared nodata is GDAL's to judge.
+        self._sentinels: tuple[float | int, ...] = (
+            () if self._auto_nodata or validity.nodata is None else (validity.nodata,)
+        )
         self.info = SourceInfo(
             grid=self.grid,
             n_band=first.count,
             dtype=first.dtype,
-            nodata=source_nodata if isinstance(source_nodata, int | float) else None,
+            nodata=validity.nodata,
             band_names=names,
-            bands=tuple(Band(name=n) for n in names),
+            bands=tuple(
+                Band(name=n, scale=first.scales[i], offset=first.offsets[i], units=first.units[i])
+                for i, n in enumerate(names)
+            ),
+            mask=validity.mask,
+            validity=validity.why,
         )
 
     @staticmethod
@@ -401,26 +678,33 @@ class CogManifestSource(Source):
             width,
         )
 
-    def _check_consistent(
-        self, headers: list[_CogHeader], nodata: float | int | None | str
-    ) -> None:
+    def _check_consistent(self, headers: list[_CogHeader], *, compare_descriptions: bool) -> None:
         first = headers[0]
+        first_uri = self.entries[0].uri
         for entry, header in zip(self.entries, headers, strict=True):
             if header.count != first.count:
                 raise ValueError(
-                    f"{entry.uri} has {header.count} bands; {self.entries[0].uri} has "
-                    f"{first.count}"
+                    f"{entry.uri} has {header.count} bands; {first_uri} has {first.count}"
                 )
             if header.dtype != first.dtype:
                 raise ValueError(
-                    f"{entry.uri} is {header.dtype}; {self.entries[0].uri} is {first.dtype}. "
+                    f"{entry.uri} is {header.dtype}; {first_uri} is {first.dtype}. "
                     "All sources must share one dtype"
                 )
-            if nodata == "auto" and header.nodata != first.nodata:
-                raise ValueError(
-                    f"{entry.uri} has nodata {header.nodata}; {self.entries[0].uri} has "
-                    f"{first.nodata}. Pass --nodata to force one value (or 'none')"
-                )
+            fields = [
+                ("scales", header.scales, first.scales),
+                ("offsets", header.offsets, first.offsets),
+                ("units", header.units, first.units),
+            ]
+            if compare_descriptions:
+                fields.append(("band descriptions", header.descriptions, first.descriptions))
+            for what, found, wanted in fields:
+                if found != wanted:
+                    raise ValueError(
+                        f"{entry.uri} has {what} {list(found)}; {first_uri} has {list(wanted)}. "
+                        "A store holds one scale, offset and unit per band for every timestep, "
+                        "so the sources must agree: rescale them to one first"
+                    )
         if first.dtype.name not in schema.DTYPES:
             raise ValueError(
                 f"sources are {first.dtype}; chronozarr stores hold {list(schema.DTYPES)}. "
@@ -446,46 +730,103 @@ class CogManifestSource(Source):
             "kind": "manifest",
             "entries": [[e.uri, str(e.time)] for e in self.entries],
             "grid": [self.grid.crs, list(self.grid.transform), self.grid.height, self.grid.width],
-            "bands": list(self.info.band_names),
+            "bands": [b.to_attrs() for b in self.info.bands],
             "dtype": self.info.dtype.name,
             "nodata": self.info.nodata,
+            "mask": self.info.mask,
+            "validity": self.info.validity,
             "resampling": self.resampling if self.warped else None,
             "warped": sorted(self.warped),
         }
 
-    def read(self, t: int) -> np.ndarray:
+    def read(self, t: int) -> Step:
         import rasterio
-        from rasterio.transform import Affine
 
-        entry = self.entries[t]
-        grid = self.grid
-        out = np.empty((self.info.n_band, grid.height, grid.width), dtype=self.info.dtype)
+        entry, header = self.entries[t], self._headers[t]
+        grid, info = self.grid, self.info
+        data = np.empty((info.n_band, grid.height, grid.width), dtype=info.dtype)
+        valid = np.empty((grid.height, grid.width), dtype=np.uint8) if info.mask else None
         try:
             with rasterio.Env(**GDAL_ENV), rasterio.open(entry.uri) as src:
                 if t in self.warped:
-                    from rasterio.warp import reproject
-
-                    fill = self.info.nodata if self.info.nodata is not None else 0
-                    out[:] = fill
-                    assert self.resampling is not None
-                    reproject(
-                        source=rasterio.band(src, list(range(1, src.count + 1))),
-                        destination=out,
-                        src_nodata=src.nodata,
-                        dst_transform=Affine(*grid.transform),
-                        dst_crs=grid.crs,
-                        dst_nodata=fill,
-                        resampling=_parse_resampling(self.resampling),
-                    )
+                    self._read_warped(src, header, data, valid)
                 else:
                     for top in range(0, grid.height, self.chunk_size):
                         rows = min(self.chunk_size, grid.height - top)
-                        out[:, top : top + rows, :] = src.read(
-                            window=((top, top + rows), (0, grid.width))
-                        )
+                        window = ((top, top + rows), (0, grid.width))
+                        block = src.read(list(header.data_indexes), window=window)
+                        data[:, top : top + rows, :] = block
+                        if valid is not None:
+                            valid[top : top + rows] = self._declared_valid(src, header, window)
+                            valid[top : top + rows] &= _value_valid(block, self._sentinels)
         except rasterio.errors.RasterioError as exc:
             raise OSError(f"reading {entry.uri} (timestep {t}): {exc}") from exc
-        return out
+        _settle_nan(data, valid, info.nodata, f"{entry.uri} (timestep {t})")
+        return Step(data, valid)
+
+    def _declared_valid(
+        self,
+        src: Any,
+        header: _CogHeader,
+        window: tuple[tuple[int, int], tuple[int, int]] | None,
+    ) -> np.ndarray:
+        """(rows, cols) bool of what the source itself declares valid.
+
+        Its alpha band if it has one (nonzero), else its internal or per-dataset mask, else, with
+        an automatic nodata, GDAL's band masks from the nodata value; valid in every data band.
+        """
+        if header.alpha is not None:
+            return src.read(header.alpha, window=window) != 0
+        if header.internal_mask or (
+            self._auto_nodata and any(token is not None for token in header.nodata)
+        ):
+            masks = src.read_masks(list(header.data_indexes), window=window)
+            return (masks != 0).all(axis=0)
+        if window is None:
+            return np.ones((src.height, src.width), dtype=bool)
+        (row0, row1), (col0, col1) = window
+        return np.ones((row1 - row0, col1 - col0), dtype=bool)
+
+    def _read_warped(
+        self, src: Any, header: _CogHeader, data: np.ndarray, valid: np.ndarray | None
+    ) -> None:
+        import rasterio
+        from rasterio.enums import Resampling
+        from rasterio.transform import Affine
+        from rasterio.warp import reproject
+
+        assert self.resampling is not None
+        grid = self.grid
+        fill = 0 if self.info.nodata is None else self.info.nodata
+        data[:] = fill
+        if self._auto_nodata:
+            src_nodata = header.warp_nodata
+        else:
+            src_nodata = self._sentinels[0] if self._sentinels else None
+        reproject(
+            source=rasterio.band(src, list(header.data_indexes)),
+            destination=data,
+            src_nodata=src_nodata,
+            dst_transform=Affine(*grid.transform),
+            dst_crs=grid.crs,
+            dst_nodata=fill,
+            resampling=_parse_resampling(self.resampling),
+        )
+        if valid is not None:
+            # Validity is resampled by nearest neighbour; outside the footprint stays 0.
+            warped = np.zeros(valid.shape, dtype=np.uint8)
+            reproject(
+                source=self._declared_valid(src, header, None).astype(np.uint8),
+                destination=warped,
+                src_transform=src.transform,
+                src_crs=src.crs,
+                src_nodata=None,
+                dst_transform=Affine(*grid.transform),
+                dst_crs=grid.crs,
+                dst_nodata=0,
+                resampling=Resampling.nearest,
+            )
+            valid[:] = (warped != 0) & _value_valid(data, self._sentinels)
 
 
 # --- xarray (Zarr / NetCDF) source --------------------------------------------------------------
@@ -539,12 +880,13 @@ class XarraySource(Source):
         dims: dict[str, str],
         crs: str | None,
         nodata: float | int | None | str,
+        mask_var: str | None = None,
     ) -> None:
         self.kind = "NetCDF file" if source.lower().endswith(NETCDF_SUFFIXES) else "Zarr store"
         self.source = source
         self.variable_name = variable
         dataset = _open_dataset(source)
-        names = list(dataset.data_vars)
+        names = [n for n in dataset.data_vars if n != mask_var]
         if variable is None:
             if len(names) != 1:
                 raise ValueError(f"{source} has variables {names}; choose one with --variable")
@@ -616,30 +958,90 @@ class XarraySource(Source):
 
         grid = Grid(_epsg(CRS.from_user_input(crs_text), "CRS"), transform, len(y), len(x))
 
-        raw_fill = da.attrs.get("_FillValue")
+        self._mask = None
+        if mask_var is not None:
+            self._mask = self._mask_variable(dataset, mask_var, variable, resolved)
+        declared = {
+            token
+            for key in ("_FillValue", "missing_value")
+            for value in np.atleast_1d(da.attrs.get(key, [])).tolist()
+            if (token := _declared_nodata(value, da.dtype)) is not None
+        }
+        validity = _decide_validity(
+            da.dtype,
+            declared,
+            override=nodata,
+            explicit=[] if mask_var is None else [f"mask variable {mask_var}"],
+            footprint=False,
+        )
+        self._sentinels: tuple[float | int, ...]
         if nodata == "auto":
-            chosen = raw_fill if raw_fill is not None and np.isfinite(raw_fill) else None
-            resolved_nodata = chosen.item() if isinstance(chosen, np.generic) else chosen
+            self._sentinels = tuple(t for t in declared if not isinstance(t, str))
         else:
-            resolved_nodata = nodata if isinstance(nodata, int | float) else None
+            self._sentinels = () if validity.nodata is None else (validity.nodata,)
 
         if "band" in resolved:
             band_names = tuple(str(b) for b in da[resolved["band"]].values)
         else:
             band_names = (variable,)
-        scale, offset = da.attrs.get("scale_factor"), da.attrs.get("add_offset")
+        scale, offset = _scaling(
+            self._scalar_attr(da, "scale_factor", 1.0),
+            self._scalar_attr(da, "add_offset", 0.0),
+            f"variable {variable!r}",
+        )
         units = da.attrs.get("units")
         bands = tuple(
-            Band(
-                name=n,
-                scale=float(scale) if scale is not None else None,
-                offset=float(offset) if offset is not None else None,
-                units=str(units) if units else None,
-            )
+            Band(name=n, scale=scale, offset=offset, units=str(units) if units else None)
             for n in band_names
         )
         self.da = da
-        self.info = SourceInfo(grid, len(band_names), da.dtype, resolved_nodata, band_names, bands)
+        self.info = SourceInfo(
+            grid,
+            len(band_names),
+            da.dtype,
+            validity.nodata,
+            band_names,
+            bands,
+            mask=validity.mask,
+            validity=validity.why,
+        )
+
+    @staticmethod
+    def _scalar_attr(da: xr.DataArray, key: str, default: float) -> float:
+        raw = da.attrs.get(key)
+        if raw is None:
+            return default
+        values = np.atleast_1d(raw)
+        if values.size != 1 or values.dtype.kind not in "iuf":
+            raise ValueError(
+                f"{da.name}: {key} must be one number (CF attributes are per variable), "
+                f"got {raw!r}"
+            )
+        return float(values[0])
+
+    def _mask_variable(
+        self, dataset: xr.Dataset, name: str, variable: str, resolved: dict[str, str]
+    ) -> xr.DataArray:
+        if name not in dataset.variables:
+            raise ValueError(
+                f"mask variable {name!r} is not in {self.source}: "
+                f"{sorted(str(v) for v in dataset.variables)}"
+            )
+        if name == variable:
+            raise ValueError(f"mask variable {name!r} is the data variable; name another")
+        mask = dataset[name]
+        wanted = {resolved[k] for k in ("time", "y", "x")}
+        if len(mask.dims) != 3 or set(mask.dims) != wanted:
+            raise ValueError(
+                f"mask variable {name!r} has dims {list(mask.dims)}; it must have exactly "
+                f"{sorted(wanted)} like {variable} (one plane per timestep, shared by all bands)"
+            )
+        if mask.dtype.kind not in "biu":
+            raise ValueError(
+                f"mask variable {name!r} is {mask.dtype}; use a boolean or integer variable "
+                "where nonzero means valid (invert a 'nonzero = bad' flag first)"
+            )
+        return mask
 
     @staticmethod
     def _crs_from_attrs(da: xr.DataArray, dataset: xr.Dataset) -> str | None:
@@ -662,13 +1064,16 @@ class XarraySource(Source):
             "source": self.source,
             "variable": self.variable,
             "grid": [grid.crs, list(grid.transform), grid.height, grid.width],
-            "bands": list(self.info.band_names),
+            "bands": [b.to_attrs() for b in self.info.bands],
             "times": [str(t) for t in self.times],
             "dtype": self.info.dtype.name,
             "nodata": self.info.nodata,
+            "mask": self.info.mask,
+            "validity": self.info.validity,
+            "mask_var": None if self._mask is None else self._mask.name,
         }
 
-    def read(self, t: int) -> np.ndarray:
+    def read(self, t: int) -> Step:
         d = self._dims
         piece = self.da.isel({d["time"]: self._order[t]})
         order = [d["band"], d["y"], d["x"]] if "band" in d else [d["y"], d["x"]]
@@ -677,7 +1082,18 @@ class XarraySource(Source):
             values = values[np.newaxis]
         if self._flip_y:
             values = values[:, ::-1, :]
-        return np.ascontiguousarray(values)
+        values = np.ascontiguousarray(values)
+        if not values.flags.writeable:
+            values = values.copy()
+        valid = None
+        if self.info.mask:
+            ok = _value_valid(values, self._sentinels)
+            if self._mask is not None:
+                plane = self._mask.isel({d["time"]: self._order[t]}).transpose(d["y"], d["x"])
+                ok &= (plane.values[::-1] if self._flip_y else plane.values) != 0
+            valid = ok.astype(np.uint8)
+        _settle_nan(values, valid, self.info.nodata, f"{self.source} timestep {t}")
+        return Step(values, valid)
 
 
 # --- Plan ---------------------------------------------------------------------------------------
@@ -697,7 +1113,7 @@ class Plan:
     sample_read_s: float | None
     est_encode_s: float
     warped: int
-    samples: dict[int, np.ndarray] = field(default_factory=dict, repr=False)
+    samples: dict[int, Step] = field(default_factory=dict, repr=False)
 
     def lines(self, read_ahead: int = 2) -> list[str]:
         info = self.source.info
@@ -707,8 +1123,14 @@ class Plan:
             f"({np.datetime_as_string(times[0], unit='D')} .. "
             f"{np.datetime_as_string(times[-1], unit='D')})",
             f"grid:       {info.grid.describe()}",
-            f"data:       {info.n_band} bands ({', '.join(info.band_names)}), {info.dtype.name}, "
-            f"nodata {info.nodata}",
+            f"data:       {info.n_band} bands ({', '.join(info.band_names)}), {info.dtype.name}",
+            "scaling:    "
+            + ", ".join(
+                f"{b.name} = stored * {b.scale:g} {b.offset:+g}"
+                + (f" [{b.units}]" if b.units else "")
+                for b in info.bands
+            ),
+            f"validity:   {info.validity}",
         ]
         if self.warped:
             out.append(
@@ -737,12 +1159,12 @@ class Plan:
         return out
 
 
-def _sample_ratio(samples: Sequence[np.ndarray], chunk_size: int) -> float:
+def _sample_ratio(samples: Sequence[Step], chunk_size: int) -> float:
     """Mean zstd-5 compressed/raw ratio of the top-left cell of each sampled timestep."""
     codec = Zstd(level=5)
     ratios = []
     for step in samples:
-        window = np.ascontiguousarray(step[:, :chunk_size, :chunk_size])
+        window = np.ascontiguousarray(step.data[:, :chunk_size, :chunk_size])
         ratios.append(len(codec.encode(window)) / window.nbytes)
     return float(np.mean(ratios))
 
@@ -761,6 +1183,7 @@ def plan_conversion(
     shape: tuple[int, int] | None = None,
     resampling: str | None = None,
     nodata: float | int | str | None = "auto",
+    mask_var: str | None = None,
     chunk_size: int = 512,
     n_lods: int | None = None,
     sample: bool = True,
@@ -774,8 +1197,10 @@ def plan_conversion(
     is_manifest = suffix in (".csv", ".json")
     source: Source
     if is_manifest:
-        if variable is not None or dims is not None:
-            raise ValueError("--variable and --dims apply to Zarr and NetCDF input, not manifests")
+        if variable is not None or dims is not None or mask_var is not None:
+            raise ValueError(
+                "--variable, --dims and --mask-var apply to Zarr and NetCDF input, not manifests"
+            )
         entries, names = read_manifest(Path(text))
         source = CogManifestSource(
             entries,
@@ -795,7 +1220,7 @@ def plan_conversion(
                 "--transform, --shape and --resampling apply to COG manifests; a Zarr or NetCDF "
                 "input keeps the grid of its x/y coordinates (--crs only declares its CRS)"
             )
-        source = XarraySource(text, variable, _parse_dims(dims), crs, nodata)
+        source = XarraySource(text, variable, _parse_dims(dims), crs, nodata, mask_var)
 
     info = source.info
     n_time = len(source.times)
@@ -826,13 +1251,21 @@ def plan_conversion(
     return plan
 
 
-def _read_checked(source: Source, t: int) -> np.ndarray:
+def _read_checked(source: Source, t: int) -> Step:
     info = source.info
     step = source.read(t)
     expected = (info.n_band, info.grid.height, info.grid.width)
-    if step.shape != expected or step.dtype != info.dtype:
+    if step.data.shape != expected or step.data.dtype != info.dtype:
         raise ValueError(
-            f"timestep {t} came back as {step.dtype}{step.shape}; expected {info.dtype}{expected}"
+            f"timestep {t} came back as {step.data.dtype}{step.data.shape}; "
+            f"expected {info.dtype}{expected}"
+        )
+    plane = (info.grid.height, info.grid.width)
+    if info.mask != (step.valid is not None) or (
+        step.valid is not None and (step.valid.shape != plane or step.valid.dtype != np.uint8)
+    ):
+        raise ValueError(
+            f"timestep {t} came back with the wrong validity plane for: {info.validity}"
         )
     return step
 
@@ -858,16 +1291,25 @@ def _staged_path(work: Path, t: int) -> Path:
     return work / f"t{t:06d}.npy"
 
 
-def _is_staged(path: Path, plan: Plan) -> bool:
+def _staged_mask_path(work: Path, t: int) -> Path:
+    return work / f"m{t:06d}.npy"
+
+
+def _is_valid_file(path: Path, shape: tuple[int, ...], dtype: np.dtype) -> bool:
     if not path.is_file():
         return False
-    info = plan.source.info
     try:
         staged = np.load(path, mmap_mode="r")
     except (ValueError, OSError):
         return False
-    return staged.shape == (info.n_band, info.grid.height, info.grid.width) and (
-        staged.dtype == info.dtype
+    return staged.shape == shape and staged.dtype == dtype
+
+
+def _is_staged(work: Path, t: int, plan: Plan) -> bool:
+    info = plan.source.info
+    plane = (info.grid.height, info.grid.width)
+    return _is_valid_file(_staged_path(work, t), (info.n_band, *plane), info.dtype) and (
+        not info.mask or _is_valid_file(_staged_mask_path(work, t), plane, np.dtype(np.uint8))
     )
 
 
@@ -899,19 +1341,25 @@ def _stage(
     progress: Callable[[int, int], None] | None,
 ) -> tuple[int, int]:
     """Read every missing timestep into `work`. Returns (staged, reused)."""
-    todo = [t for t in range(plan.n_time) if not _is_staged(_staged_path(work, t), plan)]
+    todo = [t for t in range(plan.n_time) if not _is_staged(work, t, plan)]
     reused = plan.n_time - len(todo)
     if progress is not None:
         progress(reused, plan.n_time)
 
-    def read_one(t: int) -> np.ndarray:
+    def read_one(t: int) -> Step:
         if t in plan.samples:
             return plan.samples.pop(t)
         return _read_checked(plan.source, t)
 
+    def save(target: Path, array: np.ndarray) -> None:
+        temporary = target.with_suffix(".npy.part")
+        with temporary.open("wb") as handle:
+            np.save(handle, array)
+        temporary.replace(target)
+
     done = reused
     with ThreadPoolExecutor(max_workers=read_ahead) as pool:
-        pending: deque[tuple[int, Future[np.ndarray]]] = deque()
+        pending: deque[tuple[int, Future[Step]]] = deque()
         queue = iter(todo)
         for t in queue:
             pending.append((t, pool.submit(read_one, t)))
@@ -920,11 +1368,9 @@ def _stage(
         while pending:
             t, future = pending.popleft()
             step = future.result()
-            target = _staged_path(work, t)
-            temporary = target.with_suffix(".npy.part")
-            with temporary.open("wb") as handle:
-                np.save(handle, step)
-            temporary.replace(target)
+            if step.valid is not None:
+                save(_staged_mask_path(work, t), step.valid)
+            save(_staged_path(work, t), step.data)
             del step
             done += 1
             if progress is not None:
@@ -940,6 +1386,11 @@ def _staged_timesteps(plan: Plan, work: Path) -> Iterator[np.ndarray]:
         yield np.load(_staged_path(work, t))
 
 
+def _staged_masks(plan: Plan, work: Path) -> Iterator[np.ndarray]:
+    for t in range(plan.n_time):
+        yield np.load(_staged_mask_path(work, t))
+
+
 def convert(
     source: str | Path,
     out: str | Path,
@@ -951,6 +1402,7 @@ def convert(
     shape: tuple[int, int] | None = None,
     resampling: str | None = None,
     nodata: float | int | str | None = "auto",
+    mask_var: str | None = None,
     work_dir: str | Path | None = None,
     resume: bool = False,
     dry_run: bool = False,
@@ -964,8 +1416,13 @@ def convert(
     `source` is a manifest (`.csv`/`.json`), a Zarr store (path or URL) or a NetCDF file; see the
     module docstring. The grid comes from the first source (manifests) or the x/y coordinates
     (Zarr, NetCDF) unless `crs`, `transform` and `shape` override it for a manifest, in which
-    case sources off the grid are warped with the explicit `resampling`. `nodata` is "auto"
-    (the source's value, else `encode`'s default), a number, or None.
+    case sources off the grid are warped with the explicit `resampling`.
+
+    Scale, offset, units and validity follow the fidelity rules of the module docstring.
+    `nodata` is "auto" (what the sources declare; none declared means no nodata, not 0), a
+    number that replaces the declared nodata, None (no nodata) or NaN (float data: NaN pixels are
+    invalid, through a mask). `mask_var` names a boolean or integer (time, y, x) variable of a
+    Zarr or NetCDF source whose nonzero values are valid; the store then gets a mask.
 
     `on_plan` receives the `Plan` (sizes, estimates) before any data is staged; `dry_run` stops
     there. Timesteps are staged under `work_dir` (default `<out>.convert-work` beside `out`):
@@ -990,6 +1447,7 @@ def convert(
         shape=shape,
         resampling=resampling,
         nodata=nodata,
+        mask_var=mask_var,
         chunk_size=encode_options.get("chunk_size", 512),
         n_lods=encode_options.get("n_lods"),
     )
@@ -1005,7 +1463,6 @@ def convert(
     )
     _check_work_dir(work, plan, resume)
     info = plan.source.info
-    encode_nodata = "default" if info.nodata is None and nodata == "auto" else info.nodata
     try:
         started = time.perf_counter()
         staged, reused = _stage(plan, work, read_ahead, progress)
@@ -1019,7 +1476,8 @@ def convert(
             bands=list(info.bands),
             crs=info.grid.crs,
             transform=info.grid.transform,
-            nodata=encode_nodata,
+            nodata=info.nodata,
+            mask=_staged_masks(plan, work) if info.mask else None,
             **encode_options,
         )
         encode_s = time.perf_counter() - started

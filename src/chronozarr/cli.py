@@ -16,7 +16,7 @@ import numpy as np
 import xarray as xr
 
 from chronozarr import schema
-from chronozarr.convert import RESAMPLING_METHODS, Plan, convert
+from chronozarr.convert import FIDELITY_HELP, RESAMPLING_METHODS, Plan, convert
 from chronozarr.decode import open_store
 from chronozarr.doctor import DEFAULT_ORIGIN, diagnose
 from chronozarr.encode import EncodeReport, encode
@@ -363,17 +363,33 @@ def doctor_command(target: str, origin: str, full_read_limit_mb: float) -> None:
     help="Timesteps: all (default), indices 0,5,-1, slices 0:12:3, dates 2024-03 or 2024-03-15, "
     "ranges 2020-01..2022-06. Repeatable.",
 )
-def export_cog_command(store: str, out_dir: Path, level: int, times: tuple[str, ...]) -> None:
+@click.option(
+    "--physical",
+    is_flag=True,
+    help="Write float32 physical values (stored * scale + offset, NaN where invalid) instead of "
+    "the stored values.",
+)
+def export_cog_command(
+    store: str, out_dir: Path, level: int, times: tuple[str, ...], physical: bool
+) -> None:
     """Export timesteps of STORE as true-value Cloud Optimized GeoTIFFs in OUT_DIR.
 
     STORE is a local path or https URL. One file per timestep, all bands, named
     L<level>_<date>.tif, readable by GDAL and QGIS without chronozarr. One timestep of the level
     is held in memory at a time, so use --level for very large stores.
+
+    \b
+    Validity and scaling are written as GDAL metadata:
+      mask store    an internal per-dataset mask; the store's nodata is also set, unless a valid
+                    pixel of that timestep holds it
+      nodata store  the same nodata, judged per band, and no mask
+      neither       no nodata and no mask: every pixel is valid
+      scale, offset, units and band names go to the band metadata (not with --physical)
     """
     with _command_errors():
         opened = open_store(store)
         chosen = select_times(times, opened.attrs.times)
-        paths = export_cog(opened, out_dir, level=level, times=chosen)
+        paths = export_cog(opened, out_dir, level=level, times=chosen, physical=physical)
     total = sum(p.stat().st_size for p in paths)
     click.echo(f"wrote {len(paths)} COG(s), {total / 1e6:.1f} MB, to {out_dir}")
 
@@ -455,7 +471,9 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     try:
         number = float(text)
     except ValueError as exc:
-        raise click.BadParameter(f"--nodata must be a number or 'none', got {text!r}") from exc
+        raise click.BadParameter(
+            f"--nodata must be a number, 'none' or 'nan', got {text!r}"
+        ) from exc
     return int(number) if number.is_integer() else number
 
 
@@ -491,7 +509,14 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
 @click.option(
     "--nodata",
     default=None,
-    help="Nodata value, or 'none' (default: the source's, else 0 for uint8/uint16).",
+    help="Nodata value, 'none', or 'nan' (float data). Default: what the sources declare; none "
+    "declared means no nodata, not 0. An explicit value replaces the declared one.",
+)
+@click.option(
+    "--mask-var",
+    default=None,
+    help="Zarr/NetCDF only: a boolean or integer (time, y, x) variable whose nonzero values are "
+    "valid. The store gets a mask.",
 )
 @click.option(
     "--work-dir",
@@ -520,6 +545,7 @@ def convert_command(
     shape: str | None,
     resampling: str | None,
     nodata: str | None,
+    mask_var: str | None,
     work_dir: Path | None,
     resume: bool,
     dry_run: bool,
@@ -557,6 +583,7 @@ def convert_command(
             shape=_parse_shape(shape),
             resampling=resampling,
             nodata=_parse_nodata(nodata),
+            mask_var=mask_var,
             work_dir=work_dir,
             resume=resume,
             dry_run=dry_run,
@@ -573,3 +600,6 @@ def convert_command(
         f"read {report.n_staged} timesteps ({report.n_reused} reused) in {report.read_s:.1f} s, "
         f"encoded in {report.encode_s:.1f} s, total {report.total_s:.1f} s"
     )
+
+
+convert_command.help = f"{convert_command.help}\n\n{FIDELITY_HELP}"
