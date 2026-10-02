@@ -8,6 +8,7 @@ conforming chronozarr store. New stores are v0.2; v0.1 stores stay readable.
 
 from __future__ import annotations
 
+import importlib
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -361,9 +362,9 @@ def crs_attr(crs: str) -> dict[str, str] | None:
     code = int(match.group(1))
     attr = {"url": f"http://www.opengis.net/def/crs/EPSG/0/{code}"}
     try:
-        # pyproj is optional and not installed in every environment (ty cannot resolve it).
-        from pyproj import CRS  # ty: ignore[unresolved-import]
-        from pyproj.exceptions import CRSError  # ty: ignore[unresolved-import]
+        # Resolve optional pyproj at runtime so minimal installations remain supported.
+        CRS = importlib.import_module("pyproj").CRS
+        CRSError = importlib.import_module("pyproj.exceptions").CRSError
     except ImportError:
         return attr
     with suppress(CRSError):  # an EPSG code pyproj does not know: the URL alone still names it
