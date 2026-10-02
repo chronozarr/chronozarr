@@ -15,6 +15,8 @@ class Player(anywidget.AnyWidget):
     theme = T.Enum(["light", "dark"], default_value="light").tag(sync=True)
     t = T.Int(0, min=0).tag(sync=True)
     product = T.Unicode("").tag(sync=True)
+    band = T.Unicode("").tag(sync=True)
+    range = T.List(T.Float(), default_value=None, allow_none=True).tag(sync=True)
     speed = T.Float(4, min=0.01).tag(sync=True)
     playing = T.Bool(False).tag(sync=True)
     ready = T.Bool(False).tag(sync=True)
@@ -31,3 +33,14 @@ class Player(anywidget.AnyWidget):
         if url.scheme not in {"http", "https"} or not url.netloc:
             raise T.TraitError("store and viewer URLs must be absolute HTTP(S) URLs")
         return proposal["value"]
+
+    @T.validate("range")
+    def _validate_range(self, proposal):
+        import math
+
+        value = proposal["value"]
+        if value is not None and (
+            len(value) != 2 or not all(math.isfinite(v) for v in value) or value[0] >= value[1]
+        ):
+            raise T.TraitError("range must be None or two finite increasing physical limits")
+        return value

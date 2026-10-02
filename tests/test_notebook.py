@@ -58,3 +58,16 @@ def test_invalid_viewer_url():
 def test_frontend_is_package_asset():
     notebook = importlib.import_module("chronozarr.notebook")
     assert Path(notebook.__file__).with_name("player.js").is_file()
+
+
+def test_scientific_display_traits():
+    widget = player("https://example.org/store", product="band", band="HV_dB", range=[-25, 0])
+    try:
+        assert widget.band == "HV_dB"
+        assert widget.range == [-25, 0]
+        widget.range = None
+        for limits in ([1, 1], [2, 1], [float("nan"), 1], [1]):
+            with pytest.raises(TraitError):
+                widget.range = limits
+    finally:
+        widget.close()

@@ -13,6 +13,8 @@ def player(
     port: int = 0,
     t: int = 0,
     product: str = "",
+    band: str = "",
+    range: list[float] | None = None,
     speed: float = 4,
     playing: bool = False,
     theme: str = "light",
@@ -21,7 +23,8 @@ def player(
 
     Install ``chronozarr[notebook]``. Display the result in a trusted Jupyter,
     VS Code or compatible notebook. Set ``widget.t``, ``product``, ``speed`` or
-    ``playing`` from Python; inspect ``times``, ``state``, ``click`` and ``error``.
+    ``playing``, ``band`` (name) and ``range`` (physical limits or None) from Python.
+    Inspect ``times``, ``state``, ``click`` and ``error``.
     Local stores use the same CORS/range server as view(); remote kernels need
     a store URL reachable by the browser. Closing the widget removes its iframe.
     """
@@ -39,6 +42,8 @@ def player(
         height=height,
         t=t,
         product=product,
+        band=band,
+        range=range,
         speed=speed,
         playing=playing,
         theme=theme,

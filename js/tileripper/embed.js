@@ -148,6 +148,10 @@ export function parseCommand(data) {
     if (typeof data[field] !== 'string' || data[field] === '') return bad(`${field} must be a non-empty string, got ${show(data[field])}.`);
     set[field] = data[field];
   }
+  if (data.range !== undefined) {
+    if (data.range !== null && (!Array.isArray(data.range) || data.range.length !== 2 || !data.range.every(Number.isFinite) || data.range[0] >= data.range[1])) return bad("range must be null or two finite increasing physical limits.");
+    set.range = data.range;
+  }
   if (data.zoom !== undefined) {
     if (typeof data.zoom !== 'number' || !Number.isFinite(data.zoom) || data.zoom <= 0) return bad(`zoom must be a number above 0 (CSS pixels per level-0 data pixel), got ${show(data.zoom)}.`);
     set.zoom = data.zoom;
@@ -207,7 +211,7 @@ export function resolveSet(set, store) {
     if (!store.bandNames.includes(set.band)) return { ok: false, message: `band ${show(set.band)} is not in this store; bands: ${store.bandNames.join(', ')}.` };
     plan.bandName = set.band;
   }
-  for (const field of ['zoom', 'center', 'playing', 'speed']) if (set[field] !== undefined) plan[field] = set[field];
+  for (const field of ['zoom', 'center', 'playing', 'speed', 'range']) if (set[field] !== undefined) plan[field] = set[field];
   return { ok: true, plan };
 }
 
@@ -394,6 +398,7 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
     time: timeOf(viewer.t),
     product: viewer.products[viewer.productIndex].id,
     band: viewer.bands[viewer.bandChoice].name,
+    range: viewer.stretchRange,
     ...viewPayload(),
     playing: viewer.playback?.playing ?? false,
     speed: viewer.speed,
@@ -430,6 +435,8 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
     }
     if (plan.productId !== undefined) viewer.setProduct(viewer.products.findIndex((product) => product.id === plan.productId));
     if (plan.bandName !== undefined) viewer.setBandChoice(viewer.bands.findIndex((band) => band.name === plan.bandName));
+    if (plan.range === null) viewer.autoStretch();
+    else if (plan.range !== undefined) viewer.setStretch(...plan.range);
     if (plan.t !== undefined) viewer.goToTime(plan.t);
     if (plan.zoom !== undefined || center) viewer.setView({ zoom: plan.zoom, center });
     if (plan.speed !== undefined) viewer.setSpeed(plan.speed);

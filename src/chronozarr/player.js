@@ -10,6 +10,11 @@ export default {
     time.setAttribute('aria-label', 'Timestep'); time.style.flex = '1';
     const date = document.createElement('span');
     const product = document.createElement('select'); product.setAttribute('aria-label', 'Product');
+    const band = document.createElement('select'); band.setAttribute('aria-label', 'Band');
+    const low = document.createElement('input'), high = document.createElement('input');
+    for (const [input, label] of [[low, 'Display minimum'], [high, 'Display maximum']]) { input.type = 'number'; input.step = 'any'; input.setAttribute('aria-label', label); input.style.width = '90px'; }
+    const auto = document.createElement('button'); auto.textContent = 'Auto limits';
+    const legend = document.createElement('span'); legend.setAttribute('aria-label', 'Units legend');
     const speed = document.createElement('select'); speed.setAttribute('aria-label', 'Playback speed');
     for (const value of [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,20,24,30,40,48,60]) {
       speed.add(new Option(`${value}/s`, String(value)));
@@ -18,7 +23,7 @@ export default {
     const frame = document.createElement('iframe'); frame.title = 'chronozarr player';
     frame.style.cssText = 'width:100%;border:0;min-height:320px';
     frame.allow = 'fullscreen; local-network-access';
-    controls.append(play, time, date, product, speed); box.append(controls, frame, status); el.append(box);
+    controls.append(play, time, date, product, band, low, high, auto, legend, speed); box.append(controls, frame, status); el.append(box);
     let origin, connected = false, disposed = false, suppress = false, saveTimer = 0, commandTimer = 0;
     let pending = {};
     const subscriptions = [];
@@ -39,8 +44,9 @@ export default {
       send({ type: 'tileripper:get' }); // v1 has no separate playback/product acknowledgement.
     }
     function queue(key, value) {
-      if (key === 'product' && !value) return;
+      if (['product', 'band'].includes(key) && !value) return;
       pending[key] = value;
+      if (['band', 'product'].includes(key) && model.get('range')) pending.range = model.get('range');
       clearTimeout(commandTimer); commandTimer = setTimeout(flush, 0);
     }
     function draw() {
@@ -49,7 +55,14 @@ export default {
       date.textContent = times[model.get('t')]?.slice(0, 10) ?? '';
       play.textContent = model.get('playing') ? 'Pause' : 'Play';
       product.value = model.get('product'); speed.value = String(model.get('speed'));
-      for (const control of [play, time, product, speed]) control.disabled = !connected;
+      band.value = model.get('band') ?? '';
+      const limits = model.get('range');
+      low.value = limits?.[0] ?? ''; high.value = limits?.[1] ?? '';
+      const single = model.get('product') === 'band';
+      for (const control of [band, low, high, auto, legend]) control.hidden = !single;
+      const units = model.get('bands').find(item => item.name === model.get('band'))?.units ?? '';
+      legend.textContent = limits ? `${limits[0]} → ${limits[1]} ${units}` : `${units} (auto limits)`;
+      for (const control of [play, time, product, band, low, high, auto, speed]) control.disabled = !connected;
       frame.style.height = `${model.get('height')}px`;
     }
     function start() {
@@ -76,10 +89,12 @@ export default {
         connected = true; status.textContent = model.get('error').message ?? '';
         product.replaceChildren();
         for (const item of message.products.filter(item => item.available)) product.add(new Option(item.name, item.id));
+        band.replaceChildren();
+        for (const item of message.bands) band.add(new Option(`${item.name}${item.units ? ` (${item.units})` : ''}`, item.name));
         const state = message.state;
-        const desired = first ? { playing: model.get('playing'), speed: model.get('speed'), ...pending } : null;
+        const desired = first ? { playing: model.get('playing'), speed: model.get('speed'), band: model.get('band') ?? '', range: model.get('range') ?? null, ...pending } : null;
         update({ ready: true, times: message.times, products: message.products, bands: message.bands,
-          state, t: state.t, product: state.product, playing: state.playing, speed: state.speed });
+          state, t: state.t, product: state.product, band: state.band, range: state.range ?? null, playing: state.playing, speed: state.speed });
         if (desired) { pending = desired; flush(); }
       } else if (message.type === 'tileripper:time') {
         update({ t: message.t, state: { ...model.get('state'), t: message.t, time: message.time } });
@@ -92,13 +107,20 @@ export default {
       }
     };
     const listen = (key, callback) => { model.on(`change:${key}`, callback); subscriptions.push([`change:${key}`, callback]); };
-    for (const key of ['t', 'product', 'playing', 'speed']) listen(key, () => { if (!suppress) { queue(key, model.get(key)); draw(); } });
+    for (const key of ['t', 'product', 'band', 'range', 'playing', 'speed']) listen(key, () => { if (!suppress) { queue(key, model.get(key)); draw(); } });
     for (const key of ['store_url', 'viewer_url', 'theme']) listen(key, start);
     listen('height', draw);
     const control = (key, value) => { model.set(key, value); save(); };
     play.onclick = () => control('playing', !model.get('playing'));
     time.oninput = () => control('t', Number(time.value));
     product.onchange = () => control('product', product.value);
+    band.onchange = () => control('band', band.value);
+    const applyLimits = () => {
+      const limits = [Number(low.value), Number(high.value)];
+      if (low.value !== '' && high.value !== '' && limits.every(Number.isFinite) && limits[0] < limits[1]) control('range', limits);
+      else { status.textContent = 'Display limits must be finite and minimum < maximum.'; }
+    };
+    low.onchange = high.onchange = applyLimits; auto.onclick = () => control('range', null);
     speed.onchange = () => control('speed', Number(speed.value));
     const loaded = () => send({ type: 'tileripper:get' });
     frame.addEventListener('load', loaded); window.addEventListener('message', receive); start();
