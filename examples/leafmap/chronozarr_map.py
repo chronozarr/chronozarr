@@ -21,6 +21,8 @@ def add_chronozarr(
     t=0,
     product="true_color",
     opacity=1.0,
+    band=0,
+    range=None,
     fit_bounds=True,
     reader_url=DEFAULT_READER,
 ):
@@ -38,6 +40,13 @@ def add_chronozarr(
         raise ValueError("t must be a nonnegative integer timestep")
     if not 0 <= opacity <= 1:
         raise ValueError("opacity must be between 0 and 1")
+    if not isinstance(band, int) or isinstance(band, bool) or band < 0:
+        raise ValueError("band must be a nonnegative integer")
+    if range is not None:
+        import math
+
+        if len(range) != 2 or not all(math.isfinite(v) for v in range) or range[0] >= range[1]:
+            raise ValueError("range must contain two finite increasing limits")
     for value in (url, reader_url):
         if urlsplit(value).scheme not in {"http", "https"}:
             raise ValueError("store and reader URLs must use HTTP or HTTPS")
@@ -61,7 +70,15 @@ def add_chronozarr(
         "addLayer",
         {
             "type": "chronozarr-notebook",
-            "options": {"id": name, "url": url, "t": t, "product": product, "opacity": opacity},
+            "options": {
+                "id": name,
+                "url": url,
+                "t": t,
+                "product": product,
+                "opacity": opacity,
+                "band": band,
+                "range": range,
+            },
             "fitBounds": fit_bounds,
         },
     )
