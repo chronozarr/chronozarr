@@ -46,7 +46,7 @@ Issues = "https://github.com/chronozarr/chronozarr/issues"
 # rasterio: GeoTIFF/COG input for `convert`, `export-cog`, and the WGS84 extent for `stac`.
 geo = ["rasterio>=1.3"]
 # IPython: `chronozarr.view(store)` in notebooks.
-notebook = ["ipython>=8"]
+notebook = ["ipython>=8", "anywidget>=0.9"]
 # dask: `chunks=` with the xarray backend and dask-backed input to `encode`.
 dask = ["dask>=2024.1"]
 # h5netcdf and h5py: NetCDF input for `convert` and `encode`.

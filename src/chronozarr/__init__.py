@@ -3,6 +3,7 @@
 from chronozarr.append import AppendReport, append
 from chronozarr.decode import ChronoStore, HttpStore, open_store
 from chronozarr.encode import EncodeReport, encode
+from chronozarr.notebook import player
 from chronozarr.schema import Band, SchemaError, validate
 from chronozarr.view import view
 
@@ -16,6 +17,7 @@ __all__ = [
     "append",
     "encode",
     "open_store",
+    "player",
     "validate",
     "view",
 ]
