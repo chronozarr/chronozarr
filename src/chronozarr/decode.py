@@ -202,6 +202,18 @@ class ChronoStore:
         window = slice(None)
         return self._read_plane(level.coverage, [self._check_time(t)], window, window)[0]
 
+    def _band_metadata(self, *, physical: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+        coords: dict[str, Any] = {}
+        attrs: dict[str, Any] = {}
+        bands = self.attrs.bands
+        if any(b.units for b in bands):
+            coords["band_units"] = ("band", [b.units or "" for b in bands])
+            units = {b.units for b in bands}
+            unscaled = all(b.scale in (None, 1) and b.offset in (None, 0) for b in bands)
+            if len(units) == 1 and (physical or unscaled):
+                attrs["units"] = bands[0].units
+        return coords, attrs
+
     def to_xarray(
         self, lod: int = 0, times: Sequence[int] | None = None, *, physical: bool = False
     ) -> xr.DataArray:
@@ -227,6 +239,9 @@ class ChronoStore:
             "y": y,
             "x": x,
         }
+        band_coords, band_attrs = self._band_metadata(physical=physical)
+        coords.update(band_coords)
+        attrs.update(band_attrs)
         if level.mask is not None:
             coords["mask"] = (
                 schema.PLANE_DIMENSIONS,

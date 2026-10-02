@@ -1282,6 +1282,8 @@ class Viewer {
     this.#updateStretchUi();
   }
 
+  get stretchRange() { return this.#linear.manual ? [...this.#linear.range] : null; }
+
   /** The user typed a stretch range (physical units). */
   setStretch(lo, hi) {
     if (!(Number.isFinite(lo) && Number.isFinite(hi) && hi > lo)) {

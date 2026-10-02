@@ -357,3 +357,14 @@ test('the chart lines and legend use the palette variables, so they stay legible
   assert.doesNotMatch(chart, /COLORS = \{[^}]*#[0-9a-f]{6}/i);
   for (const series of ['red', 'green', 'blue', 'amber', 'grey']) assert.ok(css.includes(`--series-${series}:`), series);
 });
+
+test('physical display limits validate atomically and survive resolution', () => {
+  for (const range of [[0, 0], [2, 1], [NaN, 1], [0], 'bad']) {
+    assert.equal(parseCommand({type: 'tileripper:set', t: 1, range}).kind, 'error');
+  }
+  for (const range of [null, [-25, 0]]) {
+    const command = parseCommand({type: 'tileripper:set', range});
+    assert.equal(command.kind, 'set');
+    assert.deepEqual(resolveSet(command.set, {times: [], productIds: [], bandNames: []}).plan.range, range);
+  }
+});

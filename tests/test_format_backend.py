@@ -362,3 +362,26 @@ def test_backend_nodata_attr_follows_the_mask(tmp_path):
     assert "mask" not in plain
     store = chronozarr.open_store(tmp_path / "masked")
     assert np.array_equal(masked["data"].isel(time=1).values, store.physical(1), equal_nan=True)
+
+
+@pytest.mark.parametrize("units", [["m", "m"], ["m", "dB"], ["m", None]])
+@pytest.mark.parametrize("physical", [True, False])
+def test_band_units_survive_both_xarray_interfaces(tmp_path, units, physical):
+    path = tmp_path / "units"
+    chronozarr.encode(
+        make_da(make_truth(2, 2, 16, 16), ["a", "b"]),
+        path,
+        bands=[
+            {"name": name, "units": unit} for name, unit in zip(["a", "b"], units, strict=True)
+        ],
+        chunk_size=16,
+    )
+    eager = chronozarr.open_store(path).to_xarray(physical=physical)
+    lazy = _open(path, physical=physical)["data"]
+    for array in (eager, lazy):
+        assert array.band_units.values.tolist() == [unit or "" for unit in units]
+        if units == ["m", "m"]:
+            assert array.attrs["units"] == "m"
+        else:
+            assert "units" not in array.attrs
+        assert array.sel(band="a").band_units.item() == "m"

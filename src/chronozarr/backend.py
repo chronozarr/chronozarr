@@ -131,11 +131,15 @@ def open_dataset(
     if any(b.common_name for b in store.attrs.bands):
         coords["common_name"] = ("band", [b.common_name or "" for b in store.attrs.bands])
 
+    band_coords, band_attrs = store._band_metadata(physical=physical)
+    coords.update(band_coords)
+
     variables: dict[str, xr.Variable] = {
         store.attrs.variable: _variable(
             _ChronoArray(store, level, "data", physical=physical), schema.DIMENSIONS, level
         )
     }
+    variables[store.attrs.variable].attrs.update(band_attrs)
     for name, array in (
         (store.attrs.mask_variable, level.mask),
         (store.attrs.coverage_variable, level.coverage),
