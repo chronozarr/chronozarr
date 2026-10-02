@@ -6,9 +6,9 @@ from pathlib import Path
 
 import leafmap.maplibregl as leafmap
 
+from chronozarr import add_chronozarr
+
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "examples/leafmap"))
-from chronozarr_map import add_chronozarr  # noqa: E402
 
 band = 1 if "--hv" in sys.argv else 0
 m = leafmap.Map(

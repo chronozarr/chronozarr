@@ -8,7 +8,8 @@ import json
 from pathlib import Path
 
 import leafmap.maplibregl as leafmap
-from chronozarr_map import add_chronozarr
+
+from chronozarr import add_chronozarr
 
 m = leafmap.Map(style={"version": 8, "sources": {}, "layers": []}, controls={}, height="600px")
 m.use_message_queue(False)

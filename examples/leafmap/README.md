@@ -1,11 +1,11 @@
 # chronozarr in leafmap
 
-Open `demo.ipynb` in a local notebook with `leafmap` installed. The helper uses
+Install `chronozarr[leafmap]` and open `demo.ipynb` in a local notebook. The helper uses
 `leafmap.maplibregl.Map`, not leafmap's default ipyleaflet backend:
 
 ```python
 import leafmap.maplibregl as leafmap
-from chronozarr_map import add_chronozarr
+from chronozarr import add_chronozarr
 
 m = leafmap.Map(style="positron", height="600px",
                 add_sidebar=False, add_floating_sidebar=False)
@@ -25,7 +25,7 @@ chronozarr slider do not need that sidebar. If you need leafmap's sidebar, the
 compatible environment is `ipyvuetify<3` and `ipyvue<3`; 1.11.3 and 1.12.0 were
 checked with leafmap 0.63.1.
 
-This is an example adapter, not an upstream leafmap method. Ordinary Python layer
+This is a packaged chronozarr helper, not an upstream leafmap method. Ordinary Python layer
 definitions cannot serialize WebGL callbacks. The helper wraps the installed
 py-maplibregl anywidget renderer's model interface and reconstructs custom layers
 in the browser. It requires a browser that permits module imports from blob URLs
