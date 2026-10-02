@@ -49,6 +49,8 @@ geo = ["rasterio>=1.3"]
 notebook = ["ipython>=8", "anywidget>=0.9"]
 # Leafmap MapLibre integration; sidebar-free examples work with ipyvuetify 3.
 leafmap = ["leafmap>=0.63.1"]
+# geemap MapLibre currently relies on geo/widget dependencies supplied by leafmap.
+geemap = ["geemap>=0.37.2", "leafmap>=0.63.1"]
 # dask: `chunks=` with the xarray backend and dask-backed input to `encode`.
 dask = ["dask>=2024.1"]
 # h5netcdf and h5py: NetCDF input for `convert` and `encode`.
