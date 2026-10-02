@@ -6,7 +6,8 @@ import { makeTimeFormatter } from '../tileripper/products.js';
 import { ChronozarrLayer } from './layer.js';
 
 const DEFAULT_STORE = 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-4';
-const storeUrl = new URLSearchParams(location.search).get('store') ?? DEFAULT_STORE;
+const params = new URLSearchParams(location.search);
+const storeUrl = params.get('store') ?? DEFAULT_STORE;
 const $ = (id) => document.getElementById(id);
 
 const map = new maplibregl.Map({
@@ -19,7 +20,7 @@ const map = new maplibregl.Map({
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
 map.addControl(new maplibregl.ScaleControl(), 'bottom-right');
 
-const layer = new ChronozarrLayer({ url: storeUrl, product: 'true_color', t: 0, prefetch: true });
+const layer = new ChronozarrLayer({ url: storeUrl, product: params.get('p') ?? 'true_color', t: 0, prefetch: true });
 window.chronozarrDemo = { map, layer };
 
 function showError(error) {

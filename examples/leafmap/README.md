@@ -7,7 +7,8 @@ Open `demo.ipynb` in a local notebook with `leafmap` installed. The helper uses
 import leafmap.maplibregl as leafmap
 from chronozarr_map import add_chronozarr
 
-m = leafmap.Map(style="positron", height="600px")
+m = leafmap.Map(style="positron", height="600px",
+                add_sidebar=False, add_floating_sidebar=False)
 add_chronozarr(m)
 m
 ```
@@ -17,6 +18,12 @@ and a date slider, fits the map to the store, and preserves leafmap's basemaps a
 controls. It reads pixels directly from static storage; no raster tile service is
 involved. `url=`, `t=`, `product=`, `opacity=` and `fit_bounds=` are configurable.
 Each additional layer needs a unique `name=`.
+
+The examples disable leafmap's optional floating sidebar: leafmap 0.63.1 uses
+`ipyvuetify.ExpansionPanelHeader`, which ipyvuetify 3 removed. The direct map and
+chronozarr slider do not need that sidebar. If you need leafmap's sidebar, the
+compatible environment is `ipyvuetify<3` and `ipyvue<3`; 1.11.3 and 1.12.0 were
+checked with leafmap 0.63.1.
 
 This is an example adapter, not an upstream leafmap method. Ordinary Python layer
 definitions cannot serialize WebGL callbacks. The helper wraps the installed
