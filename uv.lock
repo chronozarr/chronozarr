@@ -14,7 +14,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-09-25T18:35:24.745632Z"
+exclude-newer = "2026-09-25T19:16:18.881834Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -224,7 +224,7 @@ wheels = [
 
 [[package]]
 name = "chronozarr"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
