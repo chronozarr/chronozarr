@@ -18,7 +18,7 @@ try {
     const values = {
       store_url: live ? 'https://data.tileripper.com/ucayali_santa_maria/png-1' : `${base}/data/stores/nisar/local-20261002`,
       viewer_url: live ? 'https://tileripper.com/tileripper/' : `${base}/js/tileripper/index.html`,
-      height: 560, theme: 'light', t: 0, product: 'band', band: 'HH_dB', range: [-25, 0], speed: 4, playing: false,
+      controls: true, height: 560, theme: 'light', t: 0, product: 'band', band: 'HH_dB', range: [-25, 0], speed: 4, playing: false,
       times: [], products: [], bands: [], ready: false, state: {}, click: {}, error: {},
     };
     const listeners = new Map();
@@ -49,6 +49,18 @@ try {
   await page.locator('select[aria-label=Band]').selectOption('HV_dB');
   await frame.waitForFunction(() => window.tileripper.viewer.bands[window.tileripper.viewer.bandChoice].name === 'HV_dB');
   await page.waitForFunction(() => window.values.state.band === 'HV_dB' && window.values.state.range?.[0] === -25);
+  await page.locator('select[aria-label=Band]').selectOption('HH_linear');
+  await page.waitForFunction(() => window.values.state.band === 'HH_linear' && window.values.state.range === null);
+  await frame.waitForFunction(() => window.tileripper.viewer.renderNow().complete);
+  await page.screenshot({path: path.join(root, "data/reports/nisar/player-linear.png")});
+  await page.locator('select[aria-label=Band]').selectOption('HV_dB');
+  await page.waitForFunction(() => window.values.state.band === 'HV_dB' && window.values.state.range?.[0] === -25);
+  await page.evaluate(() => window.model.set('controls', false));
+  assert.equal(await page.locator('select[aria-label=Band]').isVisible(), false);
+  assert.equal(await page.locator('select[aria-label=Product]').isVisible(), false);
+  assert.equal(await page.locator('[aria-label="Display minimum"]').isVisible(), false);
+  assert.equal(await page.locator('[aria-label=Timestep]').isVisible(), true);
+  await page.evaluate(() => window.model.set('controls', true));
   await page.evaluate(() => window.model.set('t', 1));
   await page.waitForFunction(() => window.values.state.t === 1 && window.values.state.range?.[0] === -25);
   await page.locator('[aria-label="Display minimum"]').fill('-30');

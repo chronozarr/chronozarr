@@ -13,6 +13,7 @@ def player(
     port: int = 0,
     t: int = 0,
     product: str = "",
+    controls: bool = False,
     band: str = "",
     range: list[float] | None = None,
     speed: float = 4,
@@ -24,6 +25,8 @@ def player(
     Install ``chronozarr[notebook]``. Display the result in a trusted Jupyter,
     VS Code or compatible notebook. Set ``widget.t``, ``product``, ``speed`` or
     ``playing``, ``band`` (name) and ``range`` (physical limits or None) from Python.
+    By default only play and the time slider are shown. ``controls=True`` reveals
+    product, band, display-limit and speed controls.
     Inspect ``times``, ``state``, ``click`` and ``error``.
     Local stores use the same CORS/range server as view(); remote kernels need
     a store URL reachable by the browser. Closing the widget removes its iframe.
@@ -42,6 +45,7 @@ def player(
         height=height,
         t=t,
         product=product,
+        controls=controls,
         band=band,
         range=range,
         speed=speed,

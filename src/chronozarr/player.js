@@ -26,6 +26,8 @@ export default {
     controls.append(play, time, date, product, band, low, high, auto, legend, speed); box.append(controls, frame, status); el.append(box);
     let origin, connected = false, disposed = false, suppress = false, saveTimer = 0, commandTimer = 0;
     let pending = {};
+    let activeBand = '';
+    const bandRanges = new Map();
     const subscriptions = [];
     const save = () => {
       if (!saveTimer) saveTimer = setTimeout(() => { saveTimer = 0; model.save_changes(); }, 100);
@@ -46,7 +48,13 @@ export default {
     function queue(key, value) {
       if (['product', 'band'].includes(key) && !value) return;
       pending[key] = value;
-      if (['band', 'product'].includes(key) && model.get('range')) pending.range = model.get('range');
+      if (key === 'band') {
+        const limits = model.get('range') ?? null;
+        bandRanges.set(activeBand, limits);
+        const units = name => model.get('bands').find(item => item.name === name)?.units;
+        pending.range = bandRanges.has(value) ? bandRanges.get(value) : units(value) === units(activeBand) ? limits : null;
+        activeBand = value;
+      } else if (key === 'product' && model.get('range')) pending.range = model.get('range');
       clearTimeout(commandTimer); commandTimer = setTimeout(flush, 0);
     }
     function draw() {
@@ -58,7 +66,9 @@ export default {
       band.value = model.get('band') ?? '';
       const limits = model.get('range');
       low.value = limits?.[0] ?? ''; high.value = limits?.[1] ?? '';
-      const single = model.get('product') === 'band';
+      const advanced = model.get('controls') === true;
+      for (const control of [date, product, speed]) control.hidden = !advanced;
+      const single = advanced && model.get('product') === 'band';
       for (const control of [band, low, high, auto, legend]) control.hidden = !single;
       const units = model.get('bands').find(item => item.name === model.get('band'))?.units ?? '';
       legend.textContent = limits ? `${limits[0]} → ${limits[1]} ${units}` : `${units} (auto limits)`;
@@ -66,7 +76,7 @@ export default {
       frame.style.height = `${model.get('height')}px`;
     }
     function start() {
-      connected = false; pending = {}; clearTimeout(commandTimer);
+      connected = false; pending = {}; activeBand = ''; bandRanges.clear(); clearTimeout(commandTimer);
       update({ ready: false, error: {}, times: [], products: [], bands: [], state: {}, click: {} });
       status.textContent = 'Opening store…'; product.replaceChildren();
       const url = new URL(model.get('viewer_url'));
@@ -92,6 +102,8 @@ export default {
         band.replaceChildren();
         for (const item of message.bands) band.add(new Option(`${item.name}${item.units ? ` (${item.units})` : ''}`, item.name));
         const state = message.state;
+        activeBand = state.band;
+        bandRanges.set(activeBand, state.range ?? null);
         const desired = first ? { playing: model.get('playing'), speed: model.get('speed'), band: model.get('band') ?? '', range: model.get('range') ?? null, ...pending } : null;
         update({ ready: true, times: message.times, products: message.products, bands: message.bands,
           state, t: state.t, product: state.product, band: state.band, range: state.range ?? null, playing: state.playing, speed: state.speed });
@@ -110,6 +122,7 @@ export default {
     for (const key of ['t', 'product', 'band', 'range', 'playing', 'speed']) listen(key, () => { if (!suppress) { queue(key, model.get(key)); draw(); } });
     for (const key of ['store_url', 'viewer_url', 'theme']) listen(key, start);
     listen('height', draw);
+    listen('controls', draw);
     const control = (key, value) => { model.set(key, value); save(); };
     play.onclick = () => control('playing', !model.get('playing'));
     time.oninput = () => control('t', Number(time.value));

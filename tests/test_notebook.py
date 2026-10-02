@@ -63,6 +63,9 @@ def test_frontend_is_package_asset():
 def test_scientific_display_traits():
     widget = player("https://example.org/store", product="band", band="HV_dB", range=[-25, 0])
     try:
+        assert widget.controls is False
+        widget.controls = True
+        assert widget.controls is True
         assert widget.band == "HV_dB"
         assert widget.range == [-25, 0]
         widget.range = None

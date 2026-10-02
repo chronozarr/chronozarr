@@ -15,6 +15,7 @@ class Player(anywidget.AnyWidget):
     theme = T.Enum(["light", "dark"], default_value="light").tag(sync=True)
     t = T.Int(0, min=0).tag(sync=True)
     product = T.Unicode("").tag(sync=True)
+    controls = T.Bool(False).tag(sync=True)
     band = T.Unicode("").tag(sync=True)
     range = T.List(T.Float(), default_value=None, allow_none=True).tag(sync=True)
     speed = T.Float(4, min=0.01).tag(sync=True)
