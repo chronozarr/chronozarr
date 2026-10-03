@@ -183,6 +183,7 @@ function spawnDecodeWorker() {
  * @param {string} baseUrl  URL of the store root (the directory holding zarr.json).
  * @param {object} [options]
  * @param {typeof fetch} [options.fetch]   fetch implementation (default: globalThis.fetch at call time).
+ * @param {AbortSignal} [options.signal] cancels opening metadata reads; after opening, use per-read signals or close().
  * @param {object} [options.store]         a zarrita AsyncReadable to use instead of HTTP.
  * @param {number} [options.totalBytes]    cap on decoded plus compressed chunk bytes (default: see defaultTotalBytes). Naming both
  *   tier budgets below without this makes their sum the cap; naming one raises the default cap to it if it is larger.
@@ -217,7 +218,7 @@ export async function openStore(baseUrl, options = {}) {
         suffixRequests: options.suffixRequests ?? false,
       });
 
-  const rootBytes = await readable.get('/zarr.json');
+  const rootBytes = await readable.get('/zarr.json', { signal: options.signal });
   requireStore(rootBytes, baseUrl, 'root zarr.json not found');
   const root = JSON.parse(new TextDecoder().decode(rootBytes));
   const { cz, datasets } = parseRoot(root, baseUrl);
@@ -227,7 +228,7 @@ export async function openStore(baseUrl, options = {}) {
   const consolidated = root.consolidated_metadata?.metadata ?? {};
   const readMeta = async (path, { required }) => {
     if (consolidated[path]) return consolidated[path];
-    const bytes = await readable.get(`/${path}/zarr.json`);
+    const bytes = await readable.get(`/${path}/zarr.json`, { signal: options.signal });
     requireStore(bytes || !required, baseUrl, `${path}/zarr.json not found`);
     return bytes ? JSON.parse(new TextDecoder().decode(bytes)) : null;
   };
@@ -241,6 +242,7 @@ export async function openStore(baseUrl, options = {}) {
     // Level groups carry the affine `transform`; the `levels` mirror makes reading one unnecessary.
     Array.isArray(cz.levels) ? null : readMeta(datasets[0].path, { required: false }),
   ]);
+  if (options.signal?.aborted) throw abortError();
 
   const storage = {
     data: dataMetas.map((meta, lod) => parseStorage(meta, { path: `${datasets[lod].path}/${names.data}`, rank: 4, baseUrl })),
@@ -324,6 +326,7 @@ export class ChronoStore {
   #clock;
   #now;
   #inflight = new Map();
+  #closeController = new AbortController();
   #shardIndexes = new Map();
   #shardBytes;
   /** Bumped each time a re-read root replaces `#shardBytes`; an index read compares it with the value it started under. */
@@ -567,8 +570,16 @@ export class ChronoStore {
 
   /** Abort every in-flight fetch and release the decode workers. The store cannot be used afterwards. */
   close() {
+    if (this.#closeController.signal.aborted) return;
+    this.#closeController.abort();
     for (const entry of this.#inflight.values()) this.#abortEntry(entry);
     this.#decoder.close();
+    this.clearCache();
+    this.#shardIndexes.clear();
+    this.#cellFailures.clear();
+    this.#recoveredAt.clear();
+    this.evictionScore = (entry) => -entry.used;
+    this.probe = null;
   }
 
   cacheInfo() {
@@ -589,6 +600,7 @@ export class ChronoStore {
    * cancelled once no caller wants it any more (a caller without a signal keeps it alive).
    */
   async getRaw(lod, row, col, t, { signal } = {}) {
+    if (this.#closeController.signal.aborted) throw new Error('ChronoStore is closed');
     const level = this.level(lod);
     this.#checkCell(level, row, col);
     if (!Number.isInteger(t) || t < 0 || t >= level.nTime) {
@@ -744,6 +756,8 @@ export class ChronoStore {
    *   seek?:boolean, masks?:boolean, concurrency?:number, signal?:AbortSignal, onChunk?:(lod,row,col,t)=>void}} job
    */
   async prefetch({ lod, cells, t, direction = 1, behindFactor = 2, loop = false, playing = false, seek = false, masks = false, concurrency = DEFAULT_PREFETCH_CONCURRENCY, signal, onChunk }) {
+    if (this.#closeController.signal.aborted) throw new Error('ChronoStore is closed');
+    signal = signal ? AbortSignal.any([signal, this.#closeController.signal]) : this.#closeController.signal;
     const level = this.level(lod);
     const wholeAxis = playing || loop;
     const withMasks = masks && this.hasMask;
@@ -936,6 +950,7 @@ export class ChronoStore {
   }
 
   async #getAux(kind, lod, row, col, t, signal) {
+    if (this.#closeController.signal.aborted) throw new Error('ChronoStore is closed');
     if (this.#storage[kind] === null) return null;
     const level = this.level(lod);
     this.#checkCell(level, row, col);
@@ -972,15 +987,12 @@ export class ChronoStore {
   #start(key, meta, { background, owner = null }) {
     const controller = new AbortController();
     const entry = { controller, waiters: 0, sticky: false, owned: owner !== null, background, priority: { value: background ? 1 : 0 }, promise: null };
+    const onOwnerAbort = () => {
+      entry.owned = false;
+      this.#cancelIfUnwanted(entry);
+    };
     if (owner && owner !== true) {
-      owner.addEventListener(
-        'abort',
-        () => {
-          entry.owned = false;
-          this.#cancelIfUnwanted(entry);
-        },
-        { once: true },
-      );
+      owner.addEventListener('abort', onOwnerAbort, { once: true });
     }
     if (!background) {
       this.#demandInflight++;
@@ -988,7 +1000,8 @@ export class ChronoStore {
     }
     entry.promise = this.#load(key, meta, entry)
       .finally(() => {
-        this.#inflight.delete(key);
+        if (owner && owner !== true) owner.removeEventListener('abort', onOwnerAbort);
+        if (this.#inflight.get(key) === entry) this.#inflight.delete(key);
         if (!background && --this.#demandInflight === 0) {
           this.#updateSpeculativeShare();
           for (const wake of this.#demandIdleWaiters.splice(0)) wake();
@@ -1046,6 +1059,7 @@ export class ChronoStore {
       if (decodeNow) data = await this.#decoder.decode(retained ? retained.slice() : bytes, entry.priority, signal, spec);
     }
     const decodedAt = performance.now();
+    if (signal.aborted) throw abortError();
     this.#counters.loads.count++;
     if (!held) this.#counters.loads.fetchMs += fetchedAt - requestedAt;
     this.#counters.loads.decodeMs += decodedAt - fetchedAt;
@@ -1187,7 +1201,8 @@ export class ChronoStore {
     this.#recoveries.rootRefetches++;
     const refresh = (async () => {
       try {
-        const bytes = await this.#readable.get('/zarr.json', { priority: 0, reload: true });
+        const bytes = await this.#readable.get('/zarr.json', { priority: 0, reload: true, signal: this.#closeController.signal });
+        if (this.#closeController.signal.aborted) return;
         if (!bytes) throw new Error('root zarr.json not found');
         const cz = JSON.parse(new TextDecoder().decode(bytes)).attributes?.chronozarr;
         if (!cz) throw new Error('the root has no chronozarr attributes');
@@ -1199,6 +1214,7 @@ export class ChronoStore {
           return;
         }
       } catch (error) {
+        if (isAbort(error)) return;
         console.warn(`chronozarr: ${this.url}: cannot reload zarr.json to refresh shard_bytes (${error.name}: ${error.message})`);
       }
       this.#noNewHintsAt = this.#clock();
@@ -1253,8 +1269,15 @@ export class ChronoStore {
   #demandIdle(signal) {
     if (this.#demandInflight === 0) return Promise.resolve();
     return new Promise((resolve) => {
-      this.#demandIdleWaiters.push(resolve);
-      signal?.addEventListener('abort', resolve, { once: true });
+      const finish = () => {
+        signal?.removeEventListener('abort', finish);
+        const at = this.#demandIdleWaiters.indexOf(finish);
+        if (at >= 0) this.#demandIdleWaiters.splice(at, 1);
+        resolve();
+      };
+      this.#demandIdleWaiters.push(finish);
+      signal?.addEventListener('abort', finish, { once: true });
+      if (signal?.aborted) finish();
     });
   }
 }

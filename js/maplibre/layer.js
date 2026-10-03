@@ -99,6 +99,7 @@ export class ChronozarrLayer {
   #failed = new Map();
   #shown = new Map();
   #controller = new AbortController();
+  #openController = new AbortController();
   #retired = [];
   #lastView = { lod: 0, cells: [] };
   #reported = new Set();
@@ -339,7 +340,9 @@ export class ChronozarrLayer {
   async #open() {
     let store;
     try {
-      store = await openStore(this.#options.url, this.#options.storeOptions);
+      const options = this.#options.storeOptions ?? {};
+      const signal = options.signal ? AbortSignal.any([options.signal, this.#openController.signal]) : this.#openController.signal;
+      store = await openStore(this.#options.url, { ...options, signal });
       if (this.#disposed) {
         store.close();
         return;
@@ -495,6 +498,7 @@ export class ChronozarrLayer {
     clearTimeout(this.#prefetchTimer);
     this.#prefetchController?.abort();
     this.#controller.abort();
+    this.#openController.abort();
     for (const controller of this.#retired) controller.abort();
     this.#disposeGl();
     this.#store?.close();

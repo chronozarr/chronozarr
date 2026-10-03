@@ -99,3 +99,51 @@ jobs:
           name: playwright-report
           path: ${{ runner.temp }}/playwright
           retention-days: 14
+
+  notebook:
+    name: Notebook wheel Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: js/package-lock.json
+      - name: Build and install wheel with locked dependencies
+        run: |
+          uv build --wheel
+          uv export --frozen --all-extras --no-emit-project --format requirements-txt --output-file "$RUNNER_TEMP/notebook-requirements.txt"
+          uv venv --python '${{ matrix.python-version }}' "$RUNNER_TEMP/notebook-env"
+          uv pip sync --python "$RUNNER_TEMP/notebook-env/bin/python" "$RUNNER_TEMP/notebook-requirements.txt"
+          uv pip install --no-deps --python "$RUNNER_TEMP/notebook-env/bin/python" dist/*.whl
+      - name: Generate installed-wheel widget fixtures
+        run: uv run --no-project --python "$RUNNER_TEMP/notebook-env/bin/python" python scripts/notebook_ci/prepare.py
+      - name: Install browser dependencies
+        working-directory: js
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Test real notebook renderers
+        run: node scripts/notebook_ci/browser.mjs
+      - name: Upload notebook evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: notebook-python-${{ matrix.python-version }}
+          path: |
+            data/reports/notebook-ci/*.png
+            data/reports/notebook-ci/*result.json
+            data/reports/notebook-ci/versions.json
+          retention-days: 14

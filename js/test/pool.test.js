@@ -173,3 +173,22 @@ test('with a fallback, workers that cannot start are replaced by it, with one wa
   assert.equal(warn.mock.callCount(), 1);
   assert.match(warn.mock.calls[0].arguments[0], /decode worker failed to start: no such codec.*decoding on the main thread/);
 });
+
+test('cancelling a queued decode releases its job before a worker becomes ready', async (t) => {
+  const { spawn, log } = fakeWorkerFactory({ readyDelayMs: 500 });
+  const pool = new DecodePool({ size: 1, spawn, init: { type: 'init' } });
+  t.after(() => pool.close());
+  const abort = new AbortController();
+  const pending = pool.decode(Uint8Array.of(9, 9), 1, abort.signal).catch(error => error.name);
+  abort.abort();
+  assert.equal(await Promise.race([pending, new Promise(resolve => setTimeout(() => resolve('still queued'), 50))]), 'AbortError');
+  assert.deepEqual(log, []);
+});
+
+test('closed main-thread decoders cannot resurrect their codec cache', async () => {
+  const decoder = new MainThreadDecoder({ registry: new Map() });
+  const spec = { key: 'bytes', dtype: 'uint16', shape: [1, 1, 1, 2], codecs: [{ name: 'bytes', configuration: { endian: 'little' } }] };
+  assert.equal((await decoder.decode(new Uint8Array(4), 0, undefined, spec)).length, 2);
+  decoder.close(); decoder.close();
+  await assert.rejects(decoder.decode(new Uint8Array(4), 0, undefined, spec), { name: 'AbortError' });
+});

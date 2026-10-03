@@ -13,6 +13,7 @@ const WORKER_IDLE_MS = 30000;
 export class MainThreadDecoder {
   #zarrita;
   #decoders = new Map();
+  #closed = false;
 
   constructor(zarrita) {
     this.#zarrita = zarrita;
@@ -29,6 +30,7 @@ export class MainThreadDecoder {
   }
 
   #decoderFor(spec) {
+    if (this.#closed) throw abortError();
     let decoder = this.#decoders.get(spec.key);
     if (!decoder) {
       decoder = createChunkDecoder(this.#zarrita, spec);
@@ -43,7 +45,10 @@ export class MainThreadDecoder {
     this.#decoderFor(spec).then((decode) => decode.warmup()).catch(() => {});
   }
 
-  close() {}
+  close() {
+    this.#closed = true;
+    this.#decoders.clear();
+  }
 }
 
 /**
@@ -108,6 +113,14 @@ export class DecodePool {
     }
     return new Promise((resolve, reject) => {
       const job = { id: this.#nextId++, bytes, handle, signal, spec, resolve, reject };
+      job.onAbort = () => {
+        const at = this.#queue.indexOf(job);
+        if (at >= 0) this.#queue.splice(at, 1);
+        this.#jobs.delete(job.id);
+        signal.removeEventListener('abort', job.onAbort);
+        job.reject(abortError());
+      };
+      signal?.addEventListener('abort', job.onAbort, { once: true });
       this.#enqueue(job);
       this.#dispatch();
     });
@@ -120,7 +133,6 @@ export class DecodePool {
   }
 
   close() {
-    for (const worker of this.#workers) worker.handle.terminate();
     this.#fail(abortError());
   }
 
@@ -135,6 +147,7 @@ export class DecodePool {
       if (!worker.ready || worker.busy) continue;
       let job = this.#queue.shift();
       while (job?.signal?.aborted) {
+        job.signal.removeEventListener('abort', job.onAbort);
         job.reject(abortError());
         job = this.#queue.shift();
       }
@@ -149,17 +162,22 @@ export class DecodePool {
   }
 
   #onMessage(worker, message) {
+    if (this.#failure) return;
     if (message.type === 'ready') {
       worker.ready = true;
       for (const spec of this.#warm.values()) worker.handle.postMessage({ type: 'warm', spec });
       this.#dispatch();
     } else if (message.type === 'decoded' || (message.type === 'error' && message.id !== undefined)) {
+      if (worker.current !== message.id) return;
       const job = this.#jobs.get(message.id);
       this.#jobs.delete(message.id);
       worker.busy = false;
       worker.current = null;
-      if (message.type === 'decoded') job.resolve(message.data);
-      else job.reject(new Error(message.message));
+      if (job) {
+        job.signal?.removeEventListener('abort', job.onAbort);
+        if (message.type === 'decoded') job.resolve(message.data);
+        else job.reject(new Error(message.message));
+      }
       this.#dispatch();
     } else if (this.#fallback) {
       this.#useFallback(new Error(`decode worker failed to start: ${message.message}`));
@@ -174,13 +192,28 @@ export class DecodePool {
     for (const worker of this.#workers) worker.handle.terminate();
     this.#workers = [];
     const fallback = this.#fallback;
-    for (const job of this.#queue.splice(0)) fallback.decode(job.bytes, job.handle, job.signal, job.spec).then(job.resolve, job.reject);
+    for (const job of this.#queue.splice(0)) {
+      job.signal?.removeEventListener('abort', job.onAbort);
+      fallback.decode(job.bytes, job.handle, job.signal, job.spec).then(job.resolve, job.reject);
+    }
     this.decode = (bytes, priority, signal, spec) => fallback.decode(bytes, priority, signal, spec);
   }
 
   #fail(error) {
-    this.#failure ??= error;
-    for (const job of [...this.#queue, ...this.#jobs.values()]) job.reject(error);
+    if (this.#failure) return;
+    this.#failure = error;
+    for (const worker of this.#workers) {
+      worker.handle.terminate();
+      worker.handle.onmessage = null;
+      worker.handle.onerror = null;
+    }
+    this.#workers = [];
+    this.#warm.clear();
+    this.#fallback?.close?.();
+    for (const job of [...this.#queue, ...this.#jobs.values()]) {
+      job.signal?.removeEventListener('abort', job.onAbort);
+      job.reject(error);
+    }
     this.#queue = [];
     this.#jobs.clear();
   }
