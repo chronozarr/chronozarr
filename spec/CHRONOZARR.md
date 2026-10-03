@@ -19,7 +19,7 @@ MUST, MUST NOT, SHOULD, SHOULD NOT and MAY express requirements as in RFC 2119. 
 | ID | Authority | Sections used by this profile |
 |---|---|---|
 | Z | [Zarr core 3.1](https://zarr-specs.readthedocs.io/en/latest/v3/core/) | Concepts and terminology (Hierarchy), Stored representation, Metadata, Array metadata, Group metadata, Chunk grids, Chunk encoding, Storage and Extensions. The store's `zarr_format` remains 3. |
-| F | [Zarr Conventions Specification](https://github.com/zarr-conventions/zarr-conventions-spec/blob/main/README.md) | Definition, Convention Registration via `zarr_conventions`, Convention Properties and Composability. |
+| F | [Zarr Conventions Specification](https://github.com/zarr-conventions/zarr-conventions-spec/blob/d8077b612759013c0380c4ee562ade2873141da4/README.md) | Definition, Convention Registration via `zarr_conventions`, Convention Properties and Composability. |
 | M | [multiscales v0.1](https://github.com/zarr-conventions/multiscales/blob/v0.1/README.md) | Configuration, Layout Object, Transform Object, Hierarchical Layout, Group Discovery Methods and Consolidated Metadata. |
 | P | [proj v0.1](https://github.com/zarr-conventions/proj/blob/v0.1/README.md) | Properties and Inheritance Rules. |
 | S | [spatial v0.1](https://github.com/zarr-conventions/spatial/blob/v0.1/README.md) | Properties, spatial:dimensions, spatial:transform, Coordinate convention, Coefficient ordering and spatial:registration. |

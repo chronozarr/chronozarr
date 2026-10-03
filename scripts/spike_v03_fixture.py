@@ -28,20 +28,12 @@ TIMES = ["2024-01-01T00:00:00Z", "2024-02-01T00:00:00Z", "2024-03-01T00:00:00Z"]
 
 
 def registration(name):
-    revision, uuid = PINS[name]
-    # M's pinned schema requires literal v0.1 URLs, even with the correct UUID.
-    if name == "multiscales":
-        return dict(
-            name=name,
-            uuid=uuid,
-            schema_url="https://raw.githubusercontent.com/zarr-conventions/multiscales/refs/tags/v0.1/schema.json",
-            spec_url="https://github.com/zarr-conventions/multiscales/blob/v0.1/README.md",
-        )
+    _, uuid = PINS[name]
     return dict(
         name=name,
         uuid=uuid,
-        schema_url=f"https://raw.githubusercontent.com/zarr-conventions/{name}/{revision}/schema.json",
-        spec_url=f"https://github.com/zarr-conventions/{name}/blob/{revision}/README.md",
+        schema_url=f"https://raw.githubusercontent.com/zarr-conventions/{name}/refs/tags/v0.1/schema.json",
+        spec_url=f"https://github.com/zarr-conventions/{name}/blob/v0.1/README.md",
     )
 
 
@@ -98,12 +90,16 @@ def build(path):
         }
         for name, values in coords.items():
             arr = group.create_array(
-                name, data=values, chunks=values.shape, dimension_names=[name], compressors=None
+                name,
+                data=values,
+                chunks=values.shape,
+                dimension_names=[name],
+                compressors=[ZstdCodec(level=5)],
             )
             arr.attrs["_ARRAY_DIMENSIONS"] = [name]
             if name == "time":
                 arr.attrs.update(
-                    units="milliseconds since 1970-01-01", calendar="proleptic_gregorian"
+                    units="milliseconds since 1970-01-01T00:00:00", calendar="proleptic_gregorian"
                 )
             if name in ("x", "y"):
                 arr.attrs.update(
@@ -124,7 +120,7 @@ def build(path):
                 registration("multiscales"),
                 {
                     "name": "chronozarr",
-                    "spec_url": "https://github.com/chronozarr/chronozarr/blob/main/docs/geozarr-profile.md",
+                    "spec_url": "https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md",
                     "description": (
                         "Experimental v0.3 profile; not a published normative specification"
                     ),
