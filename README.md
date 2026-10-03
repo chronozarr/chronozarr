@@ -45,14 +45,14 @@ chronozarr keeps native projection and lossless values, serves a timestep as one
 
 ## Install
 
-The first release (0.2.0 of both packages) is pending: `chronozarr` is not on PyPI and `chronozarr` is not on npm yet, so the install commands below fail until the `v0.2.0` tag is published. Both packages release from one `v*` tag, so their versions move together.
+`chronozarr` 0.2.1 is published on both [PyPI](https://pypi.org/project/chronozarr/0.2.1/) and [npm](https://www.npmjs.com/package/chronozarr/v/0.2.1). Both packages release from one `v*` tag, so their versions move together.
 
 ```bash
 pip install chronozarr              # Python package and CLI; extras: geo (GeoTIFF input), notebook (view()), netcdf, dask
 npm install chronozarr           # JavaScript reader and MapLibre layer
 ```
 
-Until then, work from a checkout of this repository:
+To work from a checkout of this repository:
 
 ```bash
 uv sync                      # Python package and CLI; add --extra geo for GeoTIFF input, --extra notebook for view()

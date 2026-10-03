@@ -1,7 +1,8 @@
 # Notebook player
 
-Install the notebook extra (`uv add 'chronozarr[notebook]'` once this change is
-released; for this checkout use `uv sync --extra notebook`). Open `demo.ipynb`
+The notebook player is published in `chronozarr` 0.2.1 on PyPI. Install the notebook
+extra with `uv add 'chronozarr[notebook]'`; for this checkout use
+`uv sync --extra notebook`. Open `demo.ipynb`
 in a trusted local Jupyter notebook, VS Code notebook or compatible anywidget host.
 
 ```python

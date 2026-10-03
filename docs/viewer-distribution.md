@@ -1,10 +1,12 @@
 # Self-host the packaged viewer
 
-The npm package contains the full reference viewer, its reader, workers, codecs, GIF encoder,
+The locally packed npm build contains the full reference viewer, its reader, workers, codecs, GIF encoder,
 and other static assets. The viewer runs entirely in the browser; the host serves files only.
 Node.js is needed to copy the package assets, but is not needed on the hosting service.
 
-This distribution is available from a locally packed build until the next npm release.
+The current npm release, `chronozarr` 0.2.1, contains the reader and MapLibre layer,
+but does not include the standalone viewer or `chronozarr-viewer` copy command.
+Those additions are currently available only from a locally packed checkout build.
 To prepare a build from the repository:
 
 ```sh
