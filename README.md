@@ -1,5 +1,7 @@
 # chronozarr
 
+Start with [Bring your own data](examples/bring_your_data/README.md): convert your rasters, read values in Python, and publish a self-hosted viewer and embed example.
+
 Open a decade of analysis-ready satellite time series in a browser tab from a static bucket. Scrub it like video. Click for real numbers.
 
 **chronozarr** is an open raster time-series format with a browser viewer at [chronozarr.org/demo](https://chronozarr.org/demo/): plain Zarr v3 with one group per pyramid level and one object per chunk, so a timestep of a spatial cell is one plain `GET`. Sharding, one file per cell for the time axis, is an option (`--shard`). The layout follows ndpyramid's `multiscales` attribute and the zarr `proj` and `spatial` conventions. An optional temporal profile, star-delta, stores most timesteps as residuals against a nearby anchor; the writer measures a sample of cells and enables it only when it shrinks the compressed bytes to 0.85 of the plain size or better. A store without it needs no chronozarr-aware reader.

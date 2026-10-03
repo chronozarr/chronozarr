@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const sources = {
+  'examples/bring_your_data/README.md': 'guides/bring-your-data',
   'spec/CHRONOZARR.md': 'specification',
   'docs/hosting.md': 'guides/hosting',
   'docs/append.md': 'guides/append',

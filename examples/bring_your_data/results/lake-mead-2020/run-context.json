@@ -1,0 +1,27 @@
+{
+  "verified_on": "2026-10-02",
+  "timezone": "America/New_York",
+  "base_commit": "82a40014483cbd056f5461ea2846de6a02fd5cae",
+  "checkout_note": "New adoption scripts and documentation are uncommitted; base commit alone does not reproduce them.",
+  "dependencies": {
+    "chronozarr": "0.2.1",
+    "numpy": "2.4.4",
+    "xarray": "2026.2.0",
+    "zarr": "3.1.6",
+    "rasterio": "1.4.4",
+    "planetary-computer": "1.0.0",
+    "pystac-client": "0.9.0"
+  },
+  "script_sha256": {
+    "examples/bring_your_data/bundle.py": "459ea567ce5586dff038b40f5da9acf409fb356d5f33dce7dde5fa99ae5e7d0a",
+    "examples/bring_your_data/check.mjs": "c90aa9e1de80cbec46badb93dffcd4faee9e12d1298a673d99146d0b67c83e4d",
+    "examples/bring_your_data/compare_local.py": "47191037fdf8e3be52bc179d6c8513379c46ab91c6689cb4dc153989a5bda9b9",
+    "examples/bring_your_data/fetch_sample.py": "c18ff125f3b0b3fa4bcfddc47bcea1e050921af6adda5d0b0351056790d641d1",
+    "examples/bring_your_data/read_series.py": "db83c55e9a3702c07213bfc6f34892b36deffdbe0f2a59a449dc767170dbbdf3",
+    "examples/bring_your_data/serve.py": "f355879a307b69b954d7c6990fd9ae0318fb8f1cd45b9a5fb5789f2d11edd39e",
+    "examples/bring_your_data/verify.py": "ca97a4f217aebf47b11c42708e9dfc0b8425a427541044de74cc0b9dc2589548",
+    "examples/sentinel2_pc/catalog.py": "68e28d826f945e674577379eb9bf4840dee8e1448dff91875ab3ceb9d9258bca",
+    "examples/sentinel2_pc/mosaic.py": "69ff9c3c3cb529883ecb80ba9fe54d844fa46198fa092c37a3385dac29a38a66",
+    "js/examples/embed.html": "d2323a6a18133036dd26901829be304c517a555568593eb9a9c7459fe60d2c0b"
+  }
+}

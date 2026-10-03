@@ -18,6 +18,7 @@ export default defineConfig({
       { text: 'Examples', link: '/examples' },
     ] },
     { text: 'Use chronozarr', items: [
+      { text: 'Bring your own data', link: '/guides/bring-your-data' },
       { text: 'Publish a store', link: '/publishing' },
       { text: 'Hosting recipes', link: '/guides/hosting' },
       { text: 'Append timesteps', link: '/guides/append' },
