@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const dist = resolve(repo, 'site/docs/dist');
 await mkdir(dist, { recursive: true });
-for (const directory of ['demo', 'chronozarr', 'maplibre', 'geolibre', 'vendor', 'examples']) {
+for (const directory of ['demo', 'chronozarr', 'shared', 'maplibre', 'geolibre', 'vendor', 'examples']) {
   await cp(resolve(repo, 'js', directory), resolve(dist, directory), {
     recursive: true,
     filter: source => !source.includes('/maplibre/verify'),
