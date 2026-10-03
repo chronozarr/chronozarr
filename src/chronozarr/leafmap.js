@@ -6,7 +6,8 @@ export async function renderBridge({ model, el }, source, readerUrl) {
   let upstream;
   try { upstream = (await import(blob)).default; }
   finally { URL.revokeObjectURL(blob); }
-  const layers = new Map();
+  const maps = new Set();
+  let disposed = false;
   const controls = document.createElement('div');
   controls.style.cssText = 'display:grid;gap:8px;padding:8px;font:13px system-ui';
   el.append(controls);
@@ -16,7 +17,6 @@ export async function renderBridge({ model, el }, source, readerUrl) {
       if (method !== 'addLayer' || descriptor?.type !== 'chronozarr-notebook') return [method, args];
       const { options, fitBounds } = descriptor;
       const layer = new ChronozarrLayer(options);
-      layers.set(layer.id, layer);
       const row = document.createElement('label');
       const title = document.createElement('span');
       const slider = document.createElement('input');
@@ -31,13 +31,17 @@ export async function renderBridge({ model, el }, source, readerUrl) {
         slider.max = String(layer.times.length - 1); slider.disabled = false; label();
       });
       layer.on('error', event => { title.textContent = `${layer.id}: ${event.error.message}`; });
-      if (fitBounds) {
-        const onAdd = layer.onAdd.bind(layer);
-        layer.onAdd = (map, gl) => {
-          onAdd(map, gl);
-          layer.opened.then(() => map.fitBounds(layer.bounds, { padding: 40, duration: 0 })).catch(() => {});
-        };
-      }
+      const onAdd = layer.onAdd.bind(layer);
+      layer.onAdd = (map, gl) => {
+        maps.add(map);
+        onAdd(map, gl);
+        // The upstream renderer currently returns no disposer. Capture its map
+        // through the public custom-layer lifecycle, including a late load.
+        if (disposed) queueMicrotask(() => { if (maps.delete(map)) map.remove(); });
+        else if (fitBounds) layer.opened.then(() => {
+          if (!disposed) map.fitBounds(layer.bounds, { padding: 40, duration: 0 });
+        }).catch(() => {});
+      };
       return [method, [layer, ...args.slice(1)]];
     });
   }
@@ -57,8 +61,11 @@ export async function renderBridge({ model, el }, source, readerUrl) {
   });
   const cleanup = await upstream.render({ model: proxy, el });
   return () => {
+    if (disposed) return;
+    disposed = true;
     callbacks.forEach(([event, callback]) => model.off(event, callback));
-    layers.forEach(layer => layer.onRemove());
-    cleanup?.(); controls.remove();
+    if (cleanup) cleanup();
+    else maps.forEach(map => map.remove());
+    maps.clear(); controls.remove();
   };
 }
