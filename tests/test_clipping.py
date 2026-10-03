@@ -25,9 +25,8 @@ def _cube(anchor: np.ndarray, current: np.ndarray) -> np.ndarray:
 
 
 def _encode(tmp_path, truth, **kwargs):
-    kwargs.setdefault("anchor_interval", 2)
     kwargs.setdefault("chunk_size", 4)
-    chronozarr.encode(make_da(truth), tmp_path / "s", encoding="star-delta", **kwargs)
+    chronozarr.encode(make_da(truth), tmp_path / "s", **kwargs)
     return chronozarr.open_store(tmp_path / "s")
 
 
@@ -69,7 +68,7 @@ def test_uint8_residuals_wrap_modulo_256(tmp_path):
 @pytest.mark.parametrize("anchor_interval", [1, 2])
 def test_full_range_uint16_roundtrips(tmp_path, anchor_interval):
     truth = _cube(np.array([0, 65535, 1, 65534], dtype=np.uint16), CURRENT)
-    store = _encode(tmp_path, truth, anchor_interval=anchor_interval)
+    store = _encode(tmp_path, truth)
     assert np.array_equal(store.to_xarray().values, truth)
 
 

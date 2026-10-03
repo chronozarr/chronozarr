@@ -50,21 +50,18 @@ def build_store(
     truth: np.ndarray,
     *,
     shard: bool,
-    anchor_interval: int = 2,
     chunk_size: int = 512,
     n_lods: int | None = None,
-    encoding: str = "star-delta",
     **kwargs,
 ) -> EncodeReport:
-    """Encode `truth` with star-delta by default (most tests are about its mechanics)."""
+    """Encode an ordinary-value v0.3 store."""
+    kwargs.setdefault("volatility", True)
     return chronozarr.encode(
         make_da(truth, BANDS[: truth.shape[1]] if truth.shape[1] <= len(BANDS) else None),
         path,
-        anchor_interval=anchor_interval,
         chunk_size=chunk_size,
         n_lods=n_lods,
         shard=shard,
-        encoding=encoding,
         **kwargs,
     )
 
