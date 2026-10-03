@@ -33,7 +33,7 @@ const COMPRESSORS = {
   },
 };
 
-// 3 timesteps (anchors 0 and 2) x 2 bands x 700 x 600 pixels in 512 chunks, two levels: the shape of the original fixtures.
+// 3 true-value timesteps x 2 bands x 700 x 600 pixels in 512 chunks, two levels: the shape of the original fixtures.
 const SYNTHETIC = { nTime: 3, nBand: 2, height: 700, width: 600, chunk: 512, nLevels: 2, bands: ['B04', 'B08'], consolidated: true, transform: [10, 0, 746090, 0, -10, 2540440] };
 
 /** The shard with every inner chunk compressed and the index (at the end, with its crc32c) rewritten for the new sizes. */
@@ -119,7 +119,7 @@ function syntheticFixtures() {
 /**
  * codec_bench: four chunks of 4 bands x 512 x 512 uint16 as arrays with three codec chains (plain, zstd level 5,
  * blosc zstd with byte shuffle), the layout of js/support/codec-bench/make_stores.py. Chunks 0-2 are smooth values with
- * noise, chunk 3 is signed residuals stored as unsigned bits, as a star-delta delta chunk is.
+ * noise; chunk 3 contains signed test patterns stored as unsigned bits for codec coverage.
  */
 async function codecBenchFiles() {
   const side = 512;

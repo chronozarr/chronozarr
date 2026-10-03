@@ -1,4 +1,4 @@
-"""Lossless roundtrip, pyramid values, anchor schedule, volatility, encoder input checks."""
+"""Lossless roundtrip, pyramid values, volatility, encoder input checks."""
 
 from __future__ import annotations
 
@@ -38,8 +38,8 @@ def test_lossless_roundtrip_every_timestep_and_level(tmp_path, shard):
 
 
 @pytest.mark.parametrize("shard", [True, False], ids=["sharded", "unsharded"])
-def test_multiple_anchors_multi_cell_pyramid(tmp_path, shard):
-    # 9 timesteps, anchors 0/4/8; 40x50 px with 16 px cells -> grids 3x4, 2x2, 1x1.
+def test_multiple_timesteps_multi_cell_pyramid(tmp_path, shard):
+    # 9 timesteps; 40x50 px with 16 px cells -> grids 3x4, 2x2, 1x1.
     truth = make_truth(9, 2, 40, 50)
     build_store(tmp_path / "s", truth, shard=shard, chunk_size=16)
     store = chronozarr.open_store(tmp_path / "s")

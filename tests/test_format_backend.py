@@ -142,7 +142,7 @@ def test_selection_reads_only_the_chunks_it_needs(store_path):
     counting = CountingStore(LocalStore(path, read_only=True))
     ds = xr.open_dataset(counting, engine=ChronozarrBackendEntrypoint)  # ty: ignore[invalid-argument-type]
     counting.reads.clear()
-    value = ds["data"].isel(time=1, y=slice(0, 10), x=slice(0, 10)).values  # anchor 0, delta 1
+    value = ds["data"].isel(time=1, y=slice(0, 10), x=slice(0, 10)).values
     assert value.shape == (2, 10, 10)
     data_keys = {k for k, _ in counting.reads if "/data/c/" in k}
     mask_keys = {k for k, _ in counting.reads if "/mask/c/" in k}

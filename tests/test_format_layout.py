@@ -181,8 +181,7 @@ def test_shard_time_splits_the_time_axis_into_several_shards(tmp_path):
 
 
 def test_reads_span_shards_along_time(tmp_path):
-    # anchors 0, 4, 8; timestep 5 references anchor 4 which lives in shard 1 (t 3..5),
-    # timestep 7 references anchor 8 which lives in shard 2 (t 6..8): a delta from another shard.
+    # Read ordinary timesteps from three distinct time shards.
     truth = make_truth(9, 1, 13, 11)
     _encode(tmp_path, truth, shard=True, shard_time=3)
     counting = CountingStore(LocalStore(tmp_path / "s", read_only=True))
@@ -191,12 +190,12 @@ def test_reads_span_shards_along_time(tmp_path):
     cell = store.read_cell(7, 0, 0)
     assert np.array_equal(cell, truth[7, :, :8, :8])
     keys = {k for k, _ in counting.reads if "/data/c/" in k}
-    assert keys == {"0/data/c/2/0/0/0"}  # t=7 and its anchor 8 are both in time shard 2
+    assert keys == {"0/data/c/2/0/0/0"}  # t=7 is in time shard 2
     counting.reads.clear()
-    store.read_cell(5, 0, 0)  # delta in shard 1, anchor 4 in shard 1
+    store.read_cell(5, 0, 0)  # t=5 is in time shard 1
     assert {k for k, _ in counting.reads if "/data/c/" in k} == {"0/data/c/1/0/0/0"}
     counting.reads.clear()
-    cell = store.read_cell(6, 0, 0)  # delta in shard 2, nearest anchor 4 (tie, earlier) in shard 1
+    cell = store.read_cell(6, 0, 0)  # t=6 is in time shard 2
     assert np.array_equal(cell, truth[6, :, :8, :8])
     assert {k for k, _ in counting.reads if "/data/c/" in k} == {
         "0/data/c/2/0/0/0",

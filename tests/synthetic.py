@@ -97,7 +97,7 @@ def reference_anchor_schedule(n_time: int, interval: int) -> dict[int, int]:
 def make_correlated(
     n_time: int, n_band: int, height: int, width: int, seed: int = 11
 ) -> np.ndarray:
-    """A smooth scene that barely changes between timesteps: star-delta compresses it well."""
+    """A smooth scene that barely changes between timesteps."""
     rng = np.random.default_rng(seed)
     yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
     base = 3000 + 1200 * np.sin(yy / 40) * np.cos(xx / 30) + rng.normal(0, 150, (height, width))

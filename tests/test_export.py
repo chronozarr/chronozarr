@@ -113,7 +113,7 @@ def test_every_timestep_roundtrips_through_rasterio(store_and_truth, tmp_path):
     store = chronozarr.open_store(path)
     for t, tif in enumerate(paths):
         with rasterio.open(tif) as src:
-            assert np.array_equal(src.read(), truth[t])  # includes non-anchor timesteps
+            assert np.array_equal(src.read(), truth[t])
             assert src.crs.to_string() == store.attrs.crs
             assert tuple(src.transform)[:6] == store.levels[0].transform
             assert src.descriptions == tuple(BANDS)

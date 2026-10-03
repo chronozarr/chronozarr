@@ -85,7 +85,7 @@ def test_appended_store_validates_and_decodes_every_timestep_and_level(tmp_path,
     store, fresh = tmp_path / "store", tmp_path / "fresh"
     encode_head(truth, store, 8, **LAYOUTS[layout])
     first = append(store, window(truth, 8, 9))
-    second = append(store, window(truth, 9, 13))  # crosses a shard and an anchor boundary
+    second = append(store, window(truth, 9, 13))  # crosses a shard boundary
     assert (first.n_appended, first.n_time, second.n_appended, second.n_time) == (1, 9, 4, 13)
 
     assert chronozarr.validate(store) == []
@@ -235,9 +235,6 @@ def test_report_counts_objects_and_bytes(tmp_path, truth):
     sizes = sum((store / key).stat().st_size for key in changed(before, after))
     assert report.bytes_written >= sizes
     assert report.seconds > 0
-
-
-# --- Star-delta references ----------------------------------------------------------------------
 
 
 # --- Volatility ----------------------------------------------------------------------------------

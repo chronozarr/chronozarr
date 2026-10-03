@@ -11,17 +11,13 @@ from tests.synthetic import make_da
 
 pytestmark = pytest.mark.unit
 
-# One 1x4 cell, two timesteps: anchor 0, delta 1 -> anchor 0. Columns:
-#   0: wraps up     anchor 100,   value 60000 -> difference +59900 (> int16 max)
-#   1: wraps down   anchor 50000, value 100   -> difference -49900 (< int16 min)
-#   2: largest exact +  anchor 100,   value 32867 -> difference +32767
-#   3: largest exact -  anchor 32868, value 100   -> difference -32768
-ANCHOR = np.array([100, 50000, 100, 32868], dtype=np.uint16)
+# Two timesteps spanning large increases, decreases and int16 difference boundaries.
+PREVIOUS = np.array([100, 50000, 100, 32868], dtype=np.uint16)
 CURRENT = np.array([60000, 100, 32867, 100], dtype=np.uint16)
 
 
-def _cube(anchor: np.ndarray, current: np.ndarray) -> np.ndarray:
-    return np.stack([anchor, current])[:, None, None, :]  # (time, band, y, x)
+def _cube(previous: np.ndarray, current: np.ndarray) -> np.ndarray:
+    return np.stack([previous, current])[:, None, None, :]  # (time, band, y, x)
 
 
 def _encode(tmp_path, truth, **kwargs):
@@ -32,30 +28,30 @@ def _encode(tmp_path, truth, **kwargs):
 
 @pytest.mark.parametrize("shard", [True, False], ids=["sharded", "unsharded"])
 def test_wraparound_differences_roundtrip_exactly(tmp_path, shard):
-    truth = _cube(ANCHOR, CURRENT)
+    truth = _cube(PREVIOUS, CURRENT)
     store = _encode(tmp_path, truth, shard=shard)
     assert store.read(1)[0, 0].tolist() == CURRENT.tolist()
     assert np.array_equal(store.to_xarray().values, truth)
 
 
 def test_stored_values_are_the_measurements(tmp_path):
-    _encode(tmp_path, _cube(ANCHOR, CURRENT), shard=False)
+    _encode(tmp_path, _cube(PREVIOUS, CURRENT), shard=False)
     raw = zarr.open_array(str(tmp_path / "s" / "0" / "data"), mode="r")
-    assert raw[0, 0, 0].tolist() == ANCHOR.tolist()  # anchors are true values
+    assert raw[0, 0, 0].tolist() == PREVIOUS.tolist()  # both timesteps store true values
     assert raw[1, 0, 0].tolist() == CURRENT.tolist()
 
 
 def test_signed_boundary_values_remain_unsigned_measurements(tmp_path):
-    truth = _cube(ANCHOR[2:], CURRENT[2:])  # +32767 and -32768: the extremes of int16
+    truth = _cube(PREVIOUS[2:], CURRENT[2:])  # +32767 and -32768: the extremes of int16
     _encode(tmp_path, truth, shard=False)
     raw = zarr.open_array(str(tmp_path / "s" / "0" / "data"), mode="r")[1, 0, 0]
     assert raw.tolist() == CURRENT[2:].tolist()
 
 
 def test_uint8_values_remain_unchanged(tmp_path):
-    anchor = np.array([5, 250, 0, 255], dtype=np.uint8)
+    previous = np.array([5, 250, 0, 255], dtype=np.uint8)
     current = np.array([250, 5, 255, 0], dtype=np.uint8)
-    truth = np.stack([anchor, current])[:, None, None, :]
+    truth = np.stack([previous, current])[:, None, None, :]
     store = _encode(tmp_path, truth, shard=False)
     raw = zarr.open_array(str(tmp_path / "s" / "0" / "data"), mode="r")
     assert raw.dtype == np.uint8
