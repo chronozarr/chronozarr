@@ -59,9 +59,17 @@ def select_times(spec: Sequence[str], times: Sequence[str]) -> list[int]:
                 raise ValueError(
                     f"bad time range '{token}': use ISO date prefixes like 2020-01..2022-06"
                 )
+            start, end = start.replace(" ", "T"), end.replace(" ", "T")
             chosen.update(
                 i for i, t in enumerate(times) if t[: len(start)] >= start and t[: len(end)] <= end
             )
+        elif _DATE_PREFIX.match(token):
+            matches = [i for i, t in enumerate(times) if t.startswith(token.replace(" ", "T"))]
+            if not matches:
+                raise ValueError(
+                    f"no timestep matches '{token}' (store spans {times[0]} to {times[-1]})"
+                )
+            chosen.update(matches)
         elif ":" in token:
             try:
                 parts = [int(p) if p else None for p in token.split(":")]
@@ -75,13 +83,6 @@ def select_times(spec: Sequence[str], times: Sequence[str]) -> list[int]:
             if not -n <= index < n:
                 raise ValueError(f"time index {index} out of range: the store has {n} timesteps")
             chosen.add(index % n)
-        elif _DATE_PREFIX.match(token):
-            matches = [i for i, t in enumerate(times) if t.startswith(token.replace(" ", "T"))]
-            if not matches:
-                raise ValueError(
-                    f"no timestep matches '{token}' (store spans {times[0]} to {times[-1]})"
-                )
-            chosen.update(matches)
         else:
             raise ValueError(
                 f"cannot parse time selector '{token}': use an index, start:stop[:step], "
