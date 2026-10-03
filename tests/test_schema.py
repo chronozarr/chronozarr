@@ -234,10 +234,10 @@ def test_variable_name_comes_from_attrs_not_a_hardcoded_default(store_copy):
     assert "level 1: array 'reflectance' is missing" in problems
 
 
-def test_optional_data_attrs_are_not_required_but_must_be_correct_when_present(store_copy):
+def test_geometry_aliases_are_optional_and_must_match_when_present(store_copy):
     root = zarr.open_group(str(store_copy), mode="r+", zarr_format=3, use_consolidated=False)
     data = root["0"]["data"]
-    for key in ("proj:code", "spatial:bbox", "spatial:transform", "spatial:shape", "crs"):
+    for key in ("spatial:bbox", "spatial:shape", "crs", "transform", "_CRS"):
         del data.attrs[key]
     problems = chronozarr.validate(store_copy)
     assert not [p for p in problems if "attribute" in p]

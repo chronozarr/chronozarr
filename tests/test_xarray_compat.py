@@ -63,7 +63,7 @@ def test_coordinates_and_pyramid_levels(store_and_truth):
 
 
 def test_all_timesteps_are_true_values(store_and_truth):
-    path, truth, _ = store_and_truth
+    path, truth = store_and_truth
     data = xr.open_zarr(path, group="0", chunks=None, mask_and_scale=False)["data"]
     assert np.array_equal(data.values, truth)
 

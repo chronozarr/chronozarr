@@ -22,7 +22,7 @@ import zarr
 from zarr.core.sync import sync
 from zarr.errors import GroupNotFoundError
 
-from chronozarr.store import as_store
+from chronozarr.store import IndexStore, as_store, check_extensions
 
 SPEC_VERSION = "0.3.0"
 VARIABLE = "data"
@@ -959,6 +959,12 @@ def _check_level(
         problems.append(str(exc))
         return
 
+    for name, declaration in (
+        (MASK_VARIABLE, meta.mask_variable),
+        (COVERAGE_VARIABLE, meta.coverage_variable),
+    ):
+        if name in group and declaration is None:
+            problems.append(f"{prefix}/{name}: array present without root declaration")
     if attrs.crs != meta.crs:
         problems.append(f"{prefix}: crs {attrs.crs!r} differs from chronozarr.crs {meta.crs!r}")
     if state.attrs is not None and not same_numbers(
@@ -1174,14 +1180,30 @@ def validate(store: Any) -> list[str]:
     Only the exact v0.3.0 profile is accepted.
     """
     store = as_store(store)
+    from pathlib import Path
+
+    from zarr.storage import LocalStore
+
+    if isinstance(store, str | Path):
+        store = LocalStore(store, read_only=True)
+    store = IndexStore(store)
     problems: list[str] = []
     try:
         root = zarr.open_group(store, mode="r", zarr_format=3, use_consolidated=False)
     except (GroupNotFoundError, FileNotFoundError):
         return [f"{store}: no Zarr v3 group found (is this a chronozarr store?)"]
+    except ValueError as exc:
+        return [str(exc)]
     try:
+        import json
+
+        from zarr.core.buffer import default_buffer_prototype
+
+        manifest = sync(root.store.get("zarr.json", default_buffer_prototype()))
+        if manifest is not None:
+            check_extensions(json.loads(manifest.to_bytes()))
         attrs = parse_root_attrs(root.attrs.asdict())
-    except SchemaError as exc:
+    except ValueError as exc:
         return [str(exc)]
 
     raw_meta = cast("dict[str, Any]", root.attrs.asdict()["chronozarr"])
@@ -1216,6 +1238,13 @@ def validate(store: Any) -> list[str]:
             problems.append(f"{path}: must occupy a single chunk")
         if "spatial:dimensions" in volatility.attrs:
             problems.append(f"{path}: must not be georeferenced")
+        try:
+            check_codecs(volatility, path)
+        except SchemaError as exc:
+            problems.append(str(exc))
+        values = np.asarray(volatility[:])
+        if not (np.isfinite(values).all() and (values >= 0).all() and (values <= 1).all()):
+            problems.append(f"{path}: values must be finite in [0,1]")
         if volatility.dtype != np.dtype("float32"):
             problems.append(f"{path}: dtype must be float32, got {volatility.dtype}")
         if state.shape is not None and state.cs is not None:

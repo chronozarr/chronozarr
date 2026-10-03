@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import xarray as xr
 import zarr
 from zarr.errors import GroupNotFoundError
+from zarr.storage import LocalStore
 
 from chronozarr import schema
 from chronozarr.schema import Chronozarr, SchemaError, Transform
 from chronozarr.store import HttpStore as HttpStore
+from chronozarr.store import IndexStore
 from chronozarr.store import as_store as as_store
 
 
@@ -42,6 +45,7 @@ class ChronoStore:
 
     def __init__(self, group: zarr.Group, source: str) -> None:
         root = schema.parse_root_attrs(group.attrs.asdict())
+        self._group = group
         self.source = source
         self.attrs: Chronozarr = root.chronozarr
         self.times: np.ndarray = np.array(
@@ -55,8 +59,9 @@ class ChronoStore:
             data = schema.get_array(level_group, root.chronozarr.variable, where)
             level_attrs = schema.canonical_level(data, where)
             mirrors = level_group.attrs.asdict()
-            if "transform" in mirrors and mirrors["transform"] != list(level_attrs.transform):
-                raise SchemaError(f"{where}: transform mirror differs from canonical geometry")
+            for key, expected in level_attrs.to_attrs().items():
+                if key in mirrors and mirrors[key] != expected:
+                    raise SchemaError(f"{where}: {key} mirror differs from canonical geometry")
             if level_attrs.crs != root.chronozarr.crs:
                 raise SchemaError(f"{where}: CRS differs from root")
             schema.check_codecs(data, where)
@@ -78,6 +83,80 @@ class ChronoStore:
                 )
             )
         self.levels: tuple[Level, ...] = tuple(levels)
+        problems: list[str] = []
+        state = schema._LevelState()
+        for level in levels:
+            shape = schema._check_data_array(
+                level.data,
+                f"level {level.index}/data",
+                self.attrs,
+                state.shape,
+                level.index,
+                state,
+                problems,
+            )
+            if level.index == 0:
+                state.shape = shape
+            expected_transform = schema.scale_transform(levels[0].transform, level.index)
+            if level.transform != expected_transform:
+                problems.append(f"level {level.index}: transform is not scaled from level 0")
+            if self.attrs.levels is not None:
+                if len(self.attrs.levels) != len(levels):
+                    problems.append("chronozarr.levels: length differs from multiscales layout")
+                else:
+                    mirror = self.attrs.levels[level.index]
+                    if (
+                        mirror.shape != level.shape
+                        or mirror.grid != level.grid
+                        or mirror.transform != level.transform
+                        or mirror.resolution != level.resolution
+                    ):
+                        problems.append(f"level {level.index}: chronozarr.levels mirror mismatch")
+            for plane in (level.mask, level.coverage):
+                if plane is not None:
+                    schema._check_spatial(
+                        plane,
+                        self.attrs.crs,
+                        level.transform,
+                        level.shape[2],
+                        level.shape[3],
+                        plane.path,
+                        problems,
+                    )
+                    schema._check_dims(plane, schema.PLANE_DIMENSIONS, plane.path, problems)
+                    if plane.shape != (
+                        level.shape[0],
+                        *level.shape[2:],
+                    ) or plane.dtype != np.dtype("uint8"):
+                        problems.append(f"{plane.path}: incompatible shape or dtype")
+        if problems:
+            raise SchemaError("; ".join(problems))
+        if isinstance(group.store, IndexStore):
+            for level in levels:
+                for array in (level.data, level.mask, level.coverage):
+                    if array is None or array.shards is None:
+                        continue
+                    codec = cast("Any", array.metadata).codecs[0]
+                    counts = tuple(s // c for s, c in zip(array.shards, array.chunks, strict=True))
+                    index_size = codec._shard_index_size(counts)
+                    interval = array.shards[0]
+                    mutable = array.shape[0] // interval if array.shape[0] % interval else -1
+                    inventory = (
+                        (self.attrs.shard_bytes or {}).get(str(level.index), {})
+                        if array is level.data
+                        else {}
+                    )
+                    lengths = {
+                        f"{array.path}/c/{key.split('/')[0]}/0/{'/'.join(key.split('/')[1:])}": n
+                        for key, n in inventory.items()
+                    }
+                    group.store.configure(
+                        f"{array.path}/c/",
+                        index_size,
+                        codec.index_location.value,
+                        mutable,
+                        lengths,
+                    )
         self.dtype: np.dtype = levels[0].data.dtype
         self.nodata: int | float | None = self.attrs.nodata
         self._scale = np.array(
@@ -113,7 +192,13 @@ class ChronoStore:
         self, level: Level, timesteps: Sequence[int], ys: slice, xs: slice
     ) -> np.ndarray:
         """Read ordinary stored values, with no cross-timestep reconstruction."""
-        return np.asarray(level.data.oindex[np.asarray(timesteps, dtype=np.int64), :, ys, xs])
+        try:
+            return np.asarray(level.data.oindex[np.asarray(timesteps, dtype=np.int64), :, ys, xs])
+        except (ValueError, OSError, IndexError):
+            if level.data.shards is None or not isinstance(self._group.store, IndexStore):
+                raise
+            self._group.store.invalidate_indices()
+            return np.asarray(level.data.oindex[np.asarray(timesteps, dtype=np.int64), :, ys, xs])
 
     def _read_plane(
         self, array: zarr.Array, timesteps: Sequence[int], ys: slice, xs: slice
@@ -248,9 +333,15 @@ def open_store(path_or_url: Any) -> ChronoStore:
     http(s) URL is read with `HttpStore` (Range requests, no fsspec needed).
     """
     try:
-        group = zarr.open_group(as_store(path_or_url), mode="r", zarr_format=3)
+        transport = as_store(path_or_url)
+        if isinstance(transport, str | Path):
+            transport = LocalStore(transport, read_only=True)
+        group = zarr.open_group(IndexStore(transport), mode="r", zarr_format=3)
     except (GroupNotFoundError, FileNotFoundError) as exc:
         raise SchemaError(
             f"{path_or_url}: no Zarr v3 group found; is this a chronozarr store?"
         ) from exc
-    return ChronoStore(group, str(path_or_url))
+    try:
+        return ChronoStore(group, str(path_or_url))
+    except ValueError as exc:
+        raise SchemaError(str(exc)) from exc

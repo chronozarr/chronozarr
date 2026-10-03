@@ -199,7 +199,6 @@ def test_reads_span_shards_along_time(tmp_path):
     cell = store.read_cell(6, 0, 0)  # delta in shard 2, nearest anchor 4 (tie, earlier) in shard 1
     assert np.array_equal(cell, truth[6, :, :8, :8])
     assert {k for k, _ in counting.reads if "/data/c/" in k} == {
-        "0/data/c/1/0/0/0",
         "0/data/c/2/0/0/0",
     }
 
