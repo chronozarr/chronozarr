@@ -108,10 +108,11 @@ def _band_metadata(store: ChronoStore) -> list[tuple[str, float, float, str | No
         if isinstance(band, str):
             out.append((band, 1.0, 0.0, None))
         else:
+            scale = getattr(band, "scale", None)
             out.append(
                 (
                     str(band.name),
-                    float(getattr(band, "scale", None) or 1.0),
+                    float(1.0 if scale is None else scale),
                     float(getattr(band, "offset", None) or 0.0),
                     getattr(band, "units", None),
                 )

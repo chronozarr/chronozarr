@@ -329,6 +329,31 @@ def test_a_store_without_nodata_or_mask_exports_neither(tmp_path):
             assert np.array_equal(src.read(), truth[t])
 
 
+def test_export_preserves_zero_scale_and_its_physical_values(tmp_path):
+    rasterio = pytest.importorskip("rasterio")
+    truth = np.full((1, 1, 16, 16), 7, dtype=np.uint16)
+    path = tmp_path / "store"
+    chronozarr.encode(
+        make_da(truth, ["constant"]),
+        path,
+        bands=[{"name": "constant", "scale": 0.0, "offset": 3.0}],
+        nodata=None,
+        chunk_size=16,
+    )
+    store = chronozarr.open_store(path)
+    (stored_tif,) = export_cog(store, tmp_path / "stored")
+    with rasterio.open(stored_tif) as src:
+        assert src.scales == (0.0,)
+        assert src.offsets == (3.0,)
+        assert np.array_equal(src.read(), truth[0])
+        assert np.array_equal(src.read() * src.scales[0] + src.offsets[0], store.physical(0))
+    (physical_tif,) = export_cog(store, tmp_path / "physical", physical=True)
+    with rasterio.open(physical_tif) as src:
+        assert np.array_equal(src.read(), np.full((1, 16, 16), 3.0, dtype=np.float32))
+        assert src.scales == (1.0,)
+        assert src.offsets == (0.0,)
+
+
 def test_physical_export_writes_float32_values_with_nan_where_invalid(tmp_path):
     rasterio = pytest.importorskip("rasterio")
     cogs = fx.nodata_zero(tmp_path)

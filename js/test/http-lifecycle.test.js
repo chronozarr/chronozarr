@@ -15,6 +15,42 @@ function http(base, fetchImpl = fetch, delays = [0]) {
   return { store, limiter, network };
 }
 
+test('suffix reads reject missing or invalid HEAD lengths before sending a range', async () => {
+  for (const length of [null, '', 'not-a-size', '-1', '1.5', '1e2', '9007199254740992']) {
+    const methods = [];
+    const { store, network } = http('https://example.test/', async request => {
+      methods.push(request.method);
+      return new Response(null, { headers: length === null ? {} : { 'Content-Length': length } });
+    });
+    await assert.rejects(store.getRange('/chunk', { suffixLength: 4 }), /missing or invalid Content-Length/);
+    assert.deepEqual(methods, ['HEAD']);
+    assert.equal(network.requests, 1);
+  }
+});
+
+test('suffix reads use the HEAD length and clamp to the whole object for long suffixes', async () => {
+  for (const status of [200, 206]) {
+    for (const suffixLength of [2, 10]) {
+      const ranges = [];
+      const body = Uint8Array.of(1, 2, 3, 4);
+      const start = Math.max(0, body.length - suffixLength);
+      const { store } = http('https://example.test/', async request => {
+        if (request.method === 'HEAD') return new Response(null, { headers: { 'Content-Length': '4' } });
+        ranges.push(request.headers.get('Range'));
+        return new Response(status === 200 ? body : body.slice(start), { status });
+      });
+      assert.deepEqual(await store.getRange('/chunk', { suffixLength }), body.slice(start));
+      assert.deepEqual(ranges, [`bytes=${start}-3`]);
+    }
+  }
+});
+
+test('suffix reads of an empty object return empty bytes without sending an invalid range', async () => {
+  const { store, network } = http('https://example.test/', async () => new Response(null, { headers: { 'Content-Length': '0' } }));
+  assert.deepEqual(await store.getRange('/chunk', { suffixLength: 4 }), new Uint8Array(0));
+  assert.equal(network.requests, 1);
+});
+
 test('a queued cancellation settles before the occupied slot is released', async (t) => {
   const limiter = new RequestLimiter(1);
   let release;

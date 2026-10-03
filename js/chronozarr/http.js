@@ -87,8 +87,12 @@ export class HttpStore {
       }
       const { headers } = await this.#send(url, 'HEAD', undefined, signal, priority);
       if (!headers) return undefined;
-      const size = Number(headers.get('Content-Length'));
-      if (!Number.isFinite(size)) throw new Error(`HEAD ${url}: no Content-Length, cannot read the last ${range.suffixLength} bytes`);
+      const contentLength = headers.get('Content-Length');
+      const size = Number(contentLength);
+      if (contentLength === null || !/^\d+$/.test(contentLength) || !Number.isSafeInteger(size)) {
+        throw new Error(`HEAD ${url}: missing or invalid Content-Length, cannot read the last ${range.suffixLength} bytes`);
+      }
+      if (size === 0) return new Uint8Array(0);
       start = Math.max(0, size - range.suffixLength);
       end = size - 1;
     } else {
