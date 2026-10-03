@@ -68,6 +68,20 @@ def test_select_times_rejects_bad_tokens(spec, message):
         select_times(spec, TIMES)
 
 
+@pytest.mark.parametrize("separator", ["T", " "])
+def test_select_times_accepts_timestamp_prefixes_and_ranges(separator):
+    times = [
+        "2024-03-01T12:30:00Z",
+        "2024-03-01T12:30:30Z",
+        "2024-03-01T13:00:00Z",
+    ]
+    assert select_times([f"2024-03-01{separator}12:30:00Z"], times) == [0]
+    assert select_times([f"2024-03-01{separator}12:30"], times) == [0, 1]
+    assert select_times(
+        [f"2024-03-01{separator}12:30:00Z..2024-03-01{separator}12:30:30Z"], times
+    ) == [0, 1]
+
+
 def test_file_stem_keeps_the_clock_only_when_needed():
     assert _file_stem("2024-03-01T00:00:00Z") == "2024-03-01"
     assert _file_stem("2024-03-01T00:00:00.000Z") == "2024-03-01"
