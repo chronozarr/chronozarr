@@ -1,8 +1,10 @@
-# TileRipper
+# chronozarr
+
+Start with [Bring your own data](examples/bring_your_data/README.md): convert your rasters, read values in Python, and publish a self-hosted viewer and embed example.
 
 Open a decade of analysis-ready satellite time series in a browser tab from a static bucket. Scrub it like video. Click for real numbers.
 
-TileRipper is the viewer. **chronozarr** is the format underneath it: plain Zarr v3 with one group per pyramid level and one object per chunk, so a timestep of a spatial cell is one plain `GET`. Sharding, one file per cell for the time axis, is an option (`--shard`). The layout follows ndpyramid's `multiscales` attribute and the zarr `proj` and `spatial` conventions. An optional temporal profile, star-delta, stores most timesteps as residuals against a nearby anchor; the writer measures a sample of cells and enables it only when it shrinks the compressed bytes to 0.85 of the plain size or better. A store without it needs no chronozarr-aware reader.
+**chronozarr** is an open raster time-series format with a browser viewer at [chronozarr.org/demo](https://chronozarr.org/demo/): plain Zarr v3 with one group per pyramid level and one object per chunk, so a timestep of a spatial cell is one plain `GET`. Sharding, one file per cell for the time axis, is an option (`--shard`). The layout follows ndpyramid's `multiscales` attribute and the zarr `proj` and `spatial` conventions. An optional temporal profile, star-delta, stores most timesteps as residuals against a nearby anchor; the writer measures a sample of cells and enables it only when it shrinks the compressed bytes to 0.85 of the plain size or better. A store without it needs no chronozarr-aware reader.
 
 Reading a store without chronozarr:
 
@@ -27,7 +29,7 @@ Spec: [spec/CHRONOZARR.md](https://github.com/chronozarr/chronozarr/blob/main/sp
 | Python package `chronozarr` | `src/chronozarr/` | `encode()`, `open_store()`, `validate()`, `view()`; CLI `chronozarr encode / convert / append / validate / info / doctor / export-cog / stac`; xarray engine `chronozarr` |
 | JS reader | `js/chronozarr/` | DOM-free reader on top of zarrita: cells by (lod, row, col, t), cache, prefetch |
 | MapLibre layer | `js/maplibre/` | Custom layer that renders a store through the JS reader |
-| TileRipper viewer | `js/tileripper/` | WebGL2 viewer: time scrub, looping playback up to 60 steps per second, click for values and a time-series chart, permalinks, WebM and GIF export; `?embed=1` compact mode with a postMessage API for host pages |
+| chronozarr viewer | `js/demo/` | WebGL2 viewer: time scrub, looping playback up to 60 steps per second, click for values and a time-series chart, permalinks, WebM and GIF export; `?embed=1` compact mode with a postMessage API for host pages |
 | Ingest example | `examples/sentinel2_pc/` | Monthly Sentinel-2 median composites from Planetary Computer |
 | Water-mask example | `examples/water_masks/` | Derived NDWI and water-fraction stores with validity masks from the monthly mosaics ([docs/user-zero.md](https://github.com/chronozarr/chronozarr/blob/main/docs/user-zero.md)) |
 | PNG frames example | `examples/png_frames/` | Georeferenced PNG frames converted into a store with no GeoTIFF step ([docs/png-frames.md](https://github.com/chronozarr/chronozarr/blob/main/docs/png-frames.md)) |
@@ -89,7 +91,7 @@ ds = xr.open_zarr("my_store", group="0", zarr_format=3, chunks=None)
 Serve the store from any static host that supports GET, byte ranges and CORS (S3, R2, GCS, Source Cooperative, a local range-capable server), then open the viewer:
 
 ```
-js/tileripper/index.html?store=https://your-bucket/my_store
+js/demo/index.html?store=https://your-bucket/my_store
 ```
 
 ## Command line
@@ -198,10 +200,47 @@ Cold open of the live unsharded store `chronozarr-4` from the deployed viewer wi
 
 Star-delta reconstruction runs in the fragment shader; the CPU loop it replaces cost 54 ms per 36-cell frame. Known limits: the coarse loop pulls the whole time axis at its level after the first frame (tens of MB for a store a few cells wide); cold open of very small stores costs 30 to 40 ms for worker startup.
 
+## Development checks
+
+```bash
+uv sync --extra dev --extra geo --extra netcdf --extra dask
+uv run python scripts/check_architecture.py
+uv run coverage run -m pytest -q -m unit
+uv run coverage report
+uv run coverage json
+uv run coverage xml
+npm ci --prefix js
+npm run test:coverage --prefix js
+npm run test:browser --prefix js
+```
+
+The architecture checker and `sentrux check .` share `.sentrux/rules.toml`: first-party
+imports must be acyclic, shared writer and store modules must not depend on their callers,
+and MapLibre/shared rendering must not depend on the demo. The dependency-free checker
+runs in CI and includes deferred Python imports and static JavaScript imports/re-exports;
+computed runtime imports are outside its scope.
+
+Python coverage measures every package module and writes JSON/XML to
+`data/reports/coverage/python/`. Native Node coverage measures only modules loaded by the
+Node tests under `chronozarr`, `shared`, `maplibre`, and `demo`; it does not measure the
+browser-only viewer or GPU execution. Browser tests verify those behaviors separately.
+CI retains both coverage reports for 14 days.
+
+For a before/after speed check on the same local fixture:
+
+```bash
+node scripts/audit_browser.mjs js data/spike/stress6x6 data/reports/browser-bench.json
+```
+
+The script uses headless Chromium with software WebGL, three cold runs and 20 switches.
+Its additional `warmFullyLoaded` measurement primes all timesteps with a 2 GiB cache,
+because the ordinary idle prefetch intentionally stops at 64 MiB. Inspect complete frames
+and bytes alongside timings; local/loopback results do not measure CDN performance.
+
 ## Status
 
 v0.2 draft (spec version `0.2.0`; every v0.1 store is a valid v0.2 store and readers accept both). The layout is Zarr v3 groups per level. The writer default is unsharded: one object per chunk, that is per cell, level and timestep (about 5,900 objects for the 117-month imagery store), so there is no shard index to read, a CDN miss costs one chunk and an append writes only new objects. Sharding stays available (`--shard`, `shard_time`) and every store written sharded stays valid: 93 objects and one range read per timestep once the shard index is cached, with a miss that costs time proportional to the shard size.
 
-The public demo store is `ucayali_santa_maria/chronozarr-3`: the Ucayali River near Santa María, Peru, 117 monthly Sentinel-2 composites from 2015 to 2026 over one of the fastest-migrating meandering reaches on Earth, served from an R2 bucket at data.tileripper.com. It is a v0.2 store. The writer's auto rule chose temporal encoding `none`: star-delta compressed to 0.988 of the plain size on the sampled cells, far short of the 0.85 needed to keep it. `chronozarr-3` is sharded: 6,451.9 MB in 93 files. `chronozarr-4` is the same data written with the unsharded default (6,451.8 MB in 5,893 files, values bit-identical) and replaces it once uploaded. The same data with star-delta forced is 6,285.2 MB, so the plain store is 166.7 MB (about 2.7%) larger. That is the price of a store any Zarr v3 reader decodes without an adapter. The Measured tables above were taken on earlier stores of this reach and of the Sahara. Sahara and Iowa remain the benchmark pair and can be re-encoded from the ingest example.
+The public demo store is `ucayali_santa_maria/chronozarr-4`: the Ucayali River near Santa María, Peru, 117 monthly Sentinel-2 composites from 2015 to 2026, served from an R2 bucket at data.tileripper.com. The suffixes `-3` and `-4` are immutable revisions of this dataset's storage prefix, not chronozarr format or package versions. Both use spec v0.2.0: `chronozarr-3` was the historical sharded layout (6,451.9 MB in 93 files); the current `chronozarr-4` uses the unsharded default (6,451.8 MB in 5,893 files, values bit-identical). The writer's auto rule chose temporal encoding `none`: star-delta compressed to 0.988 of the plain size on the sampled cells, far short of the 0.85 needed to keep it. The same data with star-delta forced is 6,285.2 MB, so the plain store is 166.7 MB (about 2.7%) larger. That is the price of a store any Zarr v3 reader decodes without an adapter. The Measured tables above were taken on earlier stores of this reach and of the Sahara. Sahara and Iowa remain the benchmark pair and can be re-encoded from the ingest example. The legacy data hostname is retained for existing store URLs; the demo is at chronozarr.org/demo/.
 
-A second public store, `ucayali_santa_maria/water-1`, is derived from the same mosaics: NDWI as int16 with a scale of 1e-4, water as a scaled fraction, a validity mask where no scene was observed, 1.73 GB in 201 files, built by `examples/water_masks/`. `water-2` is the same store written unsharded (1.73 GB in 17,088 files, values bit-identical) and replaces it once uploaded. It is the first store with a dtype other than uint16, explicit masks and physical units through the whole path, and the viewer lists both stores. Stores can now grow with `chronozarr append`, the viewer embeds in other pages with `?embed=1`, and georeferenced PNG frames convert directly.
+A derived water store, `ucayali_santa_maria/water-2`, uses the same mosaics: NDWI as int16 with a scale of 1e-4, water as a scaled fraction, and a validity mask where no scene was observed, built by `examples/water_masks/`. It is the unsharded revision (1.73 GB in 17,088 files, values bit-identical to the historical sharded `water-1`, 201 files). It exercised a dtype other than uint16, explicit masks and physical units through the whole path. The current catalog lists the imagery store and the PNG frames demo (`png-1`); it does not list the water store. Stores can grow with `chronozarr append`, the viewer embeds in other pages with `?embed=1`, and georeferenced PNG frames convert directly.

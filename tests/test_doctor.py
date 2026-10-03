@@ -22,7 +22,7 @@ from zarr.abc.store import OffsetByteRequest, RangeByteRequest, SuffixByteReques
 from zarr.core.buffer import default_buffer_prototype
 
 import chronozarr
-import chronozarr.decode as decode_module
+import chronozarr.store as store_module
 from chronozarr.decode import HttpStore
 from chronozarr.doctor import Check, diagnose
 from chronozarr.view import StoreRequestHandler, serve_store, view
@@ -358,7 +358,7 @@ def test_http_store_slices_locally_when_the_server_ignores_range(sharded_store):
 
 
 def test_http_store_retries_transient_server_errors(sharded_store, monkeypatch):
-    monkeypatch.setattr(decode_module, "_RETRY_DELAYS_S", (0.0, 0.0, 0.0))
+    monkeypatch.setattr(store_module, "_RETRY_DELAYS_S", (0.0, 0.0, 0.0))
     handler = type("Flaky", (FlakyHandler,), {"seen": set()})
     with serving(handler, sharded_store) as url:
         store = HttpStore(url)
@@ -368,7 +368,7 @@ def test_http_store_retries_transient_server_errors(sharded_store, monkeypatch):
 
 
 def test_http_store_names_the_url_when_the_host_is_unreachable(monkeypatch):
-    monkeypatch.setattr(decode_module, "_RETRY_DELAYS_S", (0.0,))
+    monkeypatch.setattr(store_module, "_RETRY_DELAYS_S", (0.0,))
     store = HttpStore("http://127.0.0.1:9/x")
     with pytest.raises(OSError, match=r"GET http://127\.0\.0\.1:9/x/zarr\.json"):
         asyncio.run(store.get("zarr.json", default_buffer_prototype()))
@@ -429,7 +429,7 @@ def test_range_server_semantics(sharded_store):
         status, headers, _ = _get(
             key,
             {
-                "Origin": "https://tileripper.com",
+                "Origin": "https://chronozarr.org",
                 "Access-Control-Request-Method": "GET",
                 "Access-Control-Request-Headers": "range",
             },
@@ -473,7 +473,7 @@ def test_view_returns_an_iframe_pointing_the_viewer_at_the_local_store(sharded_s
         page = shown.data
         assert "<iframe" in page
         assert 'height="480"' in page
-        assert "https://tileripper.com/tileripper/?store=http%3A%2F%2F127.0.0.1%3A" in page
+        assert "https://chronozarr.org/demo/?store=http%3A%2F%2F127.0.0.1%3A" in page
         assert f"%2F{sharded_store.name}" in page
     finally:
         for server in list(view_module._servers.values()):

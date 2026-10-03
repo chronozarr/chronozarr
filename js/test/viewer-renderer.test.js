@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TEXTURE_FORMATS, fragmentShader } from '../tileripper/renderer.js';
-import { PRODUCT_GLSL } from '../tileripper/products-glsl.js';
-import { GAIN, PRODUCTS } from '../tileripper/products.js';
+import { TEXTURE_FORMATS, fragmentShader } from '../demo/renderer.js';
+import { PRODUCT_GLSL } from '../shared/products-glsl.js';
+import { GAIN, PRODUCTS } from '../shared/products.js';
 
 test('the product GLSL defines shade() and shadeLinear() with stable signatures, and the tone map gain of products.js', () => {
   assert.match(PRODUCT_GLSL, /vec4 shade\(int product, vec3 x, float stretchLo\)/);

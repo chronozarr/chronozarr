@@ -1,9 +1,9 @@
-// zarr-layer against the TileRipper viewer on the same store, view, level and timestep, in a fresh headless Chromium
+// zarr-layer against the chronozarr viewer on the same store, view, level and timestep, in a fresh headless Chromium
 // per run, with CDP network throttling. Measures
 //
 //   open   from the call that opens the store to the first frame that shows every visible cell of the fixed level
 //   scrub  20 timesteps forward from timestep 40, in one of two modes:
-//          burst  one input every 100 ms (the viewer's ArrowRight, zarr-layer's setSelector), like tileripper's
+//          burst  one input every 100 ms (the viewer's ArrowRight, zarr-layer's setSelector), like chronozarr's
 //                 interactionBench "scrub forward 20"; a step a tool skipped is satisfied by the later frame that shows
 //                 a later step (interactionBench's rule)
 //          paced  the next input 100 ms after the frame of the previous step is complete, so every step is shown and its
@@ -11,7 +11,7 @@
 //
 // Requests and bytes come from CDP events of the page (see lib/harness.mjs), identically for both tools.
 //
-//   node zarr-layer/compare.mjs --tool zarr-layer|tileripper --profile natural|50Mbit-40ms|10Mbit-100ms
+//   node zarr-layer/compare.mjs --tool zarr-layer|chronozarr --profile natural|50Mbit-40ms|10Mbit-100ms
 //        --mode burst|paced [--source remote|local] [--reps 1] [--steps 20] [--start 40] [--timeout 900000] [--out results/file.json]
 //
 // --source remote (default) reads the published store, https://data.tileripper.com/ucayali_santa_maria/chronozarr-3; `natural`
@@ -42,13 +42,13 @@ const REMOTE_STORE = 'https://data.tileripper.com/ucayali_santa_maria/chronozarr
 const LOCAL_STORE_PATH = '/data/stores/ucayali_santa_maria/chronozarr-3';
 
 if (!(profileName in PROFILES)) throw new Error(`unknown profile ${profileName}; use ${Object.keys(PROFILES).join(', ')}`);
-if (!['zarr-layer', 'tileripper'].includes(tool)) throw new Error(`unknown tool ${tool}`);
+if (!['zarr-layer', 'chronozarr'].includes(tool)) throw new Error(`unknown tool ${tool}`);
 if (!['burst', 'paced'].includes(mode)) throw new Error(`unknown mode ${mode}`);
 if (!['remote', 'local'].includes(source)) throw new Error(`unknown source ${source}`);
 const shardBytes = JSON.parse(await readFile(path.join(REPO_ROOT, LOCAL_STORE_PATH, 'zarr.json'), 'utf8')).attributes.chronozarr.shard_bytes;
 
 // The fixed view: the whole AOI of the Ucayali store (3 x 3 cells of level 1, 20 m) on a 1800 x 1700 px window at one CSS
-// pixel per device pixel. zarr-layer draws level 1 at map zoom 12; TileRipper is pinned to level 1 and given the same
+// pixel per device pixel. zarr-layer draws level 1 at map zoom 12; chronozarr is pinned to level 1 and given the same
 // ground scale (the AOI is 1457.6 px wide in both) and centre. Its canvas (1500 x 1592 px) shows the whole AOI.
 const FIXED_LEVEL = 1;
 const BOUNDS = [485650, 9142230, 513240, 9169880];
@@ -60,8 +60,8 @@ const CENTER = [(BOUNDS[0] + BOUNDS[2]) / 2, (BOUNDS[1] + BOUNDS[3]) / 2];
 const CADENCE_MS = 100;
 const THINK_MS = 100;
 
-const tileripperPage = async ({ url, lod, viewSearch, steps, mode, cadenceMs, thinkMs, timeoutMs }) => {
-  const perf = await import('/js/tileripper/perf.js');
+const chronozarrPage = async ({ url, lod, viewSearch, steps, mode, cadenceMs, thinkMs, timeoutMs }) => {
+  const perf = await import('/js/demo/perf.js');
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const waitUntil = async (predicate, limitMs) => {
     const began = performance.now();
@@ -71,7 +71,7 @@ const tileripperPage = async ({ url, lod, viewSearch, steps, mode, cadenceMs, th
     }
     return true;
   };
-  const viewer = window.tileripper.viewer;
+  const viewer = window.chronozarr.viewer;
   const events = [];
   viewer.probe = (event) => events.push(event);
   const n0 = await window.netSnapshot();
@@ -242,7 +242,7 @@ const zarrLayerPage = async ({ store, extra, bounds, crs, zoom, startT, steps, m
   };
 };
 
-const pageFunctions = { tileripper: tileripperPage, 'zarr-layer': zarrLayerPage };
+const pageFunctions = { chronozarr: chronozarrPage, 'zarr-layer': zarrLayerPage };
 
 const sortedNumbers = (values) => [...values].sort((a, b) => a - b);
 const median = (values) => {
@@ -258,7 +258,7 @@ async function oneRun(server, rep) {
   const store = source === 'remote' ? REMOTE_STORE : `${server.url}${LOCAL_STORE_PATH}`;
   const browser = await launchBrowser();
   try {
-    const { context, page } = await newPage(browser, { width: 1800, height: 1700, blockCatalog: tool === 'tileripper' });
+    const { context, page } = await newPage(browser, { width: 1800, height: 1700, blockCatalog: tool === 'chronozarr' });
     const messages = [];
     page.on('console', (m) => {
       if (['warning', 'error'].includes(m.type())) messages.push(`${m.type()}: ${m.text().slice(0, 300)}`);
@@ -267,15 +267,15 @@ async function oneRun(server, rep) {
     const { cdp, counter } = await attachNet(context, page, [source === 'remote' ? new URL(store).origin : `${server.url}/data/`]);
     await page.exposeFunction('netSnapshot', () => counter.snapshot());
     await applyProfile(cdp, null);
-    const pageUrl = tool === 'tileripper' ? `${server.url}/js/tileripper/index.html` : `${server.url}/bench/zarr-layer/page.html`;
+    const pageUrl = tool === 'chronozarr' ? `${server.url}/js/demo/index.html` : `${server.url}/bench/zarr-layer/page.html`;
     await page.goto(pageUrl);
-    await page.waitForFunction(() => Boolean(window.tileripper || window.zl), null, { timeout: 60000 });
+    await page.waitForFunction(() => Boolean(window.chronozarr || window.zl), null, { timeout: 60000 });
     const warmup = counter.snapshot();
     await applyProfile(cdp, PROFILES[profileName]);
 
     const common = { steps, mode, cadenceMs: CADENCE_MS, thinkMs: THINK_MS, timeoutMs };
     const input =
-      tool === 'tileripper'
+      tool === 'chronozarr'
         ? { ...common, url: store, lod: FIXED_LEVEL, viewSearch: `?t=${startT}&z=${AOI_WIDTH_PX / LEVEL0_WIDTH}&c=${CENTER[0]},${CENTER[1]}` }
         : { ...common, store, extra: { crs: CRS, bounds: BOUNDS, zarrVersion: 3 }, bounds: BOUNDS, crs: CRS, zoom: ZOOM, startT };
     const raw = await page.evaluate(pageFunctions[tool], input);

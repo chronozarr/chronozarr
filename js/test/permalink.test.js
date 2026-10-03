@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decodeView, encodeView, pixelToProjected, projectedToPixel } from '../tileripper/permalink.js';
+import { decodeView, encodeView, pixelToProjected, projectedToPixel } from '../demo/permalink.js';
 
 const NORTH_UP = [10, 0, 746090, 0, -10, 2540440];
 const ROTATED = [8.66, 5, 500000, 5, -8.66, 4100000];

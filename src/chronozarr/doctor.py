@@ -25,7 +25,7 @@ import zarr
 from chronozarr.decode import ChronoStore, as_store, open_store
 from chronozarr.schema import validate
 
-DEFAULT_ORIGIN = "https://tileripper.com"
+DEFAULT_ORIGIN = "https://chronozarr.org"
 USER_AGENT = "chronozarr-doctor"
 Status = Literal["ok", "info", "warn", "fail"]
 

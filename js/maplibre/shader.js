@@ -3,11 +3,11 @@
 // Vertex: an origin-translated matrix (composed in float64 on the CPU) times a small mercator offset.
 // Fragment: star-delta reconstruction (modular, spec v0.2) and the stored-to-physical conversion straight from the
 // raw texture array, whatever the store's dtype; the product colors are PRODUCT_GLSL, shared with the viewer.
-// Differences from js/tileripper/renderer.js: no background fill (no data is transparent so the basemap shows
+// Differences from js/demo/renderer.js: no background fill (no data is transparent so the basemap shows
 // through), an optional validity mask, and opacity.
 
-import { PRODUCT_GLSL } from '../tileripper/products-glsl.js';
-import { TEXTURE_FORMATS } from '../tileripper/renderer.js';
+import { PRODUCT_GLSL } from '../shared/products-glsl.js';
+import { TEXTURE_FORMATS } from '../shared/texture-formats.js';
 
 export const VERTEX_SHADER = `#version 300 es
 uniform mat4 u_matrix;   // clip <- mercator offset from the mesh origin

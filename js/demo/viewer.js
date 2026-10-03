@@ -1,4 +1,4 @@
-// TileRipper viewer: renders a chronozarr store with WebGL2, scrubs through time, switches
+// chronozarr viewer: renders a chronozarr store with WebGL2, scrubs through time, switches
 // products on the GPU and shows decoded values on click. Opens ?store=<base url>.
 
 import { chunkKey, openStore, samplePixelFrom, scrubCost, windowOrder } from '../chronozarr/decoder.js';
@@ -12,6 +12,8 @@ import { decodeView, encodeView } from './permalink.js';
 import { toggleExportPanel } from './export.js';
 import { FrameMonitor, formatBytes, formatMs, formatRate, hitRate, readStats } from './perf.js';
 import { Renderer } from './renderer.js';
+import { MAX_SCALE, bindViewerInput } from './input.js';
+import { formatValue, sidebarHtml } from './inspector.js';
 import {
   computeStretchLo,
   describePixel,
@@ -25,7 +27,7 @@ import {
   percentileRange,
   resolveProducts,
   toPhysical,
-} from './products.js';
+} from '../shared/products.js';
 
 const PREFETCH_SETTLE_MS = 30;
 const PREFETCH_PLAYBACK_RESTART_MS = 250;
@@ -38,12 +40,10 @@ const GPU_UPLOAD_SLICE_MS = 4;
 // Pick the coarsest level that still has at least ~0.7 texels per canvas pixel; a bias of 0 would pick
 // the finest level whenever it is even slightly denser than the screen, at 4x the bytes per level.
 const LOD_BIAS = 0.5;
-const MAX_SCALE = 16;
-const CLICK_SLOP_PX = 4;
 const CELL_RETRY_DELAY_MS = 4000;
 const MAX_CELL_RETRIES = 3;
 const TOAST_MS = 12000;
-const SPEED_KEY = 'tileripper.stepsPerSecond';
+const SPEED_KEY = 'chronozarr.stepsPerSecond';
 const STRETCH_SAMPLES_PER_CELL = 300;
 const URL_SYNC_MS = 300;
 const CHART_BATCH = 4;
@@ -1941,124 +1941,16 @@ class Viewer {
   // ---- input ----
 
   #bindInput() {
-    const canvas = this.canvas;
-    let drag = null;
-    canvas.addEventListener('pointerdown', (e) => {
-      // No text selection or native drag from a press on the map.
-      e.preventDefault();
-      drag = { x: e.clientX, y: e.clientY, moved: 0 };
-      canvas.setPointerCapture(e.pointerId);
+    bindViewerInput(this, {
+      inspect: (x, y) => this.#inspect(x, y),
+      cameraChanged: () => {
+        this.#beginView('camera');
+        this.#dirty = true;
+        this.requestRender();
+        this.#scheduleUrlSync();
+      },
     });
-    canvas.addEventListener('pointermove', (e) => {
-      if (!drag || !this.store) return;
-      const dx = e.clientX - drag.x;
-      const dy = e.clientY - drag.y;
-      drag.moved += Math.abs(dx) + Math.abs(dy);
-      drag.x = e.clientX;
-      drag.y = e.clientY;
-      const scaleToCanvas = canvas.width / canvas.getBoundingClientRect().width;
-      this.camera.cx -= (dx * scaleToCanvas) / this.camera.scale;
-      this.camera.cy -= (dy * scaleToCanvas) / this.camera.scale;
-      this.#beginView('camera');
-      this.#dirty = true;
-      this.requestRender();
-      this.#scheduleUrlSync();
-    });
-    canvas.addEventListener('pointerup', (e) => {
-      const wasClick = drag && drag.moved < CLICK_SLOP_PX;
-      drag = null;
-      if (wasClick) this.#inspect(e.clientX, e.clientY);
-    });
-    canvas.addEventListener('pointercancel', () => {
-      drag = null;
-    });
-    canvas.addEventListener('wheel', (e) => {
-      if (!this.store) return;
-      e.preventDefault();
-      const rect = canvas.getBoundingClientRect();
-      const px = ((e.clientX - rect.left) * canvas.width) / rect.width;
-      const py = ((e.clientY - rect.top) * canvas.height) / rect.height;
-      const { cx, cy, scale } = this.camera;
-      const next = clamp(scale * Math.exp(-e.deltaY * 0.0015), this.fitScale * 0.5, MAX_SCALE);
-      const worldX = cx + (px - canvas.width / 2) / scale;
-      const worldY = cy + (py - canvas.height / 2) / scale;
-      this.camera = { cx: worldX - (px - canvas.width / 2) / next, cy: worldY - (py - canvas.height / 2) / next, scale: next };
-      this.#beginView('camera');
-      this.#dirty = true;
-      this.requestRender();
-      this.#scheduleUrlSync();
-    }, { passive: false });
-    canvas.addEventListener('dblclick', () => this.store && this.fit());
-
-    $('play-btn').addEventListener('click', () => this.togglePlay());
-    $('speed').min = '0';
-    $('speed').max = String(SPEEDS.length - 1);
-    $('speed').addEventListener('input', (e) => this.setSpeed(SPEEDS[Number(e.target.value)]));
     this.#updateSpeedUi();
-    $('prev-btn').addEventListener('click', () => this.goToTime(this.t - 1));
-    $('next-btn').addEventListener('click', () => this.goToTime(this.t + 1));
-    $('band-select').addEventListener('change', (e) => this.setBandChoice(Number(e.target.value)));
-    $('product-select').addEventListener('change', (e) => this.setProduct(Number(e.target.value)));
-    $('inspector-close').addEventListener('click', () => this.closeInspector());
-    const applyStretch = () => this.setStretch(Number($('stretch-min').value), Number($('stretch-max').value));
-    $('stretch-min').addEventListener('change', applyStretch);
-    $('stretch-max').addEventListener('change', applyStretch);
-    $('stretch-auto').addEventListener('click', () => this.autoStretch());
-    $('gap-toggle').addEventListener('click', () => this.toggleGaps());
-
-    const track = $('timeline-track');
-    let scrubbing = false;
-    const timeFromEvent = (e) => {
-      const rect = track.getBoundingClientRect();
-      const pad = 8;
-      const frac = clamp((e.clientX - rect.left - pad) / (rect.width - pad * 2), 0, 1);
-      return Math.round(frac * (this.store.times.length - 1));
-    };
-    track.addEventListener('pointerdown', (e) => {
-      // Without these a press on the track starts a text selection that the pointer, drifting off the control, extends over the page.
-      e.preventDefault();
-      if (!this.store) return;
-      track.setPointerCapture(e.pointerId);
-      scrubbing = true;
-      this.goToTime(timeFromEvent(e));
-    });
-    const endScrub = () => {
-      scrubbing = false;
-    };
-    window.addEventListener('pointermove', (e) => scrubbing && this.goToTime(timeFromEvent(e)));
-    window.addEventListener('pointerup', endScrub);
-    window.addEventListener('pointercancel', endScrub);
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && this.inspectorOpen) {
-        this.closeInspector();
-        return;
-      }
-      if (!this.store) return;
-      const typing = e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT';
-      if (e.key === ' ') {
-        if (e.target.tagName === 'SELECT' || (typing && e.target.type !== 'range')) return;
-        e.preventDefault();
-        if (!e.repeat) this.togglePlay();
-        return;
-      }
-      if (typing) return;
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        this.goToTime(this.t - 1);
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        this.goToTime(this.t + 1);
-      } else if (/^[1-9]$/.test(e.key)) {
-        this.setProduct(Number(e.key) - 1);
-      } else if ((e.key === 'd' || e.key === 'D') && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        this.togglePerfOverlay();
-      }
-    });
-    // A focused button would also click on Space; the keydown above has already toggled playback.
-    document.addEventListener('keyup', (e) => {
-      if (e.key === ' ' && e.target.tagName === 'BUTTON') e.preventDefault();
-    });
   }
 
   // ---- UI ----
@@ -2230,83 +2122,6 @@ class Viewer {
   }
 }
 
-const ndviColor = (v) => (v === null ? 'var(--text-3)' : v > 0.3 ? 'var(--green)' : v > 0 ? 'var(--amber)' : 'var(--red)');
-const ndwiColor = (v) => (v === null ? 'var(--text-3)' : v > 0 ? 'var(--accent)' : 'var(--text-2)');
-
-function metricHtml(name, value, color) {
-  const frac = value === null ? 0 : ((value + 1) / 2) * 100;
-  return `
-    <div class="metric">
-      <div class="metric-header">
-        <span class="metric-name">${name}</span>
-        <span class="metric-value" style="color:${color}">${value === null ? '—' : value.toFixed(3)}</span>
-      </div>
-      <div class="metric-bar"><div class="metric-fill" style="width:${frac}%;background:${color}"></div></div>
-    </div>`;
-}
-
-/** A value for display: whole numbers as they are, others with 3 significant-ish digits (more decimals for small values). */
-function formatValue(value) {
-  if (!Number.isFinite(value) || Number.isInteger(value)) return String(value);
-  const magnitude = Math.abs(value);
-  return value.toFixed(magnitude >= 1000 ? 1 : magnitude >= 10 ? 2 : 3);
-}
-
-function sidebarHtml(info, timeLabel) {
-  const indices = [];
-  if (info.hasNdvi) indices.push(metricHtml('NDVI', info.ndvi, ndviColor(info.ndvi)));
-  if (info.hasNdwi) {
-    indices.push(metricHtml('NDWI', info.ndwi, ndwiColor(info.ndwi)));
-    indices.push(`
-      <div class="metric">
-        <div class="metric-header">
-          <span class="metric-name">Water</span>
-          <span class="water-badge ${info.isWater ? 'yes' : 'no'}">
-            <span class="water-dot" style="background:${info.isWater ? 'var(--water)' : 'var(--text-3)'}"></span>
-            ${info.isWater ? 'Detected' : 'None'}
-          </span>
-        </div>
-      </div>`);
-  }
-  const row = (label, value) => `<div class="meta-row"><span class="label">${label}</span><span class="value mono">${value}</span></div>`;
-  const reflectance = info.bands.every((b) => b.reflectance);
-  const physical = (b) => (reflectance ? b.value.toFixed(4) : `${formatValue(b.value)}${b.units && b.units !== 'reflectance' ? ` ${b.units}` : ''}`);
-  const noData = '<span class="no-data">no data</span>';
-  const scaled = info.valid && info.bands.some((b) => b.value !== b.stored);
-  const status = info.valid ? '' : row('Status', `<span class="no-data">No data</span> · ${info.masked ? 'masked out' : 'at the nodata value'}`);
-  const observed = info.observed === null || info.observed === undefined ? '' : row('Observed by', info.observed === 0 ? 'no scene (gap-filled)' : `${info.observed} scene${info.observed === 1 ? '' : 's'}`);
-  return `
-    <div class="sidebar-section">
-      <div class="section-label">Location</div>
-      <div class="meta-row"><span class="label">Time</span><span class="value">${timeLabel}</span></div>
-      ${row('Pixel (x, y)', `${info.pixel.x}, ${info.pixel.y}`)}
-      ${row('Level', info.lod === 0 ? '0 (full resolution)' : `${info.lod} (${2 ** info.lod}× coarser)`)}
-      ${status}
-      ${observed}
-    </div>
-    ${indices.length ? `<div class="sidebar-section"><div class="section-label">Indices</div>${indices.join('')}</div>` : ''}
-    <div class="sidebar-section">
-      <div class="section-label">Over time</div>
-      <div id="chart-legend" class="chart-legend"></div>
-      <div id="chart" class="chart"></div>
-      <div id="chart-status" class="chart-status"></div>
-    </div>
-    <div class="sidebar-section">
-      <div class="section-label">${reflectance ? 'Reflectance' : 'Value'}</div>
-      ${info.bands.map((b) => row(b.name, info.valid ? physical(b) : noData)).join('')}
-    </div>
-    ${
-      scaled
-        ? `<div class="sidebar-section">
-      <div class="section-label">Stored value</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 16px;">
-        ${info.bands.map((b) => row(b.name, b.stored)).join('')}
-      </div>
-    </div>`
-        : ''
-    }`;
-}
-
 async function loadCatalog() {
   const url = new URL('catalog.json', location.href);
   const response = await fetch(url);
@@ -2325,7 +2140,7 @@ async function main() {
   viewer.inspectorUi = embed.controls;
   viewer.extraQuery = embed.query;
   const bridge = embed.embed ? connectEmbed(viewer, embed) : null;
-  window.tileripper = {
+  window.chronozarr = {
     viewer,
     bench: () => import('./bench.js').then((m) => m.runBenchmarks(viewer)),
     scrubBench: (options) => import('./bench.js').then((m) => m.runScrubBenchmarks(viewer, options)),
@@ -2355,7 +2170,7 @@ async function main() {
     // An external store earns a dropdown entry only once it has loaded, so a dead URL from an old
     // permalink never lingers as an option.
     const optionFor = (value) => [...select.options].find((option) => option.value === value);
-    window.tileripper.ready = viewer
+    window.chronozarr.ready = viewer
       .loadStore(url, { viewSearch })
       .then((result) => {
         if (!inCatalog(url) && catalog.length > 0 && !optionFor(url)) {

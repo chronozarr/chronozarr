@@ -14,7 +14,7 @@ import xarray as xr
 from zarr.storage import LocalStore
 
 import chronozarr
-from chronozarr import decode
+from chronozarr import store as store_module
 from chronozarr.backend import ChronozarrBackendEntrypoint
 from chronozarr.decode import HttpStore
 from tests.synthetic import make_da, make_truth
@@ -257,7 +257,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 def serve(monkeypatch):
     """Serve a directory over http://127.0.0.1; returns (url, handler class) for it."""
     monkeypatch.setenv("no_proxy", "127.0.0.1")
-    monkeypatch.setattr(decode, "_RETRY_DELAYS_S", (0.0, 0.0, 0.0))
+    monkeypatch.setattr(store_module, "_RETRY_DELAYS_S", (0.0, 0.0, 0.0))
     servers: list[http.server.ThreadingHTTPServer] = []
 
     def start(root: Path) -> tuple[str, type[_Handler]]:
@@ -385,3 +385,15 @@ def test_band_units_survive_both_xarray_interfaces(tmp_path, units, physical):
         else:
             assert "units" not in array.attrs
         assert array.sel(band="a").band_units.item() == "m"
+
+
+def test_http_store_compatibility_exports():
+    """Existing decoder imports share the neutral transport used by validation."""
+    from chronozarr.decode import as_store
+    from chronozarr.store import HttpStore as NeutralHttpStore
+
+    assert HttpStore is NeutralHttpStore
+    assert as_store is store_module.as_store
+    assert isinstance(as_store("https://example.invalid/store"), NeutralHttpStore)
+    local = LocalStore("unused")
+    assert as_store(local) is local

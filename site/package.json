@@ -10,7 +10,8 @@
     "sync-content": "node scripts/sync-content.mjs",
     "predev": "npm run sync-content",
     "prebuild": "npm run sync-content",
-    "deploy": "npm run build && ../node_modules/.bin/wrangler deploy --config wrangler.toml"
+    "deploy": "npm run build && ../node_modules/.bin/wrangler deploy --config wrangler.toml",
+    "postbuild": "node scripts/copy-demo.mjs"
   },
   "dependencies": {
     "react": "19.2.4",

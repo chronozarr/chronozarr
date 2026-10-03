@@ -1,8 +1,16 @@
 # Measured comparisons: zarr-layer, and one COG per date
 
+> Historical benchmark: the results below were measured on sharded dataset revision `chronozarr-3` on 2026-10-01. The current demo catalog uses unsharded `chronozarr-4`; these suffixes are store-prefix revisions, not format versions. Historical results and procedures are retained as measured. See the README for the subsequent unsharded cold-open measurement.
+
+For the matched three-date level-0 sample measured on 2026-10-03, see the
+[retrieval comparison](../bench/adoption/README.md) and
+[shared-renderer comparison](../bench/rendered/README.md). The latter checks exact
+data, masks and rendered pixels; its controlled network profile is page-target
+emulation with unobserved worker traffic, not a CDN experiment.
+
 Two comparisons of a chronozarr store, measured on 2026-10-01 on one machine (Apple M3 Max, macOS, Node 24.16.0, Chromium 153 through Playwright 1.63.0 with the Metal GPU backend). All code, raw results and a lockfile are in `bench/`; the exact commands are in the last section.
 
-- **A. CarbonPlan zarr-layer** (`@carbonplan/zarr-layer` 0.10.0, `maplibre-gl` 6.11.2): does it open the published Ucayali store, and how does it compare with the TileRipper viewer on the same store, view and level.
+- **A. CarbonPlan zarr-layer** (`@carbonplan/zarr-layer` 0.10.0, `maplibre-gl` 6.11.2): does it open the published Ucayali store, and how does it compare with the chronozarr viewer on the same store, view and level.
 - **B. One COG per date**: the same imagery as 117 Cloud Optimized GeoTIFFs, against the chronozarr store, for the delivery cost of one session.
 
 Store used in both: `https://data.tileripper.com/ucayali_santa_maria/chronozarr-3` (spec 0.2.0, `temporal.encoding: none`, 117 monthly timesteps, 4 bands B02/B03/B04/B08 as uint16, 4 levels in UTM 18S, level 0 = 2759 x 2765 px at 10 m, shards of (117, 4, 512, 512) holding one zstd-5 chunk of (1, 4, 512, 512) per timestep, consolidated metadata, `shard_bytes` hints). Level 1 is 1380 x 1383 px at 20 m, a 3 x 3 grid of cells. A local copy is `data/stores/ucayali_santa_maria/chronozarr-3` (6.45 GB).
@@ -10,7 +18,7 @@ Store used in both: `https://data.tileripper.com/ucayali_santa_maria/chronozarr-
 ## Summary
 
 - **zarr-layer does not open the published store with its default options.** The map stays blank and zarr-layer says nothing: the `pixels_per_tile` key in `multiscales[0].datasets[*]` makes it treat the store as a global slippy-map pyramid, so it places a UTM raster on the whole Web Mercator world and finds no cell in view (section 1.1). It opens the store, drawn in the right place with the same values as the store, either with two constructor options (`crs`, `bounds`) or with `pixels_per_tile` removed from the store's attributes (section 1.2). The second was adopted as the format rule afterwards (note in section 1.2).
-- **Per step the two renderers move the same chunks** (9 chunks, 10.7 MB for the 3 x 3 view). TileRipper's speculative prefetch adds 10 to 64 % bytes to a 20-step scrub (14 to 17 % on a saturated local link). On a saturated link with a stable origin (local 50 and 10 Mbit/s, remote 10 Mbit/s) a TileRipper step is 15 to 19 % slower than zarr-layer's (10.2 s against 8.6 s at 10 Mbit/s); on an idle local link the same prefetch makes steps cost 0 ms against zarr-layer's 80 ms. TileRipper never shows a frame that mixes timesteps; zarr-layer does for 22 to 70 % of the time of a stepped scrub.
+- **Per step the two renderers move the same chunks** (9 chunks, 10.7 MB for the 3 x 3 view). chronozarr's speculative prefetch adds 10 to 64 % bytes to a 20-step scrub (14 to 17 % on a saturated local link). On a saturated link with a stable origin (local 50 and 10 Mbit/s, remote 10 Mbit/s) a chronozarr step is 15 to 19 % slower than zarr-layer's (10.2 s against 8.6 s at 10 Mbit/s); on an idle local link the same prefetch makes steps cost 0 ms against zarr-layer's 80 ms. chronozarr never shows a frame that mixes timesteps; zarr-layer does for 22 to 70 % of the time of a stepped scrub.
 - **Cold open on the published store is dominated by the CDN, not by either tool**: the nine shard-index reads at the end of 83 to 174 MB shard objects are cache misses that take 1.7 to 11 s, for both tools alike (section 1.5).
 - **One COG per date costs about the same bytes (+0 to +4 % per phase, +1.4 % over the 20-step scrub, +3.2 % on disk) and differs in requests.** Per new date a COG needs a header read before its tiles; chronozarr reads a shard index once and then only chunks. With geotiff.js 3.0.5's defaults a header is 7 chained requests; with 64 KB blocks it is 1. The modelled delivery time of the 20-step scrub is 1.75x (defaults) or 1.13x (64 KB blocks) of chronozarr on a 90 Mbit/s, 112 ms link, 1.18x / 1.05x at 50 Mbit/s + 40 ms and 1.10x / 1.04x at 10 Mbit/s + 100 ms. On slow links both are bandwidth-bound and the formats converge.
 - **Reading one pixel's complete history costs 164 MB in both layouts** (117 chunks or tiles of 512 x 512 x 4), because neither chunks along time; the two readers return identical values.
@@ -68,11 +76,11 @@ With the options variant, `layer.queryData` at level `finest` for pixel (row 138
 
 ### 1.4 Method of the comparison
 
-- **View and level.** The whole AOI (3 x 3 cells of level 1) in a 1800 x 1700 px window at device pixel ratio 1, AOI 1457.6 px wide, centred. zarr-layer chooses level 1 by itself at map zoom 12 (every run reports level 1). TileRipper is pinned to level 1 (`viewer.loadStore(url, { lod: 1, viewSearch })`, `viewSearch` = `?t=40&z=<0.5283>&c=<AOI centre>`), which also switches off its coarse-first staging; its canvas (1500 x 1592) shows the whole AOI. `tileripper.interactionBench` was not used because it opens at the viewer's own fit camera with the adaptive level and takes neither; the page script replays its scrub with the same probe events and the same `analyzeLatency` from `js/tileripper/perf.js`.
+- **View and level.** The whole AOI (3 x 3 cells of level 1) in a 1800 x 1700 px window at device pixel ratio 1, AOI 1457.6 px wide, centred. zarr-layer chooses level 1 by itself at map zoom 12 (every run reports level 1). chronozarr is pinned to level 1 (`viewer.loadStore(url, { lod: 1, viewSearch })`, `viewSearch` = `?t=40&z=<0.5283>&c=<AOI centre>`), which also switches off its coarse-first staging; its canvas (1500 x 1592) shows the whole AOI. `chronozarr.interactionBench` was not used because it opens at the viewer's own fit camera with the adaptive level and takes neither; the page script replays its scrub with the same probe events and the same `analyzeLatency` from `js/demo/perf.js`.
 - **zarr-layer configuration.** Unmodified store; options `crs: 'EPSG:32718'`, `bounds`, `zarrVersion: 3`; one `setSelector` per step with `time` by index. A frame counts as complete when every visible region of the active level holds the current selector and has its textures uploaded (read from `layer.regionRenderer`'s region cache at each MapLibre render).
 - **Open.** From the call that opens the store (`loadStore` / `map.addLayer`, both include reading the metadata) to the first frame that shows all 9 cells at level 1.
-- **Scrub forward 20**, from timestep 40 (steps 41 to 60), in two modes. *Burst*: one input every 100 ms (TileRipper's `ArrowRight`, zarr-layer's `setSelector`), as in `interactionBench`; a step the tool skipped is satisfied by the later frame that shows a later step. *Paced*: the next input 100 ms after the frame of the previous step is complete, so every step is shown and its latency is the time to load and draw it.
-- **Network.** A fresh Chromium per run (empty caches; HTTP cache also disabled over CDP). CDP `Network.emulateNetworkConditions` is applied after the page has loaded, so only the data requests are throttled (checked once with 10 MB range reads: 1.66 s at 50 Mbit/s and 8.1 s at 10 Mbit/s). Requests and bytes are counted from CDP events of the page, identically for both tools: `encodedDataLength` (headers and body) of finished requests, and the body bytes received so far for aborted ones, which is a lower bound of what crossed the wire. The count was checked against TileRipper's own reader statistics (19 requests, 10.03 MB against 19 and 10.04 MB at open; the reader counts only completed requests).
+- **Scrub forward 20**, from timestep 40 (steps 41 to 60), in two modes. *Burst*: one input every 100 ms (chronozarr's `ArrowRight`, zarr-layer's `setSelector`), as in `interactionBench`; a step the tool skipped is satisfied by the later frame that shows a later step. *Paced*: the next input 100 ms after the frame of the previous step is complete, so every step is shown and its latency is the time to load and draw it.
+- **Network.** A fresh Chromium per run (empty caches; HTTP cache also disabled over CDP). CDP `Network.emulateNetworkConditions` is applied after the page has loaded, so only the data requests are throttled (checked once with 10 MB range reads: 1.66 s at 50 Mbit/s and 8.1 s at 10 Mbit/s). Requests and bytes are counted from CDP events of the page, identically for both tools: `encodedDataLength` (headers and body) of finished requests, and the body bytes received so far for aborted ones, which is a lower bound of what crossed the wire. The count was checked against chronozarr's own reader statistics (19 requests, 10.03 MB against 19 and 10.04 MB at open; the reader counts only completed requests).
 - **Two sources.** *remote*: the published store; `natural` is then the real link from this machine to Cloudflare (HTTP/2). *local*: the same files from this repository's range server (`js/support/static-server.js`, HTTP/1.1, so at most 6 connections per origin for either tool); `natural` is then unthrottled localhost, and CDP throttling defines the whole link. The local runs exist because the CDN adds stalls that are not the tools' (section 1.5).
 - **Repetitions.** remote: natural 3, 50 Mbit/s 2, 10 Mbit/s 2 (natural and 50 Mbit/s after one unrecorded warm-up per tool); local: 3, 2, 2. The two tools and two modes are interleaved, the tool order alternates by repetition. Tables show the median and the range. The machine was shared (load average 10 to 20) and the remote link varied by an order of magnitude between probes (27 to 964 Mbit/s).
 
@@ -84,40 +92,40 @@ Median over repetitions, range in parentheses. Burst and paced runs both open th
 
 | link | tool | runs | time to first complete frame | of which until the shard-index reads are done | requests | MB |
 |---|---|---|---|---|---|---|
-| natural | tileripper | 6 | 6.79 s (3.08 s-9.92 s) | 6.58 s (3.01 s-9.61 s) | 19 (19-19) | 10.0 (10.0-10.0) |
+| natural | chronozarr | 6 | 6.79 s (3.08 s-9.92 s) | 6.58 s (3.01 s-9.61 s) | 19 (19-19) | 10.0 (10.0-10.0) |
 | natural | zarr-layer | 6 | 6.72 s (4.84 s-7.91 s) | 6.51 s (4.46 s-7.54 s) | 30 (30-30) | 10.0 (10.0-10.0) |
-| 50Mbit-40ms | tileripper | 4 | 7.69 s (3.76 s-10.1 s) | 7.42 s (3.38 s-9.85 s) | 19 (19-19) | 10.0 (10.0-10.0) |
+| 50Mbit-40ms | chronozarr | 4 | 7.69 s (3.76 s-10.1 s) | 7.42 s (3.38 s-9.85 s) | 19 (19-19) | 10.0 (10.0-10.0) |
 | 50Mbit-40ms | zarr-layer | 4 | 5.76 s (3.04 s-6.80 s) | 5.49 s (2.22 s-6.52 s) | 30 (30-30) | 10.0 (10.0-10.0) |
-| 10Mbit-100ms | tileripper | 4 | 14.8 s (14.7 s-16.8 s) | 9.34 s (2.97 s-15.7 s) | 19 (19-19) | 10.0 (10.0-10.0) |
+| 10Mbit-100ms | chronozarr | 4 | 14.8 s (14.7 s-16.8 s) | 9.34 s (2.97 s-15.7 s) | 19 (19-19) | 10.0 (10.0-10.0) |
 | 10Mbit-100ms | zarr-layer | 4 | 16.9 s (9.36 s-21.3 s) | 15.8 s (3.88 s-20.1 s) | 30 (30-30) | 10.0 (10.0-10.0) |
 
 #### Scrub forward 20 timesteps, paced: published store (data.tileripper.com)
 
 | link | tool | runs | requests | of which aborted | MB transferred | scrub duration | steps shown exactly | step latency median / p95 | time showing mixed-timestep frames | MB in the next 3 s |
 |---|---|---|---|---|---|---|---|---|---|---|
-| natural | tileripper | 3 | 227 (219-235) | 36 (28-50) | 235 (234-235) | 14.6 s (10.5 s-16.3 s) | 20 (20-20) of 20 | 424 ms / 1.45 s | 0 ms (0 ms-0 ms) | 49 (29-59) |
+| natural | chronozarr | 3 | 227 (219-235) | 36 (28-50) | 235 (234-235) | 14.6 s (10.5 s-16.3 s) | 20 (20-20) of 20 | 424 ms / 1.45 s | 0 ms (0 ms-0 ms) | 49 (29-59) |
 | natural | zarr-layer | 3 | 180 (180-180) | 0 (0-0) | 214 (214-214) | 17.2 s (16.6 s-19.6 s) | 20 (20-20) of 20 | 451 ms / 1.77 s | 9.71 s (9.42 s-12.7 s) | 0 (0-0) |
-| 50Mbit-40ms | tileripper | 2 | 257 (255-257) | 77 (75-77) | 297 (263-297) | 50.2 s (44.0 s-50.2 s) | 20 (20-20) of 20 | 2.12 s / 4.62 s | 0 ms (0 ms-0 ms) | 15 (15-15) |
+| 50Mbit-40ms | chronozarr | 2 | 257 (255-257) | 77 (75-77) | 297 (263-297) | 50.2 s (44.0 s-50.2 s) | 20 (20-20) of 20 | 2.12 s / 4.62 s | 0 ms (0 ms-0 ms) | 15 (15-15) |
 | 50Mbit-40ms | zarr-layer | 2 | 180 (180-180) | 0 (0-0) | 214 (214-214) | 65.1 s (38.9 s-65.1 s) | 20 (20-20) of 20 | 2.27 s / 7.70 s | 45.7 s (13.6 s-45.7 s) | 0 (0-0) |
-| 10Mbit-100ms | tileripper | 2 | 275 (273-275) | 94 (93-94) | 270 (269-270) | 207.9 s (207.8 s-207.9 s) | 20 (20-20) of 20 | 10.3 s / 12.2 s | 0 ms (0 ms-0 ms) | 3 (2-3) |
+| 10Mbit-100ms | chronozarr | 2 | 275 (273-275) | 94 (93-94) | 270 (269-270) | 207.9 s (207.8 s-207.9 s) | 20 (20-20) of 20 | 10.3 s / 12.2 s | 0 ms (0 ms-0 ms) | 3 (2-3) |
 | 10Mbit-100ms | zarr-layer | 2 | 180 (180-180) | 0 (0-0) | 214 (214-214) | 175.8 s (175.7 s-175.8 s) | 20 (20-20) of 20 | 8.64 s / 9.73 s | 59.2 s (56.7 s-59.2 s) | 0 (0-0) |
 
 #### Scrub forward 20 timesteps, burst (one step every 100 ms): published store (data.tileripper.com)
 
 | link | tool | runs | requests | of which aborted | MB transferred | scrub duration | steps shown exactly | step latency median / p95 | time showing mixed-timestep frames | MB in the next 3 s |
 |---|---|---|---|---|---|---|---|---|---|---|
-| natural | tileripper | 3 | 192 (192-192) | 177 (175-177) | 11 (11-21) | 2.91 s (2.33 s-3.11 s) | 1 (1-1) of 20 | 2.01 s / 2.91 s | 0 ms (0 ms-0 ms) | 29 (16-52) |
+| natural | chronozarr | 3 | 192 (192-192) | 177 (175-177) | 11 (11-21) | 2.91 s (2.33 s-3.11 s) | 1 (1-1) of 20 | 2.01 s / 2.91 s | 0 ms (0 ms-0 ms) | 29 (16-52) |
 | natural | zarr-layer | 3 | 180 (180-180) | 169 (169-171) | 28 (11-30) | 3.23 s (2.33 s-3.50 s) | 1 (1-1) of 20 | 2.33 s / 3.23 s | 661 ms (219 ms-1.11 s) | 0 (0-0) |
-| 50Mbit-40ms | tileripper | 2 | 192 (192-192) | 177 (177-177) | 22 (12-22) | 4.14 s (3.60 s-4.14 s) | 1 (1-1) of 20 | 3.24 s / 4.14 s | 0 ms (0 ms-0 ms) | 20 (20-20) |
+| 50Mbit-40ms | chronozarr | 2 | 192 (192-192) | 177 (177-177) | 22 (12-22) | 4.14 s (3.60 s-4.14 s) | 1 (1-1) of 20 | 3.24 s / 4.14 s | 0 ms (0 ms-0 ms) | 20 (20-20) |
 | 50Mbit-40ms | zarr-layer | 2 | 180 (180-180) | 171 (171-171) | 19 (13-19) | 5.86 s (3.66 s-5.86 s) | 1 (1-1) of 20 | 4.96 s / 5.86 s | 2.40 s (377 ms-2.40 s) | 0 (0-0) |
-| 10Mbit-100ms | tileripper | 2 | 192 (192-192) | 177 (177-177) | 10 (10-10) | 10.3 s (10.2 s-10.3 s) | 1 (1-1) of 20 | 9.35 s / 10.3 s | 0 ms (0 ms-0 ms) | 6 (5-6) |
+| 10Mbit-100ms | chronozarr | 2 | 192 (192-192) | 177 (177-177) | 10 (10-10) | 10.3 s (10.2 s-10.3 s) | 1 (1-1) of 20 | 9.35 s / 10.3 s | 0 ms (0 ms-0 ms) | 6 (5-6) |
 | 10Mbit-100ms | zarr-layer | 2 | 180 (180-180) | 171 (171-171) | 10 (10-10) | 10.2 s (10.2 s-10.2 s) | 1 (1-1) of 20 | 9.35 s / 10.2 s | 2.64 s (2.53 s-2.64 s) | 0 (0-0) |
 
-Paced scrub: both tools show every step. zarr-layer transfers exactly the 180 chunks it needs (214 MB, 10.7 MB a step) and aborts nothing; TileRipper transfers 235 to 297 MB: speculative requests for later steps (28 to 94 of its 219 to 275 requests are aborted when the user moves on) and, on the faster links, data that keeps arriving after the last step (up to 59 MB in the next 3 s). The median step takes 0.42 s (TileRipper) against 0.45 s (zarr-layer) on the natural link, 2.1 against 2.3 s at 50 Mbit/s and 10.3 against 8.6 s at 10 Mbit/s, where the link is the limit (10.7 MB need 8.6 s) and TileRipper's prefetch is on it while the next step is requested. The remote runs at 50 Mbit/s vary with the CDN (zarr-layer's scrub took 38.9 s in one run and 65.1 s in the other). zarr-layer replaces the nine regions of a step one by one as their chunks arrive, so the canvas showed a mixture of old and new timestep for 9.7 s of its 17 s scrub (natural) and 59 s of 176 s (10 Mbit/s); TileRipper draws a step only when all nine cells are there (no mixed frame).
+Paced scrub: both tools show every step. zarr-layer transfers exactly the 180 chunks it needs (214 MB, 10.7 MB a step) and aborts nothing; chronozarr transfers 235 to 297 MB: speculative requests for later steps (28 to 94 of its 219 to 275 requests are aborted when the user moves on) and, on the faster links, data that keeps arriving after the last step (up to 59 MB in the next 3 s). The median step takes 0.42 s (chronozarr) against 0.45 s (zarr-layer) on the natural link, 2.1 against 2.3 s at 50 Mbit/s and 10.3 against 8.6 s at 10 Mbit/s, where the link is the limit (10.7 MB need 8.6 s) and chronozarr's prefetch is on it while the next step is requested. The remote runs at 50 Mbit/s vary with the CDN (zarr-layer's scrub took 38.9 s in one run and 65.1 s in the other). zarr-layer replaces the nine regions of a step one by one as their chunks arrive, so the canvas showed a mixture of old and new timestep for 9.7 s of its 17 s scrub (natural) and 59 s of 176 s (10 Mbit/s); chronozarr draws a step only when all nine cells are there (no mixed frame).
 
-Burst scrub: neither tool keeps up with one step every 100 ms (a step is 9 chunk reads and at least one round trip). Both skip to the last step (1 of 20 shown exactly) and abort nearly every request (zarr-layer 169 to 171 of 180, TileRipper 175 to 177 of 192); the bytes that count are those of the final step plus what was already in flight (10 to 30 MB). From the first input to the last frame: 2.9 s (TileRipper) against 3.2 s (zarr-layer) on the natural link, 4.1 against 5.9 s at 50 Mbit/s, 10.3 against 10.2 s at 10 Mbit/s.
+Burst scrub: neither tool keeps up with one step every 100 ms (a step is 9 chunk reads and at least one round trip). Both skip to the last step (1 of 20 shown exactly) and abort nearly every request (zarr-layer 169 to 171 of 180, chronozarr 175 to 177 of 192); the bytes that count are those of the final step plus what was already in flight (10 to 30 MB). From the first input to the last frame: 2.9 s (chronozarr) against 3.2 s (zarr-layer) on the natural link, 4.1 against 5.9 s at 50 Mbit/s, 10.3 against 10.2 s at 10 Mbit/s.
 
-How the cold open divides: of the 6.8 s (natural link) both tools need, 6.5 to 6.6 s is the wait for the nine shard-index reads, the last request before any chunk can be asked for. Each is a 1,876-byte range read at the end of a shard object of 83 to 174 MB; at the CDN they are `cf-cache-status: MISS` and the body arrives 1.7 to 11 s after the headers (`curl` for one of them: 2.4, 4.5 and 5.2 s on a miss, 0.34 s on a hit). Both tools make the same nine reads, so the open times on the published store do not separate them; the spread is the CDN's. zarr-layer reads the shard sizes with 9 `HEAD` requests first and TileRipper takes them from the `shard_bytes` attribute, which is why it needs 19 requests at open and zarr-layer 30 (33 with its defaults).
+How the cold open divides: of the 6.8 s (natural link) both tools need, 6.5 to 6.6 s is the wait for the nine shard-index reads, the last request before any chunk can be asked for. Each is a 1,876-byte range read at the end of a shard object of 83 to 174 MB; at the CDN they are `cf-cache-status: MISS` and the body arrives 1.7 to 11 s after the headers (`curl` for one of them: 2.4, 4.5 and 5.2 s on a miss, 0.34 s on a hit). Both tools make the same nine reads, so the open times on the published store do not separate them; the spread is the CDN's. zarr-layer reads the shard sizes with 9 `HEAD` requests first and chronozarr takes them from the `shard_bytes` attribute, which is why it needs 19 requests at open and zarr-layer 30 (33 with its defaults).
 
 This measurement is why the encoder default became unsharded (spec section 13): an unsharded store has no shard index and its largest object is one 1.8 MB chunk. The cold-open numbers for the unsharded layout will be measured on the live store after its upload; every number in this document is for the sharded `chronozarr-3` unless it says otherwise.
 
@@ -129,48 +137,48 @@ Median over repetitions, range in parentheses. Burst and paced runs both open th
 
 | link | tool | runs | time to first complete frame | of which until the shard-index reads are done | requests | MB |
 |---|---|---|---|---|---|---|
-| natural | tileripper | 6 | 101 ms (95 ms-108 ms) | 9 ms (9 ms-12 ms) | 19 (19-19) | 10.0 (10.0-10.0) |
+| natural | chronozarr | 6 | 101 ms (95 ms-108 ms) | 9 ms (9 ms-12 ms) | 19 (19-19) | 10.0 (10.0-10.0) |
 | natural | zarr-layer | 6 | 127 ms (122 ms-130 ms) | 33 ms (30 ms-34 ms) | 30 (30-30) | 10.0 (10.0-10.0) |
-| 50Mbit-40ms | tileripper | 4 | 2.12 s (2.11 s-2.12 s) | 191 ms (190 ms-193 ms) | 19 (19-19) | 10.0 (10.0-10.0) |
+| 50Mbit-40ms | chronozarr | 4 | 2.12 s (2.11 s-2.12 s) | 191 ms (190 ms-193 ms) | 19 (19-19) | 10.0 (10.0-10.0) |
 | 50Mbit-40ms | zarr-layer | 4 | 1.89 s (1.89 s-1.89 s) | 287 ms (280 ms-288 ms) | 30 (30-30) | 10.0 (10.0-10.0) |
-| 10Mbit-100ms | tileripper | 4 | 9.69 s (9.69 s-9.69 s) | 476 ms (475 ms-477 ms) | 19 (19-19) | 10.0 (10.0-10.0) |
+| 10Mbit-100ms | chronozarr | 4 | 9.69 s (9.69 s-9.69 s) | 476 ms (475 ms-477 ms) | 19 (19-19) | 10.0 (10.0-10.0) |
 | 10Mbit-100ms | zarr-layer | 4 | 8.67 s (8.67 s-8.67 s) | 680 ms (678 ms-682 ms) | 30 (30-30) | 10.0 (10.0-10.0) |
 
 #### Scrub forward 20 timesteps, paced: same files, local range server
 
 | link | tool | runs | requests | of which aborted | MB transferred | scrub duration | steps shown exactly | step latency median / p95 | time showing mixed-timestep frames | MB in the next 3 s |
 |---|---|---|---|---|---|---|---|---|---|---|
-| natural | tileripper | 3 | 305 (305-314) | 7 (3-11) | 351 (350-355) | 2.18 s (2.18 s-2.19 s) | 20 (20-20) of 20 | 0 ms / 4 ms | 0 ms (0 ms-0 ms) | 2 (1-2) |
+| natural | chronozarr | 3 | 305 (305-314) | 7 (3-11) | 351 (350-355) | 2.18 s (2.18 s-2.19 s) | 20 (20-20) of 20 | 0 ms / 4 ms | 0 ms (0 ms-0 ms) | 2 (1-2) |
 | natural | zarr-layer | 3 | 180 (180-180) | 0 (0-0) | 214 (214-214) | 3.79 s (3.78 s-3.85 s) | 20 (20-20) of 20 | 80 ms / 100 ms | 824 ms (805 ms-839 ms) | 0 (0-0) |
-| 50Mbit-40ms | tileripper | 2 | 250 (249-250) | 70 (68-70) | 250 (249-250) | 43.0 s (42.9 s-43.0 s) | 20 (20-20) of 20 | 2.03 s / 2.82 s | 0 ms (0 ms-0 ms) | 16 (16-16) |
+| 50Mbit-40ms | chronozarr | 2 | 250 (249-250) | 70 (68-70) | 250 (249-250) | 43.0 s (42.9 s-43.0 s) | 20 (20-20) of 20 | 2.03 s / 2.82 s | 0 ms (0 ms-0 ms) | 16 (16-16) |
 | 50Mbit-40ms | zarr-layer | 2 | 180 (180-180) | 0 (0-0) | 214 (214-214) | 37.6 s (37.6 s-37.6 s) | 20 (20-20) of 20 | 1.76 s / 1.98 s | 14.6 s (14.6 s-14.6 s) | 0 (0-0) |
-| 10Mbit-100ms | tileripper | 2 | 251 (251-251) | 71 (71-71) | 245 (244-245) | 204.7 s (204.2 s-204.7 s) | 20 (20-20) of 20 | 10.2 s / 14.1 s | 0 ms (0 ms-0 ms) | 4 (2-4) |
+| 10Mbit-100ms | chronozarr | 2 | 251 (251-251) | 71 (71-71) | 245 (244-245) | 204.7 s (204.2 s-204.7 s) | 20 (20-20) of 20 | 10.2 s / 14.1 s | 0 ms (0 ms-0 ms) | 4 (2-4) |
 | 10Mbit-100ms | zarr-layer | 2 | 180 (180-180) | 0 (0-0) | 214 (214-214) | 175.6 s (175.4 s-175.6 s) | 20 (20-20) of 20 | 8.63 s / 9.73 s | 72.6 s (72.5 s-72.6 s) | 0 (0-0) |
 
 #### Scrub forward 20 timesteps, burst (one step every 100 ms): same files, local range server
 
 | link | tool | runs | requests | of which aborted | MB transferred | scrub duration | steps shown exactly | step latency median / p95 | time showing mixed-timestep frames | MB in the next 3 s |
 |---|---|---|---|---|---|---|---|---|---|---|
-| natural | tileripper | 3 | 306 (301-311) | 9 (7-10) | 346 (344-352) | 1.90 s (1.90 s-1.90 s) | 20 (20-20) of 20 | 0 ms / 53 ms | 0 ms (0 ms-0 ms) | 3 (2-3) |
+| natural | chronozarr | 3 | 306 (301-311) | 9 (7-10) | 346 (344-352) | 1.90 s (1.90 s-1.90 s) | 20 (20-20) of 20 | 0 ms / 53 ms | 0 ms (0 ms-0 ms) | 3 (2-3) |
 | natural | zarr-layer | 3 | 180 (180-180) | 0 (0-0) | 214 (214-214) | 1.98 s (1.98 s-1.98 s) | 20 (20-20) of 20 | 79 ms / 84 ms | 863 ms (789 ms-900 ms) | 0 (0-0) |
-| 50Mbit-40ms | tileripper | 2 | 192 (192-192) | 177 (177-177) | 14 (14-14) | 3.62 s (3.61 s-3.62 s) | 1 (1-1) of 20 | 2.72 s / 3.62 s | 0 ms (0 ms-0 ms) | 17 (17-17) |
+| 50Mbit-40ms | chronozarr | 2 | 192 (192-192) | 177 (177-177) | 14 (14-14) | 3.62 s (3.61 s-3.62 s) | 1 (1-1) of 20 | 2.72 s / 3.62 s | 0 ms (0 ms-0 ms) | 17 (17-17) |
 | 50Mbit-40ms | zarr-layer | 2 | 180 (180-180) | 171 (171-171) | 16 (16-16) | 3.60 s (3.59 s-3.60 s) | 1 (1-1) of 20 | 2.70 s / 3.60 s | 681 ms (680 ms-681 ms) | 0 (0-0) |
-| 10Mbit-100ms | tileripper | 2 | 192 (192-192) | 177 (177-177) | 10 (10-10) | 12.1 s (12.1 s-12.1 s) | 1 (1-1) of 20 | 11.2 s / 12.1 s | 0 ms (0 ms-0 ms) | 3 (3-3) |
+| 10Mbit-100ms | chronozarr | 2 | 192 (192-192) | 177 (177-177) | 10 (10-10) | 12.1 s (12.1 s-12.1 s) | 1 (1-1) of 20 | 11.2 s / 12.1 s | 0 ms (0 ms-0 ms) | 3 (3-3) |
 | 10Mbit-100ms | zarr-layer | 2 | 180 (180-180) | 171 (171-171) | 10 (10-10) | 10.2 s (10.2 s-10.2 s) | 1 (1-1) of 20 | 9.30 s / 10.2 s | 3.42 s (3.41 s-3.42 s) | 0 (0-0) |
 
-Paced scrub: zarr-layer transfers 214 MB exactly; TileRipper 245 MB at 10 Mbit/s (+14 %), 250 MB at 50 Mbit/s (+17 %) and 351 MB unthrottled (+64 %), where its prefetch fills what the link can carry. The median step is 2.03 s (TileRipper) against 1.76 s (zarr-layer) at 50 Mbit/s (+15 %), 10.2 against 8.63 s at 10 Mbit/s (+18 %), and 0 ms against 80 ms unthrottled, where TileRipper has already loaded the next steps. zarr-layer showed mixed-timestep frames for 0.8 s of 3.8 s unthrottled, 14.6 s of 37.6 s at 50 Mbit/s and 72.6 s of 175.6 s at 10 Mbit/s; TileRipper never did. Burst scrub: unthrottled both keep up (20 of 20 steps shown, 1.9 s against 2.0 s); at 50 and 10 Mbit/s both skip to the last step, as on the published store.
+Paced scrub: zarr-layer transfers 214 MB exactly; chronozarr 245 MB at 10 Mbit/s (+14 %), 250 MB at 50 Mbit/s (+17 %) and 351 MB unthrottled (+64 %), where its prefetch fills what the link can carry. The median step is 2.03 s (chronozarr) against 1.76 s (zarr-layer) at 50 Mbit/s (+15 %), 10.2 against 8.63 s at 10 Mbit/s (+18 %), and 0 ms against 80 ms unthrottled, where chronozarr has already loaded the next steps. zarr-layer showed mixed-timestep frames for 0.8 s of 3.8 s unthrottled, 14.6 s of 37.6 s at 50 Mbit/s and 72.6 s of 175.6 s at 10 Mbit/s; chronozarr never did. Burst scrub: unthrottled both keep up (20 of 20 steps shown, 1.9 s against 2.0 s); at 50 and 10 Mbit/s both skip to the last step, as on the published store.
 
-With the CDN out of the picture the open is transfer-bound (10 MB: 1.6 s at 50 Mbit/s, 8.0 s at 10 Mbit/s plus round trips). zarr-layer reaches its first complete frame 0.23 s (11 %) and 1.0 s (10 %) sooner than TileRipper at 50 and 10 Mbit/s and 26 ms later unthrottled. TileRipper's last byte arrives 0.01 s (50 Mbit/s) and 0.41 s (10 Mbit/s) after zarr-layer's (1.89 s against 1.90 s, 8.66 s against 9.08 s); the rest of the difference is what happens afterwards: TileRipper takes 0.07 s (unthrottled), 0.23 s and 0.61 s after the last byte to paint, zarr-layer 0.01 to 0.08 s. The sequential round trips before the chunk reads are 3 for TileRipper (`zarr.json`, shard index, chunk) and 5 for zarr-layer with `zarrVersion: 3` (`zarr.json`, the `band` and `time` coordinate arrays, `HEAD`, shard index, chunk; 8 with its defaults).
+With the CDN out of the picture the open is transfer-bound (10 MB: 1.6 s at 50 Mbit/s, 8.0 s at 10 Mbit/s plus round trips). zarr-layer reaches its first complete frame 0.23 s (11 %) and 1.0 s (10 %) sooner than chronozarr at 50 and 10 Mbit/s and 26 ms later unthrottled. chronozarr's last byte arrives 0.01 s (50 Mbit/s) and 0.41 s (10 Mbit/s) after zarr-layer's (1.89 s against 1.90 s, 8.66 s against 9.08 s); the rest of the difference is what happens afterwards: chronozarr takes 0.07 s (unthrottled), 0.23 s and 0.61 s after the last byte to paint, zarr-layer 0.01 to 0.08 s. The sequential round trips before the chunk reads are 3 for chronozarr (`zarr.json`, shard index, chunk) and 5 for zarr-layer with `zarrVersion: 3` (`zarr.json`, the `band` and `time` coordinate arrays, `HEAD`, shard index, chunk; 8 with its defaults).
 
 ### 1.7 What the zarr-layer numbers show and do not show
 
-They show the cost of a step at a fixed level for the two designs on this store: the same 9 chunk reads, and what each does around them (TileRipper: prefetch and whole frames; zarr-layer: nothing speculative, per-region replacement, abort and re-request on every new selector). They show that the viewer's speculation is a trade: it takes the idle link (steps cost nothing) and loses to a tool that fetches only what is on screen when the link is already full.
+They show the cost of a step at a fixed level for the two designs on this store: the same 9 chunk reads, and what each does around them (chronozarr: prefetch and whole frames; zarr-layer: nothing speculative, per-region replacement, abort and re-request on every new selector). They show that the viewer's speculation is a trade: it takes the idle link (steps cost nothing) and loses to a tool that fetches only what is on screen when the link is already full.
 
 They do not show:
 
-- anything about zarr-layer's design goals: arbitrary variables and dimensions, any CRS reprojected on the GPU to Web Mercator and globe projections, queries, other basemaps. TileRipper draws in the store's native projection in its own canvas and decodes a single dtype layout; the render cost of the two is not isolated and zarr-layer's reprojection is not charged to TileRipper.
+- anything about zarr-layer's design goals: arbitrary variables and dimensions, any CRS reprojected on the GPU to Web Mercator and globe projections, queries, other basemaps. chronozarr draws in the store's native projection in its own canvas and decodes a single dtype layout; the render cost of the two is not isolated and zarr-layer's reprojection is not charged to chronozarr.
 - cold open of the published store (CDN-bound, same for both) or the CDN at all beyond the stalls above; one machine, one Chromium, one store.
-- TileRipper's default behaviour: with the level pinned its coarse-first staging, adaptive movie level and playback buffering are off, as asked. The first frame a user sees with the viewer's defaults is earlier than the numbers here.
+- chronozarr's default behaviour: with the level pinned its coarse-first staging, adaptive movie level and playback buffering are off, as asked. The first frame a user sees with the viewer's defaults is earlier than the numbers here.
 - zarr-layer with a debounced selector (its README advises one; the burst runs deliberately do not), with `renderingMode '2d'`, or with its decoded-chunk cache warm (all runs are cold).
 - Bytes of aborted requests beyond what Chromium reported (data in flight when a stream is reset is not seen); the aborted counts are exact.
 

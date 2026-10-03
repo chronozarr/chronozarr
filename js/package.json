@@ -24,6 +24,9 @@
     "directory": "js"
   },
   "type": "module",
+  "bin": {
+    "chronozarr-viewer": "./support/viewer-bundle.mjs"
+  },
   "exports": {
     ".": "./chronozarr/decoder.js",
     "./maplibre": "./maplibre/layer.js",
@@ -39,9 +42,11 @@
     "maplibre/shader.js",
     "maplibre/slots.js",
     "maplibre/view.js",
-    "tileripper/products.js",
-    "tileripper/products-glsl.js",
-    "tileripper/renderer.js",
+    "demo/",
+    "shared/",
+    "favicon.svg",
+    "support/viewer-bundle.mjs",
+    "vendor/gifenc.esm.js",
     "vendor/numcodecs/",
     "vendor/zarrita/",
     "vendor/zarrita-storage/",
@@ -51,9 +56,13 @@
     "access": "public"
   },
   "scripts": {
+    "prepack": "node support/check-pack.mjs",
     "pretest": "node e2e/make-node-fixtures.mjs",
     "test": "node --test \"test/*.test.js\"",
+    "pretest:coverage": "node e2e/make-node-fixtures.mjs",
+    "test:coverage": "node --experimental-test-coverage --test-coverage-include=chronozarr/** --test-coverage-include=shared/** --test-coverage-include=maplibre/** --test-coverage-include=demo/** --test \"test/*.test.js\"",
     "test:browser": "playwright test",
+    "test:package": "node support/check-viewer-package.mjs",
     "vendor": "node support/vendor.mjs",
     "vendor:check": "node support/vendor.mjs --check"
   },

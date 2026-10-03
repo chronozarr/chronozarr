@@ -1,6 +1,6 @@
 // Runs compare.mjs for both tools and both scrub modes at one link profile, interleaved (tool order alternates with the
 // repetition) so that drift of the link or of this machine hits both tools alike, and writes the runs to
-// results/zarr-layer-vs-tileripper-<source>-<profile>.json.
+// results/zarr-layer-vs-chronozarr-<source>-<profile>.json.
 //
 //   node zarr-layer/run-all.mjs --profile natural --reps 3 [--source remote|local] [--warmup]
 //
@@ -44,12 +44,12 @@ async function once(tool, mode, rep) {
   return results[0];
 }
 
-if (warmup) for (const tool of ['tileripper', 'zarr-layer']) await once(tool, 'paced', 0);
+if (warmup) for (const tool of ['chronozarr', 'zarr-layer']) await once(tool, 'paced', 0);
 const runs = [];
 for (let rep = 1; rep <= reps; rep++) {
-  const tools = rep % 2 === 1 ? ['tileripper', 'zarr-layer'] : ['zarr-layer', 'tileripper'];
+  const tools = rep % 2 === 1 ? ['chronozarr', 'zarr-layer'] : ['zarr-layer', 'chronozarr'];
   for (const mode of ['burst', 'paced']) for (const tool of tools) runs.push(await once(tool, mode, rep));
 }
-const file = path.join(import.meta.dirname, '..', 'results', `zarr-layer-vs-tileripper-${source}-${profile}.json`);
+const file = path.join(import.meta.dirname, '..', 'results', `zarr-layer-vs-chronozarr-${source}-${profile}.json`);
 await writeFile(file, `${JSON.stringify({ source, profile, store: 'ucayali_santa_maria/chronozarr-3', level: 1, startT: 40, steps: 20, runs }, null, 1)}\n`);
 console.log(`wrote ${file}`);

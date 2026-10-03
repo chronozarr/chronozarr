@@ -1,5 +1,5 @@
-// Benchmarks for the chronozarr decoder and the TileRipper viewer, run against the store that is
-// currently open. From the page console: `await tileripper.bench()`.
+// Benchmarks for the chronozarr decoder and the chronozarr viewer, run against the store that is
+// currently open. From the page console: `await chronozarr.bench()`.
 //
 //   cold open       loadStore -> first complete frame at LOD 0, HTTP cache bypassed, with and without
 //                   consolidated metadata in the root zarr.json.
@@ -11,9 +11,9 @@
 //   decode          per-chunk zarrita decode time, replayed from recorded bytes (no network).
 //   cpu add         the JS star-delta loop the GPU path replaces, for reference.
 //
-// `await tileripper.scrubBench()` measures what a user feels while stepping and dragging the time
-// slider; see runScrubBenchmarks. `await tileripper.playBench({ stepsPerSecond: 4 })` plays one movie
-// loop and reports the achieved rate and the holds; see playBench. `await tileripper.interactionBench()`
+// `await chronozarr.scrubBench()` measures what a user feels while stepping and dragging the time
+// slider; see runScrubBenchmarks. `await chronozarr.playBench({ stepsPerSecond: 4 })` plays one movie
+// loop and reports the achieved rate and the holds; see playBench. `await chronozarr.interactionBench()`
 // replays one scripted sequence (scrub, jump, pan, zoom, play) and reports the performance overlay's numbers
 // per phase, for before/after comparisons; see interactionBench.
 
@@ -680,7 +680,7 @@ async function wheel(viewer, { ticks, deltaY, everyMs = 30 }) {
  * the last input of a phase (for the scrub phases, per step). Every phase also reports the completeness of the frames
  * it painted (`frameCompleteness`): how many were partial (none, for a viewer that draws only whole frames), how many
  * came from a coarser level than asked for, and how often it kept the canvas as it was because no whole frame was ready.
- * From the page console: `await tileripper.interactionBench()`; `network: {rttMs, mbps}` simulates a remote link;
+ * From the page console: `await chronozarr.interactionBench()`; `network: {rttMs, mbps}` simulates a remote link;
  * `only: ['open', 'scrub forward 20', 'play']` runs just those phases.
  */
 export async function interactionBench(viewer, { network = null, stepsPerSecond = 10, loops = 2, cadenceMs = 100, playCapMs = 180000, settleMs = 60000, only = null } = {}) {

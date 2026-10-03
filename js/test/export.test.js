@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { GIFEncoder, applyPalette, quantize } from '../vendor/gifenc.esm.js';
-import { exportFilename, flipRows, gifDelayMs, paletteSampleTimes, pickWebmMimeType, subsamplePixels, webmBitrate } from '../tileripper/export.js';
+import { exportFilename, flipRows, gifDelayMs, paletteSampleTimes, pickWebmMimeType, subsamplePixels, webmBitrate } from '../demo/export.js';
 
 test('gifDelayMs rounds to whole centiseconds and never goes below 20 ms', () => {
   assert.equal(gifDelayMs(1), 1000);
@@ -47,8 +47,8 @@ test('subsamplePixels keeps every stride-th pixel and its whole RGBA quad', () =
 
 test('exportFilename names the store, range and format, with only safe characters', () => {
   const labels = (t) => ['2015-01', '2015-02', '2024-09'][t];
-  assert.equal(exportFilename('ucayali_santa_maria chronozarr-2', 'webm', 0, 2, labels), 'tileripper-ucayali-santa-maria-chronozarr-2-2015-01-to-2024-09.webm');
-  assert.equal(exportFilename('Stress 48', 'gif', 1, 1, labels), 'tileripper-stress-48-2015-02-to-2015-02.gif');
+  assert.equal(exportFilename('ucayali_santa_maria chronozarr-2', 'webm', 0, 2, labels), 'chronozarr-ucayali-santa-maria-chronozarr-2-2015-01-to-2024-09.webm');
+  assert.equal(exportFilename('Stress 48', 'gif', 1, 1, labels), 'chronozarr-stress-48-2015-02-to-2015-02.gif');
 });
 
 test('the vendored GIF encoder writes a looping GIF89a with the frames, palette and delay we give it', () => {

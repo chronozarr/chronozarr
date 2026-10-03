@@ -1,0 +1,23 @@
+{
+  "chronozarr": {
+    "coldMs": 49.39999985694885,
+    "uncachedStepMs": 23.949999928474426,
+    "nativeRepeatMs": 1,
+    "coldRequests": 9,
+    "coldWireBytes": 3801256
+  },
+  "zarr": {
+    "coldMs": 45.69999980926514,
+    "uncachedStepMs": 24.850000143051147,
+    "nativeRepeatMs": 25.799999952316284,
+    "coldRequests": 12,
+    "coldWireBytes": 3801140
+  },
+  "cog": {
+    "coldMs": 168.09999990463257,
+    "uncachedStepMs": 139.14999997615814,
+    "nativeRepeatMs": 122.09999990463257,
+    "coldRequests": 5,
+    "coldWireBytes": 4267419
+  }
+}

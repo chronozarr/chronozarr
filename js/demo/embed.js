@@ -16,7 +16,7 @@ import { pixelToProjected, projectedToPixel } from './permalink.js';
 /** Contract version, in the `v` field of every message the viewer sends; a command may carry it and then must say 1. */
 export const EMBED_VERSION = 1;
 
-const PREFIX = 'tileripper:';
+const PREFIX = 'chronozarr:';
 /** Types the viewer sends. A host that echoes messages back at the iframe must not get errors for them. */
 const OUTGOING_TYPES = new Set(['ready', 'time', 'click', 'view', 'error'].map((name) => PREFIX + name));
 
@@ -135,7 +135,7 @@ export function parseCommand(data) {
     return { kind: 'error', code: 'bad_message', message: `v ${show(data.v)} is not supported: this viewer speaks v ${EMBED_VERSION}.` };
   }
   if (data.type === `${PREFIX}get`) return { kind: 'get' };
-  if (data.type !== `${PREFIX}set`) return { kind: 'error', code: 'bad_message', message: `unknown message type ${show(data.type)}; commands are "tileripper:set" and "tileripper:get".` };
+  if (data.type !== `${PREFIX}set`) return { kind: 'error', code: 'bad_message', message: `unknown message type ${show(data.type)}; commands are "chronozarr:set" and "chronozarr:get".` };
 
   const set = {};
   if (data.t !== undefined) {
@@ -261,7 +261,7 @@ export function toPlainJson(value) {
 
 // ---- the bridge ----
 
-/** A failure of a command that the host should hear about as `tileripper:error` with this code. */
+/** A failure of a command that the host should hear about as `chronozarr:error` with this code. */
 export class EmbedCommandError extends Error {
   constructor(code, text) {
     super(text);
@@ -311,7 +311,7 @@ export class EmbedBridge {
     clearTimeout(this.#viewTimer);
   }
 
-  /** Send `tileripper:<name>` to the host. */
+  /** Send `chronozarr:<name>` to the host. */
   post(name, payload) {
     if (!this.active) return;
     this.#parent.postMessage(toPlainJson(embedMessage(name, payload)), this.#origin);
@@ -322,7 +322,7 @@ export class EmbedBridge {
     this.#lastView = JSON.stringify(payload);
   }
 
-  /** Send `tileripper:view` once the camera has been still for the debounce time, and only if it differs from the last one sent. */
+  /** Send `chronozarr:view` once the camera has been still for the debounce time, and only if it differs from the last one sent. */
   scheduleView(build) {
     if (!this.active) return;
     clearTimeout(this.#viewTimer);
@@ -346,10 +346,10 @@ export class EmbedBridge {
     this.enqueue(() => this.#onCommand(command));
   }
 
-  /** Run `work` after the commands queued before it; a failure becomes `tileripper:error` (an unexpected one is logged too). */
+  /** Run `work` after the commands queued before it; a failure becomes `chronozarr:error` (an unexpected one is logged too). */
   enqueue(work) {
     this.#queue = this.#queue.then(work).catch((error) => {
-      if (!(error instanceof EmbedCommandError)) console.error('tileripper embed: a command failed:', error);
+      if (!(error instanceof EmbedCommandError)) console.error('chronozarr embed: a command failed:', error);
       this.post('error', { code: error instanceof EmbedCommandError ? error.code : 'internal', message: error.message });
     });
   }
@@ -362,7 +362,7 @@ async function loadProjection(crs) {
     const { createProjection } = await import('../maplibre/projection.js');
     return createProjection(crs);
   } catch (error) {
-    console.warn(`tileripper embed: no lon/lat for this store (${error.message})`);
+    console.warn(`chronozarr embed: no lon/lat for this store (${error.message})`);
     return null;
   }
 }
@@ -377,10 +377,10 @@ async function loadProjection(crs) {
  * @param {{win?: Window, loadProjection?: (crs: string) => Promise<object|null>}} [options]
  */
 export function connectEmbed(viewer, params, { win = window, loadProjection: projectionFor = loadProjection } = {}) {
-  if (params.originError) console.warn(`tileripper embed: ${params.originError} The postMessage API is off.`);
+  if (params.originError) console.warn(`chronozarr embed: ${params.originError} The postMessage API is off.`);
   const framed = win.parent !== win;
   if (framed && !params.origin && !params.originError) {
-    console.warn('tileripper embed: the page has no origin= parameter and no referrer, so the postMessage API is off. Add &origin=<the origin of the embedding page> to the iframe URL.');
+    console.warn('chronozarr embed: the page has no origin= parameter and no referrer, so the postMessage API is off. Add &origin=<the origin of the embedding page> to the iframe URL.');
   }
 
   let geo = makeGeo();

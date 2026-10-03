@@ -1,4 +1,4 @@
-// Drive the TileRipper viewer on the store converted from PNG frames with headless Chromium (software WebGL) and
+// Drive the chronozarr viewer on the store converted from PNG frames with headless Chromium (software WebGL) and
 // check what the reader and the GPU show: an 8-bit RGB store with a mask opens, True color is enabled and the
 // reflectance products (False color, NDVI, NDWI, Water) are not, masked pixels are drawn as the background colour,
 // a click returns the three uint8 values the reader holds, and playback runs.
@@ -18,7 +18,7 @@ const base = args.base ?? 'http://localhost:8000';
 const root = path.resolve(import.meta.dirname, '../..');
 const reports = path.join(root, 'data/reports');
 const storeUrl = `${base}/${args.store ?? 'data/stores/ucayali_santa_maria/png-1'}`;
-const viewerUrl = (query) => `${base}/js/tileripper/index.html?store=${encodeURIComponent(storeUrl)}&${query}`;
+const viewerUrl = (query) => `${base}/js/demo/index.html?store=${encodeURIComponent(storeUrl)}&${query}`;
 const BACKGROUND = [9, 12, 18]; // js/e2e/cpu-render.js: round([0.035, 0.047, 0.071] * 255)
 const EDGE_GAP = 6; // pixels between a masked pixel and the valid pixel to its right
 const MARGIN = 40; // pixels kept between the edge searched for and any cell border
@@ -38,8 +38,8 @@ page.on('pageerror', (e) => problems.push(`page error: ${e.message}`));
 
 async function open(query) {
   await page.goto(viewerUrl(query));
-  await page.waitForFunction(() => window.tileripper?.ready, null, { timeout: 120_000 });
-  const timings = await page.evaluate(() => window.tileripper.ready);
+  await page.waitForFunction(() => window.chronozarr?.ready, null, { timeout: 120_000 });
+  const timings = await page.evaluate(() => window.chronozarr.ready);
   if (!timings) throw new Error(`the viewer did not open ${storeUrl}: ${await page.locator('#error-message').innerText()}`);
   return timings;
 }
@@ -48,7 +48,7 @@ async function open(query) {
 async function settle(t, lod = 0) {
   await page.waitForFunction(
     ([want, wantLod]) => {
-      const v = window.tileripper.viewer;
+      const v = window.chronozarr.viewer;
       if (v.paintedT !== want) return false;
       const result = v.renderNow();
       return result.complete && result.lod === wantLod;
@@ -61,8 +61,8 @@ async function settle(t, lod = 0) {
 const canvasPixel = (x, y) =>
   page.evaluate(
     ([x, y]) => {
-      const { renderer, canvas } = window.tileripper.viewer;
-      window.tileripper.viewer.renderNow();
+      const { renderer, canvas } = window.chronozarr.viewer;
+      window.chronozarr.viewer.renderNow();
       const rgba = renderer.readFrame(canvas.width, canvas.height);
       const i = ((canvas.height - 1 - y) * canvas.width + x) * 4;
       return [rgba[i], rgba[i + 1], rgba[i + 2]];
@@ -74,7 +74,7 @@ const canvasPixel = (x, y) =>
 const readerPixel = (t, x, y) =>
   page.evaluate(
     async ([t, x, y]) => {
-      const store = window.tileripper.viewer.store;
+      const store = window.chronozarr.viewer.store;
       const level = store.levels[0];
       const stride = level.chunkHeight * level.chunkWidth;
       const [row, col] = [Math.floor(y / level.chunkHeight), Math.floor(x / level.chunkWidth)];
@@ -89,7 +89,7 @@ const readerPixel = (t, x, y) =>
 /** Fraction of masked pixels of every timestep, from the one cell of pyramid level 1. */
 const maskedFractions = () =>
   page.evaluate(async () => {
-    const store = window.tileripper.viewer.store;
+    const store = window.chronozarr.viewer.store;
     const fractions = [];
     for (let t = 0; t < store.times.length; t++) {
       const mask = await store.getMask(1, 0, 0, t);
@@ -107,7 +107,7 @@ const maskedFractions = () =>
 const findMaskedEdge = (t) =>
   page.evaluate(
     async ([t, gap, margin]) => {
-      const store = window.tileripper.viewer.store;
+      const store = window.chronozarr.viewer.store;
       const level = store.levels[0];
       const cells = [];
       for (let row = 0; row < level.gridRows; row++) for (let col = 0; col < level.gridCols; col++) cells.push([row, col]);
@@ -155,12 +155,12 @@ async function clickCentre(waitFor) {
 await open('t=0');
 const fractions = await maskedFractions();
 const gapT = fractions.reduce((best, f, t) => (Math.abs(f - 0.4) < Math.abs(fractions[best] - 0.4) ? t : best), 0);
-const times = await page.evaluate(() => window.tileripper.viewer.store.times);
+const times = await page.evaluate(() => window.chronozarr.viewer.store.times);
 console.log(`${fractions.length} timesteps; view t=${gapT} (${times[gapT]}), ${(fractions[gapT] * 100).toFixed(1)} % masked at level 1`);
 const timings = await open(`t=${gapT}`);
 console.log(`opened in ${Math.round(timings.openMs)} ms, first paint ${Math.round(timings.firstPaintMs)} ms`);
 const info = await page.evaluate(() => {
-  const v = window.tileripper.viewer;
+  const v = window.chronozarr.viewer;
   return { dtype: v.dtype, hasMask: v.store.hasMask, times: v.store.times.length, bands: v.bands.map((b) => [b.name, b.common_name, b.scale, b.offset]) };
 });
 check(info.dtype === 'uint8' && info.hasMask && info.times === 36, `uint8 store with a mask, ${info.times} timesteps`);
@@ -173,7 +173,7 @@ check(JSON.stringify(buttons.filter(([, enabled]) => enabled).map(([name]) => na
 const disabled = buttons.filter(([, enabled]) => !enabled).map(([name]) => name);
 check(['False color', 'NDVI', 'NDWI', 'Water'].every((name) => disabled.includes(name)), `disabled products: ${JSON.stringify(disabled)}`);
 check(buttons.find(([name]) => name === 'True color')?.[2] === true, 'True color is the active product');
-await page.waitForFunction((t) => window.tileripper.viewer.paintedT === t, gapT);
+await page.waitForFunction((t) => window.chronozarr.viewer.paintedT === t, gapT);
 await page.waitForTimeout(1500);
 await page.screenshot({ path: path.join(reports, 'viewer_ucayali_png_truecolor.png') });
 console.log(`screenshot data/reports/viewer_ucayali_png_truecolor.png (True color, t=${gapT} ${times[gapT]}, ${(fractions[gapT] * 100).toFixed(0)} % masked)`);
@@ -189,7 +189,7 @@ if (edge) {
   await open(`t=${gapT}&z=8&c=${toProjected(edge.transform, edge.x, edge.y)}`);
   await settle(gapT);
   const [cx, cy, scale] = await page.evaluate(() => {
-    const { canvas, camera } = window.tileripper.viewer;
+    const { canvas, camera } = window.chronozarr.viewer;
     return [Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), camera.scale];
   });
   const drawnMasked = await canvasPixel(cx, cy);
@@ -212,12 +212,12 @@ if (edge) {
 
 // 5. Playback runs: it buffers, steps through timesteps and stops again.
 await open('t=0');
-await page.waitForFunction(() => window.tileripper.viewer.paintedT === 0);
+await page.waitForFunction(() => window.chronozarr.viewer.paintedT === 0);
 await page.keyboard.press('Space');
-await page.waitForFunction(() => window.tileripper.viewer.playback.stats.steps >= 6, null, { timeout: 90_000 });
-const playing = await page.evaluate(() => ({ t: window.tileripper.viewer.t, playing: window.tileripper.viewer.playback.playing, steps: window.tileripper.viewer.playback.stats.steps }));
+await page.waitForFunction(() => window.chronozarr.viewer.playback.stats.steps >= 6, null, { timeout: 90_000 });
+const playing = await page.evaluate(() => ({ t: window.chronozarr.viewer.t, playing: window.chronozarr.viewer.playback.playing, steps: window.chronozarr.viewer.playback.stats.steps }));
 await page.keyboard.press('Space');
-await page.waitForFunction(() => !window.tileripper.viewer.playback.playing, null, { timeout: 10_000 });
+await page.waitForFunction(() => !window.chronozarr.viewer.playback.playing, null, { timeout: 10_000 });
 check(playing.playing && playing.steps >= 6 && playing.t > 0, `playback advanced to t=${playing.t} after ${playing.steps} steps, then stopped`);
 
 check(problems.length === 0, `no console errors or page errors${problems.length ? `: ${problems.join(' | ')}` : ''}`);

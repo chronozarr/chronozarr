@@ -58,7 +58,7 @@ A sharded store writes the trailing shard again on each append, so month `k` of 
 
 ## Results: the production-sized store
 
-The published sharded Ucayali store (`chronozarr-3`) holds all its months in one shard per cell. Built the same way from the first 115 months (`--base-months 115`, `auto` chooses `none`), then months 116 and 117 appended:
+The historical sharded Ucayali store (`chronozarr-3`, replaced in the demo by unsharded `chronozarr-4`) holds all its months in one shard per cell. Built the same way from the first 115 months (`--base-months 115`, `auto` chooses `none`), then months 116 and 117 appended:
 
 | operation | wall s | peak RSS MB | objects written | MB written |
 |---|---|---|---|---|

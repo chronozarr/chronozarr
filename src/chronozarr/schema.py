@@ -22,6 +22,8 @@ import zarr
 from zarr.core.sync import sync
 from zarr.errors import GroupNotFoundError
 
+from chronozarr.store import as_store
+
 SPEC_VERSION = "0.2.0"
 STAR_DELTA = "star-delta"
 NONE = "none"
@@ -1119,8 +1121,6 @@ def validate(store: Any) -> list[str]:
     `zarr.json` files are checked directly; consolidated metadata, when present, must match them.
     Both v0.1 and v0.2 stores are accepted.
     """
-    from chronozarr.decode import as_store  # decode imports this module
-
     store = as_store(store)
     problems: list[str] = []
     try:

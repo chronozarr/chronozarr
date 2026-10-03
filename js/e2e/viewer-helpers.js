@@ -5,16 +5,16 @@ import { maskValue } from '../support/synthetic-store.js';
 import { BACKGROUND, shadeTexel } from './cpu-render.js';
 import { STORES, storedValue } from './stores.js';
 
-/** Open the viewer on a store and wait for its first complete frame; returns the timings `tileripper.ready` resolves to. */
+/** Open the viewer on a store and wait for its first complete frame; returns the timings `chronozarr.ready` resolves to. */
 export async function openViewer(page, servers, storeUrl) {
-  await page.goto(`${servers.appUrl}/tileripper/index.html?store=${encodeURIComponent(storeUrl)}`);
-  await page.waitForFunction(() => window.tileripper?.ready);
-  const timings = await page.evaluate(() => window.tileripper.ready);
+  await page.goto(`${servers.appUrl}/demo/index.html?store=${encodeURIComponent(storeUrl)}`);
+  await page.waitForFunction(() => window.chronozarr?.ready);
+  const timings = await page.evaluate(() => window.chronozarr.ready);
   expect(timings, 'loadStore resolved with its timings (it resolves with nothing when the store failed to open)').toBeTruthy();
   return timings;
 }
 
-export const waitForPaintedTime = (page, t) => page.waitForFunction((want) => window.tileripper.viewer.paintedT === want, t);
+export const waitForPaintedTime = (page, t) => page.waitForFunction((want) => window.chronozarr.viewer.paintedT === want, t);
 
 /** Level-0 pixels of the 200 x 200 stores that the GPU/CPU comparison reads: the nodata columns, cell edges and corners. */
 export const SAMPLE_PIXELS = [
@@ -41,7 +41,7 @@ export const SAMPLE_PIXELS = [
 export async function captureFrame(page, pixels = SAMPLE_PIXELS) {
   return page.evaluate(
     ({ pixels, background }) => {
-      const { viewer } = window.tileripper;
+      const { viewer } = window.chronozarr;
       const { renderer, canvas } = viewer;
       let frame = null;
       const original = renderer.beginPaint;
@@ -114,7 +114,7 @@ export function expectFrameMatchesStore(capture, storeName, t) {
 export async function clickStorePixel(page, X, Y) {
   const { x, y } = await page.evaluate(
     ([X, Y]) => {
-      const { canvas, camera } = window.tileripper.viewer;
+      const { canvas, camera } = window.chronozarr.viewer;
       const rect = canvas.getBoundingClientRect();
       return {
         x: rect.left + (((X + 0.5 - camera.cx) * camera.scale + canvas.width / 2) * rect.width) / canvas.width,

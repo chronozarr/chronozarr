@@ -1,4 +1,4 @@
-"""anywidget traits for the v1 TileRipper embed contract (optional dependency)."""
+"""anywidget traits for the v1 chronozarr embed contract (optional dependency)."""
 
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -10,7 +10,7 @@ import traitlets as T
 class Player(anywidget.AnyWidget):
     _esm = Path(__file__).with_name("player.js")
     store_url = T.Unicode().tag(sync=True)
-    viewer_url = T.Unicode("https://tileripper.com/tileripper/").tag(sync=True)
+    viewer_url = T.Unicode("https://chronozarr.org/demo/").tag(sync=True)
     height = T.Int(560, min=320).tag(sync=True)
     theme = T.Enum(["light", "dark"], default_value="light").tag(sync=True)
     t = T.Int(0, min=0).tag(sync=True)

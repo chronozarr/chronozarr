@@ -10,8 +10,8 @@
 // mercator projection.
 
 import { openStore } from '../chronozarr/decoder.js';
-import { computeStretchLo, describePixel, displayMode, findBand, inputConversion, inputIndices, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../tileripper/products.js';
-import { TEXTURE_FORMATS } from '../tileripper/renderer.js';
+import { computeStretchLo, describePixel, displayMode, findBand, inputConversion, inputIndices, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../shared/products.js';
+import { TEXTURE_FORMATS } from '../shared/texture-formats.js';
 import { buildMesh, FLOATS_PER_VERTEX, MAX_DIVISIONS, originMatrix } from './mesh.js';
 import { createProjection, crsToPixel, footprintBounds, levelTransform, lonLatToMercator, mercatorPerTexel, pixelToCrs } from './projection.js';
 import { VERTEX_SHADER, fragmentShader } from './shader.js';

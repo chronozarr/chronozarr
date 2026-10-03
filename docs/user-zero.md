@@ -20,13 +20,12 @@ pixel, chart it. Nothing was downloaded.
 
 `auto` did not measure anything: for `int16` data the writer always uses `none` (spec 4.3), so there
 is no star-delta ratio to report. Codec zstd level 5, 4 pyramid levels. Both `water-1` stores are sharded, (T, 2, 512, 512), the encoder default when they were built. `ucayali_santa_maria/water-2` is the Ucayali store rebuilt unsharded, the default now: 17,088 files, 1730.5 MB, and every value, mask plane and coverage plane identical to `water-1` at every level, timestep and cell. Lake Mead has no `water-2`.
-Both stores together are 2991 MB. With about 3.5 GB left in R2 they fit and leave about 0.5 GB.
-Publish Ucayali first (1.73 GB; it is the reach the project is for), Lake Mead second. Nothing has
-been uploaded; the script takes the store name from `STORE`:
+The table records the original sharded build. Ucayali was subsequently rebuilt and uploaded as `water-2` on 2026-10-01; Lake Mead remained local. The current demo catalog lists imagery (`chronozarr-4`) and PNG frames (`png-1`), not either water store. The water suffixes identify dataset revisions, not spec or package versions. The historical bucket budget is not a current capacity check.
+
+To preview the upload of an existing unsharded Ucayali build, the script takes its store name from `STORE`:
 
 ```bash
-STORE=water-1 scripts/upload_stores.sh --dry-run ucayali_santa_maria   # 201 objects
-STORE=water-1 scripts/upload_stores.sh ucayali_santa_maria
+STORE=water-2 scripts/upload_stores.sh --dry-run ucayali_santa_maria   # 17,088 objects
 ```
 
 ## How they were built

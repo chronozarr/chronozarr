@@ -1,0 +1,56 @@
+{
+  "natural/chronozarr": {
+    "coldMs": 78.39999985694885,
+    "uncachedStepMs": 24.199999928474426,
+    "nativeRepeatMs": 2.1000001430511475,
+    "warmMs": 1.0,
+    "renderMs": 1.149999976158142,
+    "coldRequests": 9,
+    "coldWireBytes": 3801256
+  },
+  "natural/zarr": {
+    "coldMs": 77.09999990463257,
+    "uncachedStepMs": 28.899999976158142,
+    "nativeRepeatMs": 26.09999990463257,
+    "warmMs": 0.9000000953674316,
+    "renderMs": 1.2000000476837158,
+    "coldRequests": 12,
+    "coldWireBytes": 3801140
+  },
+  "natural/cog": {
+    "coldMs": 181.39999985694885,
+    "uncachedStepMs": 147.05000007152557,
+    "nativeRepeatMs": 126.59999990463257,
+    "warmMs": 1.100000023841858,
+    "renderMs": 1.3999998569488525,
+    "coldRequests": 5,
+    "coldWireBytes": 4267419
+  },
+  "50Mbit-40ms/chronozarr": {
+    "coldMs": 1271,
+    "uncachedStepMs": 1078.0499999523163,
+    "nativeRepeatMs": 2.200000047683716,
+    "warmMs": 1.0499999523162842,
+    "renderMs": 1.1000001430511475,
+    "coldRequests": 9,
+    "coldWireBytes": 3801256
+  },
+  "50Mbit-40ms/zarr": {
+    "coldMs": 1367.1000001430511,
+    "uncachedStepMs": 654.9500000476837,
+    "nativeRepeatMs": 657.7999999523163,
+    "warmMs": 1.2999999523162842,
+    "renderMs": 1.6999999284744263,
+    "coldRequests": 12,
+    "coldWireBytes": 3801140
+  },
+  "50Mbit-40ms/cog": {
+    "coldMs": 1025.7000000476837,
+    "uncachedStepMs": 857.5499999523163,
+    "nativeRepeatMs": 124.39999985694885,
+    "warmMs": 1.0999999046325684,
+    "renderMs": 1.2999999523162842,
+    "coldRequests": 5,
+    "coldWireBytes": 4267419
+  }
+}

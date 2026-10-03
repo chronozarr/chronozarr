@@ -40,8 +40,20 @@ jobs:
         run: uv run ruff format --check src tests examples scripts
       - name: ty
         run: uv run ty check src
-      - name: Unit tests
-        run: uv run pytest -q -m unit
+      - name: Architecture boundaries
+        run: uv run python scripts/check_architecture.py
+      - name: Unit tests and measured coverage
+        run: |
+          uv run coverage run -m pytest -q -m unit
+          uv run coverage report
+          uv run coverage json
+          uv run coverage xml
+      - name: Upload Python coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-coverage-${{ matrix.python-version }}
+          path: data/reports/coverage/python/coverage.*
+          retention-days: 14
       - name: Build distributions
         if: matrix.python-version == '3.11'
         run: uv build
@@ -63,9 +75,17 @@ jobs:
         run: npm ci
       # The pretest script writes the data/spike fixtures that ten of these tests read and a clean checkout lacks
       # (js/e2e/make-node-fixtures.mjs); the glob keeps node's runner away from the Playwright specs in js/e2e.
-      - name: Node tests
+      - name: Node tests and measured coverage
         working-directory: js
-        run: npm test
+        env:
+          NODE_V8_COVERAGE: ${{ runner.temp }}/node-coverage
+        run: npm run test:coverage
+      - name: Upload Node coverage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: node-coverage
+          path: ${{ runner.temp }}/node-coverage
+          retention-days: 14
 
   browser:
     name: Browser
@@ -92,6 +112,9 @@ jobs:
         env:
           PLAYWRIGHT_ARTIFACTS_DIR: ${{ runner.temp }}/playwright
         run: npx playwright test
+      - name: Installed-package viewer smoke test
+        working-directory: js
+        run: npm run test:package
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

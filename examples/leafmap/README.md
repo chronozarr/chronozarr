@@ -29,7 +29,7 @@ This is a packaged chronozarr helper, not an upstream leafmap method. Ordinary P
 definitions cannot serialize WebGL callbacks. The helper wraps the installed
 py-maplibregl anywidget renderer's model interface and reconstructs custom layers
 in the browser. It requires a browser that permits module imports from blob URLs
-and the hosted reader at `https://tileripper.com/maplibre/layer.js` (override
+and the hosted reader at `https://chronozarr.org/maplibre/layer.js` (override
 `reader_url=` to use your own reader). Store URLs need CORS. Local notebook kernels
 can use `chronozarr.serve_store`; remote kernels need a URL the browser can reach.
 

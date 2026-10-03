@@ -76,7 +76,7 @@ def main():
         versions[backend] = importlib.metadata.version(backend)
     w = chronozarr.player(
         url,
-        viewer=f"{BASE}/js/tileripper/index.html",
+        viewer=f"{BASE}/js/demo/index.html",
         product="band",
         band="wse",
         range=[-128, 128],

@@ -1,4 +1,4 @@
-// Drive the TileRipper viewer on a water stack with headless Chromium (software WebGL) and check what the
+// Drive the chronozarr viewer on a water stack with headless Chromium (software WebGL) and check what the
 // reader and the GPU show: the store opens, the single-band product offers ndwi and water, a masked pixel is
 // drawn as background, a click returns scaled physical values ("water 1 fraction" on a river pixel and "0 fraction"
 // on land at level 0, a fraction between 0 and 1 on a coarser level), and the chart of a river pixel is the water series.
@@ -21,7 +21,7 @@ const base = args.base ?? 'http://localhost:8000';
 const root = path.resolve(import.meta.dirname, '../..');
 const reports = path.join(root, 'data/reports');
 const storeUrl = `${base}/data/stores/${aoi}/water-1`;
-const viewerUrl = (query) => `${base}/js/tileripper/index.html?store=${encodeURIComponent(storeUrl)}&${query}`;
+const viewerUrl = (query) => `${base}/js/demo/index.html?store=${encodeURIComponent(storeUrl)}&${query}`;
 const BACKGROUND = [9, 12, 18]; // js/e2e/cpu-render.js: round([0.035, 0.047, 0.071] * 255)
 
 const failures = [];
@@ -50,8 +50,8 @@ page.on('pageerror', (e) => problems.push(`page error: ${e.message}`));
 
 async function open(query) {
   await page.goto(viewerUrl(query));
-  await page.waitForFunction(() => window.tileripper?.ready, null, { timeout: 120_000 });
-  const timings = await page.evaluate(() => window.tileripper.ready);
+  await page.waitForFunction(() => window.chronozarr?.ready, null, { timeout: 120_000 });
+  const timings = await page.evaluate(() => window.chronozarr.ready);
   if (!timings) throw new Error(`the viewer did not open ${storeUrl}: ${await page.locator('#error-message').innerText()}`);
   return timings;
 }
@@ -60,7 +60,7 @@ async function open(query) {
 async function settle(t, lod = 0) {
   await page.waitForFunction(
     ([want, wantLod]) => {
-      const v = window.tileripper.viewer;
+      const v = window.chronozarr.viewer;
       if (v.paintedT !== want) return false;
       const result = v.renderNow();
       return result.complete && result.lod === wantLod;
@@ -73,8 +73,8 @@ async function settle(t, lod = 0) {
 const canvasPixel = (x, y) =>
   page.evaluate(
     ([x, y]) => {
-      const { renderer, canvas } = window.tileripper.viewer;
-      window.tileripper.viewer.renderNow();
+      const { renderer, canvas } = window.chronozarr.viewer;
+      window.chronozarr.viewer.renderNow();
       const rgba = renderer.readFrame(canvas.width, canvas.height);
       const i = ((canvas.height - 1 - y) * canvas.width + x) * 4;
       return [rgba[i], rgba[i + 1], rgba[i + 2]];
@@ -91,7 +91,7 @@ const canvasPixel = (x, y) =>
 const discover = (t, kind, edgeGap) =>
   page.evaluate(
     async ([t, kind, edgeGap]) => {
-      const store = window.tileripper.viewer.store;
+      const store = window.chronozarr.viewer.store;
       const level = store.levels[0];
       const stride = level.chunkHeight * level.chunkWidth;
       const windowIs = (half, test, x, y) => {
@@ -136,7 +136,7 @@ const discover = (t, kind, edgeGap) =>
 const discoverFraction = (t, lod) =>
   page.evaluate(
     async ([t, lod]) => {
-      const store = window.tileripper.viewer.store;
+      const store = window.chronozarr.viewer.store;
       const level = store.levels[lod];
       const stride = level.chunkHeight * level.chunkWidth;
       const cells = [];
@@ -199,7 +199,7 @@ async function readChart() {
 const timings = await open(`t=${indexOf(gapMonth)}`);
 console.log(`opened in ${Math.round(timings.openMs)} ms, first paint ${Math.round(timings.firstPaintMs)} ms`);
 const info = await page.evaluate(() => {
-  const v = window.tileripper.viewer;
+  const v = window.chronozarr.viewer;
   return { dtype: v.dtype, hasMask: v.store.hasMask, bands: v.bands.map((b) => b.name ?? b), times: v.store.times.length, units: v.bands.map((b) => b.units) };
 });
 check(info.dtype === 'int16' && info.hasMask && info.times === months.length, `int16 store with a mask, ${info.times} timesteps (CSV: ${months.length})`);
@@ -207,7 +207,7 @@ const productButtons = await page.locator('#products button').evaluateAll((bs) =
 check(JSON.stringify(productButtons.filter(([, enabled]) => enabled)) === JSON.stringify([['Single band', true, true]]), `enabled products: ${JSON.stringify(productButtons.filter(([, e]) => e).map(([n]) => n))}`);
 const bandOptions = await page.locator('#band-select option').allInnerTexts();
 check(JSON.stringify(bandOptions) === JSON.stringify(['ndwi', 'water']), `band selector offers ${JSON.stringify(bandOptions)}`);
-await page.waitForFunction((t) => window.tileripper.viewer.paintedT === t, indexOf(gapMonth));
+await page.waitForFunction((t) => window.chronozarr.viewer.paintedT === t, indexOf(gapMonth));
 await page.waitForTimeout(1500);
 await page.screenshot({ path: path.join(reports, `viewer_${aoi}_ndwi.png`) });
 console.log(`screenshot data/reports/viewer_${aoi}_ndwi.png (single band ndwi, ${gapMonth.month}, ${Math.round((1 - Number(gapMonth.valid_frac)) * 100)} % masked)`);
@@ -221,7 +221,7 @@ if (edge) {
   await open(`t=${gapT}&b=ndwi&z=8&c=${toProjected(edge.transform, edge.x, edge.y)}`);
   await settle(gapT);
   const [cx, cy, scale] = await page.evaluate(() => {
-    const { canvas, camera } = window.tileripper.viewer;
+    const { canvas, camera } = window.chronozarr.viewer;
     return [Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), camera.scale];
   });
   const masked = await canvasPixel(cx, cy);
@@ -234,7 +234,7 @@ if (edge) {
 // 3. River pixel at level 0: a click returns scaled values ("water 1 fraction"); the chart is the water series.
 const riverT = indexOf(riverMonth);
 await open(`t=${riverT}`);
-await page.waitForFunction((t) => window.tileripper.viewer.paintedT === t, riverT);
+await page.waitForFunction((t) => window.chronozarr.viewer.paintedT === t, riverT);
 const river = await discover(riverT, 'river', 0);
 check(Boolean(river), `found a river window at pixel ${JSON.stringify(river)} in ${riverMonth.month}`);
 if (river) {
@@ -275,7 +275,7 @@ if (land) {
 // 5. A click on a coarser level reads a fraction: the inspector shows the level it read, and the chart plots fractions.
 const COARSE = 2;
 await open(`t=${riverT}`);
-await page.waitForFunction((t) => window.tileripper.viewer.paintedT === t, riverT);
+await page.waitForFunction((t) => window.chronozarr.viewer.paintedT === t, riverT);
 const blended = await discoverFraction(riverT, COARSE);
 check(Boolean(blended), `found a level ${COARSE} pixel with a water fraction of 0.25 to 0.75: ${JSON.stringify(blended)} in ${riverMonth.month}`);
 if (blended) {

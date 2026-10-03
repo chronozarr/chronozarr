@@ -29,10 +29,10 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   page.on('pageerror', (error) => console.error('pageerror', error.message));
   page.on('console', () => {});
-  await page.goto(`${server.url}/js/tileripper/index.html?store=${encodeURIComponent(storeUrl)}`);
-  await page.waitForFunction(() => window.tileripper?.ready, null, { timeout: 60000 });
-  await page.evaluate(() => window.tileripper.ready);
-  const results = await page.evaluate((benchOptions) => window.tileripper.scrubBench(benchOptions), options);
+  await page.goto(`${server.url}/js/demo/index.html?store=${encodeURIComponent(storeUrl)}`);
+  await page.waitForFunction(() => window.chronozarr?.ready, null, { timeout: 60000 });
+  await page.evaluate(() => window.chronozarr.ready);
+  const results = await page.evaluate((benchOptions) => window.chronozarr.scrubBench(benchOptions), options);
   const rows = Object.entries(results.runs).map(([name, run]) => ({
     run: name,
     lod: run.lod,

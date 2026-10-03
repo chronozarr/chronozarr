@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, validAt, windowPixels, xFromTime } from '../tileripper/chart.js';
-import { normalizeBands, resolveProducts } from '../tileripper/products.js';
+import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, validAt, windowPixels, xFromTime } from '../demo/chart.js';
+import { normalizeBands, resolveProducts } from '../shared/products.js';
 
 const BANDS = normalizeBands(['B02', 'B03', 'B04', 'B08']);
 const product = (id, bands = BANDS) => resolveProducts(bands).find((p) => p.id === id);

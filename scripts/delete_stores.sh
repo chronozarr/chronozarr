@@ -4,7 +4,8 @@
 set -euo pipefail
 BUCKET="${BUCKET:-tileripper-stores}"
 STORE="${STORE:-chronozarr}"
-ROOT="${ROOT:-/Users/jakegearon/projects/tile-ripper/data/stores}"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="${ROOT:-$REPO_ROOT/data/stores}"
 cd "$ROOT"
 # shellcheck disable=SC2016  # $1 and $f are expanded by the inner sh, not here
 for aoi in "$@"; do

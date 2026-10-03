@@ -4,7 +4,7 @@ A chronozarr store is a directory of static files. Any host that returns a file 
 
 ## 1. Checklist
 
-`chronozarr doctor <store-url>` runs the HTTP and decode checks below against a live URL (and the decode checks against a local directory). It sends `Origin: https://tileripper.com` by default. The last column is what doctor reports when the requirement is missing (`fail` violates a MUST, `warn` a SHOULD, `info` is reported without judgement), read from `src/chronozarr/doctor.py` on 2026-10-01; if that file changes, it is the authority. The `edge cache` and `timing-allow-origin` lines are advice: doctor reports them as `info`, and only `fail` lines make it exit with status 1 (warnings and info do not).
+`chronozarr doctor <store-url>` runs the HTTP and decode checks below against a live URL (and the decode checks against a local directory). It sends `Origin: https://chronozarr.org` by default. The last column is what doctor reports when the requirement is missing (`fail` violates a MUST, `warn` a SHOULD, `info` is reported without judgement), read from `src/chronozarr/doctor.py` on 2026-10-01; if that file changes, it is the authority. The `edge cache` and `timing-allow-origin` lines are advice: doctor reports them as `info`, and only `fail` lines make it exit with status 1 (warnings and info do not).
 
 | # | Requirement | doctor check | If missing |
 |---|---|---|---|
@@ -34,7 +34,7 @@ A preflight is sent only for a suffix range. Browsers do not preflight a bounded
 
 ## 2. Immutable prefixes and upload order
 
-**Immutable prefixes.** A store is never edited in place. Every encode is written under a new prefix (for example `ucayali_santa_maria/chronozarr-3`), the catalog or URL is switched to it, and the old prefix is deleted afterwards. This is what makes `Cache-Control: public, max-age=31536000, immutable` safe: browsers and CDNs may hold any object for a year, and no object at that URL ever changes.
+**Immutable prefixes.** A store is never edited in place. Every encode is written under a new prefix (for example `ucayali_santa_maria/chronozarr-4`), the catalog or URL is switched to it, and the old prefix is deleted afterwards. This is what makes `Cache-Control: public, max-age=31536000, immutable` safe: browsers and CDNs may hold any object for a year, and no object at that URL ever changes.
 
 **Metadata last.** The root `zarr.json` is the marker that a store exists. Upload in three phases:
 
@@ -49,8 +49,8 @@ The same three phases work for every host. Save this as `upload.sh`, run it with
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-STORE=data/stores/ucayali_santa_maria/chronozarr-3   # local store directory
-PREFIX=ucayali_santa_maria/chronozarr-3              # new for every encode
+STORE=data/stores/ucayali_santa_maria/chronozarr-4   # local store directory
+PREFIX=ucayali_santa_maria/chronozarr-4              # new for every encode
 CC="public, max-age=31536000, immutable"
 
 # put() goes here, from the host recipe below
@@ -68,7 +68,7 @@ put ./zarr.json
 
 `set -e` stops before phase 2 or 3 if any upload in the previous phase failed (`xargs` exits 123).
 
-The repository's `scripts/upload_stores.sh` uploads to R2 in the same three phases and stops before the next phase when an upload fails. It reads `data/stores/<aoi>/$STORE` (`STORE=chronozarr-3` for a versioned prefix) and sets `Cache-Control` per object: `immutable` for every chunk and shard except the objects an append rewrites, which get `max-age=300` (`--trailing-ttl SECONDS` changes it; `--dry-run` prints the class of every object without uploading). Section 7 lists those objects.
+The repository's `scripts/upload_stores.sh` uploads to R2 in the same three phases and stops before the next phase when an upload fails. It reads `data/stores/<aoi>/$STORE` (`STORE=chronozarr-4` for a versioned prefix) and sets `Cache-Control` per object: `immutable` for every chunk and shard except the objects an append rewrites, which get `max-age=300` (`--trailing-ttl SECONDS` changes it; `--dry-run` prints the class of every object without uploading). Section 7 lists those objects.
 
 ## 3. Recipes
 
@@ -264,7 +264,7 @@ Whether the proxy stores and serves the `--cache-control` value is untested here
 ```bash
 URL=https://data.example.com/aoi/chronozarr-2
 KEY=0/data/c/0/0/0/0          # level 0, cell (0, 0): timestep 0 (unsharded) or time shard 0 (sharded)
-O='Origin: https://tileripper.com'
+O='Origin: https://chronozarr.org'
 
 # 206 + Content-Range + CORS + exposed headers + caching
 curl -s -D - -o /dev/null -H "$O" -H 'Range: bytes=0-99' "$URL/$KEY"
@@ -292,7 +292,7 @@ The key is the same in both layouts: for an unsharded store it is the chunk of t
 
 ## 6. The live store
 
-The published demo store is `ucayali_santa_maria/chronozarr-3` (plain encoding, sharded, 93 objects; see the README status). `chronozarr-4` is the same data written with the unsharded default (5,893 objects) and replaces it once uploaded. It replaces `chronozarr-2`, which was live on 2026-09-30 when `chronozarr doctor` was run against `https://data.tileripper.com/ucayali_santa_maria/chronozarr-2`: 15 ok, 2 info, 0 warnings (`edge cache` HIT, `timing-allow-origin` `*`, `cache-control` `max-age=31536000`). The host is R2 with `deploy/r2-cors.json` plus the Cache Rule and the Transform Rule of section 3.2; both rules match the hostname, so they apply to every prefix under it.
+The demo catalog points to `ucayali_santa_maria/chronozarr-4` (plain encoding, unsharded, 5,893 objects). It replaced the historical sharded `chronozarr-3` (93 objects) on 2026-10-01; the values are bit-identical. These suffixes identify dataset revisions, not format versions; both are spec v0.2.0. The upload was checked with `chronozarr doctor` (13 ok, 0 failures), and the deployed viewer's cold-edge measurement was 390 ms to the first whole frame and 622 ms to the target-level frame. The earlier `chronozarr-2` doctor result on 2026-09-30 was 15 ok, 2 info, 0 warnings (`edge cache` HIT, `timing-allow-origin` `*`, `cache-control` `max-age=31536000`); that is historical host evidence, not a fresh check of the current prefix. The host is R2 with `deploy/r2-cors.json` and hostname rules from section 3.2. The legacy `data.tileripper.com` hostname remains intentional.
 
 ## 7. Appending to a live store
 
@@ -304,15 +304,16 @@ The published demo store is `ucayali_santa_maria/chronozarr-3` (plain encoding, 
 
 ```bash
 chronozarr convert new_month.csv work/new_month      # one new timestep, or encode/convert several
-cp -R data/stores/aoi/chronozarr-3 work/aoi-working  # append is not atomic: work on a copy
+mkdir -p work/aoi-working
+cp -R data/stores/aoi/chronozarr-4 work/aoi-working/chronozarr-4  # append is not atomic: work on a copy
 touch work/stamp
-chronozarr append work/aoi-working work/new_month
-chronozarr validate work/aoi-working
+chronozarr append work/aoi-working/chronozarr-4 work/new_month
+chronozarr validate work/aoi-working/chronozarr-4
 # publish: shards and chunks first, root zarr.json last; only objects the append touched
-STORE=chronozarr-3 ROOT=work scripts/upload_stores.sh --newer-than work/stamp --trailing-ttl 300 aoi-working
+STORE=chronozarr-4 ROOT=work scripts/upload_stores.sh --newer-than work/stamp --trailing-ttl 300 aoi-working
 ```
 
-(`scripts/upload_stores.sh` reads `$ROOT/<aoi>/$STORE`; put the working copy at `work/<aoi>/chronozarr-3` for the layout it expects.)
+(`scripts/upload_stores.sh` reads `$ROOT/<aoi>/$STORE`; put the working copy at `work/<aoi>/chronozarr-4` for the layout it expects.)
 
 **Cache classes.** Only these objects change in place, so only these need a short lifetime:
 

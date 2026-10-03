@@ -8,7 +8,7 @@ export default defineConfig({
   topNav: [
     { text: 'Docs', link: '/getting-started' },
     { text: 'Specification', link: '/specification' },
-    { text: 'Demo', link: 'https://tileripper.com' },
+    { text: 'Demo', link: '/demo/' },
   ],
   socials: [{ icon: 'github', link: 'https://github.com/chronozarr/chronozarr' }],
   sidebar: [
@@ -18,11 +18,13 @@ export default defineConfig({
       { text: 'Examples', link: '/examples' },
     ] },
     { text: 'Use chronozarr', items: [
+      { text: 'Bring your own data', link: '/guides/bring-your-data' },
       { text: 'Publish a store', link: '/publishing' },
       { text: 'Hosting recipes', link: '/guides/hosting' },
       { text: 'Append timesteps', link: '/guides/append' },
       { text: 'Integrate', link: '/integrate' },
       { text: 'Embed the viewer', link: '/guides/embedding' },
+      { text: 'Self-host the packaged viewer', link: '/guides/viewer-distribution' },
       { text: 'PNG frames', link: '/guides/png-frames' },
       { text: 'Water masks', link: '/guides/water-masks' },
     ] },
@@ -34,6 +36,7 @@ export default defineConfig({
       { text: 'MapLibre layer', link: '/reference/maplibre' },
       { text: 'Format comparison', link: '/guides/format-comparison' },
       { text: 'Measured comparisons', link: '/guides/comparisons' },
+      { text: 'Matched rendered comparison', link: '/guides/rendered-comparison' },
     ] },
   ],
 })

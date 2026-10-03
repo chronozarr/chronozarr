@@ -42,8 +42,8 @@ export default {
     function flush() {
       commandTimer = 0;
       if (!connected || disposed || !Object.keys(pending).length) return;
-      send({ type: 'tileripper:set', ...pending }); pending = {};
-      send({ type: 'tileripper:get' }); // v1 has no separate playback/product acknowledgement.
+      send({ type: 'chronozarr:set', ...pending }); pending = {};
+      send({ type: 'chronozarr:get' }); // v1 has no separate playback/product acknowledgement.
     }
     function queue(key, value) {
       if (['product', 'band'].includes(key) && !value) return;
@@ -94,7 +94,7 @@ export default {
       if (disposed || event.origin !== origin || event.source !== frame.contentWindow) return;
       const message = event.data;
       if (!message || message.v !== 1) return;
-      if (message.type === 'tileripper:ready') {
+      if (message.type === 'chronozarr:ready') {
         const first = !connected;
         connected = true; status.textContent = model.get('error').message ?? '';
         product.replaceChildren();
@@ -108,14 +108,14 @@ export default {
         update({ ready: true, times: message.times, products: message.products, bands: message.bands,
           state, t: state.t, product: state.product, band: state.band, range: state.range ?? null, playing: state.playing, speed: state.speed });
         if (desired) { pending = desired; flush(); }
-      } else if (message.type === 'tileripper:time') {
+      } else if (message.type === 'chronozarr:time') {
         update({ t: message.t, state: { ...model.get('state'), t: message.t, time: message.time } });
-      } else if (message.type === 'tileripper:view') {
+      } else if (message.type === 'chronozarr:view') {
         update({ state: { ...model.get('state'), zoom: message.zoom, center: message.center } });
-      } else if (message.type === 'tileripper:click') update({ click: message });
-      else if (message.type === 'tileripper:error') {
+      } else if (message.type === 'chronozarr:click') update({ click: message });
+      else if (message.type === 'chronozarr:error') {
         update({ error: message }); status.textContent = message.message;
-        if (connected) send({ type: 'tileripper:get' });
+        if (connected) send({ type: 'chronozarr:get' });
       }
     };
     const listen = (key, callback) => { model.on(`change:${key}`, callback); subscriptions.push([`change:${key}`, callback]); };
@@ -135,7 +135,7 @@ export default {
     };
     low.onchange = high.onchange = applyLimits; auto.onclick = () => control('range', null);
     speed.onchange = () => control('speed', Number(speed.value));
-    const loaded = () => send({ type: 'tileripper:get' });
+    const loaded = () => send({ type: 'chronozarr:get' });
     frame.addEventListener('load', loaded); window.addEventListener('message', receive); start();
     return () => {
       disposed = true; clearTimeout(saveTimer); clearTimeout(commandTimer);

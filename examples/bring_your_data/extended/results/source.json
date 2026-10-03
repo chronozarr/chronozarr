@@ -1,0 +1,108 @@
+{
+  "catalog": "https://planetarycomputer.microsoft.com/api/stac/v1",
+  "collection": "sentinel-2-l2a",
+  "bbox_wgs84": [
+    -114.755,
+    36.145,
+    -114.735,
+    36.165
+  ],
+  "crs": "EPSG:32611",
+  "shape": [
+    227,
+    186
+  ],
+  "bands": [
+    "blue",
+    "green",
+    "red",
+    "nir"
+  ],
+  "processing": "One acquisition per month, bilinear band resampling to a 10 m UTM grid; SCL nearest-neighbour validity; baseline offset correction; no compositing or gap filling.",
+  "scenes": [
+    {
+      "id": "S2B_MSIL2A_20200111T182729_R127_T11SQA_20201002T172544",
+      "date": "2020-01-11",
+      "mgrs_tile": "11SQA",
+      "scene_cloud_pct": 0.781004,
+      "valid_fraction": 0.8760361896641561
+    },
+    {
+      "id": "S2B_MSIL2A_20200210T182509_R127_T11SQA_20201001T161301",
+      "date": "2020-02-10",
+      "mgrs_tile": "11SQA",
+      "scene_cloud_pct": 0.303782,
+      "valid_fraction": 0.9278101463691915
+    },
+    {
+      "id": "S2A_MSIL2A_20200326T182001_R127_T11SQA_20201101T181309",
+      "date": "2020-03-26",
+      "mgrs_tile": "11SQA",
+      "scene_cloud_pct": 3.271464,
+      "valid_fraction": 0.9857893988915731
+    },
+    {
+      "id": "S2A_MSIL2A_20200415T181921_R127_T11SQA_20200923T150129",
+      "date": "2020-04-15",
+      "mgrs_tile": "11SQA",
+      "scene_cloud_pct": 0.25417,
+      "valid_fraction": 0.9974894604708446
+    },
+    {
+      "id": "S2A_MSIL2A_20200505T181921_R127_T11SQA_20200920T144554",
+      "date": "2020-05-05",
+      "mgrs_tile": "11SQA",
+      "scene_cloud_pct": 0.348844,
+      "valid_fraction": 1.0
+    },
+    {
+      "id": "S2B_MSIL2A_20200609T181919_R127_T11SQA_20200826T191834",
+      "date": "2020-06-09",
+      "mgrs_tile": "11SQA",
+      "scene_cloud_pct": 0.341402,
+      "valid_fraction": 1.0
+    },
+    {
+      "id": "S2A_MSIL2A_20200704T181931_R127_T11SQA_20200825T043236",
+      "date": "2020-07-04",
+      "mgrs_tile": "11SQA",
+      "scene_cloud_pct": 0.316734,
+      "valid_fraction": 1.0
+    },
+    {
+      "id": "S2B_MSIL2A_20200808T181919_R127_T11SQA_20200908T080321",
+      "date": "2020-08-08",
+      "mgrs_tile": "11SQA",
+      "scene_cloud_pct": 0.30763,
+      "valid_fraction": 1.0
+    },
+    {
+      "id": "S2B_MSIL2A_20200927T182039_R127_T11SQA_20200929T000118",
+      "date": "2020-09-27",
+      "mgrs_tile": "11SQA",
+      "scene_cloud_pct": 0.210786,
+      "valid_fraction": 0.9999052626592771
+    },
+    {
+      "id": "S2A_MSIL2A_20201012T182321_R127_T11SQA_20201014T105522",
+      "date": "2020-10-12",
+      "mgrs_tile": "11SQA",
+      "scene_cloud_pct": 0.184243,
+      "valid_fraction": 0.9932262801383165
+    },
+    {
+      "id": "S2B_MSIL2A_20201126T182719_R127_T11SQA_20201127T224233",
+      "date": "2020-11-26",
+      "mgrs_tile": "11SQA",
+      "scene_cloud_pct": 0.641221,
+      "valid_fraction": 0.9423996968405097
+    },
+    {
+      "id": "S2A_MSIL2A_20201221T182801_R127_T11SQA_20210104T041341",
+      "date": "2020-12-21",
+      "mgrs_tile": "11SQA",
+      "scene_cloud_pct": 0.237744,
+      "valid_fraction": 0.9209890578371465
+    }
+  ]
+}

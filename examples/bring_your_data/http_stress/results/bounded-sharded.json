@@ -1,0 +1,17 @@
+{
+  "axes": [
+    11,
+    12
+  ],
+  "successfulBackgroundChunks": 2,
+  "successfulDemandChunks": 62,
+  "injected500s": 12,
+  "fullCellChecks": 100,
+  "maxReaderCacheBytes": 8192,
+  "evicted": true,
+  "closedBytes": [
+    0,
+    0
+  ],
+  "limits": "Reader chunk cache only, not browser/GPU/process peak memory; atomic replacements and metadata-last publication, not an arbitrary partially updated host."
+}

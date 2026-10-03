@@ -34,7 +34,7 @@ and rendering still update immediately.
 
 The viewer remains in an iframe and uses the existing v1 embed contract. Incoming
 messages require both its exact origin and its window as sender. Python/JavaScript
-changes are acknowledged with `tileripper:get`; invalid commands produce `error`
+changes are acknowledged with `chronozarr:get`; invalid commands produce `error`
 and restore the accepted state. No raster server is needed for hosted stores.
 
 `store` can also be a local path: the same range/CORS server used by

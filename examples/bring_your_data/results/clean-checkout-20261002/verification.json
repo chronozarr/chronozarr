@@ -1,0 +1,87 @@
+{
+  "scope": "Local observations: adoption and level-0 fidelity; not a scale or delivery benchmark.",
+  "dates": [
+    "2020-05-05",
+    "2020-06-09",
+    "2020-07-29"
+  ],
+  "shape": [
+    3,
+    4,
+    905,
+    741
+  ],
+  "valid_fractions": [
+    0.9839488223320733,
+    0.985756145570045,
+    0.9889293995720282
+  ],
+  "encoding": "none",
+  "checks": {
+    "stored_values": "exact",
+    "validity_masks": "exact",
+    "physical_values": "passed",
+    "native_zarr_level0": "exact"
+  },
+  "pixel_history": {
+    "row": 443,
+    "col": 239,
+    "physical_values": [
+      [
+        0.14159999787807465,
+        0.16759999096393585,
+        0.23719999194145203,
+        0.29420000314712524
+      ],
+      [
+        0.13379999995231628,
+        0.16200000047683716,
+        0.22299998998641968,
+        0.2786000072956085
+      ],
+      [
+        0.11019999533891678,
+        0.13300000131130219,
+        0.1891999989748001,
+        0.24239999055862427
+      ]
+    ]
+  },
+  "storage": {
+    "source_cogs": [
+      {
+        "file": "2020-05-05.tif",
+        "objects": 1,
+        "bytes": 5249138,
+        "overviews": [
+          2
+        ]
+      },
+      {
+        "file": "2020-06-09.tif",
+        "objects": 1,
+        "bytes": 5254735,
+        "overviews": [
+          2
+        ]
+      },
+      {
+        "file": "2020-07-29.tif",
+        "objects": 1,
+        "bytes": 5171095,
+        "overviews": [
+          2
+        ]
+      }
+    ],
+    "chronozarr": {
+      "objects": 55,
+      "bytes": 14475461
+    },
+    "plain_zarr": {
+      "objects": 55,
+      "bytes": 14475345
+    }
+  },
+  "comparison_limits": "COGs use DEFLATE; both Zarr layouts use zstd 5. COG overview values and masks were not reconciled with the Zarr pyramids. Bytes include each representation's metadata and overviews; they do not establish a format or bandwidth advantage."
+}

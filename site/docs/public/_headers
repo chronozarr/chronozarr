@@ -4,3 +4,14 @@
   Cache-Control: public, max-age=0, must-revalidate
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
+
+/chronozarr/*
+  Access-Control-Allow-Origin: *
+/maplibre/*
+  Access-Control-Allow-Origin: *
+/demo/*
+  Access-Control-Allow-Origin: *
+/vendor/*
+  Access-Control-Allow-Origin: *
+/geolibre/*
+  Access-Control-Allow-Origin: *

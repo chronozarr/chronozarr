@@ -1,0 +1,90 @@
+{
+  "date": "2026-10-03",
+  "base_commit": "139a6cd40577b22c18c0cb7fb234127352d418d3",
+  "commands": [
+    {
+      "command": "uv run pytest -q tests/test_http_append_snapshot.py",
+      "result": "2 passed in 3.86s"
+    },
+    {
+      "command": "uv run python examples/bring_your_data/http_stress/verify.py data/adoption/extended-20261003/input data/adoption/http-stress-20261003",
+      "result": "all assertions passed; see real-http-snapshot.json"
+    },
+    {
+      "command": "cd js && npx playwright test e2e/adoption-http-stress.spec.js e2e/reader-http.spec.js e2e/viewer-lifecycle.spec.js --workers=1",
+      "result": "5 passed in 31.0s"
+    }
+  ],
+  "script_sha256": {
+    "tests/test_http_append_snapshot.py": "c17af449fd5bb6bc70495146dfd4ddc037e266ee14d62f00df152bbae2faf2b5",
+    "examples/bring_your_data/http_stress/verify.py": "1859507665a4bf87cbede994be7a8f201032549ebbf83c7769e7f37970858525",
+    "js/e2e/adoption-http-stress.spec.js": "dafb4ec442f859e0a8429a1f46df22528882f357410be024300ce730cf5b3ef5",
+    "js/e2e/reader-http.spec.js": "11941436d42f5316a691495d9f8a4ca0eefa53029d11f1518d693a0633032bf8",
+    "js/e2e/viewer-lifecycle.spec.js": "a0a285a80663a2baf9dd43cb76f26ad8d655ec50d7fb478dee8c9af90c2f9d28"
+  },
+  "limits": "Correctness checks concurrent with another adoption conversion; elapsed suite times are not performance measurements. No production read path changed.",
+  "browser_evidence_run": {
+    "command": "cd js && npx playwright test e2e/adoption-http-stress.spec.js e2e/reader-http.spec.js e2e/viewer-lifecycle.spec.js --workers=1 --reporter=json",
+    "stats": {
+      "startTime": "2026-10-03T17:16:37.983Z",
+      "duration": 30582.505,
+      "expected": 5,
+      "skipped": 0,
+      "unexpected": 0,
+      "flaky": 0
+    },
+    "attachments": [
+      {
+        "test": "visible painted frames remain whole through transient HTTP 500 retries",
+        "status": "passed",
+        "file": "visible-frames.json"
+      },
+      {
+        "test": "bounded-cache HTTP reader retains old axis and exact uncached values through append (false)",
+        "status": "passed",
+        "file": "bounded-unsharded.json"
+      },
+      {
+        "test": "bounded-cache HTTP reader retains old axis and exact uncached values through append (true)",
+        "status": "passed",
+        "file": "bounded-sharded.json"
+      }
+    ]
+  },
+  "final_full_suite_run": {
+    "command": "cd js && npx playwright test --workers=1 --reporter=json > /tmp/chronozarr-round2-browser.json",
+    "stats": {
+      "startTime": "2026-10-03T17:21:36.695Z",
+      "duration": 53688.777,
+      "expected": 44,
+      "skipped": 0,
+      "unexpected": 0,
+      "flaky": 0
+    },
+    "attachments": [
+      {
+        "test": "visible painted frames remain whole through transient HTTP 500 retries",
+        "status": "passed",
+        "file": "full-suite-visible-frames.json"
+      },
+      {
+        "test": "bounded-cache HTTP reader retains old axis and exact uncached values through append (false)",
+        "status": "passed",
+        "file": "full-suite-bounded-unsharded.json"
+      },
+      {
+        "test": "bounded-cache HTTP reader retains old axis and exact uncached values through append (true)",
+        "status": "passed",
+        "file": "full-suite-bounded-sharded.json"
+      }
+    ],
+    "script_sha256": {
+      "tests/test_http_append_snapshot.py": "c17af449fd5bb6bc70495146dfd4ddc037e266ee14d62f00df152bbae2faf2b5",
+      "examples/bring_your_data/http_stress/verify.py": "1859507665a4bf87cbede994be7a8f201032549ebbf83c7769e7f37970858525",
+      "js/e2e/adoption-http-stress.spec.js": "ba4b201de9009236ad71e544e87ffd90203f48b6d942d56c92c0f77d75c071a9",
+      "js/e2e/reader-http.spec.js": "11941436d42f5316a691495d9f8a4ca0eefa53029d11f1518d693a0633032bf8",
+      "js/e2e/viewer-lifecycle.spec.js": "a0a285a80663a2baf9dd43cb76f26ad8d655ec50d7fb478dee8c9af90c2f9d28"
+    },
+    "change_since_initial_run": "HTTP failure delay hashes URL pathname, independent of randomly assigned server port; original five-target evidence and its original hashes retained."
+  }
+}

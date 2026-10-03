@@ -37,7 +37,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://tileripper.com"
+Homepage = "https://chronozarr.org"
 Documentation = "https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md"
 Repository = "https://github.com/chronozarr/chronozarr"
 Issues = "https://github.com/chronozarr/chronozarr/issues"
@@ -63,6 +63,7 @@ ingest = [
     "pyyaml>=6.0",
 ]
 dev = [
+    "coverage>=7.6",
     "pytest>=8.0",
     "ruff>=0.5",
     "ty>=0.0.23",
@@ -82,7 +83,10 @@ build-backend = "hatchling.build"
 packages = ["src/chronozarr"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/chronozarr", "tests", "spec", "README.md", "LICENSE", "pyproject.toml"]
+include = [
+    "src/chronozarr", "tests", "spec", "README.md", "LICENSE", "pyproject.toml",
+    "scripts/check_architecture.py", ".sentrux/rules.toml",
+]
 
 [tool.ruff]
 src = ["src"]
@@ -101,3 +105,19 @@ markers = [
     "slow: marks tests that process real data",
     "unit: fast isolated tests",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["chronozarr"]
+data_file = "data/reports/coverage/python/.coverage"
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.coverage.json]
+output = "data/reports/coverage/python/coverage.json"
+
+[tool.coverage.xml]
+output = "data/reports/coverage/python/coverage.xml"

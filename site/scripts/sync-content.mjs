@@ -4,10 +4,16 @@ import { fileURLToPath } from 'node:url';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const sources = {
+  'examples/bring_your_data/README.md': 'guides/bring-your-data',
+  'examples/bring_your_data/large/README.md': 'guides/larger-source-check',
+  'examples/bring_your_data/http_stress/README.md': 'guides/http-stress',
+  'bench/adoption/README.md': 'guides/retrieval-comparison',
+  'bench/rendered/README.md': 'guides/rendered-comparison',
   'spec/CHRONOZARR.md': 'specification',
   'docs/hosting.md': 'guides/hosting',
   'docs/append.md': 'guides/append',
   'docs/embedding.md': 'guides/embedding',
+  'docs/viewer-distribution.md': 'guides/viewer-distribution',
   'docs/format-comparison.md': 'guides/format-comparison',
   'docs/comparisons.md': 'guides/comparisons',
   'docs/png-frames.md': 'guides/png-frames',
@@ -24,9 +30,6 @@ for (const [source, route] of Object.entries(sources)) {
     const link = sources[target] ? `/${sources[target]}` : `https://github.com/chronozarr/chronozarr/blob/main/${target}`;
     return `](${link}${anchor ? `#${anchor}` : ''})`;
   });
-  // README examples predate the current public store; keep website links live.
-  text = text.replaceAll('https://data.tileripper.com/ucayali_santa_maria/chronozarr-3', 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-4')
-    .replaceAll('https://data.tileripper.com/ucayali_santa_maria/chronozarr-2', 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-4');
   // Vocs parses Markdown as MDX: protect literal prose braces/angles, while
   // preserving fenced and inline code verbatim. No authored source is changed.
   text = text.replace(/<!--[\s\S]*?-->/g, '');

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chooseFrame } from '../tileripper/frames.js';
+import { chooseFrame } from '../demo/frames.js';
 
 /** `ready` lists the [lod, t] frames that are complete in memory. */
 const choose = (ready, options) => {

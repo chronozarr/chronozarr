@@ -1,13 +1,13 @@
-# TileRipper viewer: static assets served by a Cloudflare Worker.
-# Deploy with `npx wrangler deploy`. The custom domains below create their DNS records
-# and certificates on deploy; the hostnames must not already have DNS records.
-name = "tileripper"
+# Unified chronozarr documentation and demo. Build first: npm --prefix site run build
+name = "chronozarr-docs"
 compatibility_date = "2026-09-01"
-
+main = "site/worker.js"
 routes = [
-  { pattern = "tileripper.com", custom_domain = true },
-  { pattern = "www.tileripper.com", custom_domain = true },
+  { pattern = "chronozarr.org", custom_domain = true },
+  { pattern = "www.chronozarr.org", custom_domain = true },
 ]
-
 [assets]
-directory = "./js"
+run_worker_first = true
+binding = "ASSETS"
+directory = "./site/docs/dist"
+not_found_handling = "404-page"

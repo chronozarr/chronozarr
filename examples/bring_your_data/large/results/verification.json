@@ -1,0 +1,85 @@
+{
+  "dates": [
+    "2020-01-11",
+    "2020-02-10",
+    "2020-03-26",
+    "2020-04-15",
+    "2020-05-05",
+    "2020-06-09",
+    "2020-07-04",
+    "2020-08-08",
+    "2020-09-27",
+    "2020-10-12",
+    "2020-11-26",
+    "2020-12-21"
+  ],
+  "shape": [
+    12,
+    4,
+    1136,
+    1107
+  ],
+  "encoding": "explicit star-delta, anchor_interval=6",
+  "valid_fractions": [
+    0.8532545771467104,
+    0.8921476010534753,
+    0.9546483962492207,
+    0.9799801519141952,
+    0.9825200071249539,
+    0.9839513594666464,
+    0.9801185159738921,
+    0.9850709950761479,
+    0.9801328294973091,
+    0.9575460895454025,
+    0.8944536687150909,
+    0.872531712406326
+  ],
+  "frame_sha256": [
+    "054dc69efdddefa663facc973d2c22dca3a6909e528a7e6bd773dd4eca9faef3",
+    "4b94a83f3c348b9cd260bee392eb3e9d4daef70cde3ca928e696f7161776adda",
+    "9101439fe15601729d225e9ac4b77a55f8b7767f16e18c4dab328368305fcef8",
+    "19c724cd9124ff156e03328b46faecd29c89f0df7fa95d5ff931659e1ce742cd",
+    "92586e8e99550187f303b45c6cd3ee65b7eddb3b14c3b2b3a5684d8d4b2addda",
+    "eae7b3f9f2dbdeee9ac9f48241256beab6eae2667bc9e55d9faf3280cbcab578",
+    "e2ef81f832813b656404f6eb290016855213ca807019b891fc86ae6b6932bd97",
+    "dc79c8b657be68d525467d306d7abb701741bf764b62d6932e128e63601e69af",
+    "d6baee177c44a15539d272b7cd14a3e84d7c1494d508f7b8d2140ffa77d14008",
+    "078cf0bd4d7b312c3151ee56adcfcc3f8c9fc1d75ef73f6e6e7429a47b5e50d5",
+    "c3cff02021d58edb79e8ae27c4b303f480d433fdd3432ebd3a7ff77eaf2638c6",
+    "570320547347e09b62fcc54abaaea523e6c5657825ff1d5ac19efefb951e678e"
+  ],
+  "mask_sha256": [
+    "08e973e27edf2bbb162c8c21f71b776781677ffafd9241aaa1dc33f6396a9ee3",
+    "64a2184a2134c429c5c2900b605bc57e0556552a2fd26d6a9e4a23d697043a38",
+    "78a828b3a1f4b8735e9aed52330a3720b34afdf1e3b393721d870d9986cb1bcf",
+    "17b72855f2a8232060de727175009bdc5c9617477ab9642d9bf47ceee86ca115",
+    "4bc0262ec112e018b67c1f635e689bfc8cefae44e4fc6dced50ae7bdeaa2b68d",
+    "8372b78bfd8a53d1601036a158a85ea7f742699ac26a00ca516961ade0745a83",
+    "92c5731e72e82046d329d4cadd717ea2e32ebfa124fe7575c0f93eefd15326b4",
+    "29db1d7b878001a3cf50355d67d76a7dcd8cab8ae318baca1f7d413995be29ba",
+    "af0fc5fa78fb113a895580da9cbbd7512119faafd397c67edbb79bf650a5dcb7",
+    "e712cfecb3bdd67529c1adbc787b8996a616e109eea354e74d24e57913916f1a",
+    "e7d866322f8937090abcbd6836d3de9282ff0fb5fffad23fcb7e8eef55d15397",
+    "c824eaeece2c34f9b44715bff085aa3f8b70f91d5898a98a19b8d37b99af5253"
+  ],
+  "append": {
+    "n_appended": 1,
+    "n_time": 12,
+    "objects_written": 42,
+    "bytes_written": 9485621,
+    "seconds": 0.23156550014391541
+  },
+  "old_reader_times": 11,
+  "old_http_reader_times": 11,
+  "reopened_reader_times": 12,
+  "existing_chunks_unchanged": 308,
+  "checks": {
+    "all_level0_values_and_masks_local_http": "exact",
+    "physical_scaling": "passed",
+    "old_handle_new_date": "IndexError",
+    "old_http_handle_new_date": "IndexError",
+    "all_frames_distinct": true
+  },
+  "process_peak_rss_bytes": 955449344,
+  "limits": "Same-host test; RSS includes conversion and GDAL. No CDN, outside-user or isolated browser peak-memory claim."
+}

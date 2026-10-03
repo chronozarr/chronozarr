@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from chronozarr.view import serve_store
 
 DEFAULT_STORE = "https://data.tileripper.com/ucayali_santa_maria/chronozarr-4"
-DEFAULT_READER = "https://tileripper.com/maplibre/layer.js"
+DEFAULT_READER = "https://chronozarr.org/maplibre/layer.js"
 
 
 def add_chronozarr(

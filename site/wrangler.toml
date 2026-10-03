@@ -1,4 +1,4 @@
-# Separate from the TileRipper viewer Worker.
+# Unified documentation and browser demo Worker.
 name = "chronozarr-docs"
 compatibility_date = "2026-09-01"
 workers_dev = true

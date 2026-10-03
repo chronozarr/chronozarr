@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Embedding TileRipper</title>
+<title>Embedding chronozarr</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
   :root { --ink: #141a29; --muted: #5b6784; --line: #d9deea; --paper: #fbfcfe; --accent: #2563eb; }
@@ -42,8 +42,8 @@
 </head>
 <body>
 <main>
-  <h1>Embedding TileRipper</h1>
-  <p>The viewer below is an iframe of <code>tileripper/index.html?embed=1</code>. This page drives it with <code>postMessage</code> and reads what you click from the messages it sends back. Reference: <a href="https://github.com/chronozarr/chronozarr/blob/main/docs/embedding.md">docs/embedding.md</a>.</p>
+  <h1>Embedding chronozarr</h1>
+  <p>The viewer below is an iframe of <code>demo/index.html?embed=1</code>. This page drives it with <code>postMessage</code> and reads what you click from the messages it sends back. Reference: <a href="https://github.com/chronozarr/chronozarr/blob/main/docs/embedding.md">docs/embedding.md</a>.</p>
 
   <div class="bar">
     <label>
@@ -55,7 +55,7 @@
     <button id="pause" disabled>Pause</button>
   </div>
 
-  <iframe id="viewer" title="TileRipper viewer"></iframe>
+  <iframe id="viewer" title="chronozarr viewer"></iframe>
 
   <div class="readout" aria-live="polite">
     <h2>Last click</h2>
@@ -74,7 +74,7 @@
 
 <script>
   'use strict';
-  const DEFAULT_STORE = 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-3';
+  const DEFAULT_STORE = 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-4';
 
   const params = new URLSearchParams(location.search);
   const frame = document.getElementById('viewer');
@@ -87,7 +87,7 @@
   const log = document.getElementById('log');
 
   // The iframe URL: the store, the origin of this page (the only origin the viewer will talk to), and the look.
-  const viewerUrl = new URL('../tileripper/index.html', location.href);
+  const viewerUrl = new URL('../demo/index.html', location.href);
   const query = new URLSearchParams({ embed: '1', store: params.get('store') || DEFAULT_STORE, origin: location.origin });
   if (params.get('theme') === 'light') query.set('theme', 'light');
   if (params.get('controls') === '0') query.set('controls', '0');
@@ -135,7 +135,7 @@
     const message = event.data;
     if (!message || message.v !== 1 || typeof message.type !== 'string') return;
     note('<-', message);
-    if (message.type === 'tileripper:ready') {
+    if (message.type === 'chronozarr:ready') {
       times = message.times;
       slider.max = String(times.length - 1);
       slider.disabled = false;
@@ -145,11 +145,11 @@
       productSelect.replaceChildren(...message.products.filter((p) => p.available).map((p) => new Option(p.name, p.id)));
       productSelect.value = message.state.product;
       productSelect.disabled = false;
-    } else if (message.type === 'tileripper:time') {
+    } else if (message.type === 'chronozarr:time') {
       showTime(message.t);
-    } else if (message.type === 'tileripper:click') {
+    } else if (message.type === 'chronozarr:click') {
       showClick(message);
-    } else if (message.type === 'tileripper:error') {
+    } else if (message.type === 'chronozarr:error') {
       dateLabel.textContent = 'error';
       clickBox.className = 'empty';
       clickBox.textContent = `${message.code}: ${message.message}`;
@@ -158,11 +158,11 @@
 
   slider.addEventListener('input', () => {
     dateLabel.textContent = shortDate(times[Number(slider.value)]);
-    send({ v: 1, type: 'tileripper:set', t: Number(slider.value) });
+    send({ v: 1, type: 'chronozarr:set', t: Number(slider.value) });
   });
-  productSelect.addEventListener('change', () => send({ v: 1, type: 'tileripper:set', product: productSelect.value }));
-  playButton.addEventListener('click', () => send({ v: 1, type: 'tileripper:set', playing: true, speed: 4 }));
-  pauseButton.addEventListener('click', () => send({ v: 1, type: 'tileripper:set', playing: false }));
+  productSelect.addEventListener('change', () => send({ v: 1, type: 'chronozarr:set', product: productSelect.value }));
+  playButton.addEventListener('click', () => send({ v: 1, type: 'chronozarr:set', playing: true, speed: 4 }));
+  pauseButton.addEventListener('click', () => send({ v: 1, type: 'chronozarr:set', playing: false }));
 
   if (location.origin === 'null') {
     dateLabel.textContent = 'serve this page over http(s)';

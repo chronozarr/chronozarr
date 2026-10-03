@@ -52,7 +52,7 @@ The decode worker is found relative to `decoder.js` (`new URL('./decode-worker.j
 ```js
 import { openStore } from 'chronozarr';
 
-const store = await openStore('https://data.tileripper.com/ucayali_santa_maria/chronozarr-3');
+const store = await openStore('https://data.tileripper.com/ucayali_santa_maria/chronozarr-4');
 console.log(store.times.length, store.bands, store.dtype, store.crs);
 // 117 [ 'B02', 'B03', 'B04', 'B08' ] 'uint16' 'EPSG:32718'
 
@@ -76,7 +76,7 @@ import { ChronozarrLayer } from 'chronozarr/maplibre';
 
 const map = new maplibregl.Map({ container: 'map', style: 'https://demotiles.maplibre.org/style.json' });
 const layer = new ChronozarrLayer({
-  url: 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-3', // store root (holds zarr.json)
+  url: 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-4', // store root (holds zarr.json)
   product: 'true_color', // layer.products lists what the store's bands support
   t: 0, // timestep index
   prefetch: true, // fill the reader's caches around t in the background

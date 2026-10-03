@@ -16,7 +16,7 @@ npm run deploy
 
 Deployment uses the repository's pinned Wrangler binary. Install root tooling
 with `npm ci` from the repository root if it is absent. The site has its own
-Worker, `chronozarr-docs`; the TileRipper viewer deployment is separate.
+Worker, `chronozarr-docs`; the browser demo and its shared modules are copied into this same deployment by `scripts/copy-demo.mjs`.
 Build output is `docs/dist`. `worker.js` redirects www to the apex and forwards
 other requests to static assets. Unknown paths return 404.
 

@@ -17,7 +17,7 @@ try {
   await page.evaluate(async ({ base, live }) => {
     const values = {
       store_url: live ? 'https://data.tileripper.com/ucayali_santa_maria/png-1' : `${base}/data/stores/ucayali_santa_maria/png-1`,
-      viewer_url: live ? 'https://tileripper.com/tileripper/' : `${base}/js/tileripper/index.html`,
+      viewer_url: live ? 'https://chronozarr.org/demo/' : `${base}/js/demo/index.html`,
       controls: true, height: 560, theme: 'light', t: 0, product: '', speed: 4, playing: false,
       times: [], products: [], bands: [], ready: false, state: {}, click: {}, error: {},
     };
@@ -42,11 +42,11 @@ try {
   await page.waitForFunction(() => window.values.ready, null, { timeout: 60000 });
   assert.equal(await page.evaluate(() => window.values.times.length), 36);
   const frame = page.frames().find(frame => frame !== page.mainFrame());
-  await frame.waitForFunction(() => window.tileripper?.ready, null, { timeout: 60000 });
-  await frame.evaluate(() => window.tileripper.ready);
+  await frame.waitForFunction(() => window.chronozarr?.ready, null, { timeout: 60000 });
+  await frame.evaluate(() => window.chronozarr.ready);
   // Commands from a kernel-side trait change reach the viewer.
   await page.evaluate(() => window.model.set('t', 9));
-  await frame.waitForFunction(() => window.tileripper.viewer.t === 9);
+  await frame.waitForFunction(() => window.chronozarr.viewer.t === 9);
   await page.waitForFunction(() => window.values.state.t === 9);
   await page.locator('select[aria-label=Product]').selectOption('band');
   await page.waitForFunction(() => window.values.state.product === 'band');
@@ -57,21 +57,21 @@ try {
   // Matching origin alone is insufficient; a sibling/source-less event is rejected.
   await page.evaluate(() => window.dispatchEvent(new MessageEvent('message', {
     origin: new URL(window.values.viewer_url).origin,
-    data: { v: 1, type: 'tileripper:time', t: 999, time: 'forged' }, source: null,
+    data: { v: 1, type: 'chronozarr:time', t: 999, time: 'forged' }, source: null,
   })));
   assert.equal(await page.evaluate(() => window.values.t), 9);
   await page.evaluate(() => { window.model.set('speed', 2); window.model.set('playing', true); });
   await page.waitForFunction(() => window.values.state.playing === true);
-  await frame.waitForFunction(() => window.tileripper.viewer.t !== 9, null, { timeout: 30000 });
+  await frame.waitForFunction(() => window.chronozarr.viewer.t !== 9, null, { timeout: 30000 });
   await page.evaluate(() => window.model.set('playing', false));
   await page.waitForFunction(() => window.values.state.playing === false);
   await page.locator('input[aria-label=Timestep]').fill('9');
   await page.locator('input[aria-label=Timestep]').dispatchEvent('input');
-  await frame.waitForFunction(() => window.tileripper.viewer.paintedT === 9, null, { timeout: 30000 });
+  await frame.waitForFunction(() => window.chronozarr.viewer.paintedT === 9, null, { timeout: 30000 });
   const canvas = frame.locator('canvas').first();
   const bounds = await canvas.boundingBox();
   await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-  await page.waitForFunction(() => window.values.click.type === 'tileripper:click');
+  await page.waitForFunction(() => window.values.click.type === 'chronozarr:click');
   assert.equal(await page.evaluate(() => Object.keys(window.values.click.values).length), 3);
   await page.screenshot({ path: path.join(root, `data/reports/anywidget-${live ? 'live' : 'local'}.png`) });
   await page.evaluate(() => window.dispose());

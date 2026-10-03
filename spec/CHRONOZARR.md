@@ -550,7 +550,7 @@ A plain Zarr reader (`xarray.open_zarr(store, group="0")`, zarrita) reads a `non
 - Not a video codec. Deltas are block-compressed arrays, not I/P/B frames.
 - Not a spatial index. A regular grid of chunks with a power-of-2 pyramid.
 - Not a server or an API. There is nothing to run; a bucket is the deployment.
-- Not a viewer. TileRipper is one consumer; zarr-layer and xarray are others.
+- Not a viewer. chronozarr is one consumer; zarr-layer and xarray are others.
 
 ## 12. Relationship to prior art
 

@@ -1,0 +1,8 @@
+{
+  "reader_version": "0.2.1",
+  "store_objects": 55,
+  "store_bytes": 14475461,
+  "viewer": "index.html",
+  "embed_example": "examples/embed.html",
+  "note": "Storage inventory, not a performance benchmark. Data was copied unchanged."
+}

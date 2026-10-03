@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createProjection } from '../maplibre/projection.js';
-import { EmbedBridge, EmbedCommandError, connectEmbed, parseEmbedParams } from '../tileripper/embed.js';
+import { EmbedBridge, EmbedCommandError, connectEmbed, parseEmbedParams } from '../demo/embed.js';
 
 const HOST = 'https://host.example';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -16,7 +16,7 @@ function fakeWindow() {
   const parent = { postMessage: (data, targetOrigin) => posted.push({ data, targetOrigin }) };
   const win = {
     parent,
-    location: { href: 'https://tileripper.com/tileripper/index.html?embed=1' },
+    location: { href: 'https://chronozarr.org/demo/index.html?embed=1' },
     addEventListener: (type, listener) => type === 'message' && listeners.add(listener),
     removeEventListener: (type, listener) => type === 'message' && listeners.delete(listener),
   };
@@ -30,7 +30,7 @@ function fakeWindow() {
   };
 }
 
-const setMessage = (fields) => ({ v: 1, type: 'tileripper:set', ...fields });
+const setMessage = (fields) => ({ v: 1, type: 'chronozarr:set', ...fields });
 
 test('a bridge is inactive without an origin or outside a frame: no listener, nothing sent', () => {
   const noOrigin = fakeWindow();
@@ -55,7 +55,7 @@ test('messages from another origin are ignored without any side effect, valid or
   const commands = [];
   const bridge = new EmbedBridge({ win: w.win, origin: HOST, onCommand: (command) => commands.push(command) });
   bridge.start();
-  for (const data of [setMessage({ t: 1 }), { type: 'tileripper:get' }, setMessage({ zoom: -1 }), { type: 'tileripper:nonsense' }, setMessage({ v: 9 }), 'junk']) {
+  for (const data of [setMessage({ t: 1 }), { type: 'chronozarr:get' }, setMessage({ zoom: -1 }), { type: 'chronozarr:nonsense' }, setMessage({ v: 9 }), 'junk']) {
     w.receive(data, { origin: 'https://evil.example' });
     w.receive(data, { origin: 'https://host.example.evil.example' });
     w.receive(data, { origin: 'null' });
@@ -91,28 +91,28 @@ test('commands from the host are validated, handed over in order, one at a time'
   });
   bridge.start();
   w.receive(setMessage({ t: 1 }));
-  w.receive({ type: 'tileripper:get' });
+  w.receive({ type: 'chronozarr:get' });
   w.receive(setMessage({ t: 2, speed: 5 }));
   await sleep(80);
   assert.deepEqual(log, ['start set {"t":{"index":1}}', 'end set', 'start get null', 'end get', 'start set {"t":{"index":2},"speed":5}', 'end set']);
   assert.deepEqual(w.posted, []);
 });
 
-test('a malformed command from the host is answered with tileripper:error, sent to the host origin only', () => {
+test('a malformed command from the host is answered with chronozarr:error, sent to the host origin only', () => {
   const w = fakeWindow();
   new EmbedBridge({ win: w.win, origin: HOST, onCommand: () => assert.fail('a bad command is not handed over') }).start();
   w.receive(setMessage({ zoom: 'big' }));
-  w.receive({ type: 'tileripper:fly' });
-  w.receive({ v: 2, type: 'tileripper:set' });
+  w.receive({ type: 'chronozarr:fly' });
+  w.receive({ v: 2, type: 'chronozarr:set' });
   w.receive({ type: 'somebody:else' });
-  w.receive({ v: 1, type: 'tileripper:ready' });
+  w.receive({ v: 1, type: 'chronozarr:ready' });
   assert.equal(w.posted.length, 3, 'foreign messages and echoes of the viewer\'s own types get no answer');
   assert.ok(w.posted.every(({ targetOrigin }) => targetOrigin === HOST), 'never "*"');
-  assert.deepEqual(w.posted.map(({ data }) => [data.v, data.type, data.code]), [[1, 'tileripper:error', 'bad_set'], [1, 'tileripper:error', 'bad_message'], [1, 'tileripper:error', 'bad_message']]);
+  assert.deepEqual(w.posted.map(({ data }) => [data.v, data.type, data.code]), [[1, 'chronozarr:error', 'bad_set'], [1, 'chronozarr:error', 'bad_message'], [1, 'chronozarr:error', 'bad_message']]);
   assert.match(w.posted[0].data.message, /^zoom must be a number above 0/);
 });
 
-test('a command that fails is answered with tileripper:error, and the next one still runs', async () => {
+test('a command that fails is answered with chronozarr:error, and the next one still runs', async () => {
   const w = fakeWindow();
   const seen = [];
   const original = console.error;
@@ -142,7 +142,7 @@ test('post sends plain JSON with the version to the host origin', () => {
   const w = fakeWindow();
   const bridge = new EmbedBridge({ win: w.win, origin: HOST, onCommand: () => {} });
   bridge.post('click', { value: NaN, gone: undefined, nested: { inf: Infinity } });
-  assert.deepEqual(w.posted, [{ data: { v: 1, type: 'tileripper:click', value: null, nested: { inf: null } }, targetOrigin: HOST }]);
+  assert.deepEqual(w.posted, [{ data: { v: 1, type: 'chronozarr:click', value: null, nested: { inf: null } }, targetOrigin: HOST }]);
 });
 
 test('scheduleView sends one message after the camera has been still, and not again for the same view', async () => {
@@ -244,7 +244,7 @@ test('connectEmbed: ready carries the store, its times, bands, products, levels 
   assert.equal(w.posted.length, 1);
   const { data, targetOrigin } = w.posted[0];
   assert.equal(targetOrigin, HOST);
-  assert.deepEqual([data.v, data.type], [1, 'tileripper:ready']);
+  assert.deepEqual([data.v, data.type], [1, 'chronozarr:ready']);
   assert.deepEqual(data.store, { url: 'https://data.example/stores/ucayali/', name: 'ucayali', crs: 'EPSG:32631' });
   assert.equal(data.times.length, 4);
   assert.deepEqual(data.bands, [
@@ -266,15 +266,15 @@ test('connectEmbed: ready carries the store, its times, bands, products, levels 
 
 test('connectEmbed: get answers with ready again once the store is open, and with nothing before', async () => {
   const { w, viewer } = connected();
-  w.receive({ type: 'tileripper:get' });
+  w.receive({ type: 'chronozarr:get' });
   await sleep(5);
   assert.deepEqual(w.posted, [], 'the ready message is still to come');
   viewer.hooks.ready();
   await sleep(5);
   viewer.t = 2;
-  w.receive({ type: 'tileripper:get' });
+  w.receive({ type: 'chronozarr:get' });
   await sleep(5);
-  assert.deepEqual(w.posted.map(({ data }) => [data.type, data.state.t]), [['tileripper:ready', 0], ['tileripper:ready', 2]]);
+  assert.deepEqual(w.posted.map(({ data }) => [data.type, data.state.t]), [['chronozarr:ready', 0], ['chronozarr:ready', 2]]);
 });
 
 test('connectEmbed: time, view and click messages wait for ready and carry lon/lat and the values', async () => {
@@ -287,7 +287,7 @@ test('connectEmbed: time, view and click messages wait for ready and carry lon/l
   w.posted.length = 0;
 
   viewer.hooks.time({ t: 3 });
-  assert.deepEqual(w.posted.map(({ data }) => data), [{ v: 1, type: 'tileripper:time', t: 3, time: '2024-04-01T00:00:00Z' }]);
+  assert.deepEqual(w.posted.map(({ data }) => data), [{ v: 1, type: 'chronozarr:time', t: 3, time: '2024-04-01T00:00:00Z' }]);
 
   w.posted.length = 0;
   viewer.hooks.click({
@@ -297,7 +297,7 @@ test('connectEmbed: time, view and click messages wait for ready and carry lon/l
     info: { valid: true, bands: [{ name: 'B02', value: 0.0412 }, { name: 'B04', value: 0.0633 }] },
   });
   const click = w.posted[0].data;
-  assert.deepEqual([click.type, click.pixel, click.t, click.time, click.level, click.valid], ['tileripper:click', { x: 10, y: 20 }, 2, '2024-03-01T00:00:00Z', 0, true]);
+  assert.deepEqual([click.type, click.pixel, click.t, click.time, click.level, click.valid], ['chronozarr:click', { x: 10, y: 20 }, 2, '2024-03-01T00:00:00Z', 0, true]);
   assert.deepEqual(click.values, { B02: 0.0412, B04: 0.0633 });
   // The centre of pixel (10, 20): 500000 + 10.5 * 10 east, 4000000 - 20.5 * 10 north in UTM 31N.
   const expected = createProjection('EPSG:32631').toLonLat(500105, 3999795);
@@ -311,7 +311,7 @@ test('connectEmbed: time, view and click messages wait for ready and carry lon/l
 test('connectEmbed: errors of the viewer reach the host at once, even before ready', () => {
   const { w, viewer } = connected();
   viewer.hooks.error({ code: 'store_open_failed', title: 'Could not open store', message: 'HTTP 404' });
-  assert.deepEqual(w.posted.map(({ data }) => [data.type, data.code, data.message]), [['tileripper:error', 'store_open_failed', 'Could not open store: HTTP 404']]);
+  assert.deepEqual(w.posted.map(({ data }) => [data.type, data.code, data.message]), [['chronozarr:error', 'store_open_failed', 'Could not open store: HTTP 404']]);
 });
 
 test('connectEmbed: a set is applied in a fixed order: product, band, time, camera, speed, playback', async () => {
@@ -403,7 +403,7 @@ test('connectEmbed: sets that arrive before the store has opened are merged and 
   assert.deepEqual(calls, [], 'nothing to apply them to yet');
   viewer.hooks.ready();
   await sleep(10);
-  assert.equal(w.posted[0].data.type, 'tileripper:ready');
+  assert.equal(w.posted[0].data.type, 'chronozarr:ready');
   assert.deepEqual(calls, [['goToTime', 2], ['setView', { zoom: 4, center: undefined }], ['setSpeed', 6]], 'later fields win');
 });
 
@@ -436,7 +436,7 @@ test('connectEmbed: view messages follow camera changes, debounced', async () =>
   viewer.hooks.view();
   assert.deepEqual(w.posted, []);
   await sleep(250);
-  assert.deepEqual(w.posted.map(({ data }) => [data.type, data.zoom]), [['tileripper:view', 3]]);
+  assert.deepEqual(w.posted.map(({ data }) => [data.type, data.zoom]), [['chronozarr:view', 3]]);
   assert.deepEqual(Object.keys(w.posted[0].data.center).sort(), ['lat', 'lon', 'x', 'y']);
 });
 
