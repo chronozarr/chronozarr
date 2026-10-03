@@ -24,6 +24,7 @@ export default defineConfig({
       { text: 'Append timesteps', link: '/guides/append' },
       { text: 'Integrate', link: '/integrate' },
       { text: 'Embed the viewer', link: '/guides/embedding' },
+      { text: 'Self-host the packaged viewer', link: '/guides/viewer-distribution' },
       { text: 'PNG frames', link: '/guides/png-frames' },
       { text: 'Water masks', link: '/guides/water-masks' },
     ] },

@@ -1,0 +1,11 @@
+{
+  "url": "http://127.0.0.1:8017/chronozarr-clean-published-20261002/",
+  "times": 3,
+  "fullViewer": "passed",
+  "embedTimeControl": "passed",
+  "productControl": "passed",
+  "pixelClick": "passed",
+  "playbackControls": "passed",
+  "externalRequests": 0,
+  "browserErrors": 0
+}

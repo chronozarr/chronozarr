@@ -1,0 +1,23 @@
+{
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "python": "3.11.6",
+  "dependencies": {
+    "chronozarr": "0.2.1",
+    "zarr": "3.1.6",
+    "numpy": "2.4.4",
+    "rasterio": "1.4.4",
+    "planetary-computer": "1.0.0",
+    "xarray": "2026.2.0"
+  },
+  "script_sha256": {
+    "fetch.py": "77f7ecab4be6a9e8dbf070f5e715dd5d1cc710aef11f6cc60a041733ad762d8e",
+    "validate.py": "8c5f778f8c9b62ec5117f21259f9e763b3183201b476d2a2949ead3382dcdd79",
+    "check.mjs": "207c56cae1d69c1c832623d666c2c60267a91992925753ae3fdba5f87a77d957"
+  },
+  "physical_assertion_tolerance": {
+    "rtol": 1e-07,
+    "atol": 0,
+    "equal_nan": true
+  },
+  "limits": "Freshly downloaded source observations on an existing checkout/environment; not independent adoption. Larger footprint remains open."
+}

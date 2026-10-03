@@ -1,6 +1,6 @@
 # Handover: make chronozarr independently adoptable
 
-Date: 2026-10-02 (America/New_York)
+Date: 2026-10-03 (America/New_York)
 Branch: main. Starting commit: 82a4001 (viewer migration).
 Read `.napkin.md` first, then inspect current git state. The user-provided AGENTS instructions
 now describe chronozarr, js/demo/, static hosting, and unchanged read-path speed gates.
@@ -11,11 +11,32 @@ Jake wants useful open-source infrastructure, not a business, SaaS, pricing, or 
 Target: publish numeric raster time series once and use the same data in Python, a browser
 viewer, and another application's MapLibre layer or iframe. Do not present a successful local
 example as independent adoption, continental validation, or a universal performance advantage.
-Local project-directory rename remains explicitly deferred. Existing data hostname/bucket
+Local checkout renamed to `/Users/jakegearon/projects/chronozarr` on 2026-10-03. Existing data hostname/bucket
 retain legacy names. Preserve untracked .wrangler/ and notebook checkpoint directories.
 
 ## Completed
 
+- 2026-10-03: Reconciled current demo documentation with the catalog's unsharded
+  `chronozarr-4` imagery revision; `chronozarr-3` is the historical sharded revision of
+  the same dataset, not a package/spec version. Historical comparison URLs are now preserved
+  when source guides are synchronized to the website. Corrected the embed example CRS to
+  EPSG:32718 from the local imagery metadata.
+- Added complete npm viewer assets and `chronozarr-viewer OUTPUT [--store URL]`.
+  An independently installed local tarball passed rendering, timestep, inspector and embed
+  checks with zero external requests/browser errors. Packaging guard runs on pack; Browser CI
+  now includes the installed-package smoke test. This change is not released to npm.
+  Guide: `docs/viewer-distribution.md`; check: `npm run test:package` from `js/`.
+- Added `bench/adoption/`: fifteen rotated browser runs over the prepared three-date sample,
+  all level-0 values and masks identical across chronozarr, native zarrita and geotiff.js.
+  Median localhost cold reader opening plus assembly: 49.4, 45.7 and 168.1 ms respectively.
+  Native-repeat cache behavior measured separately. No GPU/rendered latency, remote/CDN,
+  isolated codec or peak-memory comparison is established; see the benchmark README.
+- Added `examples/bring_your_data/extended/`: twelve distinct real 2020 acquisitions on
+  a 227 x 186 grid, exact local/HTTP values and masks, physical scaling and append/reopen
+  checks. All 22 previous data/mask chunks remained unchanged. All twelve dates eventually
+  rendered completely; a 10 ms completion sampler recorded one incomplete observation in
+  32 samples. This is not evidence of zero transient incomplete frames. Peak sampled reader
+  cache was 28.1 MB; larger footprints, eviction and whole-browser peak memory remain open.
 - Viewer migrated to js/demo/; API global and embed messages are chronozarr / chronozarr:*.
 - Demo deployed at https://chronozarr.org/demo/ alongside docs; migration commit 82a4001.
 - Migration checks: 584 Python passed, 4 skipped; 423 JS passed; 41 browser tests passed.
@@ -59,28 +80,30 @@ not a browser, cold-storage, CDN, ROI-read or scale benchmark.
 
 ## Next steps, in priority order
 
-1. Reproduce adoption from a clean checkout/environment. Follow the documented recipe literally,
-   without existing data or developer-installed dependencies. Record time, missing steps and
-   errors. Use a new output directory. Do not change global quarantine settings. A fresh agent
-   is useful for detecting assumptions, but is not an independent outside user.
-2. Make a fair browser-delivery comparison on the same prepared real data: chronozarr,
-   ordinary Zarr through its native reader, and COG-per-date. Match bands, dtype, masks,
-   viewport, resolution, dates and image treatment. Compare equivalent overview values or
-   pin level 0. Interleave runs; separate cold opening, warm stepping, scrubbing, decoding,
-   requests, transferred bodies/wire bytes, and peak memory. Publish limitations. Existing
-   bench/ helpers are reusable but hardcoded to older stores; do not silently reuse their results.
-3. Extend only after baseline: 12-24 dates and a larger footprint, then an append and reader
-   reopening. Measure bounded memory and incomplete-frame behavior. Avoid a continental
+1. Clean-checkout reproduction completed 2026-10-02 from committed `2c04bfd`, new virtual
+   environment and newly downloaded inputs. See
+   `examples/bring_your_data/results/clean-checkout-20261002/README.md` and adjacent evidence.
+   Numeric fidelity, native Zarr, HTTP doctor, lazy HTTP pixel history and browser/embed checks
+   passed. Host caches/interpreters/Chromium were reused; this is not an outside-user run or
+   cache-empty computer. Default Python 3.14 required a codec source build; verified runtime
+   was explicitly selected Python 3.13. No reader changes, push, release or deployment.
+2. Extend the new level-0 browser retrieval baseline to a matched renderer and a controlled
+   remote/static-host delivery experiment. Include rendered latency, scrubbing, isolated decode
+   where measurable and peak memory; the current localhost retrieval/assembly results do not
+   establish these. Reuse `bench/adoption/`, not old sharded-store results.
+3. Extend the completed twelve-date small-grid append/reopen check to a larger footprint,
+   eviction, failure injection and browser numeric fidelity. Existing Python-reader snapshot
+   checks are local; an already-open HTTP reader across append remains to be exercised.
+   Measure incomplete-frame behavior and whole-browser memory explicitly. Avoid a continental
    ingest before proving these paths. Do not change unsharded default without measurements.
-4. Resolve integration friction found in those tests. The full self-hosted viewer currently
-   needs a checkout; npm includes reader/layer and select renderer dependencies, not a turnkey
-   complete viewer distribution. Investigate a documented distributable viewer entry point.
-   Keep the demo as a reference application and the libraries usable independently.
+4. Release the newly tested npm viewer distribution when requested; until then, use the
+   documented local tarball workflow. Keep the demo as a reference application and the
+   libraries usable independently. No release or deployment was requested for this work.
 5. Obtain outside-user feedback with the reference recipe. Do not contact anyone on Jake's
    behalf without explicit authorization. Private-data integration and multi-store orchestration
    should follow a demonstrated need, not an enterprise checklist.
 
 Before reader changes, measure the existing read-path gates, make one change at a time and
 measure again. Do not optimize the Python reader solely from this tiny local sample or claim
-native Zarr is universally fastest. No push, release, or local directory rename requested
-as part of this handover.
+native Zarr is universally fastest. No push or release requested. The local directory rename was authorized and completed
+on 2026-10-03; reopen the project at its new path in Codex.

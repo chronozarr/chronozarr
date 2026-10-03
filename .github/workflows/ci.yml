@@ -92,6 +92,9 @@ jobs:
         env:
           PLAYWRIGHT_ARTIFACTS_DIR: ${{ runner.temp }}/playwright
         run: npx playwright test
+      - name: Installed-package viewer smoke test
+        working-directory: js
+        run: npm run test:package
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

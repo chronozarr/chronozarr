@@ -1,0 +1,68 @@
+{
+  "dates": [
+    "2020-01-11",
+    "2020-02-10",
+    "2020-03-26",
+    "2020-04-15",
+    "2020-05-05",
+    "2020-06-09",
+    "2020-07-04",
+    "2020-08-08",
+    "2020-09-27",
+    "2020-10-12",
+    "2020-11-26",
+    "2020-12-21"
+  ],
+  "shape": [
+    12,
+    4,
+    227,
+    186
+  ],
+  "valid_fractions": [
+    0.8760361896641561,
+    0.9278101463691915,
+    0.9857893988915731,
+    0.9974894604708446,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    0.9999052626592771,
+    0.9932262801383165,
+    0.9423996968405097,
+    0.9209890578371465
+  ],
+  "frame_sha256": [
+    "43635367706a7c7511dbdfdd1855b4b5cddc47d387b4bd7589bc8a4781c633d1",
+    "158bab151f93d36b72a8a47086759db1ad24edbd6707de157b8913c1e43fce64",
+    "6e1050e84345fd03982e1907aff63011b1cd0dfe6359b87603ee7bbeb2fb7e2d",
+    "faaa62b8243cce202e42d783eccab2ed7d04b09d9791a29644c38b8011af474a",
+    "0520958d7785012d01eda4f8ed4ced28038c1be183e6d0d94dfaa6169ccf276f",
+    "00e794dee3ad621f47e1613da75d408b0d19044382a94a0f9ed90031f1050302",
+    "78def2d6dc37cc257f81dcd9cdbd770592fb3b41352ea520c756952c36425fa3",
+    "9edb4bf94bb39bb7a5a4c11e41337afb591f3baca625e390307b5ee504748a97",
+    "7881bef27af85c90b08cdc0410966c599e6d07913b6d0ddc79ab3c30c6b94fb6",
+    "5ed933e6259571af1724cab3286eb768c4216179e6379ec7d14f515b7eac8bfd",
+    "4ecd30949f1bbe934f3937436b65d6e61e0fe9739b8f8de3cb8e7ca66a623d39",
+    "b99c35f876d140ae8bad19acc5011228ad1efe3ec037be6c8d17bb6124789be7"
+  ],
+  "append": {
+    "n_appended": 1,
+    "n_time": 12,
+    "objects_written": 8,
+    "bytes_written": 269752,
+    "seconds": 0.04428862500935793
+  },
+  "old_reader_times": 11,
+  "reopened_reader_times": 12,
+  "existing_chunks_unchanged": 22,
+  "checks": {
+    "all_level0_values_and_masks_local_http": "exact",
+    "physical_scaling": "passed",
+    "old_handle_new_date": "IndexError",
+    "all_frames_distinct": true
+  },
+  "process_peak_rss_bytes": 248020992,
+  "limits": "Small same-host test; RSS includes conversion and GDAL. No CDN, outside-user, large-footprint or browser peak-memory claim."
+}

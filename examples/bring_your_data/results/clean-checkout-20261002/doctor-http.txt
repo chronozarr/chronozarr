@@ -1,0 +1,16 @@
+chronozarr doctor http://127.0.0.1:8017/chronozarr-clean-published-20261002/store
+[ ok ] root zarr.json                  200, 20,046 bytes in 15 ms, chronozarr 0.2.0
+[ ok ] CORS on zarr.json               Access-Control-Allow-Origin allows https://chronozarr.org
+[ ok ] consolidated metadata           present in the root zarr.json
+[ ok ] byte range on 0/data/c/0/0/0/0  206, Content-Range bytes 0-99/1429888 (unsharded store, 1 ms)
+[ ok ] CORS expose Content-Range       Access-Control-Expose-Headers lists it
+[info] suffix range                    206, Content-Range bytes 1429872-1429887/1429888; not used by an unsharded store (it has no shard index)
+[ ok ] CORS preflight                  OPTIONS 204, Range header allowed
+[ ok ] HEAD                            200, Content-Length 1,429,888
+[info] edge cache                      no CDN cache status header on the response
+[info] timing-allow-origin             *
+[info] cache-control                   no-cache; the prefix does not look versioned, so a long max-age would be unsafe if the store is ever re-encoded in place
+[ ok ] validate                        layout conforms to the chronozarr spec
+[ ok ] decode level 0                  cell (1,1) t=0 and t=2 in 7 ms; plain-Zarr pixel at t=0 matches; full read (5.4 MB/timestep) matches
+[ ok ] decode level 1                  cell (0,0) t=0 and t=2 in 10 ms; plain-Zarr pixel at t=0 matches; full read (1.3 MB/timestep) matches
+10 ok, 4 info, 0 warning(s), 0 failure(s)

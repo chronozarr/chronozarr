@@ -12,10 +12,10 @@ npx wrangler r2 bucket dev-url enable tileripper-stores --force      # public r2
 npx wrangler r2 bucket domain add tileripper-stores --domain data.tileripper.com --zone-id <zone id>
 
 # upload a store: the three-phase procedure in docs/hosting.md section 2 with the R2 put() of section 3.2
-#   STORE=data/stores/ucayali_santa_maria/chronozarr-3  PREFIX=ucayali_santa_maria/chronozarr-3
+#   STORE=data/stores/ucayali_santa_maria/chronozarr-4  PREFIX=ucayali_santa_maria/chronozarr-4
 
 # check the live URL: CORS, byte ranges, HEAD, caching, and a decode of every level
-uv run chronozarr doctor https://data.tileripper.com/ucayali_santa_maria/chronozarr-3
+uv run chronozarr doctor https://data.tileripper.com/ucayali_santa_maria/chronozarr-4
 ```
 
 `deploy/r2-cors.json` uses wrangler's rule format (`rules[].allowed`, `exposeHeaders`), not the S3 CORS array.
@@ -32,7 +32,7 @@ Rules on `data.tileripper.com` (Cloudflare dashboard, Rules; both need zone writ
 - A Response Header Transform Rule with the same expression, Set static `Timing-Allow-Origin: *`.
 - Put the expression in the expression editor or use the Hostname field. Pasted into a URI wildcard value it matches nothing, and the "may not apply to your traffic" warning for the R2 hostname is a false alarm.
 
-`chronozarr doctor` on the live store reports 15 ok, 2 info, 0 warnings. Settings and the other hosts are in `docs/hosting.md` section 3.
+The `chronozarr-4` upload check on 2026-10-01 reported 13 ok and 0 failures; this is a recorded check, not a fresh deployment verification. Settings and the other hosts are in `docs/hosting.md` section 3.
 
 ## Viewer
 

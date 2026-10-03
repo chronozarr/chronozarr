@@ -1,0 +1,51 @@
+{
+  "method": "Full level-0 data and masks for all dates; fresh handles; warm local filesystem caches; rotated interleaving. Includes opening metadata, reading, decoding and assembling arrays. Exact-value assertions run outside timed intervals.",
+  "limits": "Different reader implementations and codecs. No browser rendering, HTTP, CDN, private access, pixel-window latency, or continental scale is measured. Source COG overview values are not compared.",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "shape": [
+    3,
+    4,
+    905,
+    741
+  ],
+  "repeats": 5,
+  "results": {
+    "cog_rasterio": {
+      "median_ms": 83.15175003372133,
+      "min_ms": 82.1605829987675,
+      "max_ms": 85.20520804449916,
+      "samples_ms": [
+        82.1605829987675,
+        82.37591688521206,
+        83.15175003372133,
+        83.99470802396536,
+        85.20520804449916
+      ]
+    },
+    "chronozarr": {
+      "median_ms": 16.709750052541494,
+      "min_ms": 15.845667105168104,
+      "max_ms": 17.476707929745317,
+      "samples_ms": [
+        16.08729106374085,
+        15.845667105168104,
+        16.9425830245018,
+        17.476707929745317,
+        16.709750052541494
+      ]
+    },
+    "plain_zarr_xarray": {
+      "median_ms": 14.392458135262132,
+      "min_ms": 14.155709184706211,
+      "max_ms": 15.42504201643169,
+      "samples_ms": [
+        14.243625104427338,
+        14.155709184706211,
+        15.115417074412107,
+        15.42504201643169,
+        14.392458135262132
+      ]
+    }
+  },
+  "all_values_and_masks_match": true
+}

@@ -21,7 +21,7 @@ import { ChronozarrLayer } from './js/maplibre/layer.js';
 
 const map = new maplibregl.Map({ container: 'map', style: 'https://demotiles.maplibre.org/style.json' });
 const layer = new ChronozarrLayer({
-  url: 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-2', // store root (holds zarr.json)
+  url: 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-4', // store root (holds zarr.json)
   product: 'true_color', // see layer.products; 'band' shows one band
   t: 0, // timestep index
   prefetch: true, // fill the reader's caches around t in the background (default false)

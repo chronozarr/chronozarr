@@ -1,0 +1,32 @@
+<xarray.Dataset> Size: 34MB
+Dimensions:  (time: 3, band: 4, y: 905, x: 741)
+Coordinates:
+  * time     (time) datetime64[ns] 24B 2020-05-05 2020-06-09 2020-07-29
+  * band     (band) <U5 80B 'blue' 'green' 'red' 'nir'
+  * y        (y) float64 7kB 4.009e+06 4.009e+06 4.009e+06 ... 4e+06 4e+06 4e+06
+  * x        (x) float64 6kB 6.996e+05 6.996e+05 6.996e+05 ... 7.07e+05 7.07e+05
+Data variables:
+    data     (time, band, y, x) float32 32MB ...
+    mask     (time, y, x) uint8 2MB ...
+Attributes:
+    crs:                EPSG:32611
+    transform:          [10.0, 0.0, 699590.0, 0.0, -10.0, 4008590.0]
+    resolution:         10.0
+    lod:                0
+    spec_version:       0.2.0
+    temporal_encoding:  none
+Physical values at the selected pixel (invalid samples are NaN):
+                    data  mask          y         x
+time       band                                    
+2020-05-05 blue   0.1372     1  4008385.0  699895.0
+           green  0.1760     1  4008385.0  699895.0
+           red    0.2292     1  4008385.0  699895.0
+           nir    0.2940     1  4008385.0  699895.0
+2020-06-09 blue   0.1522     1  4008385.0  699895.0
+           green  0.1896     1  4008385.0  699895.0
+           red    0.2390     1  4008385.0  699895.0
+           nir    0.3008     1  4008385.0  699895.0
+2020-07-29 blue   0.1434     1  4008385.0  699895.0
+           green  0.1798     1  4008385.0  699895.0
+           red    0.2382     1  4008385.0  699895.0
+           nir    0.2958     1  4008385.0  699895.0

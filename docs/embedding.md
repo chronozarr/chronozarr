@@ -10,7 +10,7 @@ A working host page is [js/examples/embed.html](../js/examples/embed.html), serv
 <iframe
   id="chronozarr"
   title="Ucayali River, monthly Sentinel-2"
-  src="https://chronozarr.org/demo/?embed=1&store=https%3A%2F%2Fdata.tileripper.com%2Fucayali_santa_maria%2Fchronozarr-3&origin=https%3A%2F%2Fexample.com"
+  src="https://chronozarr.org/demo/?embed=1&store=https%3A%2F%2Fdata.tileripper.com%2Fucayali_santa_maria%2Fchronozarr-4&origin=https%3A%2F%2Fexample.com"
   style="display:block; width:100%; height:560px; min-height:320px; border:0"
 ></iframe>
 
@@ -110,7 +110,7 @@ Sent when the store's metadata has been read and the view is set up, before the 
 {
   "v": 1,
   "type": "chronozarr:ready",
-  "store": { "url": "https://data.tileripper.com/ucayali_santa_maria/chronozarr-3", "name": "chronozarr-3", "crs": "EPSG:32618" },
+  "store": { "url": "https://data.tileripper.com/ucayali_santa_maria/chronozarr-4", "name": "chronozarr-4", "crs": "EPSG:32718" },
   "times": ["2015-11-01T00:00:00Z", "2015-12-01T00:00:00Z"],
   "bands": [{ "name": "B02", "common_name": "blue", "units": "reflectance", "scale": 0.0001, "offset": 0 }],
   "products": [{ "id": "true_color", "name": "True color", "available": true }],

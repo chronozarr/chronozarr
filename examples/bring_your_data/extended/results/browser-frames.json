@@ -1,0 +1,246 @@
+{
+  "url": "http://127.0.0.1:8123/published/",
+  "times": 12,
+  "completeFrames": [
+    {
+      "t": 0,
+      "cache": {
+        "hits": 0,
+        "misses": 1,
+        "joins": 0,
+        "anchorHits": 0,
+        "anchorMisses": 1,
+        "compressedHits": 0,
+        "speculativeBytes": 0,
+        "decodedBytes": 2097152,
+        "speculativeShare": 0.5,
+        "compressedBytes": 256247,
+        "usedBytes": 2353399,
+        "budgetBytes": 1610612736,
+        "evictions": 0,
+        "compressedEvictions": 0
+      }
+    },
+    {
+      "t": 1,
+      "cache": {
+        "hits": 0,
+        "misses": 2,
+        "joins": 0,
+        "anchorHits": 0,
+        "anchorMisses": 2,
+        "compressedHits": 0,
+        "speculativeBytes": 0,
+        "decodedBytes": 4194304,
+        "speculativeShare": 0.5,
+        "compressedBytes": 504409,
+        "usedBytes": 4698713,
+        "budgetBytes": 1610612736,
+        "evictions": 0,
+        "compressedEvictions": 0
+      }
+    },
+    {
+      "t": 2,
+      "cache": {
+        "hits": 0,
+        "misses": 2,
+        "joins": 0,
+        "anchorHits": 0,
+        "anchorMisses": 2,
+        "compressedHits": 0,
+        "speculativeBytes": 1683552,
+        "decodedBytes": 16777216,
+        "speculativeShare": 0.5,
+        "compressedBytes": 1943517,
+        "usedBytes": 18720733,
+        "budgetBytes": 1610612736,
+        "evictions": 0,
+        "compressedEvictions": 0
+      }
+    },
+    {
+      "t": 3,
+      "cache": {
+        "hits": 0,
+        "misses": 2,
+        "joins": 0,
+        "anchorHits": 0,
+        "anchorMisses": 2,
+        "compressedHits": 0,
+        "speculativeBytes": 3866301,
+        "decodedBytes": 25165824,
+        "speculativeShare": 0.5,
+        "compressedBytes": 2924548,
+        "usedBytes": 28090372,
+        "budgetBytes": 1610612736,
+        "evictions": 0,
+        "compressedEvictions": 0
+      }
+    },
+    {
+      "t": 4,
+      "cache": {
+        "hits": 0,
+        "misses": 2,
+        "joins": 0,
+        "anchorHits": 0,
+        "anchorMisses": 2,
+        "compressedHits": 0,
+        "speculativeBytes": 3866301,
+        "decodedBytes": 25165824,
+        "speculativeShare": 0.5,
+        "compressedBytes": 2924548,
+        "usedBytes": 28090372,
+        "budgetBytes": 1610612736,
+        "evictions": 0,
+        "compressedEvictions": 0
+      }
+    },
+    {
+      "t": 5,
+      "cache": {
+        "hits": 0,
+        "misses": 2,
+        "joins": 0,
+        "anchorHits": 0,
+        "anchorMisses": 2,
+        "compressedHits": 0,
+        "speculativeBytes": 3866301,
+        "decodedBytes": 25165824,
+        "speculativeShare": 0.5,
+        "compressedBytes": 2924548,
+        "usedBytes": 28090372,
+        "budgetBytes": 1610612736,
+        "evictions": 0,
+        "compressedEvictions": 0
+      }
+    },
+    {
+      "t": 6,
+      "cache": {
+        "hits": 0,
+        "misses": 2,
+        "joins": 0,
+        "anchorHits": 0,
+        "anchorMisses": 2,
+        "compressedHits": 0,
+        "speculativeBytes": 3866301,
+        "decodedBytes": 25165824,
+        "speculativeShare": 0.5,
+        "compressedBytes": 2924548,
+        "usedBytes": 28090372,
+        "budgetBytes": 1610612736,
+        "evictions": 0,
+        "compressedEvictions": 0
+      }
+    },
+    {
+      "t": 7,
+      "cache": {
+        "hits": 0,
+        "misses": 2,
+        "joins": 0,
+        "anchorHits": 0,
+        "anchorMisses": 2,
+        "compressedHits": 0,
+        "speculativeBytes": 3866301,
+        "decodedBytes": 25165824,
+        "speculativeShare": 0.5,
+        "compressedBytes": 2924548,
+        "usedBytes": 28090372,
+        "budgetBytes": 1610612736,
+        "evictions": 0,
+        "compressedEvictions": 0
+      }
+    },
+    {
+      "t": 8,
+      "cache": {
+        "hits": 0,
+        "misses": 2,
+        "joins": 0,
+        "anchorHits": 0,
+        "anchorMisses": 2,
+        "compressedHits": 0,
+        "speculativeBytes": 3866301,
+        "decodedBytes": 25165824,
+        "speculativeShare": 0.5,
+        "compressedBytes": 2924548,
+        "usedBytes": 28090372,
+        "budgetBytes": 1610612736,
+        "evictions": 0,
+        "compressedEvictions": 0
+      }
+    },
+    {
+      "t": 9,
+      "cache": {
+        "hits": 0,
+        "misses": 2,
+        "joins": 0,
+        "anchorHits": 0,
+        "anchorMisses": 2,
+        "compressedHits": 0,
+        "speculativeBytes": 3866301,
+        "decodedBytes": 25165824,
+        "speculativeShare": 0.5,
+        "compressedBytes": 2924548,
+        "usedBytes": 28090372,
+        "budgetBytes": 1610612736,
+        "evictions": 0,
+        "compressedEvictions": 0
+      }
+    },
+    {
+      "t": 10,
+      "cache": {
+        "hits": 0,
+        "misses": 2,
+        "joins": 0,
+        "anchorHits": 0,
+        "anchorMisses": 2,
+        "compressedHits": 0,
+        "speculativeBytes": 3866301,
+        "decodedBytes": 25165824,
+        "speculativeShare": 0.5,
+        "compressedBytes": 2924548,
+        "usedBytes": 28090372,
+        "budgetBytes": 1610612736,
+        "evictions": 0,
+        "compressedEvictions": 0
+      }
+    },
+    {
+      "t": 11,
+      "cache": {
+        "hits": 0,
+        "misses": 2,
+        "joins": 0,
+        "anchorHits": 0,
+        "anchorMisses": 2,
+        "compressedHits": 0,
+        "speculativeBytes": 3866301,
+        "decodedBytes": 25165824,
+        "speculativeShare": 0.5,
+        "compressedBytes": 2924548,
+        "usedBytes": 28090372,
+        "budgetBytes": 1610612736,
+        "evictions": 0,
+        "compressedEvictions": 0
+      }
+    }
+  ],
+  "sampling": {
+    "samples": 32,
+    "incomplete": 1,
+    "peakCacheBytes": 28090372
+  },
+  "fullViewer": "passed",
+  "embedTimeControl": "passed",
+  "productControl": "passed",
+  "pixelClick": "passed",
+  "playbackControls": "passed",
+  "externalRequests": 0,
+  "browserErrors": 0
+}

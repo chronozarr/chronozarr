@@ -16,9 +16,18 @@ Run these commands from the repository root. Python 3.11 or newer is required.
 uv sync --extra geo
 ```
 
+uv selects an installed Python automatically. To choose a specific version, use
+`uv sync --python 3.13 --extra geo` (add `--extra ingest` for the sample download).
+The locked codec dependency may need a source build on Python 3.14. The
+[clean-checkout reproduction](results/clean-checkout-20261002/README.md) verified the full
+recipe with Python 3.13, a fresh environment and newly downloaded observations.
+
 The Python converter and reader are also available as `chronozarr[geo]` on PyPI. The bundle
 script currently needs this checkout because it copies the complete viewer and vendored
 JavaScript dependencies. It does not need an npm install or a JavaScript build.
+The next-release npm package also includes a standalone viewer copy command; see
+[self-host the packaged viewer](../../docs/viewer-distribution.md) for the locally packed,
+checkout-independent workflow. These package changes have not been released to npm.
 
 ## Optional: start with independently downloaded real observations
 
@@ -146,8 +155,11 @@ Record your source type, dimensions, bands, dates, browser and hosting provider;
 command and any failure; and whether the viewer, embed controls and Python values work. Include
 `bundle.json` and `chronozarr doctor` output. Do not include credentials or signed URLs.
 
-The next validation milestone is an independent real-data run and equivalent COG/plain-Zarr
-comparisons. Successful local playback alone does not establish speed, savings, or scale.
+The [bounded browser comparison](../../bench/adoption/README.md) checks equivalent level-0
+COG/plain-Zarr values and masks, and the [twelve-date extension](extended/README.md) checks
+real observations and append/reopen behavior on a smaller footprint. Both are same-machine
+checks. Larger footprints, remote rendered delivery and outside-user adoption remain open;
+successful local playback alone does not establish speed, savings, or scale.
 
 ## Optional browser verification from the checkout
 

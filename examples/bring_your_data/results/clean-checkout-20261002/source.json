@@ -1,0 +1,45 @@
+{
+  "catalog": "https://planetarycomputer.microsoft.com/api/stac/v1",
+  "collection": "sentinel-2-l2a",
+  "bbox_wgs84": [
+    -114.78,
+    36.12,
+    -114.7,
+    36.2
+  ],
+  "crs": "EPSG:32611",
+  "shape": [
+    905,
+    741
+  ],
+  "bands": [
+    "blue",
+    "green",
+    "red",
+    "nir"
+  ],
+  "processing": "One acquisition per month, bilinear band resampling to a 10 m UTM grid; SCL nearest-neighbour validity; baseline offset correction; no compositing or gap filling.",
+  "scenes": [
+    {
+      "id": "S2A_MSIL2A_20200505T181921_R127_T11SPA_20200920T144549",
+      "date": "2020-05-05",
+      "mgrs_tile": "11SPA",
+      "scene_cloud_pct": 0.62535,
+      "valid_fraction": 0.9839488223320733
+    },
+    {
+      "id": "S2B_MSIL2A_20200609T181919_R127_T11SPA_20200826T191826",
+      "date": "2020-06-09",
+      "mgrs_tile": "11SPA",
+      "scene_cloud_pct": 0.784208,
+      "valid_fraction": 0.985756145570045
+    },
+    {
+      "id": "S2B_MSIL2A_20200729T181919_R127_T11SPA_20200908T080252",
+      "date": "2020-07-29",
+      "mgrs_tile": "11SPA",
+      "scene_cloud_pct": 0.389909,
+      "valid_fraction": 0.9889293995720282
+    }
+  ]
+}
