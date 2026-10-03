@@ -5,6 +5,10 @@ import { fileURLToPath } from 'node:url';
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const sources = {
   'examples/bring_your_data/README.md': 'guides/bring-your-data',
+  'examples/bring_your_data/large/README.md': 'guides/larger-source-check',
+  'examples/bring_your_data/http_stress/README.md': 'guides/http-stress',
+  'bench/adoption/README.md': 'guides/retrieval-comparison',
+  'bench/rendered/README.md': 'guides/rendered-comparison',
   'spec/CHRONOZARR.md': 'specification',
   'docs/hosting.md': 'guides/hosting',
   'docs/append.md': 'guides/append',

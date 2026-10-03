@@ -1,0 +1,11 @@
+{
+  "source": "/Users/jakegearon/projects/chronozarr/data/adoption/extended-20261003/input",
+  "old_http_axis": 11,
+  "old_lazy_backend_axis": 11,
+  "reopened_http_axis": 12,
+  "old_new_date": "IndexError",
+  "uncached_old_values_and_masks": "all eleven exact",
+  "reopened_values_and_masks": "all twelve exact",
+  "publication": "atomic file replacement, root metadata last",
+  "limits": "Same-host unsharded real small grid; shard/failure cases synthetic."
+}

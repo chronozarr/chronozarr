@@ -36,7 +36,11 @@ try {
   for (const r of runs) if (JSON.stringify(r.hashes) !== JSON.stringify(reference)) throw Error("Full data/mask hashes differ");
   const result = { createdAt: new Date().toISOString(), provenance: { browser: browser.version(), node: process.version, dependencies, inputHashes }, workload: { height: 905, width: 741, bands: 4, dtype: "uint16", dates: 3, level: 0, viewport: "entire raster", rendering: "none: decoded raster assembly only", cachePolicy: "fresh context; HTTP cache disabled; shared frame cache for warm operations", server: "localhost; OS caches reused" }, validation: "all data and mask full-frame SHA256 equal across 15 runs, outside timing", runs };
   await writeFile(new URL("./results.json", import.meta.url), JSON.stringify(result, null, 2) + "\n");
-  const median = (values) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)];
+  const median = (values) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  };
   const summary = {};
   for (const kind of ["chronozarr", "zarr", "cog"]) {
     const selected = runs.filter((run) => run.kind === kind);

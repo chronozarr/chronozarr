@@ -36,6 +36,7 @@ export default defineConfig({
       { text: 'MapLibre layer', link: '/reference/maplibre' },
       { text: 'Format comparison', link: '/guides/format-comparison' },
       { text: 'Measured comparisons', link: '/guides/comparisons' },
+      { text: 'Matched rendered comparison', link: '/guides/rendered-comparison' },
     ] },
   ],
 })

@@ -1,0 +1,23 @@
+{
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "python": "3.11.6",
+  "git_head": "139a6cd40577b22c18c0cb7fb234127352d418d3",
+  "script_sha256": {
+    "examples/bring_your_data/large/fetch.py": "9b4a0969c5034b18b4bbf2969caaa88079f23c4c795ad733f6b58ddcf8a94a19",
+    "examples/bring_your_data/large/validate.py": "261819052947f00ec24b4d12028f50ae164d4186cbb8af051521c5e2dd409325",
+    "examples/bring_your_data/large/check.mjs": "d8e4cca7a5b0caf23a39cb75a562a2a65c62077d60735376ce24eb7af18bb5d3",
+    "examples/sentinel2_pc/catalog.py": "68e28d826f945e674577379eb9bf4840dee8e1448dff91875ab3ceb9d9258bca",
+    "examples/sentinel2_pc/mosaic.py": "69ff9c3c3cb529883ecb80ba9fe54d844fa46198fa092c37a3385dac29a38a66"
+  },
+  "dependencies": {
+    "chronozarr": "0.2.1",
+    "rasterio": "1.4.4",
+    "numpy": "2.4.4",
+    "zarr": "3.1.6",
+    "planetary-computer": "1.0.0",
+    "pystac-client": "0.9.0"
+  },
+  "source_scope": "Fresh expanded-window reads of exact pinned scenes; larger COG prepared locally, no upscaled small input",
+  "run_note": "Python conversion/fidelity ran alongside HTTP correctness stress; no isolated timing claim. Browser RSS pass ran after other Playwright workloads ended; parent held tests during measurement.",
+  "validation_attempts": "First attempt finished numeric assertions but failed cleanup; attempt1 stores retained locally. Evidence is successful fresh-conversion rerun."
+}

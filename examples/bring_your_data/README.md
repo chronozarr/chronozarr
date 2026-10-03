@@ -156,10 +156,13 @@ command and any failure; and whether the viewer, embed controls and Python value
 `bundle.json` and `chronozarr doctor` output. Do not include credentials or signed URLs.
 
 The [bounded browser comparison](../../bench/adoption/README.md) checks equivalent level-0
-COG/plain-Zarr values and masks, and the [twelve-date extension](extended/README.md) checks
-real observations and append/reopen behavior on a smaller footprint. Both are same-machine
-checks. Larger footprints, remote rendered delivery and outside-user adoption remain open;
-successful local playback alone does not establish speed, savings, or scale.
+COG/plain-Zarr values and masks; the [shared-renderer comparison](../../bench/rendered/README.md)
+also reconciles rendered pixels. The [twelve-date extension](extended/README.md) and
+[larger-source check](large/README.md) verify real observations, append and browser values.
+[HTTP snapshot and stress checks](http_stress/README.md) exercise already-open readers,
+cache eviction and transient request failures. These are same-machine checks; remote/CDN
+delivery, larger-scale memory behavior and outside-user adoption remain open.
+Successful local playback alone does not establish speed, savings, or scale.
 
 ## Optional browser verification from the checkout
 

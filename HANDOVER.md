@@ -2,6 +2,8 @@
 
 Date: 2026-10-03 (America/New_York)
 Branch: main. Starting commit: 82a4001 (viewer migration).
+First adoption round committed locally as `139a6cd` on 2026-10-03; the second
+validation round follows that checkpoint. Neither round was pushed or deployed.
 Read `.napkin.md` first, then inspect current git state. The user-provided AGENTS instructions
 now describe chronozarr, js/demo/, static hosting, and unchanged read-path speed gates.
 
@@ -34,9 +36,34 @@ retain legacy names. Preserve untracked .wrangler/ and notebook checkpoint direc
 - Added `examples/bring_your_data/extended/`: twelve distinct real 2020 acquisitions on
   a 227 x 186 grid, exact local/HTTP values and masks, physical scaling and append/reopen
   checks. All 22 previous data/mask chunks remained unchanged. All twelve dates eventually
-  rendered completely; a 10 ms completion sampler recorded one incomplete observation in
-  32 samples. This is not evidence of zero transient incomplete frames. Peak sampled reader
-  cache was 28.1 MB; larger footprints, eviction and whole-browser peak memory remain open.
+  rendered completely; a 10 ms requested-frame readiness sampler recorded one not-ready
+  observation in 32 samples. That does not imply a partially painted canvas. Peak sampled
+  reader cache was 28.1 MB; the subsequent checks below extend the footprint and stress cases.
+- Second round: `bench/rendered/` runs all three sources through the same level-0 GPU
+  renderer, with exact values, masks and framebuffer hashes across eighteen sessions.
+  Local cold GPU-complete medians were 78.4/77.1/181.4 ms (chronozarr/zarrita/COG).
+  Page-target 50 Mbit/s, 40 ms emulation gave 1271.0/1367.1/1025.7 ms; worker descendants
+  are not fully observed or confirmed throttled. Total monitored wire counts are lower
+  bounds. No production/CDN, compositor-presentation or native-viewer scrub claim follows.
+  Application-cached warm draws use the same retained GPU slots in all three paths.
+- `examples/bring_your_data/large/`: twelve pinned real dates freshly prepared on a
+  1136 x 1107 grid, forced star-delta to exercise anchors/deltas. Every browser data/mask
+  hash matched Python COG goldens; local/HTTP values and physical scaling were exact.
+  Append preserved 308 old chunks. Sampled summed Chromium RSS was 1.89 GB with the
+  viewer and a second numeric reader active; shared pages can be double counted, and
+  this is neither an isolated reader/GPU allocation nor a true peak memory bound.
+- `examples/bring_your_data/http_stress/`: already-open HTTP and lazy backend snapshots
+  remain eleven dates with exact uncached old frames; reopening sees twelve. Synthetic
+  regressions cover sharded and unsharded layouts, atomic replacement and metadata last.
+  Browser failure/eviction checks hold a tiny 8192-byte reader cache; thirteen recorded
+  paints had no partial flags and the correct colors at all nine sampled cell centers.
+  Full compositor or exhaustive screen-pixel observation is not established.
+- Corrected the first comparison's even-sample medians using its unchanged raw timings:
+  uncached steps are 23.95/24.85/139.15 ms. Cold-opening medians were unaffected.
+- Combined second-round validation: 590 Python unit tests and 44 browser tests passed,
+  with no skipped, failed or flaky browser tests. Ruff checks and formatting passed;
+  the docs/site build passed. Production reader code was unchanged. New stress evidence
+  retains the initial run and a separate final full-suite run with matching source hashes.
 - Viewer migrated to js/demo/; API global and embed messages are chronozarr / chronozarr:*.
 - Demo deployed at https://chronozarr.org/demo/ alongside docs; migration commit 82a4001.
 - Migration checks: 584 Python passed, 4 skipped; 423 JS passed; 41 browser tests passed.
@@ -87,15 +114,15 @@ not a browser, cold-storage, CDN, ROI-read or scale benchmark.
    passed. Host caches/interpreters/Chromium were reused; this is not an outside-user run or
    cache-empty computer. Default Python 3.14 required a codec source build; verified runtime
    was explicitly selected Python 3.13. No reader changes, push, release or deployment.
-2. Extend the new level-0 browser retrieval baseline to a matched renderer and a controlled
-   remote/static-host delivery experiment. Include rendered latency, scrubbing, isolated decode
-   where measurable and peak memory; the current localhost retrieval/assembly results do not
-   establish these. Reuse `bench/adoption/`, not old sharded-store results.
-3. Extend the completed twelve-date small-grid append/reopen check to a larger footprint,
-   eviction, failure injection and browser numeric fidelity. Existing Python-reader snapshot
-   checks are local; an already-open HTTP reader across append remains to be exercised.
-   Measure incomplete-frame behavior and whole-browser memory explicitly. Avoid a continental
-   ingest before proving these paths. Do not change unsharded default without measurements.
+2. Extend the completed matched GPU-renderer experiment to a real remote/static-host
+   delivery experiment when requested. Before interpreting the emulated profile as all-target
+   network performance, instrument worker descendants and verify their throttling. Separate
+   source-module delivery, codec-only work and compositor presentation if those are claimed.
+3. Profile memory with one reader/viewer and controlled cache/GPU budgets on the larger
+   dataset. The two-reader 1.89 GB summed RSS sample is a diagnostic, not a memory ceiling.
+   Extend synthetic fault/eviction checks to larger real workloads and real host cache policy;
+   keep publication atomic and metadata last. Avoid a continental ingest before these checks.
+   Do not change unsharded default without measurements.
 4. Release the newly tested npm viewer distribution when requested; until then, use the
    documented local tarball workflow. Keep the demo as a reference application and the
    libraries usable independently. No release or deployment was requested for this work.

@@ -17,9 +17,9 @@ Measured 2026-10-03 on this machine (milliseconds, medians):
 
 | Path | Cold open plus frame 0 | Uncached date step | Native reader repeat | Repeat requests / wire bytes |
 |---|---:|---:|---:|---|
-| chronozarr reader | 49.4 | 30.4 | 1.0 | 0 / 0 |
-| native zarrita plain Zarr | 45.7 | 24.9 | 25.8 | 8 / 3.72–3.78 MB |
-| geotiff.js COG per date | 168.1 | 139.8 | 122.1 | 0 / 0 |
+| chronozarr reader | 49.4 | 23.95 | 1.0 | 0 / 0 |
+| native zarrita plain Zarr | 45.7 | 24.85 | 25.8 | 8 / 3.72–3.78 MB |
+| geotiff.js COG per date | 168.1 | 139.15 | 122.1 | 0 / 0 |
 
 Cold opens issued respectively 9, 12, and 5 requests and transferred 3,801,256,
 3,801,140, and 4,267,419 bytes including HTTP headers, as counted by Chromium CDP.
@@ -67,3 +67,5 @@ can change; compare the recorded `inputHashes` and `source.json` before interpre
 new run as the same input. Recorded Chromium is 153.0.8010.12. Exact dependency pins,
 Node version, source/manifest/COG/root metadata hashes are embedded in results.
 `summary.json` supplies compact numerical medians.
+Even-sized samples now average the two central values; the uncached-step medians
+were corrected from the original upper-middle selection using the unchanged raw timings.

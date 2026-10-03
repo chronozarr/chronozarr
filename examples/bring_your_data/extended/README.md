@@ -34,11 +34,15 @@ The browser script waits for a complete rendered frame at each of the twelve dat
 reader cache counters, and retains the original recipe's embed time/product/pixel/playback
 checks and prohibition on external requests. Browser cache bytes describe reader caches,
 not total browser or GPU memory. The test samples completion and cache bytes every 10 ms while stepping. It does not inject
-failed requests or prove absence of transient partial frames between samples. Larger-footprint
-validation remains open: this grid is smaller than the original 905 × 741 sample.
+failed requests or prove absence of transient partial frames between samples. This grid is
+smaller than the original 905 × 741 sample; the subsequent
+[larger-source check](../large/README.md) uses a 1136 × 1107 grid.
 
-During twelve-date stepping, 32 completion samples included one incomplete sample; every
-date subsequently reached a complete rendered frame. Peak sampled reader-cache use was
+During twelve-date stepping, 32 requested-frame readiness samples included one not-ready
+sample; every date subsequently reached a complete rendered frame. This signal does not
+mean that a partial frame was visible: the viewer can retain a whole previous/coarser frame.
+The later [stress check](../http_stress/README.md) samples actual painted framebuffer colors.
+Peak sampled reader-cache use was
 28,090,372 bytes, below its 1,610,612,736-byte budget. This small sequence never stressed
 eviction and does not validate the budget under large workloads.
 

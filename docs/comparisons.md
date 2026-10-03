@@ -2,6 +2,12 @@
 
 > Historical benchmark: the results below were measured on sharded dataset revision `chronozarr-3` on 2026-10-01. The current demo catalog uses unsharded `chronozarr-4`; these suffixes are store-prefix revisions, not format versions. Historical results and procedures are retained as measured. See the README for the subsequent unsharded cold-open measurement.
 
+For the matched three-date level-0 sample measured on 2026-10-03, see the
+[retrieval comparison](../bench/adoption/README.md) and
+[shared-renderer comparison](../bench/rendered/README.md). The latter checks exact
+data, masks and rendered pixels; its controlled network profile is page-target
+emulation with unobserved worker traffic, not a CDN experiment.
+
 Two comparisons of a chronozarr store, measured on 2026-10-01 on one machine (Apple M3 Max, macOS, Node 24.16.0, Chromium 153 through Playwright 1.63.0 with the Metal GPU backend). All code, raw results and a lockfile are in `bench/`; the exact commands are in the last section.
 
 - **A. CarbonPlan zarr-layer** (`@carbonplan/zarr-layer` 0.10.0, `maplibre-gl` 6.11.2): does it open the published Ucayali store, and how does it compare with the chronozarr viewer on the same store, view and level.
