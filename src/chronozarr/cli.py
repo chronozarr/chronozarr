@@ -143,18 +143,7 @@ def _encode_options(command: Any) -> Any:
             help="Spatial chunk edge in pixels (256 or 512 per the spec).",
         ),
         click.option(
-            "--anchor-interval",
-            type=int,
-            default=6,
-            show_default=True,
-            help="Timesteps between anchors (star-delta only).",
-        ),
-        click.option(
-            "--encoding",
-            type=click.Choice(["auto", "none", "star-delta"]),
-            default="auto",
-            show_default=True,
-            help="Temporal encoding; auto keeps star-delta only when it saves at least 15%.",
+            "--volatility", is_flag=True, help="Write the optional cell volatility metric."
         ),
         click.option(
             "--codec",
@@ -203,8 +192,7 @@ def _encode_kwargs(options: dict[str, Any]) -> dict[str, Any]:
         raise click.UsageError("--shard-time needs --shard")
     return {
         "chunk_size": options["chunk_size"],
-        "anchor_interval": options["anchor_interval"],
-        "encoding": options["encoding"],
+        "volatility": options["volatility"],
         "codec": options["codec"],
         "level": options["compression_level"],
         "shard": options["shard"],
@@ -215,15 +203,9 @@ def _encode_kwargs(options: dict[str, Any]) -> dict[str, Any]:
 
 
 def _encode_summary(out: Path, report: EncodeReport) -> str:
-    encoding = report.encoding
-    if report.selection is not None:
-        encoding += (
-            f" (auto: star-delta/plain = {report.selection.ratio:.2f} "
-            f"on {report.selection.sampled_cells} cells)"
-        )
     return (
         f"wrote {out}: {len(report.levels)} levels, {report.n_files} files, "
-        f"{report.total_bytes / 1e6:.1f} MB, encoding {encoding}, "
+        f"{report.total_bytes / 1e6:.1f} MB, "
         f"{report.codec} level {report.level}"
     )
 
@@ -231,7 +213,7 @@ def _encode_summary(out: Path, report: EncodeReport) -> str:
 @click.group()
 @click.version_option(package_name="chronozarr")
 def main() -> None:
-    """Zarr v3 stores for raster time series with star-delta temporal encoding."""
+    """Zarr v3 stores for raster time series with true stored values."""
 
 
 @main.command("encode")
@@ -315,30 +297,16 @@ def validate_command(store: str) -> None:
 @main.command("info")
 @click.argument("store")
 def info_command(store: str) -> None:
-    """Summarise STORE: times, bands, temporal encoding and pyramid levels."""
+    """Summarise STORE: times, bands and pyramid levels."""
     with _command_errors():
         opened = open_store(store)
     attrs = opened.attrs
-    temporal = attrs.temporal
     click.echo(f"store:     {store}")
     click.echo(f"version:   chronozarr {attrs.spec_version}")
     click.echo(f"crs:       {attrs.crs}")
     click.echo(f"times:     {len(opened.times)} ({attrs.times[0]} .. {attrs.times[-1]})")
     click.echo(f"bands:     {', '.join(opened.bands)}")
     click.echo(f"nodata:    {attrs.nodata}")
-    if temporal.encoding == schema.STAR_DELTA:
-        described = (
-            f"{schema.STAR_DELTA} every {temporal.anchor_interval}: "
-            f"{len(temporal.anchor_indices)} anchors, {len(temporal.delta_reference)} deltas"
-        )
-    else:
-        described = f"{temporal.encoding} (every timestep stored as true values)"
-    if temporal.selection is not None:
-        described += (
-            f"; auto chose it at star-delta/plain = {temporal.selection.ratio:.2f} "
-            f"on {temporal.selection.sampled_cells} cells"
-        )
-    click.echo(f"temporal:  {described}")
     extras = [
         name
         for name, present in (
