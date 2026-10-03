@@ -466,6 +466,26 @@ def test_serve_store_reuses_the_server_and_rejects_non_stores(sharded_store, tmp
         serve_store(tmp_path)
 
 
+def test_serve_store_restarts_after_close(sharded_store):
+    first = serve_store(sharded_store)
+    try:
+        assert _get(f"{first.url}/zarr.json")[0] == 200
+    finally:
+        first.close()
+
+    restarted = serve_store(sharded_store, port=first.port)
+    try:
+        assert restarted is not first
+        assert restarted.port == first.port
+        assert _get(f"{restarted.url}/zarr.json")[0] == 200
+        # Closing the old handle again must not evict the replacement.
+        first.close()
+        assert serve_store(sharded_store) is restarted
+        assert _get(f"{restarted.url}/zarr.json")[0] == 200
+    finally:
+        restarted.close()
+
+
 def test_view_returns_an_iframe_pointing_the_viewer_at_the_local_store(sharded_store):
     pytest.importorskip("IPython")
     try:

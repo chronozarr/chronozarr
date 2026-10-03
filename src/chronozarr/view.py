@@ -151,9 +151,12 @@ class StoreServer:
         return f"http://{host!s}:{self.port}/{urllib.parse.quote(self.store.name)}"
 
     def close(self) -> None:
-        self._server.shutdown()
-        self._server.server_close()
-        self._thread.join(timeout=5)
+        with _lock:
+            self._server.shutdown()
+            self._server.server_close()
+            self._thread.join(timeout=5)
+            if _servers.get(self.store) is self:
+                del _servers[self.store]
 
 
 _servers: dict[Path, StoreServer] = {}
@@ -164,7 +167,7 @@ def serve_store(store: str | Path, *, port: int = 0) -> StoreServer:
     """Serve a local store directory on 127.0.0.1 (free port by default).
 
     One server per store directory: a second call returns the running one. Stop it with
-    `close()`; servers also die with the Python process.
+    `close()`; the next call starts a new server. Servers also die with the Python process.
     """
     path = Path(store).expanduser().resolve()
     if not (path / "zarr.json").is_file():
