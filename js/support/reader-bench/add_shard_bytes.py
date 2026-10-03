@@ -18,8 +18,8 @@ def main(source: Path, dest: Path) -> None:
     cz = root["attributes"]["chronozarr"]
     variable = cz.get("variable", "data")
     shard_bytes: dict[str, dict[str, int]] = {}
-    for dataset in root["attributes"]["multiscales"][0]["datasets"]:
-        level = dataset["path"]
+    for dataset in root["attributes"]["multiscales"]["layout"]:
+        level = dataset["asset"]
         shard_dir = source / level / variable / "c"
         sizes: dict[str, int] = {}
         for shard in sorted(shard_dir.rglob("*")):
