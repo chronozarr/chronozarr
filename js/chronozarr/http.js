@@ -18,15 +18,16 @@ export class FetchError extends Error {
 export function sleep(ms, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(abortError());
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        reject(abortError());
-      },
-      { once: true },
-    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(abortError());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -126,14 +127,18 @@ export class HttpStore {
     try {
       const response = await this.#fetch(request);
       if (response.status === 416 && rangeMiss) {
-        await response.arrayBuffer();
+        await response.body?.cancel();
         return { ok: true, status: 416, bytes: undefined };
       }
       if (response.status !== 200 && response.status !== 206 && response.status !== 404) {
+        await response.body?.cancel();
         return { ok: false, status: response.status, statusText: response.statusText, cause: new Error(`HTTP ${response.status}`) };
       }
       if (method === 'HEAD') return { ok: true, status: response.status, headers: response.status === 404 ? undefined : response.headers };
-      if (response.status === 404) return { ok: true, status: 404, bytes: undefined };
+      if (response.status === 404) {
+        await response.body?.cancel();
+        return { ok: true, status: 404, bytes: undefined };
+      }
       const bytes = new Uint8Array(await response.arrayBuffer());
       received = bytes.length;
       this.#network.bytes += received;

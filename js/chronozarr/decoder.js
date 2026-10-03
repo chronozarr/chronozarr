@@ -183,6 +183,7 @@ function spawnDecodeWorker() {
  * @param {string} baseUrl  URL of the store root (the directory holding zarr.json).
  * @param {object} [options]
  * @param {typeof fetch} [options.fetch]   fetch implementation (default: globalThis.fetch at call time).
+ * @param {AbortSignal} [options.signal] cancels opening metadata reads; after opening, use per-read signals or close().
  * @param {object} [options.store]         a zarrita AsyncReadable to use instead of HTTP.
  * @param {number} [options.totalBytes]    cap on decoded plus compressed chunk bytes (default: see defaultTotalBytes). Naming both
  *   tier budgets below without this makes their sum the cap; naming one raises the default cap to it if it is larger.
@@ -217,7 +218,7 @@ export async function openStore(baseUrl, options = {}) {
         suffixRequests: options.suffixRequests ?? false,
       });
 
-  const rootBytes = await readable.get('/zarr.json');
+  const rootBytes = await readable.get('/zarr.json', { signal: options.signal });
   requireStore(rootBytes, baseUrl, 'root zarr.json not found');
   const root = JSON.parse(new TextDecoder().decode(rootBytes));
   const { cz, datasets } = parseRoot(root, baseUrl);
@@ -227,7 +228,7 @@ export async function openStore(baseUrl, options = {}) {
   const consolidated = root.consolidated_metadata?.metadata ?? {};
   const readMeta = async (path, { required }) => {
     if (consolidated[path]) return consolidated[path];
-    const bytes = await readable.get(`/${path}/zarr.json`);
+    const bytes = await readable.get(`/${path}/zarr.json`, { signal: options.signal });
     requireStore(bytes || !required, baseUrl, `${path}/zarr.json not found`);
     return bytes ? JSON.parse(new TextDecoder().decode(bytes)) : null;
   };
@@ -241,6 +242,7 @@ export async function openStore(baseUrl, options = {}) {
     // Level groups carry the affine `transform`; the `levels` mirror makes reading one unnecessary.
     Array.isArray(cz.levels) ? null : readMeta(datasets[0].path, { required: false }),
   ]);
+  if (options.signal?.aborted) throw abortError();
 
   const storage = {
     data: dataMetas.map((meta, lod) => parseStorage(meta, { path: `${datasets[lod].path}/${names.data}`, rank: 4, baseUrl })),
