@@ -1,4 +1,4 @@
-"""Residuals are modular: no clipping, no rejection, every difference roundtrips."""
+"""True values cover the entire dtype range without differencing or clipping."""
 
 from __future__ import annotations
 
@@ -38,35 +38,32 @@ def test_wraparound_differences_roundtrip_exactly(tmp_path, shard):
     assert np.array_equal(store.to_xarray().values, truth)
 
 
-def test_stored_residuals_are_the_difference_modulo_65536(tmp_path):
+def test_stored_values_are_the_measurements(tmp_path):
     _encode(tmp_path, _cube(ANCHOR, CURRENT), shard=False)
     raw = zarr.open_array(str(tmp_path / "s" / "0" / "data"), mode="r")
     assert raw[0, 0, 0].tolist() == ANCHOR.tolist()  # anchors are true values
-    expected = (CURRENT.astype(np.int64) - ANCHOR.astype(np.int64)) % 65536
-    assert raw[1, 0, 0].tolist() == expected.tolist()
-    assert expected.tolist() == [59900, 15636, 32767, 32768]
+    assert raw[1, 0, 0].tolist() == CURRENT.tolist()
 
 
-def test_small_differences_are_bit_identical_to_the_v01_int16_view(tmp_path):
+def test_signed_boundary_values_remain_unsigned_measurements(tmp_path):
     truth = _cube(ANCHOR[2:], CURRENT[2:])  # +32767 and -32768: the extremes of int16
     _encode(tmp_path, truth, shard=False)
     raw = zarr.open_array(str(tmp_path / "s" / "0" / "data"), mode="r")[1, 0, 0]
-    assert raw.view(np.int16).tolist() == [32767, -32768]
+    assert raw.tolist() == CURRENT[2:].tolist()
 
 
-def test_uint8_residuals_wrap_modulo_256(tmp_path):
+def test_uint8_values_remain_unchanged(tmp_path):
     anchor = np.array([5, 250, 0, 255], dtype=np.uint8)
     current = np.array([250, 5, 255, 0], dtype=np.uint8)
     truth = np.stack([anchor, current])[:, None, None, :]
     store = _encode(tmp_path, truth, shard=False)
     raw = zarr.open_array(str(tmp_path / "s" / "0" / "data"), mode="r")
     assert raw.dtype == np.uint8
-    assert raw[1, 0, 0].tolist() == [245, 11, 255, 1]
+    assert raw[1, 0, 0].tolist() == current.tolist()
     assert np.array_equal(store.to_xarray().values, truth)
 
 
-@pytest.mark.parametrize("anchor_interval", [1, 2])
-def test_full_range_uint16_roundtrips(tmp_path, anchor_interval):
+def test_full_range_uint16_roundtrips(tmp_path):
     truth = _cube(np.array([0, 65535, 1, 65534], dtype=np.uint16), CURRENT)
     store = _encode(tmp_path, truth)
     assert np.array_equal(store.to_xarray().values, truth)

@@ -9,7 +9,7 @@ import time
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -457,7 +457,14 @@ def encode(
     times_iso, times_ms = _iso_times(prepared.times)
     if len(times_iso) != prepared.n_time:
         raise ValueError(f"{len(times_iso)} times for {prepared.n_time} timesteps")
-    resolved_bands = _resolve_bands(bands, prepared.band_coords, prepared.n_band)
+    resolved_bands = tuple(
+        replace(
+            b,
+            scale=1.0 if b.scale is None else b.scale,
+            offset=0.0 if b.offset is None else b.offset,
+        )
+        for b in _resolve_bands(bands, prepared.band_coords, prepared.n_band)
+    )
     resolved_nodata = _resolve_nodata(nodata, prepared.dtype, has_mask=prepared.mask is not None)
     resolved_provenance = None if provenance is None else schema.parse_provenance(provenance)
     if shard_time is not None and shard_time < 1:

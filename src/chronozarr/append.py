@@ -261,7 +261,11 @@ def _band_conflict(new: Band, old: Band, *, strict: bool) -> bool:
 
 
 def _band_text(band: Band) -> str:
-    extras = {k: v for k, v in band.to_attrs().items() if k != "name"}
+    extras = {
+        k: v
+        for k, v in band.to_attrs().items()
+        if k != "name" and not (k == "scale" and v == 1.0) and not (k == "offset" and v == 0.0)
+    }
     return f"{band.name!r}" + (f" {extras}" if extras else "")
 
 
@@ -334,7 +338,9 @@ def _commit_metadata(
         else tuple(replace(lv, shape=(plan.new_n, *lv.shape[1:])) for lv in meta.levels)
     )
     shard_bytes = (
-        None if meta.shard_bytes is None else _shard_bytes(target.path, len(target.datasets))
+        None
+        if meta.shard_bytes is None
+        else _shard_bytes(target.path, len(target.datasets), target.meta.variable)
     )
     updated = replace(
         meta,

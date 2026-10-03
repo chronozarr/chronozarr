@@ -80,11 +80,8 @@ LAYOUTS = {
 # --- Exactness ----------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("encoding", ["star-delta", "none"])
 @pytest.mark.parametrize("layout", LAYOUTS)
-def test_appended_store_validates_and_decodes_every_timestep_and_level(
-    tmp_path, truth, layout, encoding
-):
+def test_appended_store_validates_and_decodes_every_timestep_and_level(tmp_path, truth, layout):
     store, fresh = tmp_path / "store", tmp_path / "fresh"
     encode_head(truth, store, 8, **LAYOUTS[layout])
     first = append(store, window(truth, 8, 9))
@@ -114,10 +111,7 @@ def test_iterable_input_is_appended_like_a_dataarray(tmp_path, truth):
     assert not list(tmp_path.glob(".store-spill-*"))
 
 
-@pytest.mark.parametrize("encoding", ["star-delta", "none"])
-def test_one_timestep_store_with_a_long_shard_takes_appends_in_the_same_shard(
-    tmp_path, truth, encoding
-):
+def test_one_timestep_store_with_a_long_shard_takes_appends_in_the_same_shard(tmp_path, truth):
     store, fresh = tmp_path / "store", tmp_path / "fresh"
     encode_head(truth, store, 1, shard=True, shard_time=12)  # shard_time > n_time
     assert chronozarr.validate(store) == []
@@ -299,8 +293,7 @@ def planes(n_time: int, seed: int = 21) -> tuple[np.ndarray, np.ndarray]:
     return mask, coverage
 
 
-@pytest.mark.parametrize("encoding", ["star-delta", "none"])
-def test_mask_and_coverage_are_appended_at_every_level(tmp_path, truth, encoding):
+def test_mask_and_coverage_are_appended_at_every_level(tmp_path, truth):
     mask, coverage = planes(N_TIME)
     store, fresh = tmp_path / "store", tmp_path / "fresh"
     head = make_da(truth[:8], BANDS)

@@ -201,6 +201,8 @@ def _resolve_transform(raw: Sequence[float] | None, da: xr.DataArray | None) -> 
     values = [float(v) for v in list(raw)[:6]]
     if len(values) != 6:
         raise ValueError(f"transform needs 6 coefficients (a, b, c, d, e, f), got {raw!r}")
+    if not all(math.isfinite(v) for v in values):
+        raise ValueError("transform coefficients must be finite")
     a, b, _, d, e, _ = values
     if b != 0 or d != 0:
         raise ValueError("rotated transforms are not supported; reproject to a north-up grid")
@@ -562,11 +564,13 @@ def _write_time_coord(group: zarr.Group, times_ms: np.ndarray, *, overwrite: boo
     )
 
 
-def _shard_bytes(out: Path, n_levels: int) -> dict[str, dict[str, int]]:
+def _shard_bytes(
+    out: Path, n_levels: int, variable: str = schema.VARIABLE
+) -> dict[str, dict[str, int]]:
     """Byte length of every shard object of the data array, keyed by level then t/row/col."""
     sizes: dict[str, dict[str, int]] = {}
     for k in range(n_levels):
-        base = out / str(k) / schema.VARIABLE / "c"
+        base = out / str(k) / variable / "c"
         entries = {}
         for path in sorted(base.glob("*/0/*/*")):
             t_shard, _, row, col = path.relative_to(base).parts

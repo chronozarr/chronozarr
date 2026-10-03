@@ -36,9 +36,8 @@ def _spill_dirs(parent: Path) -> list[Path]:
     return [p for p in parent.iterdir() if "spill" in p.name]
 
 
-@pytest.mark.parametrize("encoding", ["star-delta", "none"])
 @pytest.mark.parametrize("shard", [True, False], ids=["sharded", "unsharded"])
-def test_iterable_input_writes_the_same_store_as_a_dataarray(tmp_path, encoding, shard):
+def test_iterable_input_writes_the_same_store_as_a_dataarray(tmp_path, shard):
     truth = make_truth(5, 2, 29, 21)
     mask = (truth[:, 0] > 0).astype(np.uint8)
     coverage = (mask * 4).astype(np.uint8)

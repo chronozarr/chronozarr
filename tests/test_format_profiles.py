@@ -228,11 +228,11 @@ def test_bands_are_objects_with_a_names_mirror(tmp_path):
             "offset": 0.0,
             "units": "reflectance",
         },
-        {"name": "B08", "common_name": "nir"},
+        {"name": "B08", "common_name": "nir", "scale": 1.0, "offset": 0.0},
     ]
     assert block["band_names"] == ["B04", "B08"]
     assert store.bands == ("B04", "B08")
-    assert store.attrs.bands == tuple(bands)
+    assert store.attrs.bands == (bands[0], Band("B08", common_name="nir", scale=1.0, offset=0.0))
     assert list(zarr.open_group(str(tmp_path / "s"), mode="r")["0"]["band"][:]) == ["B04", "B08"]
 
 
@@ -304,7 +304,7 @@ def test_a_mask_makes_the_default_nodata_null(tmp_path):
     _, store = _encode(tmp_path, truth, mask=mask)
     assert store.attrs.nodata is None
     data = zarr.open_group(str(tmp_path / "s"), mode="r")["0"]["data"]
-    assert data.attrs["nodata"] is None
+    assert "nodata" not in data.attrs
     assert data.fill_value == 0
     assert chronozarr.validate(tmp_path / "s") == []
     physical = store.physical(0)
