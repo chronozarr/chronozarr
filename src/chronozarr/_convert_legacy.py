@@ -220,7 +220,15 @@ def migrate(source: LegacySource, out: Path, progress: Any = None) -> EncodeRepo
             raise ValueError("migration validation failed: " + "; ".join(problems))
         verify(source, root, progress)
         size, files = _tree_stats(out)
-        return EncodeReport(tuple(reports), size, files, "source codecs preserved", 0)
+        compression = schema._compression_config(source.data[0])
+        config = compression.get("configuration", {})
+        return EncodeReport(
+            tuple(reports),
+            size,
+            files,
+            compression["name"],
+            int(config.get("level", config.get("clevel", 0))),
+        )
     except BaseException:
         shutil.rmtree(out, ignore_errors=True)
         raise

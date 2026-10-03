@@ -585,8 +585,11 @@ def convert_command(
     cell by cell. The size and time estimate is printed first; --dry-run stops there.
     """
     last_report = 0.0
+    migration = False
 
     def show_plan(plan: Plan) -> None:
+        nonlocal migration
+        migration = plan.source.kind == "chronozarr v0.2"
         for line in plan.lines(read_ahead):
             click.echo(line)
 
@@ -595,7 +598,8 @@ def convert_command(
         now = time.monotonic()
         if done == total or now - last_report >= 2.0:
             last_report = now
-            click.echo(f"staged {done}/{total} timesteps", err=True)
+            label = "verified level/timestep pairs" if migration else "staged timesteps"
+            click.echo(f"{label}: {done}/{total}", err=True)
 
     with _command_errors():
         report = convert(
@@ -622,6 +626,12 @@ def convert_command(
         click.echo("dry run: nothing was written")
         return
     click.echo(_encode_summary(out, report.encode))
+    if migration:
+        click.echo(
+            f"verified every value in {len(report.encode.levels)} levels, "
+            f"{report.plan.n_time} timesteps; total {report.total_s:.1f} s"
+        )
+        return
     click.echo(
         f"read {report.n_staged} timesteps ({report.n_reused} reused) in {report.read_s:.1f} s, "
         f"encoded in {report.encode_s:.1f} s, total {report.total_s:.1f} s"

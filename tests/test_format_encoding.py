@@ -159,6 +159,7 @@ def test_exact_legacy_conversion_preserves_existing_overviews(tmp_path, shard, e
     }
     report = convert(source, tmp_path / "new")
     assert report.encode is not None
+    assert (report.encode.codec, report.encode.level) == ("zstd", 5)
     assert chronozarr.validate(tmp_path / "new") == []
     new = chronozarr.open_store(tmp_path / "new")
     for k, values in enumerate(expected):

@@ -243,7 +243,8 @@ class Plan:
             f"data:       {info.n_band} bands ({', '.join(info.band_names)}), {info.dtype.name}",
             "scaling:    "
             + ", ".join(
-                f"{b.name} = stored * {b.scale:g} {b.offset:+g}"
+                f"{b.name} = stored * {1.0 if b.scale is None else b.scale:g} "
+                f"{0.0 if b.offset is None else b.offset:+g}"
                 + (f" [{b.units}]" if b.units else "")
                 for b in info.bands
             ),
