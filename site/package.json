@@ -1,0 +1,27 @@
+{
+  "name": "chronozarr-site",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vocs dev",
+    "build": "vocs build",
+    "preview": "vocs preview",
+    "sync-content": "node scripts/sync-content.mjs",
+    "predev": "npm run sync-content",
+    "prebuild": "npm run sync-content",
+    "deploy": "npm run build && ../node_modules/.bin/wrangler deploy --config wrangler.toml"
+  },
+  "dependencies": {
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "vocs": "1.4.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "typescript": "5.9.3"
+  },
+  "overrides": {
+    "toml": "4.2.0"
+  }
+}

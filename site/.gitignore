@@ -1,0 +1,8 @@
+node_modules/
+.vocs/
+dist/
+docs/pages/specification.md
+docs/pages/guides/
+docs/pages/reference/javascript.md
+docs/pages/reference/maplibre.md
+.wrangler/
