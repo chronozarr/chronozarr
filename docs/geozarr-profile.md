@@ -1,6 +1,6 @@
 # chronozarr v0.3 migration plan
 
-2026-10-03. Planning only: no code/spec migration or reader experiments performed.
+2026-10-03. Migration planning with an executed baseline reader spike (§8); no production code/spec migration performed.
 
 The decision is fixed: chronozarr names the time-series + multiscale profile, libraries and viewer. The baseline contains true stored values in every array, including auxiliary arrays; physical units still require band scale/offset. Star-delta becomes a separate storage extension, excluded from the baseline and unreleased until unaware readers demonstrably reject its encoded data.
 
@@ -19,7 +19,7 @@ Read [our v0.2 spec](../spec/CHRONOZARR.md), dated 2026-09-30, including §14 am
 | N | [ndpyramid attribute](https://github.com/carbonplan/ndpyramid/blob/bad4c49461fe51cde7e1035a0504ed4d8780efa3/docs/schema.md) | `bad4c49`, 2026-04-06; Pyramid schema. Commit snapshot, not a release claim; contains development-version examples. |
 | Z | [Zarr v3 core](https://github.com/zarr-developers/zarr-specs/blob/ad8fc8df42441c84039c94569980e485e4c09870/docs/v3/core/index.rst), [indexed sharding](https://github.com/zarr-developers/zarr-specs/blob/ad8fc8df42441c84039c94569980e485e4c09870/docs/v3/codecs/sharding-indexed/index.rst) | `ad8fc8d`, 2026-09-21; Array Metadata, Extensions, must_understand and codec specification. |
 
-Pin these convention schemas by immutable revision for v0.3; record their identities in `zarr_conventions`. Pilot status permits breaking changes. Describe v0.3 as aligned with these GeoZarr conventions, not certified against an adopted OGC standard. Do not import O's TileMatrixSet requirements into M's current layout.
+Pin these convention schemas by the immutable revisions above. Record their UUIDs and schema/spec identities in `zarr_conventions`. **Measured exception (§8):** M’s pinned schema constrains registration URLs to the literal `refs/tags/v0.1/schema.json` and `blob/v0.1/README.md` URLs; commit-based URLs fail its schema even with the correct UUID. Emit those tag URLs for M, while retaining the immutable revision as the validation/provenance pin. P/S accept the commit-based registration URLs tested here. Pilot status permits breaking changes. Describe v0.3 as aligned with these GeoZarr conventions, not certified against an adopted OGC standard. Do not import O's TileMatrixSet requirements into M's current layout.
 
 ## 2. Requirement map
 
@@ -49,12 +49,12 @@ Each row assigns one action to the named rules, including table-field requiremen
 | §3.3: optional proj aliases and reader nonrequirement | align | Ours: “Readers MUST NOT require any of these.” P, Properties: “At least one of `proj:code`, `proj:wkt2`, or `proj:projjson` MUST be provided.” Require declared P with `proj:code` at each spatial array; recommend matching WKT2. |
 | §3.3: optional spatial aliases | align | Ours: “The data array SHOULD additionally carry”; S, dimensions: “Required: Yes on arrays”; transform: “Required when `spatial:transform_type` is `"affine"` or omitted.” Require S dimensions/affine transform on data/mask/coverage; explicitly pixel-register. Do not declare S on one-dimensional coordinates or ungeoreferenced volatility. |
 | §3.3: six affine coefficients and corner mapping | drop | S, spatial:transform / Coordinate convention / Coefficient ordering; preserve north-up/factor-two restrictions separately. |
-| §3.3: resolution progression, same origin; optional duplicate crs/transform and `_CRS` | keep | Keep geometric restrictions. `_CRS` remains optional for GDAL 3.12 CRS support; do not invent another transform schema. |
+| §3.3: resolution progression, same origin; optional duplicate crs/transform and `_CRS` | keep | Keep geometric restrictions. `_CRS` remains optional in the baseline, but is required for CRS recognition by tested GDAL 3.12.4 (§8); `proj:code` alone is insufficient there. Do not invent another transform schema. |
 | §§3.5,3.7: levels mirror path/resolution/transform/shape/grid, equality, primary/fallback discovery | keep | Mirror paths must equal upstream `layout[].asset`; use canonical S geometry and Z shape as validation sources. |
 | §3.6: unique band names/common_name, explicit scales/offsets/units, defaults, physical formula, valid-only math, no CF automatic scaling | keep | Preserve consumer scaling; remove v0.1 string/source-specific fallback from baseline. |
 | §3.8: optional provenance with sources/composite/gap_fill restrictions and notes | keep | Preserve provenance rules. |
 | §4: none/star-delta support, anchors/map/distance, modular arithmetic/no clamp, unchanged references, measured auto selection/forced omission | align | Ours: “Readers MUST support both.” F, Definition: “Conventions therefore may not change how data are encoded or stored”. Baseline permits only ordinary values; relocate all star-delta rules/selection policy to a separate extension draft. |
-| §5: mandatory float32 single-chunk volatility grid, exact differences, invalid inclusion, normalization/clipping/zero cases, nominal schedule for none | keep | Keep current formula and default six-step nominal schedule as publisher policy, independent of storage encoding; preserve decodability versus conformance distinction. |
+| §5: formerly mandatory float32 single-chunk volatility grid, exact differences, invalid inclusion, normalization/clipping/zero cases, nominal schedule for none | keep | Make volatility optional (confirmed §7 decision). When present, keep the current formula and default six-step nominal schedule as publisher policy, independent of storage encoding; preserve decodability versus conformance distinction. |
 | §6: factor-two means, ceil/edge replication, invalid handling, wide integer floor/float64 accumulation, mask/coverage reduction | keep | Declare average resampling upstream; profile defines exact rounding, padding and validity. Always reduce true values; no residual stage. |
 | §6: constant chunks/consecutive levels, default 1×1 grid stopping, other level counts, scaled-fraction advice | keep | Preserve all restrictions and categorical warning. |
 | §7.1: unsharded default/optional time sharding, inner shapes/keys/time mapping/partial shards, positive shard_time, multi-shard readers, host-size advice | keep | Preserve layouts and append suitability; remove anchor-multiple advice from baseline. |
@@ -89,7 +89,7 @@ Nodata, mask, coverage, physical scaling and source/gap-fill records.
 ### 5. Overview semantics
 Exact factor-two reduction, padding, rounding and fraction/categorical guidance.
 ### 6. Volatility
-True-value temporal-change ordering metric and its existing normalization.
+Optional true-value temporal-change ordering metric and its existing normalization.
 ### 7. Storage interoperability restrictions
 Compression subset, unsharded default, optional time shards and request hints.
 ### 8. Static publishing and append
@@ -171,11 +171,54 @@ Proposed only; no issues/PRs filed. None blocks ordinary-value v0.3 when the pin
 | `zarr-developers/zarr-python`, `pydata/xarray` | Add shared rejection fixtures; file fixes only for verified failures in later matrix. | No; extension blocker if failures occur |
 | `zarr-conventions` / GeoZarr SWG | Scope future temporal/band/validity/coverage convention ownership; repo TBD with maintainers. | No; keep local rules meanwhile |
 
-## 7. Questions for Jake
+## 7. Confirmed scope decisions
 
-1. Is requiring explicit conversion of existing demo/embedded v0.2 URLs before v0.3 deployment acceptable, or must those URLs stay usable in the new viewer?
-2. Is the release's supported unaware-reader population exactly the six readers above, or are additional named clients mandatory for the extension gate?
-3. Should v0.3 stay restricted to EPSG north-up single-AOI grids, or must a specific non-EPSG/rotated dataset be supported in this release?
-4. Should volatility remain mandatory for all published scientific datasets despite its source-specific normalization, or become optional in v0.3?
+1. v0.3 readers do not support v0.2; existing stores require explicit conversion.
+2. Star-delta extension work and its reader population are deferred and outside this spike.
+3. v0.3 is restricted to EPSG north-up grids.
+4. Volatility is optional; the fixture deliberately omits it.
 
-These scope answers can revise the later implementation plan; they do not reopen the profile/true-value/fail-closed decision.
+## 8. Reader spike
+
+Executed locally on 2026-10-03, before any production spec or reader rewrite. The hand-built fixture is produced by [`scripts/spike_v03_fixture.py`](../scripts/spike_v03_fixture.py), independently of `src/chronozarr`. Output `data/spike/v03/` is gitignored: Zarr v3, true-value uint16, three dates (2024-01/02/03-01), two bands (red/nir; int32 coordinate indices 0/1), two level groups (8×8 and 4×4), EPSG:32618, 10/20 m north-up pixels, unsharded zstd level 5, constant 8×8 spatial chunks, and uint8 masks at both levels. The origin is (500000, 4500000); both extents are [500000, 4499920, 500080, 4500000]. Each source 2×2 block is constant, so valid-only integer mean overviews are independently exact; the lower-right block is invalid and filled with zero. No temporal encoding, volatility, `_CRS`, or legacy ndpyramid metadata is emitted.
+
+Registrations: M on the root, P/S on all four spatial arrays, no S on coordinate arrays. M/P/S metadata passes the actual JSON schemas fetched at the §1 commit pins (jsonschema 4.26.0). M registration uses its schema-required tag URLs, as corrected in §1. The chronozarr root registration points to this experimental plan: **a published normative v0.3 schema/spec URL does not exist yet**, so this fixture does not pretend to register one. Kept attrs include object bands, names/times/levels mirrors, native CRS, nodata=null and mask_variable. Consolidated metadata is written last.
+
+“Recognized” below means a reader assigned CRS/projection semantics, rather than merely retaining a JSON attribute. “Pyramid” distinguishes level enumeration from attaching native overviews. All tests forced data reads; a lazy open alone was not counted as success.
+
+| Reader (exact version) | Opens? | CRS recognized? | Georeferencing correct? | Pyramid levels discovered? | Known pixels match? | Warnings / limitations |
+|---|---|---|---|---|---|---|
+| zarr-python 3.1.6; Python 3.11.6; NumPy 2.4.4 | Yes, root and arrays | No semantic CRS API; P attrs retained | Transform and x/y metadata retained correctly; no reprojection | Both child groups enumerated; no multiscales interpretation | Yes, all 6 data/mask samples | None on open/read. Fixture consolidation suppresses Zarr’s standard experimental-v3-consolidation warning. |
+| xarray 2026.2.0 (`open_zarr`, native backend; zarr-python 3.1.6) | Yes; root is an empty Dataset; `group="0"` / `"1"` yields data | No CRS object assigned; attrs retained | Both x/y pixel-centre grids exactly correct, CF times decoded | No automatic pyramid discovery; each group opened explicitly | Yes, all 6; uint16/uint8 preserved | None. Root open does not return the series. |
+| GDAL 3.12.4 “Chicoutimi” (Homebrew CLI, released 2026-04-22) | Yes, root MD hierarchy and selected raster slices | **No** with P alone; **yes** in separate `_CRS` control | Yes, both affine transforms and sampled pixel centres | Both levels listed as independent subdatasets; **no attached overviews** | Yes, all 6 via `gdal_translate` XYZ | `gdalmdiminfo -detailed` emits `Size of _ARRAY_DIMENSIONS[0] different from the one of shape` twice; selected raster reads emit none. GDAL reports fill=0 as NoData and does not automatically apply the separate mask. |
+| GDAL 3.13 | Not tested | Unverified | Unverified | Unverified | Unverified | Not installed. Only 3.12.4 is in Homebrew; Docker daemon unavailable. No conclusion about 3.13 from this spike. |
+| zarrita 0.7.5; Node 24.16.0; @zarrita/storage 0.2.0; numcodecs 0.3.2 | Yes, direct arrays | No geospatial interpretation; P attrs readable | Raw affine metadata correct; no projection API | Layout is metadata, not automatic pyramid selection | Yes, all 6 | None. Local filesystem Readable store. |
+| @carbonplan/zarr-layer 0.10.0 + zarrita 0.7.5; Node 24.16.0; proj4 2.22.0 | Yes, real `ZarrLayer.initialize()` | **Yes**, `describe().proj4="EPSG:32618"`; origin projects to [-75, 40.65085651557158] | Yes, exact UTM extent and descending y; data arrays opened at both resolutions | **Yes**, `levelAssets=["0","1"]` from M layout | Yes, 4 data samples via layer-owned arrays; masks separately verified with zarrita | None. `describe().crs` stays `EPSG:4326` while `proj4` holds the effective UTM projection. Node metadata/data test, no GPU rendering or framebuffer validation. Explicit spatialDimensions maps y/x; no CRS/bounds override. |
+
+Known sample oracle (index order follows the array):
+
+| Array / index | Expected |
+|---|---:|
+| `0/data[0,0,0,0]` | 1 |
+| `0/data[1,1,2,4]` | 1107 |
+| `0/data[2,0,5,1]` | 2009 |
+| `1/data[2,1,2,0]` | 2109 |
+| `0/mask[2,7,7]` | 0 |
+| `1/mask[2,3,3]` | 0 |
+
+Reproduce (the script refuses to overwrite an existing fixture):
+
+```sh
+uv run python scripts/spike_v03_fixture.py
+mkdir -p /tmp/chronozarr-v03-node
+npm install --prefix /tmp/chronozarr-v03-node @carbonplan/zarr-layer@0.10.0 zarrita@0.7.5
+uv run python scripts/spike_v03_fixture.py --verify --node-project /tmp/chronozarr-v03-node
+gdalmdiminfo -detailed data/spike/v03
+gdalinfo 'ZARR:"data/spike/v03":/0/data:1:1'
+```
+
+Use `--output <new-path>` for a fresh fixture. `--verify` checks an existing one and runs whichever GDAL CLI is on PATH; its version is printed. JavaScript tests use the actual installed package, its layer-owned array handles and the same zarrita dependency, without modified package sources. Record `npm ls --prefix /tmp/chronozarr-v03-node --depth=1` because transitive versions can change.
+
+Additional GDAL control: copied the fixture to `data/spike/v03_gdal_crs_control/`, added array `_CRS={"url":"http://www.opengis.net/def/crs/EPSG/0/32618"}` on data/mask, reconsolidated, then repeated `gdalinfo`. It assigned WGS 84 / UTM zone 18N with EPSG ID 32618; the main fixture remains free of that alias.
+
+Outcome: ordinary-value storage and M layout work in the tested Python/JS readers, and GDAL 3.12.4 reads the same numeric arrays. This is not evidence that every reader interprets the conventions: xarray requires level selection, GDAL 3.12 needs `_CRS` for CRS assignment and does not attach the pyramid, and zarr-layer’s effective projection is in `proj4`. Commit-URL registration for M was disproved and corrected in §1; volatility and legacy-reader scope are corrected in §2/§7. GDAL 3.13, HTTP/CORS, GPU render placement, append, performance and extension safety remain untested here.
