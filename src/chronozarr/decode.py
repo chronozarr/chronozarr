@@ -1,4 +1,4 @@
-"""chronozarr reader: open a store, undo star-delta, and return raw or physical values."""
+"""chronozarr reader: open a store, return raw or physical values."""
 
 from __future__ import annotations
 
@@ -53,7 +53,15 @@ class ChronoStore:
             where = f"level {dataset.path}"
             level_group = schema.get_group(group, dataset.path, "store")
             data = schema.get_array(level_group, root.chronozarr.variable, where)
-            level_attrs = schema.parse_level_attrs(level_group.attrs.asdict(), where)
+            level_attrs = schema.canonical_level(data, where)
+            mirrors = level_group.attrs.asdict()
+            if "transform" in mirrors and mirrors["transform"] != list(level_attrs.transform):
+                raise SchemaError(f"{where}: transform mirror differs from canonical geometry")
+            if level_attrs.crs != root.chronozarr.crs:
+                raise SchemaError(f"{where}: CRS differs from root")
+            schema.check_codecs(data, where)
+            if data.dtype.name not in schema.DTYPES:
+                raise SchemaError(f"{where}: unsupported data_type {data.dtype.name}")
             cs = schema.cell_size(data, f"{where}/data")
             shape = (data.shape[0], data.shape[1], data.shape[2], data.shape[3])
             levels.append(
@@ -71,10 +79,6 @@ class ChronoStore:
             )
         self.levels: tuple[Level, ...] = tuple(levels)
         self.dtype: np.dtype = levels[0].data.dtype
-        if self.attrs.temporal.encoding == schema.STAR_DELTA and (
-            self.dtype.name not in schema.TEMPORAL_DTYPES
-        ):
-            raise SchemaError(f"star-delta needs uint8 or uint16 data, got {self.dtype}")
         self.nodata: int | float | None = self.attrs.nodata
         self._scale = np.array(
             [1.0 if b.scale is None else b.scale for b in self.attrs.bands], dtype=np.float32
@@ -108,22 +112,8 @@ class ChronoStore:
     def _read_region(
         self, level: Level, timesteps: Sequence[int], ys: slice, xs: slice
     ) -> np.ndarray:
-        """Decode `timesteps` over a spatial window: (len(timesteps), band, y, x) raw values.
-
-        Reads each needed anchor once plus each requested delta, in a single Zarr read. A delta
-        timestep adds its residual to the anchor modulo 2^bits (unsigned arithmetic wraps).
-        """
-        reference = self.attrs.temporal.delta_reference
-        needed = sorted({*timesteps, *(reference[t] for t in timesteps if t in reference)})
-        raw = np.asarray(level.data.oindex[np.asarray(needed), :, ys, xs])
-        row = {t: i for i, t in enumerate(needed)}
-        out = np.empty((len(timesteps), *raw.shape[1:]), dtype=raw.dtype)
-        for i, t in enumerate(timesteps):
-            if t in reference:
-                np.add(raw[row[reference[t]]], raw[row[t]], out=out[i])
-            else:
-                out[i] = raw[row[t]]
-        return out
+        """Read ordinary stored values, with no cross-timestep reconstruction."""
+        return np.asarray(level.data.oindex[np.asarray(timesteps, dtype=np.int64), :, ys, xs])
 
     def _read_plane(
         self, array: zarr.Array, timesteps: Sequence[int], ys: slice, xs: slice
@@ -158,7 +148,7 @@ class ChronoStore:
     def read_cell(self, t: int, row: int, col: int, lod: int = 0) -> np.ndarray:
         """Decode one cell of timestep `t`: a (band, y, x) array of the stored dtype.
 
-        Costs at most two chunk reads (the anchor and the delta). Edge cells are smaller than
+        Costs one data chunk read after metadata/index discovery. Edge cells are smaller than
         `chunk_size`; padding beyond the level shape is never returned.
         """
         level = self._level(lod)
@@ -254,7 +244,7 @@ def _plane(group: zarr.Group, name: str | None, where: str) -> zarr.Array | None
 def open_store(path_or_url: Any) -> ChronoStore:
     """Open a chronozarr store from a path, http(s) URL, or zarr Store.
 
-    Raises SchemaError if the store is not a conforming chronozarr store (v0.1 or v0.2). An
+    Raises SchemaError if the store is not a conforming chronozarr store (v0.3.0). An
     http(s) URL is read with `HttpStore` (Range requests, no fsspec needed).
     """
     try:
