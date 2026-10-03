@@ -15,7 +15,7 @@ import {
   reinhardSrgb,
   resolveProducts,
   toPhysical,
-} from '../demo/products.js';
+} from '../shared/products.js';
 
 const byId = (bands) => Object.fromEntries(resolveProducts(bands).map((p) => [p.id, p]));
 

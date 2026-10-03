@@ -200,6 +200,43 @@ Cold open of the live unsharded store `chronozarr-4` from the deployed viewer wi
 
 Star-delta reconstruction runs in the fragment shader; the CPU loop it replaces cost 54 ms per 36-cell frame. Known limits: the coarse loop pulls the whole time axis at its level after the first frame (tens of MB for a store a few cells wide); cold open of very small stores costs 30 to 40 ms for worker startup.
 
+## Development checks
+
+```bash
+uv sync --extra dev --extra geo --extra netcdf --extra dask
+uv run python scripts/check_architecture.py
+uv run coverage run -m pytest -q -m unit
+uv run coverage report
+uv run coverage json
+uv run coverage xml
+npm ci --prefix js
+npm run test:coverage --prefix js
+npm run test:browser --prefix js
+```
+
+The architecture checker and `sentrux check .` share `.sentrux/rules.toml`: first-party
+imports must be acyclic, shared writer and store modules must not depend on their callers,
+and MapLibre/shared rendering must not depend on the demo. The dependency-free checker
+runs in CI and includes deferred Python imports and static JavaScript imports/re-exports;
+computed runtime imports are outside its scope.
+
+Python coverage measures every package module and writes JSON/XML to
+`data/reports/coverage/python/`. Native Node coverage measures only modules loaded by the
+Node tests under `chronozarr`, `shared`, `maplibre`, and `demo`; it does not measure the
+browser-only viewer or GPU execution. Browser tests verify those behaviors separately.
+CI retains both coverage reports for 14 days.
+
+For a before/after speed check on the same local fixture:
+
+```bash
+node scripts/audit_browser.mjs js data/spike/stress6x6 data/reports/browser-bench.json
+```
+
+The script uses headless Chromium with software WebGL, three cold runs and 20 switches.
+Its additional `warmFullyLoaded` measurement primes all timesteps with a 2 GiB cache,
+because the ordinary idle prefetch intentionally stops at 64 MiB. Inspect complete frames
+and bytes alongside timings; local/loopback results do not measure CDN performance.
+
 ## Status
 
 v0.2 draft (spec version `0.2.0`; every v0.1 store is a valid v0.2 store and readers accept both). The layout is Zarr v3 groups per level. The writer default is unsharded: one object per chunk, that is per cell, level and timestep (about 5,900 objects for the 117-month imagery store), so there is no shard index to read, a CDN miss costs one chunk and an append writes only new objects. Sharding stays available (`--shard`, `shard_time`) and every store written sharded stays valid: 93 objects and one range read per timestep once the shard index is cached, with a miss that costs time proportional to the shard size.

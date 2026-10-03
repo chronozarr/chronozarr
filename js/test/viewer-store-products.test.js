@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { openStore, samplePixelFrom } from '../chronozarr/decoder.js';
 import { buildSyntheticStore, coverageValue, maskValue } from '../support/synthetic-store.js';
 import { buildSeries, gapFilledTimes, seriesSpecs, validAt, windowPixels } from '../demo/chart.js';
-import { describePixel, displayMode, inputConversion, nodataToCompare, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../demo/products.js';
+import { describePixel, displayMode, inputConversion, nodataToCompare, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../shared/products.js';
 
 const base = { nTime: 6, height: 40, width: 40, chunk: 32, anchorInterval: 3, sharded: true };
 

@@ -6,8 +6,8 @@
 // Differences from js/demo/renderer.js: no background fill (no data is transparent so the basemap shows
 // through), an optional validity mask, and opacity.
 
-import { PRODUCT_GLSL } from '../demo/products-glsl.js';
-import { TEXTURE_FORMATS } from '../demo/renderer.js';
+import { PRODUCT_GLSL } from '../shared/products-glsl.js';
+import { TEXTURE_FORMATS } from '../shared/texture-formats.js';
 
 export const VERTEX_SHADER = `#version 300 es
 uniform mat4 u_matrix;   // clip <- mercator offset from the mesh origin

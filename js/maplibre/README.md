@@ -60,7 +60,7 @@ hundreds of MB (the demo moved 260 MB in 40 s for a 4-cell view of the Ucayali s
 
 Stores written to spec v0.2 work as they are: `uint8`, `uint16`, `int16` and `float32` data, star-delta (modular
 residuals) or no temporal encoding, per-band `scale` and `offset`, `nodata` or a validity `mask`. The product colors
-are `PRODUCT_GLSL` from `js/demo/products-glsl.js`, the same shader code as the viewer, and `displayMode` decides
+are `PRODUCT_GLSL` from `js/shared/products-glsl.js`, the same shader code as the viewer, and `displayMode` decides
 between the tone-mapped reflectance look and a linear stretch (an 8-bit RGB store is shown as stored; other single
 bands get the 2nd to 98th percentile of the valid values on screen, or `range: [min, max]` in physical units).
 

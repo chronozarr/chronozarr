@@ -36,7 +36,8 @@ HANDOVER.md
 
 # dgov / sentrux
 .dgov/
-.sentrux/
+.sentrux/*
+!.sentrux/rules.toml
 
 # Test/bench artifacts
 .playwright-mcp/
@@ -47,3 +48,6 @@ HANDOVER.md
 
 # root tooling (wrangler pinned in package.json)
 /node_modules/
+
+# Generated test coverage
+.coverage*

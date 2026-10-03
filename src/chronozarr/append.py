@@ -37,8 +37,7 @@ import zarr
 from zarr.errors import ZarrUserWarning
 
 from chronozarr import schema
-from chronozarr.decode import ChronoStore, open_store
-from chronozarr.encode import (
+from chronozarr._writer import (
     DEFAULT_CELLS_IN_FLIGHT,
     VOLATILITY_SCALE,
     Block,
@@ -56,6 +55,7 @@ from chronozarr.encode import (
     _spill_timesteps,
     _write_time_coord,
 )
+from chronozarr.decode import ChronoStore, open_store
 from chronozarr.schema import Band, Chronozarr, LevelRef, Temporal, Transform
 
 # A `none` store does not record the nominal schedule its volatility was computed against

@@ -12,20 +12,12 @@
 // the mask is 0 the shader writes the background color (opaque, so painting over the previous frame cannot leave
 // the previous timestep's pixel behind), and the store's nodata value is not compared (spec 2.3).
 
-import { PRODUCT_GLSL } from './products-glsl.js';
+import { PRODUCT_GLSL } from '../shared/products-glsl.js';
+import { TEXTURE_FORMATS } from '../shared/texture-formats.js';
+
+export { TEXTURE_FORMATS } from '../shared/texture-formats.js';
 
 const BACKGROUND = [0.035, 0.047, 0.071];
-
-/**
- * How each stored data type lives on the GPU: texture format, upload types, and the GLSL that reads a value as a
- * float. The 8- and 16-bit unsigned types add the delta to the anchor modulo 2^bits (chronozarr v0.2 residuals).
- */
-export const TEXTURE_FORMATS = {
-  uint8: { internal: 'R8UI', format: 'RED_INTEGER', type: 'UNSIGNED_BYTE', Array: Uint8Array, sampler: 'usampler2DArray', delta: 255 },
-  uint16: { internal: 'R16UI', format: 'RED_INTEGER', type: 'UNSIGNED_SHORT', Array: Uint16Array, sampler: 'usampler2DArray', delta: 65535 },
-  int16: { internal: 'R16I', format: 'RED_INTEGER', type: 'SHORT', Array: Int16Array, sampler: 'isampler2DArray', delta: null },
-  float32: { internal: 'R32F', format: 'RED', type: 'FLOAT', Array: Float32Array, sampler: 'sampler2DArray', delta: null },
-};
 
 function valueGlsl({ sampler, delta }, dtype) {
   if (delta === null) {

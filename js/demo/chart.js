@@ -6,7 +6,7 @@
 // has no reading. A series has one value per timestep: a number, null where the pixel has no
 // data (a gap), or undefined where the timestep is not loaded yet.
 
-import { isReflectance, ndvi, ndwi, toPhysical } from './products.js';
+import { isReflectance, ndvi, ndwi, toPhysical } from '../shared/products.js';
 
 // Custom properties of index.html (--series-*), so the lines and the legend follow the palette of the page: bright on the dark chrome, darker on the light one.
 const COLORS = { red: 'var(--series-red)', green: 'var(--series-green)', blue: 'var(--series-blue)', amber: 'var(--series-amber)', grey: 'var(--series-grey)' };

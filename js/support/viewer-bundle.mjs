@@ -14,7 +14,7 @@ if (!outputArg || outputArg === '--help' || (args.length && (args.length !== 2 |
   const store = args[1] ?? null;
   // Reject an existing directory, including symlinks, before writing any assets.
   await mkdir(output);
-  for (const name of ['demo', 'chronozarr', 'maplibre', 'vendor']) {
+  for (const name of ['demo', 'shared', 'chronozarr', 'maplibre', 'vendor']) {
     await cp(path.join(packageRoot, name), path.join(output, name), { recursive: true });
   }
   await cp(path.join(packageRoot, 'favicon.svg'), path.join(output, 'favicon.svg'));

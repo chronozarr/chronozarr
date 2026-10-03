@@ -1,0 +1,38 @@
+# Shared by Sentrux and scripts/check_architecture.py.
+[constraints]
+max_cycles = 0
+
+[[boundaries]]
+from = "js/maplibre/*"
+to = "js/demo/*"
+reason = "The published MapLibre layer must not depend on the demo."
+
+[[boundaries]]
+from = "js/shared/*"
+to = "js/demo/*"
+reason = "Shared rendering code must not depend on its demo consumer."
+
+[[boundaries]]
+from = "src/chronozarr/schema.py"
+to = "src/chronozarr/decode.py"
+reason = "Schema validation uses neutral store transport."
+
+[[boundaries]]
+from = "src/chronozarr/store.py"
+to = "src/chronozarr/decode.py"
+reason = "HTTP transport must not depend on decoding."
+
+[[boundaries]]
+from = "src/chronozarr/_writer.py"
+to = "src/chronozarr/encode.py"
+reason = "Shared writer internals must not depend on encoding."
+
+[[boundaries]]
+from = "src/chronozarr/_writer.py"
+to = "src/chronozarr/append.py"
+reason = "Shared writer internals must not depend on append."
+
+[[boundaries]]
+from = "src/chronozarr/append.py"
+to = "src/chronozarr/encode.py"
+reason = "Append and encode share writer internals directly."

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { VERTEX_SHADER, fragmentShader } from '../maplibre/shader.js';
-import { PRODUCT_GLSL } from '../demo/products-glsl.js';
+import { PRODUCT_GLSL } from '../shared/products-glsl.js';
 
 const DTYPES = { uint8: { sampler: 'usampler2DArray', modulus: '255u' }, uint16: { sampler: 'usampler2DArray', modulus: '65535u' }, int16: { sampler: 'isampler2DArray', modulus: null }, float32: { sampler: 'sampler2DArray', modulus: null } };
 
