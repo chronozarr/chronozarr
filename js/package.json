@@ -28,7 +28,8 @@
     ".": "./chronozarr/decoder.js",
     "./maplibre": "./maplibre/layer.js",
     "./decode-worker": "./chronozarr/decode-worker.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./geolibre": "./geolibre/plugin.js"
   },
   "files": [
     "chronozarr/",
@@ -43,7 +44,8 @@
     "tileripper/renderer.js",
     "vendor/numcodecs/",
     "vendor/zarrita/",
-    "vendor/zarrita-storage/"
+    "vendor/zarrita-storage/",
+    "geolibre/"
   ],
   "publishConfig": {
     "access": "public"

@@ -42,7 +42,7 @@ def add_chronozarr(
     if getattr(map_widget, "_rendered", False):
         raise ValueError("add_chronozarr must be called before displaying the map")
     if not callable(getattr(map_widget, "add_call", None)):
-        raise TypeError("use leafmap.maplibregl.Map, the MapLibre notebook backend")
+        raise TypeError("use leafmap.maplibregl.Map or geemap.maplibregl.Map")
     if not isinstance(t, int) or isinstance(t, bool) or t < 0:
         raise ValueError("t must be a nonnegative integer timestep")
     if not 0 <= opacity <= 1:
