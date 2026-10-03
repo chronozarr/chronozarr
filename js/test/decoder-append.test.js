@@ -415,3 +415,36 @@ test('recoveries are in the stats snapshot and the live object, and resetStats z
   assert.deepEqual(store.stats().recoveries, RECOVERIES_NONE);
   assert.equal(store.stats.recoveries, live, 'the same live object');
 });
+
+test('closing a stale reader cancels a hanging root refresh during append recovery', async () => {
+  const oldFiles = buildSyntheticStore(OLD).files;
+  const grownFiles = buildSyntheticStore(NEW).files;
+  const plain = filesFetch(oldFiles);
+  const grown = filesFetch(grownFiles);
+  let appended = false;
+  let refreshSignal;
+  let release;
+  let started;
+  const refreshing = new Promise(resolve => { started = resolve; });
+  const fetch = request => {
+    if (request.cache === 'reload') {
+      refreshSignal = request.signal;
+      return new Promise((resolve, reject) => {
+        release = () => resolve(new Response(grownFiles.get('/zarr.json')));
+        request.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        started();
+      });
+    }
+    return (appended ? grown : plain)(request);
+  };
+  const store = await openStore('https://example.test/store', { fetch, workers: 0 });
+  appended = true;
+  const pending = store.getRaw(0, 0, 0, 5).catch(error => error.name);
+  await refreshing;
+  try {
+    store.close();
+    assert.equal(refreshSignal.aborted, true);
+    assert.equal(await pending, 'AbortError');
+    assert.equal(store.cacheInfo().bytes, 0);
+  } finally { release(); }
+});
