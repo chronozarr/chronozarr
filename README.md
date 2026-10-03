@@ -1,8 +1,8 @@
-# TileRipper
+# chronozarr
 
 Open a decade of analysis-ready satellite time series in a browser tab from a static bucket. Scrub it like video. Click for real numbers.
 
-TileRipper is the viewer. **chronozarr** is the format underneath it: plain Zarr v3 with one group per pyramid level and one object per chunk, so a timestep of a spatial cell is one plain `GET`. Sharding, one file per cell for the time axis, is an option (`--shard`). The layout follows ndpyramid's `multiscales` attribute and the zarr `proj` and `spatial` conventions. An optional temporal profile, star-delta, stores most timesteps as residuals against a nearby anchor; the writer measures a sample of cells and enables it only when it shrinks the compressed bytes to 0.85 of the plain size or better. A store without it needs no chronozarr-aware reader.
+**chronozarr** is an open raster time-series format with a browser viewer at [chronozarr.org/demo](https://chronozarr.org/demo/): plain Zarr v3 with one group per pyramid level and one object per chunk, so a timestep of a spatial cell is one plain `GET`. Sharding, one file per cell for the time axis, is an option (`--shard`). The layout follows ndpyramid's `multiscales` attribute and the zarr `proj` and `spatial` conventions. An optional temporal profile, star-delta, stores most timesteps as residuals against a nearby anchor; the writer measures a sample of cells and enables it only when it shrinks the compressed bytes to 0.85 of the plain size or better. A store without it needs no chronozarr-aware reader.
 
 Reading a store without chronozarr:
 
@@ -27,7 +27,7 @@ Spec: [spec/CHRONOZARR.md](https://github.com/chronozarr/chronozarr/blob/main/sp
 | Python package `chronozarr` | `src/chronozarr/` | `encode()`, `open_store()`, `validate()`, `view()`; CLI `chronozarr encode / convert / append / validate / info / doctor / export-cog / stac`; xarray engine `chronozarr` |
 | JS reader | `js/chronozarr/` | DOM-free reader on top of zarrita: cells by (lod, row, col, t), cache, prefetch |
 | MapLibre layer | `js/maplibre/` | Custom layer that renders a store through the JS reader |
-| TileRipper viewer | `js/tileripper/` | WebGL2 viewer: time scrub, looping playback up to 60 steps per second, click for values and a time-series chart, permalinks, WebM and GIF export; `?embed=1` compact mode with a postMessage API for host pages |
+| chronozarr viewer | `js/demo/` | WebGL2 viewer: time scrub, looping playback up to 60 steps per second, click for values and a time-series chart, permalinks, WebM and GIF export; `?embed=1` compact mode with a postMessage API for host pages |
 | Ingest example | `examples/sentinel2_pc/` | Monthly Sentinel-2 median composites from Planetary Computer |
 | Water-mask example | `examples/water_masks/` | Derived NDWI and water-fraction stores with validity masks from the monthly mosaics ([docs/user-zero.md](https://github.com/chronozarr/chronozarr/blob/main/docs/user-zero.md)) |
 | PNG frames example | `examples/png_frames/` | Georeferenced PNG frames converted into a store with no GeoTIFF step ([docs/png-frames.md](https://github.com/chronozarr/chronozarr/blob/main/docs/png-frames.md)) |
@@ -89,7 +89,7 @@ ds = xr.open_zarr("my_store", group="0", zarr_format=3, chunks=None)
 Serve the store from any static host that supports GET, byte ranges and CORS (S3, R2, GCS, Source Cooperative, a local range-capable server), then open the viewer:
 
 ```
-js/tileripper/index.html?store=https://your-bucket/my_store
+js/demo/index.html?store=https://your-bucket/my_store
 ```
 
 ## Command line

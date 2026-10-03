@@ -61,7 +61,7 @@ export function subsamplePixels(rgba, stride) {
 
 export function exportFilename(storeName, format, from, to, labels) {
   const slug = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  return `tileripper-${slug(storeName)}-${slug(labels(from))}-to-${slug(labels(to))}.${format === 'gif' ? 'gif' : 'webm'}`;
+  return `chronozarr-${slug(storeName)}-${slug(labels(from))}-to-${slug(labels(to))}.${format === 'gif' ? 'gif' : 'webm'}`;
 }
 
 /** Load a timestep for every cell, retrying if the cache dropped it again; fails rather than waiting forever. */

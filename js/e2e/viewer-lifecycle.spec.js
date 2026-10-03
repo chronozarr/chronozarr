@@ -14,10 +14,10 @@ test('repeated viewer store replacement releases closed caches and keeps GPU han
     }
   });
   const urls = [await storeUrl('u16_mask'), await storeUrl('f32_band')];
-  await page.goto(`${servers.appUrl}/tileripper/index.html?store=${encodeURIComponent(urls[0])}`);
-  await page.waitForFunction(() => window.tileripper?.viewer.paintedT >= 0 && window.tileripper.viewer.renderNow().complete);
+  await page.goto(`${servers.appUrl}/demo/index.html?store=${encodeURIComponent(urls[0])}`);
+  await page.waitForFunction(() => window.chronozarr?.viewer.paintedT >= 0 && window.chronozarr.viewer.renderNow().complete);
   const result = await page.evaluate(async urls => {
-    const viewer = window.tileripper.viewer;
+    const viewer = window.chronozarr.viewer;
     const stores = [];
     const samples = [];
     const baseline = {};

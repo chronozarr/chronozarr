@@ -43,12 +43,12 @@ try {
   });
 
   const started = Date.now();
-  await page.goto(`${server.url}/js/tileripper/index.html?store=${encodeURIComponent(storeUrl)}`);
-  await page.waitForFunction(() => window.tileripper?.ready, null, { timeout: 60000 });
-  await page.evaluate(() => window.tileripper.ready);
+  await page.goto(`${server.url}/js/demo/index.html?store=${encodeURIComponent(storeUrl)}`);
+  await page.waitForFunction(() => window.chronozarr?.ready, null, { timeout: 60000 });
+  await page.evaluate(() => window.chronozarr.ready);
   const readyS = round((Date.now() - started) / 1000, 2);
   const view = await page.evaluate(() => {
-    const { viewer } = window.tileripper;
+    const { viewer } = window.chronozarr;
     return { lod: viewer.movieInfo.baseLod, canvas: [viewer.canvas.width, viewer.canvas.height], timesteps: viewer.store.times.length };
   });
 
@@ -57,7 +57,7 @@ try {
     const wait = at * 1000 - (Date.now() - started);
     if (wait > 0) await page.waitForTimeout(wait);
     const sample = await page.evaluate(() => {
-      const { store } = window.tileripper.viewer;
+      const { store } = window.chronozarr.viewer;
       const stats = store.stats();
       return {
         requests: stats.network.requests,

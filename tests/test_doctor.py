@@ -429,7 +429,7 @@ def test_range_server_semantics(sharded_store):
         status, headers, _ = _get(
             key,
             {
-                "Origin": "https://tileripper.com",
+                "Origin": "https://chronozarr.org",
                 "Access-Control-Request-Method": "GET",
                 "Access-Control-Request-Headers": "range",
             },
@@ -473,7 +473,7 @@ def test_view_returns_an_iframe_pointing_the_viewer_at_the_local_store(sharded_s
         page = shown.data
         assert "<iframe" in page
         assert 'height="480"' in page
-        assert "https://tileripper.com/tileripper/?store=http%3A%2F%2F127.0.0.1%3A" in page
+        assert "https://chronozarr.org/demo/?store=http%3A%2F%2F127.0.0.1%3A" in page
         assert f"%2F{sharded_store.name}" in page
     finally:
         for server in list(view_module._servers.values()):

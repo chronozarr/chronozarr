@@ -102,7 +102,7 @@ def _cube(store: ChronoStore, bounds: tuple[float, float, float, float]) -> tupl
     encoding = getattr(store.attrs.temporal, "encoding", "star-delta")
     caveat = (
         " Non-anchor timesteps hold residuals against an anchor timestep; read them with "
-        "chronozarr (Python or the TileRipper JS reader), not a plain Zarr reader."
+        "chronozarr (Python or the chronozarr JS reader), not a plain Zarr reader."
         if encoding == "star-delta" and len(store.attrs.temporal.delta_reference) > 0
         else ""
     )
@@ -184,7 +184,7 @@ def build_stac(
         "type": ZARR_MEDIA_TYPE,
         "title": "chronozarr Zarr v3 store",
         "description": "Root of the store. Levels are the groups 0, 1, 2, ...; open it with "
-        "chronozarr.open_store or the TileRipper viewer.",
+        "chronozarr.open_store or the chronozarr viewer.",
         "roles": ["data"],
     }
     properties: dict[str, Any] = {

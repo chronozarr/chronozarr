@@ -1,4 +1,4 @@
-"""Look at a local store in the TileRipper viewer from a notebook.
+"""Look at a local store in the chronozarr viewer from a notebook.
 
 `view(store)` starts a small HTTP server on 127.0.0.1 (byte ranges and CORS, which sharded stores
 need and `python -m http.server` lacks) and returns an IPython iframe that points the hosted
@@ -23,7 +23,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, BinaryIO, ClassVar
 
-VIEWER_URL = "https://tileripper.com/tileripper/"
+VIEWER_URL = "https://chronozarr.org/demo/"
 _CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
@@ -185,7 +185,7 @@ def viewer_url(store_url: str, viewer: str = VIEWER_URL) -> str:
 
 
 def view(store: str | Path, *, height: int = 640, viewer: str = VIEWER_URL, port: int = 0) -> Any:
-    """Show a store in the TileRipper viewer as a notebook iframe.
+    """Show a store in the chronozarr viewer as a notebook iframe.
 
     `store` is a local directory (served from 127.0.0.1, see the module docstring for when that
     works) or an http(s) URL of a store that is already hosted. Returns an

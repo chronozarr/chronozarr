@@ -46,7 +46,7 @@ export const test = base.extend({
   // A temp directory the stores are written to on first use, removed when the worker ends.
   stores: [
     async ({}, use) => {
-      const dir = await mkdtemp(path.join(tmpdir(), 'tileripper-stores-'));
+      const dir = await mkdtemp(path.join(tmpdir(), 'chronozarr-stores-'));
       const written = new Map();
       await use({
         dir,

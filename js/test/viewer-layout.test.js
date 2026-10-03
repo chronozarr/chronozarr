@@ -3,9 +3,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { COMPACT_BELOW, DRAWER_BELOW, inspectorLayout } from '../tileripper/layout.js';
+import { COMPACT_BELOW, DRAWER_BELOW, inspectorLayout } from '../demo/layout.js';
 
-const html = readFileSync(new URL('../tileripper/index.html', import.meta.url), 'utf8');
+const html = readFileSync(new URL('../demo/index.html', import.meta.url), 'utf8');
 const css = html.slice(html.indexOf('<style>'), html.indexOf('</style>'));
 
 test('the inspector is a side panel from 900 px and a drawer below; the boundary belongs to the panel', () => {

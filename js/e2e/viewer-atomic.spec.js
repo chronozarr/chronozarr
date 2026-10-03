@@ -54,7 +54,7 @@ const delayFor = (url) => 150 + ([...url].reduce((hash, char) => (hash * 31 + ch
  * of the nine cells) next to what the viewer says it painted; and whether the timeline marker ever showed its loading state.
  */
 function installRecorder() {
-  const { viewer } = window.tileripper;
+  const { viewer } = window.chronozarr;
   const recorded = { frames: [], sawLoading: false };
   const read = () => {
     const { canvas, camera, renderer } = viewer;
@@ -106,8 +106,8 @@ test.describe('whole frames over a slow store', () => {
   });
 
   test('scrubbing: every painted frame is whole, the marker shows loading, and the last frame is the complete one', async ({ page, servers }) => {
-    await page.goto(`${servers.appUrl}/tileripper/index.html?store=${encodeURIComponent(`${servers.dataUrl}/atomic/`)}`);
-    await page.waitForFunction(() => window.tileripper?.viewer?.paintedT === 0, null, { timeout: 30_000 });
+    await page.goto(`${servers.appUrl}/demo/index.html?store=${encodeURIComponent(`${servers.dataUrl}/atomic/`)}`);
+    await page.waitForFunction(() => window.chronozarr?.viewer?.paintedT === 0, null, { timeout: 30_000 });
     await page.evaluate(installRecorder);
 
     // Seven steps, 90 ms apart: much faster than the store delivers the nine cells of a timestep.
@@ -115,7 +115,7 @@ test.describe('whole frames over a slow store', () => {
       await page.keyboard.press('ArrowRight');
       await page.waitForTimeout(90);
     }
-    await page.waitForFunction((last) => window.tileripper.viewer.paintedT === last, N_TIME - 1, { timeout: 45_000 });
+    await page.waitForFunction((last) => window.chronozarr.viewer.paintedT === last, N_TIME - 1, { timeout: 45_000 });
     const { frames, sawLoading } = await page.evaluate(() => window.__recorded);
 
     expect(frames.length, 'frames painted during the scrub').toBeGreaterThan(0);
@@ -124,21 +124,21 @@ test.describe('whole frames over a slow store', () => {
     expect(await page.locator('.timeline-tick.loading').count(), 'and not any more once the frame is complete').toBe(0);
     const last = frames.at(-1);
     expect([last.t, last.lod, last.kind], 'the last frame is the complete frame of the last timestep at the level asked for').toEqual([N_TIME - 1, 0, 'target']);
-    expect(await page.evaluate(() => window.tileripper.viewer.frameStats.kept >= 0), 'the viewer counts the frames it kept back').toBe(true);
+    expect(await page.evaluate(() => window.chronozarr.viewer.frameStats.kept >= 0), 'the viewer counts the frames it kept back').toBe(true);
   });
 
   test('playback: it buffers with an indicator before it starts, and every frame it shows is whole', async ({ page, servers }) => {
-    await page.goto(`${servers.appUrl}/tileripper/index.html?store=${encodeURIComponent(`${servers.dataUrl}/atomic/`)}`);
-    await page.waitForFunction(() => window.tileripper?.viewer?.paintedT === 0, null, { timeout: 30_000 });
+    await page.goto(`${servers.appUrl}/demo/index.html?store=${encodeURIComponent(`${servers.dataUrl}/atomic/`)}`);
+    await page.waitForFunction(() => window.chronozarr?.viewer?.paintedT === 0, null, { timeout: 30_000 });
     await page.evaluate(installRecorder);
 
     await page.keyboard.press('Space');
     await expect(page.locator('#play-btn'), 'the button shows that playback is waiting for frames').toHaveClass(/buffering/);
     await expect(page.locator('#buffer-hint')).toContainText('buffering');
-    const stepsWhileBuffering = await page.evaluate(() => window.tileripper.viewer.playback.stats.steps);
+    const stepsWhileBuffering = await page.evaluate(() => window.chronozarr.viewer.playback.stats.steps);
     expect(stepsWhileBuffering, 'no frame is shown before the buffer is full').toBe(0);
 
-    await page.waitForFunction(() => window.tileripper.viewer.playback.stats.steps >= 4, null, { timeout: 45_000 });
+    await page.waitForFunction(() => window.chronozarr.viewer.playback.stats.steps >= 4, null, { timeout: 45_000 });
     await expect(page.locator('#play-btn'), 'the indicator is gone once it plays').not.toHaveClass(/buffering/);
     await page.keyboard.press('Space');
     const { frames } = await page.evaluate(() => window.__recorded);

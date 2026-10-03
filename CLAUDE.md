@@ -1,6 +1,6 @@
-# TileRipper / chronozarr
+# chronozarr
 
-TileRipper is the viewer and the site (tileripper.com). chronozarr is the open format under it:
+chronozarr is the open format, libraries, and browser demo (chronozarr.org/demo):
 a Zarr v3 layout convention for raster time series with star-delta temporal encoding and a
 multiscale pyramid, readable by xarray and any Zarr client, decoded in the browser and rendered
 on the GPU from raw uint16 bands. No server, no pricing, no auth. Static hosting only.
@@ -25,7 +25,7 @@ src/chronozarr/           Python package; CLI `chronozarr` (commands: encode | v
 js/chronozarr/            DOM-free reader on zarrita (spec 0.1 and 0.2): decoder.js (openStore, getCell, prefetch), metadata.js,
                           http.js, cache.js, bandwidth.js, limiter.js, pool.js + decode-worker.js, codec.js, shard.js
 js/maplibre/              MapLibre custom layer on the reader: layer.js, mesh.js, projection.js, shader.js, slots.js, view.js; demo.js + index.html
-js/tileripper/            viewer: index.html?store=<url>, viewer.js, renderer.js (WebGL2), products.js, playback.js, chart.js, export.js, permalink.js, bench.js
+js/demo/                 viewer: index.html?store=<url>, viewer.js, renderer.js (WebGL2), products.js, playback.js, chart.js, export.js, permalink.js, bench.js
 js/test/                  node --test suites (fixtures skip if data/spike is absent)
 js/support/               static-server.js (byte ranges), synthetic-store.js, test fixtures
 tests/                    pytest, marker `unit`
@@ -44,7 +44,7 @@ uv run pytest -q -m unit
 cd js && node --test
 # dev server with byte ranges (needed for sharded stores), from .claude/launch.json "spike":
 uv run --with rangehttpserver python -m RangeHTTPServer 8000
-# then: http://localhost:8000/js/tileripper/index.html?store=http://localhost:8000/data/spike/synthetic_sharded
+# then: http://localhost:8000/js/demo/index.html?store=http://localhost:8000/data/spike/synthetic_sharded
 ```
 
 Always `uv run python`, never bare `python`. Never override uv's 7-day release-age quarantine (global uv.toml).
@@ -60,4 +60,4 @@ Always `uv run python`, never bare `python`. Never override uv's 7-day release-a
 
 ## Speed gates (measure before and after any change to the read path)
 
-Cold open ≤ 500 ms at LOD 0 for 36 cells; warm timestep switch ≤ 16 ms; decode ≤ 5 ms per chunk; 0 wire bytes on a warm switch. `await tileripper.bench()` in the viewer console. Numbers live in the README and `.napkin.md`.
+Cold open ≤ 500 ms at LOD 0 for 36 cells; warm timestep switch ≤ 16 ms; decode ≤ 5 ms per chunk; 0 wire bytes on a warm switch. `await chronozarr.bench()` in the viewer console. Numbers live in the README and `.napkin.md`.

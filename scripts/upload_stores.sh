@@ -20,7 +20,8 @@ set -euo pipefail
 
 BUCKET="${BUCKET:-tileripper-stores}"
 STORE="${STORE:-chronozarr}"
-ROOT="${ROOT:-/Users/jakegearon/projects/tile-ripper/data/stores}"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="${ROOT:-$REPO_ROOT/data/stores}"
 TTL=300
 DRY_RUN=0
 NEWER=

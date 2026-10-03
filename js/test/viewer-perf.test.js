@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FrameMonitor, MB, analyzeLatency, distribution, emptyStats, formatBytes, formatMs, formatPhaseTable, formatRate, frameCompleteness, hitRate, isWholeFrame, readStats, statsDelta } from '../tileripper/perf.js';
+import { FrameMonitor, MB, analyzeLatency, distribution, emptyStats, formatBytes, formatMs, formatPhaseTable, formatRate, frameCompleteness, hitRate, isWholeFrame, readStats, statsDelta } from '../demo/perf.js';
 
 // The reader's shape: stats() with network and cache counters, cacheInfo() for both cache tiers, bandwidthEstimate().
 const reader = () => ({

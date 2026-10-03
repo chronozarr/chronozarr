@@ -2,7 +2,7 @@
 //   ?store=<url>  open another chronozarr store (default: the Ucayali store on data.tileripper.com)
 
 import * as maplibregl from 'maplibre-gl';
-import { makeTimeFormatter } from '../tileripper/products.js';
+import { makeTimeFormatter } from '../demo/products.js';
 import { ChronozarrLayer } from './layer.js';
 
 const DEFAULT_STORE = 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-4';

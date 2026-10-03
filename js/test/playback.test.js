@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_STEPS_PER_SECOND, DEFAULT_WIRE_RATIO, LINK_HEADROOM, Playback, SPEEDS, chooseMovieLevel, describeReason, linkAllows, snapSpeed, wireRatio } from '../tileripper/playback.js';
+import { DEFAULT_STEPS_PER_SECOND, DEFAULT_WIRE_RATIO, LINK_HEADROOM, Playback, SPEEDS, chooseMovieLevel, describeReason, linkAllows, snapSpeed, wireRatio } from '../demo/playback.js';
 
 const FRAME_60 = 1000 / 60;
 

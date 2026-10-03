@@ -15,18 +15,18 @@ try {
   const page = await browser.newPage({ viewport: { width: 1100, height: 850 } });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto(`${server.url}/js/tileripper/index.html?store=${encodeURIComponent(store)}`);
-  await page.waitForFunction(() => window.tileripper?.ready, null, { timeout: 30000 });
-  await page.evaluate(() => window.tileripper.ready);
+  await page.goto(`${server.url}/js/demo/index.html?store=${encodeURIComponent(store)}`);
+  await page.waitForFunction(() => window.chronozarr?.ready, null, { timeout: 30000 });
+  await page.evaluate(() => window.chronozarr.ready);
   const results = await page.evaluate(async () => {
-    const s = window.tileripper.viewer.store;
+    const s = window.chronozarr.viewer.store;
     const hash = async data => [...new Uint8Array(await crypto.subtle.digest('SHA-256', data))].map(v => v.toString(16).padStart(2, '0')).join('');
     const results = [];
     for (let t = 0; t < s.times.length; t++) {
       const cell = await s.getCell(0, 0, 0, t), mask = await s.getMask(0, 0, 0, t);
       const index = cell.data.findIndex((value, i) => mask[i] && value < 0 && i > 512 * 30 && i < 512 * 480 && i % 512 > 30 && i % 512 < 480);
       results.push({ data_sha256: await hash(cell.data), mask_sha256: await hash(mask),
-        index, value: cell.data[index], dtype: cell.data.constructor.name, units: window.tileripper.viewer.bands[0].units });
+        index, value: cell.data[index], dtype: cell.data.constructor.name, units: window.chronozarr.viewer.bands[0].units });
     }
     return results;
   });
@@ -36,11 +36,11 @@ try {
     assert.equal(results[t].dtype, 'Float32Array'); assert.equal(results[t].units, 'm');
     assert(results[t].index >= 0);
     await page.evaluate(({ t, index }) => {
-      const v = window.tileripper.viewer;
+      const v = window.chronozarr.viewer;
       v.hooks = { click: event => { window.clicked = event; } };
       v.goToTime(t); v.setView({ zoom: 8, center: { col: index % 512 + 0.5, row: Math.floor(index / 512) + 0.5 } });
     }, { t, index: results[t].index });
-    await page.waitForFunction(t => window.tileripper.viewer.paintedT === t && window.tileripper.viewer.renderNow().complete, t);
+    await page.waitForFunction(t => window.chronozarr.viewer.paintedT === t && window.chronozarr.viewer.renderNow().complete, t);
     const rect = await page.locator('#gl-canvas').boundingBox();
     await page.mouse.click(rect.x + rect.width / 2, rect.y + rect.height / 2);
     await page.waitForFunction(t => window.clicked?.t === t, t);
@@ -48,7 +48,7 @@ try {
     assert.equal(clicked.bands[0].value, results[t].value);
     assert.equal(clicked.masked, false);
   }
-  await page.evaluate(() => window.tileripper.viewer.fit());
+  await page.evaluate(() => window.chronozarr.viewer.fit());
   await page.waitForTimeout(300);
   await page.screenshot({ path: path.join(root, `data/reports/swot-roanoke-viewer${suffix}.png`) });
   await page.goto(`${server.url}/js/maplibre/index.html?store=${encodeURIComponent(store)}&p=band`);

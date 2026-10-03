@@ -1,4 +1,4 @@
-// The pure parts of the embedding contract (js/tileripper/embed.js): URL parameters, who may talk to the viewer,
+// The pure parts of the embedding contract (js/demo/embed.js): URL parameters, who may talk to the viewer,
 // validation of the host's commands, time lookup, pixel <-> lon/lat, message shapes; and the markup and stylesheet
 // of index.html that implement the embed layout.
 
@@ -20,9 +20,9 @@ import {
   parseIsoMs,
   resolveSet,
   toPlainJson,
-} from '../tileripper/embed.js';
+} from '../demo/embed.js';
 
-const html = readFileSync(new URL('../tileripper/index.html', import.meta.url), 'utf8');
+const html = readFileSync(new URL('../demo/index.html', import.meta.url), 'utf8');
 const css = html.slice(html.indexOf('<style>'), html.indexOf('</style>'));
 
 // ---- origin ----
@@ -110,45 +110,45 @@ test('isTrustedSender wants the allowed origin and the parent window, nothing el
 // ---- commands ----
 
 test('parseCommand ignores what is not addressed to the viewer', () => {
-  for (const data of [null, undefined, 'tileripper:set', 42, [], ['tileripper:set'], {}, { type: 5 }, { type: 'other:set', t: 1 }, { type: 'webpackOk' }]) {
+  for (const data of [null, undefined, 'chronozarr:set', 42, [], ['chronozarr:set'], {}, { type: 5 }, { type: 'other:set', t: 1 }, { type: 'webpackOk' }]) {
     assert.deepEqual(parseCommand(data), { kind: 'ignore' }, JSON.stringify(data));
   }
   for (const name of ['ready', 'time', 'click', 'view', 'error']) {
-    assert.deepEqual(parseCommand({ v: 1, type: `tileripper:${name}` }), { kind: 'ignore' }, `a host that echoes ${name} back gets no error`);
+    assert.deepEqual(parseCommand({ v: 1, type: `chronozarr:${name}` }), { kind: 'ignore' }, `a host that echoes ${name} back gets no error`);
   }
 });
 
 test('parseCommand: get, and the version check', () => {
-  assert.deepEqual(parseCommand({ type: 'tileripper:get' }), { kind: 'get' });
-  assert.deepEqual(parseCommand({ v: 1, type: 'tileripper:get' }), { kind: 'get' });
+  assert.deepEqual(parseCommand({ type: 'chronozarr:get' }), { kind: 'get' });
+  assert.deepEqual(parseCommand({ v: 1, type: 'chronozarr:get' }), { kind: 'get' });
   assert.equal(EMBED_VERSION, 1);
   for (const v of [2, 0, '1', null]) {
-    const result = parseCommand({ v, type: 'tileripper:set', t: 1 });
+    const result = parseCommand({ v, type: 'chronozarr:set', t: 1 });
     assert.equal(result.kind, 'error');
     assert.equal(result.code, 'bad_message');
     assert.match(result.message, /v .* is not supported: this viewer speaks v 1/);
   }
-  const unknown = parseCommand({ type: 'tileripper:fly' });
+  const unknown = parseCommand({ type: 'chronozarr:fly' });
   assert.deepEqual([unknown.kind, unknown.code], ['error', 'bad_message']);
-  assert.match(unknown.message, /"tileripper:fly".*tileripper:set/);
+  assert.match(unknown.message, /"chronozarr:fly".*chronozarr:set/);
 });
 
 test('parseCommand: a set with every field', () => {
-  const result = parseCommand({ v: 1, type: 'tileripper:set', t: 3, product: 'ndvi', band: 'B04', zoom: 2.5, center: { lon: 3.1, lat: 36.2 }, playing: true, speed: 12 });
+  const result = parseCommand({ v: 1, type: 'chronozarr:set', t: 3, product: 'ndvi', band: 'B04', zoom: 2.5, center: { lon: 3.1, lat: 36.2 }, playing: true, speed: 12 });
   assert.deepEqual(result, { kind: 'set', set: { t: { index: 3 }, product: 'ndvi', band: 'B04', zoom: 2.5, center: { lon: 3.1, lat: 36.2 }, playing: true, speed: 12 } });
 });
 
 test('parseCommand: an empty set is valid, unknown fields are ignored, v may be left out', () => {
-  assert.deepEqual(parseCommand({ type: 'tileripper:set' }), { kind: 'set', set: {} });
-  assert.deepEqual(parseCommand({ type: 'tileripper:set', t: 0, future: { a: 1 }, __proto__: { x: 1 } }), { kind: 'set', set: { t: { index: 0 } } });
+  assert.deepEqual(parseCommand({ type: 'chronozarr:set' }), { kind: 'set', set: {} });
+  assert.deepEqual(parseCommand({ type: 'chronozarr:set', t: 0, future: { a: 1 }, __proto__: { x: 1 } }), { kind: 'set', set: { t: { index: 0 } } });
 });
 
 test('parseCommand: t is an index or an ISO date, and nothing else', () => {
-  assert.deepEqual(parseCommand({ type: 'tileripper:set', t: 0 }).set.t, { index: 0 });
-  assert.deepEqual(parseCommand({ type: 'tileripper:set', t: '2024-03-01' }).set.t, { ms: Date.UTC(2024, 2, 1) });
-  assert.deepEqual(parseCommand({ type: 'tileripper:set', t: '2024-03-01T12:30:00Z' }).set.t, { ms: Date.UTC(2024, 2, 1, 12, 30) });
+  assert.deepEqual(parseCommand({ type: 'chronozarr:set', t: 0 }).set.t, { index: 0 });
+  assert.deepEqual(parseCommand({ type: 'chronozarr:set', t: '2024-03-01' }).set.t, { ms: Date.UTC(2024, 2, 1) });
+  assert.deepEqual(parseCommand({ type: 'chronozarr:set', t: '2024-03-01T12:30:00Z' }).set.t, { ms: Date.UTC(2024, 2, 1, 12, 30) });
   for (const t of [-1, 1.5, NaN, Infinity, '3', 'March', '2024-13-45', '2024-02-30T99:00:00Z', null, true, [], {}]) {
-    const result = parseCommand({ type: 'tileripper:set', t });
+    const result = parseCommand({ type: 'chronozarr:set', t });
     assert.deepEqual([result.kind, result.code], ['error', 'bad_set'], JSON.stringify(t));
     assert.match(result.message, /^t must be a timestep index/);
   }
@@ -182,21 +182,21 @@ test('parseCommand: each field has its own error naming the field and the value'
     [{ speed: Infinity }, /^speed must be a number above 0/],
   ];
   for (const [fields, pattern] of cases) {
-    const result = parseCommand({ type: 'tileripper:set', ...fields });
+    const result = parseCommand({ type: 'chronozarr:set', ...fields });
     assert.deepEqual([result.kind, result.code], ['error', 'bad_set'], JSON.stringify(fields));
     assert.match(result.message, pattern, JSON.stringify(fields));
   }
 });
 
 test('parseCommand: a center is {x, y} or {lon, lat}; when a message carries both (the center of a view message) x and y win', () => {
-  assert.deepEqual(parseCommand({ type: 'tileripper:set', center: { x: 500000, y: 4000000 } }).set.center, { x: 500000, y: 4000000 });
-  assert.deepEqual(parseCommand({ type: 'tileripper:set', center: { lon: -73.5, lat: -9.4 } }).set.center, { lon: -73.5, lat: -9.4 });
-  assert.deepEqual(parseCommand({ type: 'tileripper:set', center: { x: 1, y: 2, lon: 3, lat: 4 } }).set.center, { x: 1, y: 2 });
-  assert.deepEqual(parseCommand({ type: 'tileripper:set', center: { x: 1, y: 2, lon: null, lat: null } }).set.center, { x: 1, y: 2 }, 'unknown lon/lat of a store without a CRS');
+  assert.deepEqual(parseCommand({ type: 'chronozarr:set', center: { x: 500000, y: 4000000 } }).set.center, { x: 500000, y: 4000000 });
+  assert.deepEqual(parseCommand({ type: 'chronozarr:set', center: { lon: -73.5, lat: -9.4 } }).set.center, { lon: -73.5, lat: -9.4 });
+  assert.deepEqual(parseCommand({ type: 'chronozarr:set', center: { x: 1, y: 2, lon: 3, lat: 4 } }).set.center, { x: 1, y: 2 });
+  assert.deepEqual(parseCommand({ type: 'chronozarr:set', center: { x: 1, y: 2, lon: null, lat: null } }).set.center, { x: 1, y: 2 }, 'unknown lon/lat of a store without a CRS');
 });
 
 test('a set with one bad field is an error as a whole', () => {
-  const result = parseCommand({ type: 'tileripper:set', t: 2, zoom: -1 });
+  const result = parseCommand({ type: 'chronozarr:set', t: 2, zoom: -1 });
   assert.equal(result.kind, 'error');
   assert.equal(result.set, undefined);
 });
@@ -281,8 +281,8 @@ test('makeGeo with a transform but a CRS the viewer cannot project: coordinates 
 // ---- messages ----
 
 test('embedMessage puts the contract version and the type on every message', () => {
-  assert.deepEqual(embedMessage('time', { t: 3 }), { v: 1, type: 'tileripper:time', t: 3 });
-  assert.deepEqual(embedMessage('ready'), { v: 1, type: 'tileripper:ready' });
+  assert.deepEqual(embedMessage('time', { t: 3 }), { v: 1, type: 'chronozarr:time', t: 3 });
+  assert.deepEqual(embedMessage('ready'), { v: 1, type: 'chronozarr:ready' });
 });
 
 test('toPlainJson: undefined is dropped, NaN and Infinity become null, the result is a copy', () => {
@@ -330,7 +330,7 @@ test('the embed layout drops the catalog selector and the export controls, and h
   const hidden = css.slice(css.indexOf('html[data-embed] .brand'), css.indexOf('html[data-embed] .embed-wordmark {'));
   for (const selector of ['.brand', '.nav-sep', '#catalog-select', '#export-btn', '#export-panel']) assert.ok(hidden.includes(`html[data-embed] ${selector}`), selector);
   assert.match(hidden, /display: none/);
-  assert.match(html, /<a id="embed-wordmark"[^>]*target="_blank"[^>]*rel="noopener"[^>]*>Tile<span>Ripper<\/span><\/a>/);
+  assert.match(html, /<a id="embed-wordmark"[^>]*target="_blank"[^>]*rel="noopener"[^>]*>chrono<span>zarr<\/span><\/a>/);
   assert.match(css, /\.embed-wordmark \{ display: none; \}/, 'the wordmark is for the embed only');
 });
 
@@ -353,17 +353,17 @@ test('the light palette redefines every colour of the dark one; the canvas keeps
 });
 
 test('the chart lines and legend use the palette variables, so they stay legible on the light chrome', () => {
-  const chart = readFileSync(new URL('../tileripper/chart.js', import.meta.url), 'utf8');
+  const chart = readFileSync(new URL('../demo/chart.js', import.meta.url), 'utf8');
   assert.doesNotMatch(chart, /COLORS = \{[^}]*#[0-9a-f]{6}/i);
   for (const series of ['red', 'green', 'blue', 'amber', 'grey']) assert.ok(css.includes(`--series-${series}:`), series);
 });
 
 test('physical display limits validate atomically and survive resolution', () => {
   for (const range of [[0, 0], [2, 1], [NaN, 1], [0], 'bad']) {
-    assert.equal(parseCommand({type: 'tileripper:set', t: 1, range}).kind, 'error');
+    assert.equal(parseCommand({type: 'chronozarr:set', t: 1, range}).kind, 'error');
   }
   for (const range of [null, [-25, 0]]) {
-    const command = parseCommand({type: 'tileripper:set', range});
+    const command = parseCommand({type: 'chronozarr:set', range});
     assert.equal(command.kind, 'set');
     assert.deepEqual(resolveSet(command.set, {times: [], productIds: [], bandNames: []}).plan.range, range);
   }

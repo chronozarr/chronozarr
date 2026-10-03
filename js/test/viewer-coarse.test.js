@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ASSUMED_BANDWIDTH, COARSE_FRAME_BYTES, COARSE_MAX_OVERHEAD, COARSE_MIN_DIRECT_MS, ancestorCells, planCoarseStages, stageLeadMs } from '../tileripper/coarse.js';
+import { ASSUMED_BANDWIDTH, COARSE_FRAME_BYTES, COARSE_MAX_OVERHEAD, COARSE_MIN_DIRECT_MS, ancestorCells, planCoarseStages, stageLeadMs } from '../demo/coarse.js';
 
 const MB = 1024 * 1024;
 

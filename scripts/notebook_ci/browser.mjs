@@ -34,10 +34,10 @@ try {
       await page.waitForFunction(()=>window.values.ready && window.values.state.range?.[0]===-128);
       assert.equal(await page.locator('[aria-label=Band]').isVisible(),false);
       const frame=page.frames().find(f=>f!==page.mainFrame());
-      await frame.waitForFunction(()=>window.tileripper?.viewer.paintedT===0 && window.tileripper.viewer.renderNow().complete);
+      await frame.waitForFunction(()=>window.chronozarr?.viewer.paintedT===0 && window.chronozarr.viewer.renderNow().complete);
       const first=await frame.locator('#gl-canvas').screenshot();
       await page.evaluate(()=>window.model.set('t',1));
-      await frame.waitForFunction(()=>window.tileripper.viewer.paintedT===1 && window.tileripper.viewer.renderNow().complete);
+      await frame.waitForFunction(()=>window.chronozarr.viewer.paintedT===1 && window.chronozarr.viewer.renderNow().complete);
       const second=await frame.locator('#gl-canvas').screenshot();
       assert.notDeepEqual(first,second,'Player must paint different raster values at the second date');
       assert.equal(await page.evaluate(()=>window.values.bands[0].units),'m');

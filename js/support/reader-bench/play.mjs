@@ -29,13 +29,13 @@ const browser = await chromium.launch({ executablePath: chromePath, headless: tr
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   page.on('pageerror', (error) => console.error('pageerror', error.message));
-  await page.goto(`${server.url}/js/tileripper/index.html?store=${encodeURIComponent(storeUrl)}`);
-  await page.waitForFunction(() => window.tileripper?.ready, null, { timeout: 60000 });
-  await page.evaluate(() => window.tileripper.ready);
+  await page.goto(`${server.url}/js/demo/index.html?store=${encodeURIComponent(storeUrl)}`);
+  await page.waitForFunction(() => window.chronozarr?.ready, null, { timeout: 60000 });
+  await page.evaluate(() => window.chronozarr.ready);
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Network.enable');
   await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1, ...throttle });
-  const result = await page.evaluate((benchOptions) => window.tileripper.playBench(benchOptions), options);
+  const result = await page.evaluate((benchOptions) => window.chronozarr.playBench(benchOptions), options);
   const keep = ['store', 'mode', 'lod', 'resolution', 'visibleCells', 'requestedStepsPerSecond', 'achievedStepsPerSecond', 'perLoopStepsPerSecond', 'heldFrames', 'heldAtWrap', 'heldElsewhere', 'longestHoldMs', 'totalHoldMs', 'network'];
   console.log(JSON.stringify(Object.fromEntries(keep.filter((k) => k in result).map((k) => [k, result[k]])), null, 1));
 } finally {

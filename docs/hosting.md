@@ -4,7 +4,7 @@ A chronozarr store is a directory of static files. Any host that returns a file 
 
 ## 1. Checklist
 
-`chronozarr doctor <store-url>` runs the HTTP and decode checks below against a live URL (and the decode checks against a local directory). It sends `Origin: https://tileripper.com` by default. The last column is what doctor reports when the requirement is missing (`fail` violates a MUST, `warn` a SHOULD, `info` is reported without judgement), read from `src/chronozarr/doctor.py` on 2026-10-01; if that file changes, it is the authority. The `edge cache` and `timing-allow-origin` lines are advice: doctor reports them as `info`, and only `fail` lines make it exit with status 1 (warnings and info do not).
+`chronozarr doctor <store-url>` runs the HTTP and decode checks below against a live URL (and the decode checks against a local directory). It sends `Origin: https://chronozarr.org` by default. The last column is what doctor reports when the requirement is missing (`fail` violates a MUST, `warn` a SHOULD, `info` is reported without judgement), read from `src/chronozarr/doctor.py` on 2026-10-01; if that file changes, it is the authority. The `edge cache` and `timing-allow-origin` lines are advice: doctor reports them as `info`, and only `fail` lines make it exit with status 1 (warnings and info do not).
 
 | # | Requirement | doctor check | If missing |
 |---|---|---|---|
@@ -264,7 +264,7 @@ Whether the proxy stores and serves the `--cache-control` value is untested here
 ```bash
 URL=https://data.example.com/aoi/chronozarr-2
 KEY=0/data/c/0/0/0/0          # level 0, cell (0, 0): timestep 0 (unsharded) or time shard 0 (sharded)
-O='Origin: https://tileripper.com'
+O='Origin: https://chronozarr.org'
 
 # 206 + Content-Range + CORS + exposed headers + caching
 curl -s -D - -o /dev/null -H "$O" -H 'Range: bytes=0-99' "$URL/$KEY"

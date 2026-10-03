@@ -37,7 +37,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://tileripper.com"
+Homepage = "https://chronozarr.org"
 Documentation = "https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md"
 Repository = "https://github.com/chronozarr/chronozarr"
 Issues = "https://github.com/chronozarr/chronozarr/issues"

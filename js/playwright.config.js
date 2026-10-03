@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
 
-const artifacts = process.env.PLAYWRIGHT_ARTIFACTS_DIR ?? path.join(os.tmpdir(), 'tileripper-playwright');
+const artifacts = process.env.PLAYWRIGHT_ARTIFACTS_DIR ?? path.join(os.tmpdir(), 'chronozarr-playwright');
 const ci = Boolean(process.env.CI);
 
 export default defineConfig({

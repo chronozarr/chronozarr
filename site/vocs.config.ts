@@ -8,7 +8,7 @@ export default defineConfig({
   topNav: [
     { text: 'Docs', link: '/getting-started' },
     { text: 'Specification', link: '/specification' },
-    { text: 'Demo', link: 'https://tileripper.com' },
+    { text: 'Demo', link: '/demo/' },
   ],
   socials: [{ icon: 'github', link: 'https://github.com/chronozarr/chronozarr' }],
   sidebar: [

@@ -18,7 +18,7 @@ def test_hosted_player_traits_and_serialization():
     try:
         assert widget.store_url == "https://example.org/store"
         assert (widget.t, widget.product, widget.speed) == (3, "band", 10)
-        assert "tileripper:set" in widget._esm
+        assert "chronozarr:set" in widget._esm
         bundle = widget._repr_mimebundle_()
         if isinstance(bundle, tuple):
             bundle = bundle[0]

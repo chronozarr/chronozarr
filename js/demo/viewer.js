@@ -1,4 +1,4 @@
-// TileRipper viewer: renders a chronozarr store with WebGL2, scrubs through time, switches
+// chronozarr viewer: renders a chronozarr store with WebGL2, scrubs through time, switches
 // products on the GPU and shows decoded values on click. Opens ?store=<base url>.
 
 import { chunkKey, openStore, samplePixelFrom, scrubCost, windowOrder } from '../chronozarr/decoder.js';
@@ -43,7 +43,7 @@ const CLICK_SLOP_PX = 4;
 const CELL_RETRY_DELAY_MS = 4000;
 const MAX_CELL_RETRIES = 3;
 const TOAST_MS = 12000;
-const SPEED_KEY = 'tileripper.stepsPerSecond';
+const SPEED_KEY = 'chronozarr.stepsPerSecond';
 const STRETCH_SAMPLES_PER_CELL = 300;
 const URL_SYNC_MS = 300;
 const CHART_BATCH = 4;
@@ -2325,7 +2325,7 @@ async function main() {
   viewer.inspectorUi = embed.controls;
   viewer.extraQuery = embed.query;
   const bridge = embed.embed ? connectEmbed(viewer, embed) : null;
-  window.tileripper = {
+  window.chronozarr = {
     viewer,
     bench: () => import('./bench.js').then((m) => m.runBenchmarks(viewer)),
     scrubBench: (options) => import('./bench.js').then((m) => m.runScrubBenchmarks(viewer, options)),
@@ -2355,7 +2355,7 @@ async function main() {
     // An external store earns a dropdown entry only once it has loaded, so a dead URL from an old
     // permalink never lingers as an option.
     const optionFor = (value) => [...select.options].find((option) => option.value === value);
-    window.tileripper.ready = viewer
+    window.chronozarr.ready = viewer
       .loadStore(url, { viewSearch })
       .then((result) => {
         if (!inCatalog(url) && catalog.length > 0 && !optionFor(url)) {

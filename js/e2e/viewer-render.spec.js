@@ -33,10 +33,10 @@ for (const storeName of ['u16_stardelta', 'u16_plain']) {
     expect(timings.firstPaintMs).toBeGreaterThan(0);
     expect(Number.isFinite(timings.openMs)).toBe(true);
     await expect(page.locator('#time-label')).toHaveText(isoDate(0));
-    expect(await page.evaluate(() => ({ steps: window.tileripper.viewer.store.times.length, ...window.tileripper.viewer.store.levels[0] }))).toMatchObject({ steps: nTime, width: 200, height: 200 });
+    expect(await page.evaluate(() => ({ steps: window.chronozarr.viewer.store.times.length, ...window.chronozarr.viewer.store.levels[0] }))).toMatchObject({ steps: nTime, width: 200, height: 200 });
 
     // First paint: t = 0 is an anchor.
-    expect(await page.evaluate(() => window.tileripper.viewer.paintedT)).toBe(0);
+    expect(await page.evaluate(() => window.chronozarr.viewer.paintedT)).toBe(0);
     expectFrameMatchesStore(await captureFrame(page), storeName, 0);
 
     await clickAndExpectSidebar(page, storeName, 0, 50, 40);
@@ -69,7 +69,7 @@ for (const storeName of ['u8_rgb', 'u16_stardelta', 'i16_band', 'f32_band']) {
   const { dtype, enabledProducts } = STORES[storeName];
   test(`${dtype} (${storeName}): renders every enabled product without errors and enables only the products its bands allow`, async ({ page, servers, storeUrl }) => {
     await openViewer(page, servers, await storeUrl(storeName));
-    expect(await page.evaluate(() => window.tileripper.viewer.dtype)).toBe(dtype);
+    expect(await page.evaluate(() => window.chronozarr.viewer.dtype)).toBe(dtype);
 
     const buttons = await readProductButtons(page);
     expect(buttons.filter(([, enabled]) => enabled).map(([name]) => name), 'enabled product buttons').toEqual(enabledProducts);

@@ -60,7 +60,7 @@ hundreds of MB (the demo moved 260 MB in 40 s for a 4-cell view of the Ucayali s
 
 Stores written to spec v0.2 work as they are: `uint8`, `uint16`, `int16` and `float32` data, star-delta (modular
 residuals) or no temporal encoding, per-band `scale` and `offset`, `nodata` or a validity `mask`. The product colors
-are `PRODUCT_GLSL` from `js/tileripper/products-glsl.js`, the same shader code as the viewer, and `displayMode` decides
+are `PRODUCT_GLSL` from `js/demo/products-glsl.js`, the same shader code as the viewer, and `displayMode` decides
 between the tone-mapped reflectance look and a linear stretch (an 8-bit RGB store is shown as stored; other single
 bands get the 2nd to 98th percentile of the valid values on screen, or `range: [min, max]` in physical units).
 
@@ -105,7 +105,7 @@ opacity 1 and 0. Results for the Ucayali store, Chromium on an M-series Mac, 128
 |---|---|
 | Footprint outline, zoom 9.5 (level 3), 11 (2), 12.5 (0), 15.5 (0), plus bearing 30, pitch 45, bearing -50 with pitch 40 | pixels drawn outside the pyproj outline: 0 to 8 per view, none more than 0.001 px beyond it; of about 400 unlit pixels per view sampled evenly within 8 px inside the outline, every one is a nodata gap at level 0 |
 | Interior texel boundaries, levels 0 to 3 at about 4 px per texel | 60 to 84 boundaries per level (wherever neighbouring texels differ), all within 0.496 px of pyproj (0.5 px is the limit of pixel-centre sampling), mean offset below 0.03 px, no stray boundaries |
-| Colors vs `js/tileripper/viewer.js`, same store, timestep and texel | 20 of 20 texel and product pairs identical in 8 bits (NDVI, NDWI, water, true and false color) |
+| Colors vs `js/demo/viewer.js`, same store, timestep and texel | 20 of 20 texel and product pairs identical in 8 bits (NDVI, NDWI, water, true and false color) |
 
 Steps: `uv run --with pyproj python3 js/maplibre/verify/truth.py --epsg 32718 --x0 485650 --y0 9169880 --res 10 --width 2759 --height 2765 > truth.json`;
 open the demo page, hide its panel, add `verify/align.js` as a script, `jumpTo` a view, take a screenshot with

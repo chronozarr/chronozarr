@@ -2,7 +2,7 @@
 // follows renderer.js (the nodata rule, stored -> physical) and products-glsl.js (the color of each product); the
 // tone map gain comes from products.js, which the shader's copy must stay in step with.
 
-import { GAIN } from '../tileripper/products.js';
+import { GAIN } from '../demo/products.js';
 
 export const BACKGROUND = [0.035, 0.047, 0.071].map((c) => Math.round(c * 255));
 

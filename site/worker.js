@@ -5,6 +5,10 @@ export default {
       url.hostname = 'chronozarr.org';
       return Response.redirect(url.toString(), 301);
     }
+    if (url.pathname === '/demo') {
+      url.pathname = '/demo/';
+      return Response.redirect(url.toString(), 301);
+    }
     return env.ASSETS.fetch(request);
   },
 };
