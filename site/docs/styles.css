@@ -1,0 +1,22 @@
+/* Homepage styles are scoped; Vocs owns the documentation layout. */
+.cz-home { max-width: 1060px; margin: 0 auto; padding: 56px 32px 72px; }
+.cz-home h1 { font-size: clamp(38px, 5.5vw, 68px); font-weight: 650; letter-spacing: -0.045em; line-height: 1.08; max-width: 750px; margin: 0 0 24px; }
+.cz-intro { max-width: 680px; font-size: 20px; line-height: 1.65; color: var(--vocs-color_textSecondary); }
+.cz-actions { display: flex; flex-wrap: wrap; gap: 14px; margin: 28px 0 36px; align-items: center; }
+.cz-actions a { padding: 11px 18px; border: 1px solid var(--vocs-color_border); border-radius: 6px; font-weight: 550; text-decoration: none; }
+.cz-actions a:first-child { background: #1767a6; color: white; border-color: #1767a6; }
+.cz-actions a:hover { outline: 2px solid var(--vocs-color_textAccent); outline-offset: 2px; }
+.cz-home a:focus-visible { outline: 3px solid #429bd7; outline-offset: 4px; }
+.cz-strip { margin: 0; }
+.cz-frames { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.cz-frame { margin: 0; }
+.cz-frame img { width: 100%; height: auto; aspect-ratio: 345 / 346; object-fit: cover; display: block; border-radius: 4px; }
+.cz-frame figcaption { margin-top: 8px; font-size: 14px; color: var(--vocs-color_textSecondary); }
+.cz-caption { font-size: 14px; line-height: 1.6; color: var(--vocs-color_textSecondary); margin-top: 14px; max-width: 720px; }
+.cz-paths { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; padding: 36px 0; margin-top: 26px; border-top: 1px solid var(--vocs-color_border); }
+.cz-paths h2 { font-size: 20px; margin-bottom: 12px; font-weight: 600; }
+.cz-paths p { line-height: 1.65; color: var(--vocs-color_textSecondary); margin-bottom: 14px; }
+.cz-paths a, .cz-compat a { color: var(--vocs-color_textAccent); text-decoration: underline; text-underline-offset: 3px; }
+.cz-compat { padding: 20px 24px; background: var(--vocs-color_background2); border-radius: 6px; font-size: 15px; line-height: 1.75; }
+.cz-compat strong { display: block; margin-bottom: 5px; }
+@media (max-width: 650px) { .cz-home { padding: 32px 20px 48px; } .cz-intro { font-size: 18px; } .cz-frames { gap: 6px; } .cz-frame figcaption { font-size: 12px; } .cz-paths { grid-template-columns: 1fr; gap: 24px; } }

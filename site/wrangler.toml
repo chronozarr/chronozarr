@@ -1,0 +1,14 @@
+# Separate from the TileRipper viewer Worker.
+name = "chronozarr-docs"
+compatibility_date = "2026-09-01"
+workers_dev = true
+main = "worker.js"
+routes = [
+  { pattern = "chronozarr.org", custom_domain = true },
+  { pattern = "www.chronozarr.org", custom_domain = true },
+]
+[assets]
+run_worker_first = true
+binding = "ASSETS"
+directory = "./docs/dist"
+not_found_handling = "404-page"

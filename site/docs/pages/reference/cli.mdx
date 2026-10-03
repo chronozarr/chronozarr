@@ -1,0 +1,40 @@
+# Command line
+
+Install `chronozarr`, then run `chronozarr COMMAND --help` for all options.
+
+| Command | Purpose |
+| --- | --- |
+| `encode INPUT OUT` | Write a store from a Zarr store, NetCDF file, or dated GeoTIFF glob. |
+| `convert SOURCE OUT` | Stream a manifest, Zarr variable, or NetCDF file into a store. |
+| `append STORE INPUT` | Add later timesteps to an existing store. |
+| `validate STORE` | Check layout conformance; failures exit with status 1. |
+| `info STORE` | Show times, bands, encoding, and levels. |
+| `doctor TARGET` | Check a local path or live URL, HTTP behavior, and decoding. |
+| `export-cog STORE OUT_DIR` | Export reconstructed true-value COGs. Needs the geo extra. |
+| `stac STORE --out DIR` | Write a static STAC Collection and Item. Needs the geo extra. |
+
+## Common workflow
+
+```sh
+chronozarr convert manifest.csv my_store
+chronozarr validate my_store
+chronozarr info my_store
+# After uploading:
+chronozarr doctor https://your-host/my_store
+```
+
+## Encoding and storage
+
+`--encoding auto|none|star-delta` controls temporal encoding. The default is `auto`.
+`--shard` opts into sharding; `--shard-time` requires it. The default is unsharded.
+Use [the append guide](/guides/append) to choose a layout for growing stores.
+
+## Interoperability
+
+```sh
+chronozarr export-cog my_store cogs/
+chronozarr stac my_store --out catalog/
+```
+
+COG export reconstructs star-delta values. Static STAC metadata points clients to
+the store; it does not serve rendered tiles.

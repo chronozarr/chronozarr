@@ -1,0 +1,48 @@
+# How it works
+
+chronozarr is a layout convention plus readers. Every object is an ordinary Zarr
+v3 object; the convention specifies a time axis, a multiscale pyramid, coordinates,
+and optional temporal encoding.
+
+## A pyramid of arrays
+
+Each numbered group is a resolution level. Level 0 preserves the stored input
+values; coarser levels contain block means. Data has dimensions `(time, band, y, x)`.
+Coordinates and metadata describe its native projection.
+
+```text
+my_store/
+  zarr.json             consolidated metadata and format attributes
+  0/                    original resolution
+    data/               time × band × y × x
+    time/ band/ y/ x/    coordinate arrays
+    mask/ coverage/     optional validity and observed coverage
+  1/                    half resolution
+  2/                    quarter resolution
+```
+
+## Random access through time
+
+The default unsharded layout uses one object per spatial cell and timestep.
+Sharding is an option when reducing object count is useful, with byte-range reads
+and index caching as the tradeoff. Growing stores generally favor unsharded output:
+new timesteps add objects rather than rewriting a trailing shard.
+
+With temporal encoding `none`, every chunk holds true values. With `star-delta`,
+anchor timesteps hold true unsigned integer values and other timesteps hold residuals
+against a recorded anchor. Decoding needs at most two data chunks, without reading
+all preceding timesteps. The writer default `auto` enables it only when sampled
+compressed size is at most 85% of plain storage. Signed and float data use `none`.
+
+## Values and validity
+
+The format supports uint8, uint16, int16, and float32. Scale and offset describe
+physical values; a validity mask can distinguish valid zero from missing data.
+Coverage records how much input was observed, separately from validity.
+
+Compatible ordinary Zarr clients read the layout. They see true values when encoding
+is `none`, and residuals at non-anchor timesteps when encoding is `star-delta`.
+Use a chronozarr reader or export reconstructed COGs for the latter.
+
+See the [draft specification](/specification) for the normative requirements and
+[format comparison](/guides/format-comparison) for alternatives.

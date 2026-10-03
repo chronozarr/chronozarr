@@ -1,0 +1,57 @@
+# Integrate
+
+Choose the interface that fits your application.
+
+| Interface | Use it for | Guide |
+| --- | --- | --- |
+| Python and xarray | Read and analyze stores, reconstruct temporal encoding, access physical values. | [Python](/reference/python) |
+| JavaScript reader | Fetch decoded cells without a DOM or renderer. | [Reader](/reference/javascript) |
+| MapLibre layer | Add a store to an existing map. | [MapLibre](/reference/maplibre) |
+| TileRipper iframe | Embed a ready-made viewer with playback and inspection. | [Embedding](/guides/embedding) |
+| COG export and STAC | Share reconstructed values and catalog metadata with other tools. | [CLI](/reference/cli) |
+
+## Python
+
+```python
+import chronozarr
+
+store = chronozarr.open_store("my_store")
+values = store.read(t=0)
+```
+
+For a local notebook viewer, install `chronozarr[notebook]` and call
+`chronozarr.view("my_store")`. It starts a local range-capable server for local stores.
+
+## JavaScript
+
+```sh
+npm install chronozarr
+```
+
+```js
+import { openStore } from 'chronozarr'
+
+const store = await openStore('https://data.tileripper.com/ucayali_santa_maria/chronozarr-4')
+const lod = store.levels.length - 1
+const cell = await store.getCell(lod, 0, 0, 0)
+console.log(cell.data)
+store.close()
+```
+
+The returned typed array contains reconstructed stored values. Scale and offset
+are applied separately when you want physical units.
+
+## Embed a viewer
+
+```html
+<iframe
+  title="Raster time series viewer"
+  src="https://tileripper.com/tileripper/?embed=1"
+  width="100%"
+  height="600"
+  loading="lazy"
+></iframe>
+```
+
+The [embedding guide](/guides/embedding) covers store URLs, controls, themes, and
+the postMessage contract for host applications.
