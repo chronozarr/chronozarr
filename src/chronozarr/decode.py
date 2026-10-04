@@ -150,10 +150,12 @@ class ChronoStore:
                         f"{array.path}/c/{key.split('/')[0]}/0/{'/'.join(key.split('/')[1:])}": n
                         for key, n in inventory.items()
                     }
+                    # zarr 3.1.6 uses an enum; zarr 3.4.0 uses a string for index_location.
+                    index_location = getattr(codec.index_location, "value", codec.index_location)
                     group.store.configure(
                         f"{array.path}/c/",
                         index_size,
-                        codec.index_location.value,
+                        index_location,
                         mutable,
                         lengths,
                     )

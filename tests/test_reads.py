@@ -146,3 +146,13 @@ def test_to_xarray_subset_and_coordinates(synthetic):
 def test_open_store_rejects_non_stores(tmp_path):
     with pytest.raises(schema.SchemaError, match="no Zarr v3 group"):
         chronozarr.open_store(tmp_path / "missing")
+
+
+def test_sharded_read_with_installed_zarr_index_location(tmp_path):
+    """The resolved zarr codec must configure the index cache and return exact values."""
+    truth = make_truth(3, 1, 10, 9)
+    path = tmp_path / "sharded"
+    build_store(path, truth, shard=True, shard_time=2, chunk_size=8, n_lods=1)
+    store = chronozarr.open_store(path)
+    for t in range(3):
+        assert np.array_equal(store.read(t), truth[t])
