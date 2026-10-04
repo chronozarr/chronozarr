@@ -17,7 +17,7 @@ Two comparisons of a chronozarr store, measured on 2026-10-01 on one machine (Ap
 - **A. CarbonPlan zarr-layer** (`@carbonplan/zarr-layer` 0.10.0, `maplibre-gl` 6.11.2): does it open the published Ucayali store, and how does it compare with the chronozarr viewer on the same store, view and level.
 - **B. One COG per date**: the same imagery as 117 Cloud Optimized GeoTIFFs, against the chronozarr store, for the delivery cost of one session.
 
-Store used in both: `https://data.tileripper.com/ucayali_santa_maria/chronozarr-3` (spec 0.2.0, `temporal.encoding: none`, 117 monthly timesteps, 4 bands B02/B03/B04/B08 as uint16, 4 levels in UTM 18S, level 0 = 2759 x 2765 px at 10 m, shards of (117, 4, 512, 512) holding one zstd-5 chunk of (1, 4, 512, 512) per timestep, consolidated metadata, `shard_bytes` hints). Level 1 is 1380 x 1383 px at 20 m, a 3 x 3 grid of cells. A local copy is `data/stores/ucayali_santa_maria/chronozarr-3` (6.45 GB).
+Store used in both: `https://data.chronozarr.org/ucayali_santa_maria/chronozarr-3` (spec 0.2.0, `temporal.encoding: none`, 117 monthly timesteps, 4 bands B02/B03/B04/B08 as uint16, 4 levels in UTM 18S, level 0 = 2759 x 2765 px at 10 m, shards of (117, 4, 512, 512) holding one zstd-5 chunk of (1, 4, 512, 512) per timestep, consolidated metadata, `shard_bytes` hints). Level 1 is 1380 x 1383 px at 20 m, a 3 x 3 grid of cells. A local copy is `data/stores/ucayali_santa_maria/chronozarr-3` (6.45 GB).
 
 ## Summary
 
@@ -90,7 +90,7 @@ With the options variant, `layer.queryData` at level `finest` for pixel (row 138
 
 ### 1.5 Results: the published store
 
-#### Cold open, level 1, 9 cells: published store (data.tileripper.com)
+#### Cold open, level 1, 9 cells: published store (data.chronozarr.org)
 
 Median over repetitions, range in parentheses. Burst and paced runs both open the store the same way and are pooled.
 
@@ -103,7 +103,7 @@ Median over repetitions, range in parentheses. Burst and paced runs both open th
 | 10Mbit-100ms | chronozarr | 4 | 14.8 s (14.7 s-16.8 s) | 9.34 s (2.97 s-15.7 s) | 19 (19-19) | 10.0 (10.0-10.0) |
 | 10Mbit-100ms | zarr-layer | 4 | 16.9 s (9.36 s-21.3 s) | 15.8 s (3.88 s-20.1 s) | 30 (30-30) | 10.0 (10.0-10.0) |
 
-#### Scrub forward 20 timesteps, paced: published store (data.tileripper.com)
+#### Scrub forward 20 timesteps, paced: published store (data.chronozarr.org)
 
 | link | tool | runs | requests | of which aborted | MB transferred | scrub duration | steps shown exactly | step latency median / p95 | time showing mixed-timestep frames | MB in the next 3 s |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -114,7 +114,7 @@ Median over repetitions, range in parentheses. Burst and paced runs both open th
 | 10Mbit-100ms | chronozarr | 2 | 275 (273-275) | 94 (93-94) | 270 (269-270) | 207.9 s (207.8 s-207.9 s) | 20 (20-20) of 20 | 10.3 s / 12.2 s | 0 ms (0 ms-0 ms) | 3 (2-3) |
 | 10Mbit-100ms | zarr-layer | 2 | 180 (180-180) | 0 (0-0) | 214 (214-214) | 175.8 s (175.7 s-175.8 s) | 20 (20-20) of 20 | 8.64 s / 9.73 s | 59.2 s (56.7 s-59.2 s) | 0 (0-0) |
 
-#### Scrub forward 20 timesteps, burst (one step every 100 ms): published store (data.tileripper.com)
+#### Scrub forward 20 timesteps, burst (one step every 100 ms): published store (data.chronozarr.org)
 
 | link | tool | runs | requests | of which aborted | MB transferred | scrub duration | steps shown exactly | step latency median / p95 | time showing mixed-timestep frames | MB in the next 3 s |
 |---|---|---|---|---|---|---|---|---|---|---|

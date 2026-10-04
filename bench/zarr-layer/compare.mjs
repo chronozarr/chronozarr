@@ -14,7 +14,7 @@
 //   node zarr-layer/compare.mjs --tool zarr-layer|chronozarr --profile natural|50Mbit-40ms|10Mbit-100ms
 //        --mode burst|paced [--source remote|local] [--reps 1] [--steps 20] [--start 40] [--timeout 900000] [--out results/file.json]
 //
-// --source remote (default) reads the published store, https://data.tileripper.com/ucayali_santa_maria/chronozarr-3; `natural`
+// --source remote (default) reads the published store, https://data.chronozarr.org/ucayali_santa_maria/chronozarr-3; `natural`
 // is then the real link to that CDN. --source local reads the same files from this repository's range server (HTTP/1.1, so
 // at most 6 connections per origin for either tool); CDP throttling then defines the whole link.
 //
@@ -38,7 +38,7 @@ const startT = Number(flag('start', 40));
 const timeoutMs = Number(flag('timeout', 900000));
 const out = flag('out', null);
 const source = flag('source', 'remote');
-const REMOTE_STORE = 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-3';
+const REMOTE_STORE = 'https://data.chronozarr.org/ucayali_santa_maria/chronozarr-3';
 const LOCAL_STORE_PATH = '/data/stores/ucayali_santa_maria/chronozarr-3';
 
 if (!(profileName in PROFILES)) throw new Error(`unknown profile ${profileName}; use ${Object.keys(PROFILES).join(', ')}`);

@@ -1,5 +1,6 @@
 {
- "store": "https://data.tileripper.com/ucayali_santa_maria/chronozarr-3",
+ "note": "Measured against the previous host name for this R2 bucket (same bucket contents); the host is now data.chronozarr.org.",
+ "store": "https://data.chronozarr.org/ucayali_santa_maria/chronozarr-3",
  "patch": "no-pixels-per-tile",
  "extra": {},
  "outcome": "complete",

@@ -6,7 +6,7 @@ The interleaved local experiment establishes v0.3 = v0.2 within noise, with inco
 
 ## Storage accounting
 
-Read-only Cloudflare bucket metrics at 2026-10-03T23:10:00Z: 23,016 objects, 8,295,088,016 payload bytes plus 1,969,824 metadata bytes = **8,297,057,840 bytes**. This is the latest analytics sample returned by the API, not an instantaneous per-key inventory. `npx --no-install wrangler r2 bucket info tileripper-stores` reports 8.3 GB.
+Read-only Cloudflare bucket metrics at 2026-10-03T23:10:00Z: 23,016 objects, 8,295,088,016 payload bytes plus 1,969,824 metadata bytes = **8,297,057,840 bytes**. This is the latest analytics sample returned by the API, not an instantaneous per-key inventory. `npx --no-install wrangler r2 bucket info chronozarr-stores` reports 8.3 GB.
 
 | Operation/state | Object count | Bytes |
 |---|---:|---:|
@@ -25,7 +25,7 @@ Run from the repository root. The S3 script needs `R2_ACCESS_KEY_ID` and `R2_SEC
 
    ```sh
    uv run --with boto3 python scripts/r2_sync.py upload ucayali_santa_maria_v03
-   uv run chronozarr doctor https://data.tileripper.com/ucayali_santa_maria_v03
+   uv run chronozarr doctor https://data.chronozarr.org/ucayali_santa_maria_v03
    ```
 
    5,893 objects / 6,451,772,327 bytes; 31 short-lived and 5,862 immutable objects. This exceeds the 10 GB limit while v0.2 remains. Defer unless temporary overage is accepted or a different destination is chosen. Recheck bucket/prefix inventory first. The new store must be complete before publishing its catalog URL.
@@ -38,16 +38,16 @@ Run from the repository root. The S3 script needs `R2_ACCESS_KEY_ID` and `R2_SEC
    from pathlib import Path
    path = Path('js/demo/catalog.json')
    catalog = json.loads(path.read_text())
-   assert catalog[0]['url'] == 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-4'
-   catalog[0]['url'] = 'https://data.tileripper.com/ucayali_santa_maria_v03'
+   assert catalog[0]['url'] == 'https://data.chronozarr.org/ucayali_santa_maria/chronozarr-4'
+   catalog[0]['url'] = 'https://data.chronozarr.org/ucayali_santa_maria_v03'
    path.write_text(json.dumps(catalog, indent=2) + '\n')
    PY
    uv run python - <<'PY'
    from pathlib import Path
    path = Path('js/maplibre/demo.js')
-   old = 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-4'
+   old = 'https://data.chronozarr.org/ucayali_santa_maria/chronozarr-4'
    assert old in path.read_text()
-   path.write_text(path.read_text().replace(old, 'https://data.tileripper.com/ucayali_santa_maria_v03'))
+   path.write_text(path.read_text().replace(old, 'https://data.chronozarr.org/ucayali_santa_maria_v03'))
    PY
    git add js/demo/catalog.json js/maplibre/demo.js
    git commit -m "deploy: point imagery catalog at the v0.3 store"

@@ -1,11 +1,11 @@
 // Demo: the live Ucayali store as a MapLibre custom layer over MapLibre's demo tiles.
-//   ?store=<url>  open another chronozarr store (default: the Ucayali store on data.tileripper.com)
+//   ?store=<url>  open another chronozarr store (default: the Ucayali store on data.chronozarr.org)
 
 import * as maplibregl from 'maplibre-gl';
 import { makeTimeFormatter } from '../shared/products.js';
 import { ChronozarrLayer } from './layer.js';
 
-const DEFAULT_STORE = 'https://data.tileripper.com/ucayali_santa_maria_v03';
+const DEFAULT_STORE = 'https://data.chronozarr.org/ucayali_santa_maria_v03';
 const params = new URLSearchParams(location.search);
 const storeUrl = params.get('store') ?? DEFAULT_STORE;
 const $ = (id) => document.getElementById(id);

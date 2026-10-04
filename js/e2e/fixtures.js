@@ -1,5 +1,5 @@
 // Playwright fixtures: a static server for the site (js/ as the web root, as on Cloudflare), a second one for the
-// synthetic stores written to a temp directory (a separate origin, as data.tileripper.com is), the check that
+// synthetic stores written to a temp directory (a separate origin, as data.chronozarr.org is), the check that
 // the browser has WebGL2, and the rule that a test fails on any console error or on a request leaving the machine.
 
 import { mkdtemp, rm } from 'node:fs/promises';

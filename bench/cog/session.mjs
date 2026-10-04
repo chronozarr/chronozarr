@@ -42,7 +42,7 @@ const out = flag('out', path.join(REPO_ROOT, 'bench/results/cog-vs-chronozarr.js
 const STORE_DIR = path.join(REPO_ROOT, 'data/stores/ucayali_santa_maria/chronozarr-3');
 const COG_DIR = path.join(REPO_ROOT, 'data/cogs/ucayali_santa_maria');
 const REFERENCE = path.join(REPO_ROOT, 'bench/results/pixel-reference-L0-r1388-c1380.json');
-const REMOTE_STORE = 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-3';
+const REMOTE_STORE = 'https://data.chronozarr.org/ucayali_santa_maria/chronozarr-3';
 
 const range = (from, to) => Array.from({ length: to - from }, (_, i) => from + i);
 const grid = (rows, cols) => rows.flatMap((r) => cols.map((c) => [r, c]));

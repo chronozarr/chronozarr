@@ -18,7 +18,7 @@
 # it would upload and uploads nothing.
 set -euo pipefail
 
-BUCKET="${BUCKET:-tileripper-stores}"
+BUCKET="${BUCKET:-chronozarr-stores}"
 STORE="${STORE:-chronozarr}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ROOT="${ROOT:-$REPO_ROOT/data/stores}"

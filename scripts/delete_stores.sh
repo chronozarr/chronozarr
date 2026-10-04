@@ -2,7 +2,7 @@
 # Delete chronozarr stores from R2 by key, 4 at a time. Keys come from the local store tree.
 # STORE selects the prefix under each AOI (default chronozarr); ROOT overrides the local tree.
 set -euo pipefail
-BUCKET="${BUCKET:-tileripper-stores}"
+BUCKET="${BUCKET:-chronozarr-stores}"
 STORE="${STORE:-chronozarr}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ROOT="${ROOT:-$REPO_ROOT/data/stores}"

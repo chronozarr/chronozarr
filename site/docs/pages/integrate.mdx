@@ -31,7 +31,7 @@ npm install chronozarr
 ```js
 import { openStore } from 'chronozarr'
 
-const store = await openStore('https://data.tileripper.com/ucayali_santa_maria/chronozarr-4')
+const store = await openStore('https://data.chronozarr.org/ucayali_santa_maria_v03')
 const lod = store.levels.length - 1
 const cell = await store.getCell(lod, 0, 0, 0)
 console.log(cell.data)
