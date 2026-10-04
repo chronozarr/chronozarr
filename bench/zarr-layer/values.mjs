@@ -13,7 +13,7 @@ const flag = (name, fallback) => {
   return i >= 0 ? args[i + 1] : fallback;
 };
 const times = flag('times', '0,2,3,40,41,60,80,100,101,102,116').split(',').map(Number);
-const store = 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-3';
+const store = 'https://data.chronozarr.org/ucayali_santa_maria/chronozarr-3';
 const bounds = [485650, 9142230, 513240, 9169880];
 const crs = 'EPSG:32718';
 const reference = JSON.parse(await readFile(path.join(import.meta.dirname, '../results/pixel-reference-L0-r1388-c1380.json'), 'utf8'));

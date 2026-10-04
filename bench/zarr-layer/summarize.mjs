@@ -34,17 +34,12 @@ for (const source of sources) {
       files[profile] = JSON.parse(await readFile(path.join(resultsDir, `zarr-layer-vs-chronozarr-${source}-${profile}.json`), 'utf8'));
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
-      // Preserve access to measurements recorded before the viewer rename.
-      try {
-        files[profile] = JSON.parse(await readFile(path.join(resultsDir, `zarr-layer-vs-${'tile' + 'ripper'}-${source}-${profile}.json`), 'utf8'));
-        for (const run of files[profile].runs) if (run.tool === 'tile' + 'ripper') run.tool = 'chronozarr';
-      } catch (legacyError) { if (legacyError.code !== 'ENOENT') throw legacyError; }
     }
   }
   const available = PROFILES.filter((p) => files[p]);
   if (available.length === 0) continue;
   const select = (profile, tool, mode) => files[profile].runs.filter((r) => r.tool === tool && r.mode === mode);
-  const label = source === 'remote' ? 'published store (data.tileripper.com)' : 'same files, local range server';
+  const label = source === 'remote' ? 'published store (data.chronozarr.org)' : 'same files, local range server';
 
   out.push(`### Cold open, level 1, 9 cells: ${label}`, '', 'Median over repetitions, range in parentheses. Burst and paced runs both open the store the same way and are pooled.', '');
   out.push(...header(['link', 'tool', 'runs', 'time to first complete frame', 'of which until the shard-index reads are done', 'requests', 'MB']));

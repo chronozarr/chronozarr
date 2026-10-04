@@ -16,7 +16,7 @@ const flag = (name, fallback) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : fallback;
 };
-const store = args.find((a) => /^https?:/.test(a)) ?? 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-3';
+const store = args.find((a) => /^https?:/.test(a)) ?? 'https://data.chronozarr.org/ucayali_santa_maria/chronozarr-3';
 const zoom = Number(flag('zoom', 12));
 const time = Number(flag('time', 60));
 const timeoutMs = Number(flag('timeout', 90000));

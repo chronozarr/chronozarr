@@ -1,4 +1,5 @@
 {
+ "note": "Measured against the previous host name for this R2 bucket (same bucket contents); the host is now data.chronozarr.org.",
  "source": "remote",
  "profile": "natural",
  "store": "ucayali_santa_maria/chronozarr-3",
@@ -7,7 +8,7 @@
  "steps": 20,
  "runs": [
   {
-   "tool": "tileripper",
+   "tool": "chronozarr",
    "source": "remote",
    "profile": "natural",
    "mode": "burst",
@@ -832,7 +833,7 @@
    "messages": []
   },
   {
-   "tool": "tileripper",
+   "tool": "chronozarr",
    "source": "remote",
    "profile": "natural",
    "mode": "paced",
@@ -2136,7 +2137,7 @@
    "messages": []
   },
   {
-   "tool": "tileripper",
+   "tool": "chronozarr",
    "source": "remote",
    "profile": "natural",
    "mode": "burst",
@@ -2961,7 +2962,7 @@
    "messages": []
   },
   {
-   "tool": "tileripper",
+   "tool": "chronozarr",
    "source": "remote",
    "profile": "natural",
    "mode": "paced",
@@ -3307,7 +3308,7 @@
    "messages": []
   },
   {
-   "tool": "tileripper",
+   "tool": "chronozarr",
    "source": "remote",
    "profile": "natural",
    "mode": "burst",
@@ -4132,7 +4133,7 @@
    "messages": []
   },
   {
-   "tool": "tileripper",
+   "tool": "chronozarr",
    "source": "remote",
    "profile": "natural",
    "mode": "paced",
