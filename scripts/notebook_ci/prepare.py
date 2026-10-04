@@ -43,7 +43,6 @@ def main():
             transform=[100, 0, 300000, 0, -100, 4000000],
             bands=[{"name": "wse", "units": "m"}],
             mask=mask,
-            encoding="none",
             chunk_size=128,
             n_lods=1,
         )

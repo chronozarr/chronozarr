@@ -64,7 +64,7 @@ def verify(manifest: Path, store_path: Path, plain_path: Path, output: Path) -> 
             "dates": [row["datetime"] for row in rows],
             "shape": list(store.levels[0].shape),
             "valid_fractions": [float(v.mean()) for v in source_valid],
-            "encoding": store.attrs.temporal.encoding,
+            "spec_version": store.attrs.spec_version,
             "checks": {
                 "stored_values": "exact",
                 "validity_masks": "exact",

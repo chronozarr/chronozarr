@@ -63,7 +63,6 @@ def main():
             transform=[dx, 0, float(x[0] - dx / 2), 0, dy, float(y[0] - dy / 2)],
             bands=bands,
             mask=np.stack(masks),
-            encoding="none",
             n_lods=3,
             provenance={
                 "sources": [r["source"] for r in records],
