@@ -1,4 +1,10 @@
 [
-  { "name": "Ucayali River, Peru (Santa María reach)", "url": "https://data.tileripper.com/ucayali_santa_maria/chronozarr-4" },
-  { "name": "PNG frames demo (RGB + alpha, 2019–2021)", "url": "https://data.tileripper.com/ucayali_santa_maria/png-1" }
+  {
+    "name": "Ucayali River, Peru (Santa Mar\u00eda reach)",
+    "url": "https://data.tileripper.com/ucayali_santa_maria_v03"
+  },
+  {
+    "name": "PNG frames demo (RGB + alpha, 2019\u20132021)",
+    "url": "https://data.tileripper.com/ucayali_santa_maria/png-v03"
+  }
 ]

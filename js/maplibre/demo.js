@@ -5,7 +5,7 @@ import * as maplibregl from 'maplibre-gl';
 import { makeTimeFormatter } from '../shared/products.js';
 import { ChronozarrLayer } from './layer.js';
 
-const DEFAULT_STORE = 'https://data.tileripper.com/ucayali_santa_maria/chronozarr-4';
+const DEFAULT_STORE = 'https://data.tileripper.com/ucayali_santa_maria_v03';
 const params = new URLSearchParams(location.search);
 const storeUrl = params.get('store') ?? DEFAULT_STORE;
 const $ = (id) => document.getElementById(id);
