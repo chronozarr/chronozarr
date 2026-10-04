@@ -119,8 +119,8 @@ def migrate(source: LegacySource, out: Path, progress: Any = None) -> EncodeRepo
         root = zarr.open_group(out, mode="r+", use_consolidated=False)
         for k, original in enumerate(source.data):
             group = schema.get_group(root, str(k), "destination")
-            # Drop any embedded child consolidated copy before updating its arrays.
-            group.update_attributes(
+            # copytree carries v0.2 attributes; replace each node rather than merge them.
+            group.attrs.put(
                 schema.parse_level_attrs(source.groups[k].attrs.asdict(), "legacy").to_attrs()
             )
             attrs = schema.parse_level_attrs(group.attrs.asdict(), "destination")
@@ -155,7 +155,12 @@ def migrate(source: LegacySource, out: Path, progress: Any = None) -> EncodeRepo
                         source.info.nodata if name == source.meta["variable"] else None,
                         dimensions=dims,
                     )
-                    array.update_attributes(new_attrs)
+                    array.attrs.put(new_attrs)
+            for name in ("time", "band", "x", "y"):
+                coordinate_attrs: dict[str, Any] = {"_ARRAY_DIMENSIONS": [name]}
+                if name == "time":
+                    coordinate_attrs.update(units=schema.TIME_UNITS, calendar=schema.TIME_CALENDAR)
+                schema.get_array(group, name, "destination").attrs.put(coordinate_attrs)
             summaries.append(
                 schema.LevelSummary(
                     str(k),
@@ -207,7 +212,8 @@ def migrate(source: LegacySource, out: Path, progress: Any = None) -> EncodeRepo
                     )
                     values[r, c] = np.clip(total / count / 10000, 0, 1) if count else 0
             vol[:] = values
-        root.update_attributes(
+            vol.attrs.put({"_ARRAY_DIMENSIONS": ["row", "col"]})
+        root.attrs.put(
             schema.RootAttrs(
                 meta, tuple(schema.LevelRef(str(k), meta.crs) for k in range(len(summaries)))
             ).to_attrs()
