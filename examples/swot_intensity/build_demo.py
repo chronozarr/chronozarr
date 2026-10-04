@@ -78,7 +78,6 @@ def main():
             transform=list(transform)[:6],
             bands=bands,
             mask=np.stack(masks),
-            encoding="none",
             n_lods=3,
             provenance={
                 "sources": [r["path"] for r in records],

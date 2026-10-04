@@ -31,7 +31,7 @@ def run(root: Path) -> None:
             writer.writerows(subset)
     target = root / "series"
     convert(source / "first-eleven.csv", target)
-    convert(source / "last-date.csv", root / "last-date", encoding="none")
+    convert(source / "last-date.csv", root / "last-date")
     old = chronozarr.open_store(target)
     old_times = old.times.copy()
     before = {

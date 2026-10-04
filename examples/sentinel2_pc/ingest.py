@@ -175,9 +175,8 @@ def encode(mosaic_dir: Path, store_dir: Path) -> None:
         provenance=PROVENANCE,
     )
     logger.info(
-        "Encoded %d levels (%s): %.2f MB in %d files, %.1fs -> %s",
+        "Encoded %d levels (true values): %.2f MB in %d files, %.1fs -> %s",
         len(report.levels),
-        report.encoding,
         report.total_bytes / 1e6,
         report.n_files,
         time.perf_counter() - t0,

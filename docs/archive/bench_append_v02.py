@@ -1,7 +1,9 @@
-"""Measure what appending one date to a chronozarr store costs, on real monthly mosaics.
+"""Historical v0.2 benchmark: run with a pinned v0.2 checkout/environment.
+
+Measure what appending one date to a chronozarr store costs, on real monthly mosaics.
 
 Reads data/mosaics/<aoi>/YYYY-MM.npz (the files `reencode_aoi.py` reads). For each layout
-(whole-axis shard, shard_time=12, unsharded) with true stored values it builds a store
+(whole-axis shard, shard_time=12, unsharded) and encoding (auto, star-delta) it builds a store
 from the first months, appends the next months one at a time, and records per operation: wall
 seconds and peak RSS (each operation runs in its own process), the objects and bytes written
 (file sizes, mtimes and sha256 before and after), what `aws s3 sync` and `aws s3 sync
@@ -11,7 +13,8 @@ every step the store must validate and every timestep must equal its source bit 
 Usage:
     uv run python scripts/bench_append.py run --work-dir /tmp/append-bench
     uv run python scripts/bench_append.py run --work-dir /tmp/append-bench --base-months 115 \
-        --layouts whole-axis --encodings none          # the production-sized store
+        --layouts whole-axis --encodings auto          # the production-sized store
+    uv run python scripts/bench_append.py reference-cost  # frozen versus nearest references
 """
 
 from __future__ import annotations
@@ -19,10 +22,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import resource
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -32,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import reencode_aoi as live
 
 import chronozarr
+from chronozarr import schema
 from chronozarr.append import append
 
 MOSAICS = live.DATA / "mosaics"
@@ -58,19 +64,22 @@ def child_build(args: argparse.Namespace) -> dict:
     paths = live.mosaic_paths(MOSAICS / args.aoi, args.base_months)
     grid = live.read_grid(paths[0])
     started = time.perf_counter()
-    chronozarr.encode(
+    report = chronozarr.encode(
         live.iter_mosaics(paths, grid),
         args.store,
         times=live.mosaic_times(paths),
         bands=live.s2_bands(grid.band_names),
         crs=f"EPSG:{grid.epsg}",
         transform=grid.transform,
+        encoding=args.encoding,
+        anchor_interval=6,
         provenance=live.PROVENANCE,
         **LAYOUTS[args.layout],
     )
     return {
         "seconds": time.perf_counter() - started,
-        "encoding": "none",
+        "encoding": report.encoding,
+        "selection_ratio": None if report.selection is None else report.selection.ratio,
         "peak_rss_mb": peak_rss_mb(),
     }
 
@@ -214,6 +223,31 @@ def view_requests(store: Path, t: int) -> dict:
     }
 
 
+def avoided_rewrite(store: Path) -> dict:
+    """What the nearest-anchor rule would rewrite when the next anchor arrives (star-delta).
+
+    Appending timestep n to a store of n timesteps makes the anchor at n visible, and a fresh
+    encode of n + 1 timesteps would point the tail of the last interval at it. Those timesteps
+    hold residuals against the old anchor in published objects; the rule would rewrite them.
+    """
+    opened = chronozarr.open_store(store)
+    temporal = opened.attrs.temporal
+    if temporal.encoding != schema.STAR_DELTA:
+        return {}
+    n = len(opened.times)
+    _, fresh = schema.compute_anchor_schedule(n + 1, temporal.anchor_interval)
+    flipped = sorted(t for t, a in temporal.delta_reference.items() if fresh[t] != a)
+    shard_time = opened.levels[0].shard_time
+    affected = {t if shard_time is None else t // shard_time for t in flipped}
+    objects = size = 0
+    for path in sorted(store.rglob("*")):
+        key = str(path.relative_to(store))
+        if path.is_file() and "/data/c/" in key and int(key.split("/")[3]) in affected:
+            objects += 1
+            size += path.stat().st_size
+    return {"flipped_timesteps": flipped, "objects": objects, "mb": size / MB}
+
+
 # --- Driver -------------------------------------------------------------------------------------
 
 
@@ -233,6 +267,7 @@ def run(args: argparse.Namespace) -> None:
                 store=store,
                 base_months=args.base_months,
                 layout=layout,
+                encoding=encoding,
             )
             verify(store, args.base_months, args.aoi)
             state = snapshot(store)
@@ -245,6 +280,7 @@ def run(args: argparse.Namespace) -> None:
                     "store_mb": sum(v[0] for v in state.values()) / MB,
                     "n_objects": len(state),
                 },
+                "avoided": avoided_rewrite(store),
                 "views_before": [view_requests(store, t) for t in args.view_steps],
                 "appends": [],
             }
@@ -270,6 +306,85 @@ def run(args: argparse.Namespace) -> None:
     print(f"wrote {out}")
 
 
+# --- Frozen versus nearest references ---------------------------------------------------------
+
+
+def cell_windows(shape: tuple[int, int, int], cs: int = 512) -> Iterator[tuple[slice, slice]]:
+    rows, cols = schema.grid_shape(shape[1], shape[2], cs)
+    for r in range(rows):
+        for c in range(cols):
+            yield slice(r * cs, (r + 1) * cs), slice(c * cs, (c + 1) * cs)
+
+
+def reference_cost(args: argparse.Namespace) -> None:
+    """Compressed bytes of level-0 chunks under the nearest rule and under the preceding anchor.
+
+    An append-built store gives every new timestep the preceding anchor, because the next anchor
+    does not exist yet; a fresh encode gives the upper half of each interval the next anchor.
+    Only those timesteps differ. Sizes use zstd level 5 on the same (band, y, x) chunks the store
+    holds, the way the encoder measures them.
+    """
+    import numcodecs
+
+    paths = live.mosaic_paths(MOSAICS / args.aoi)
+    print(f"loading {len(paths)} months", flush=True)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        months = list(pool.map(lambda p: np.load(p, allow_pickle=False)["bands"], paths))
+    windows = list(cell_windows(months[0].shape))
+    n_time = len(months)
+    codec = numcodecs.Zstd(level=5)
+
+    def size(array: np.ndarray) -> int:
+        return len(codec.encode(np.ascontiguousarray(array)))
+
+    results = []
+    for interval in args.intervals:
+        _, nearest = schema.compute_anchor_schedule(n_time, interval)
+        preceding = {t: t - t % interval for t in nearest}
+        affected = sorted(t for t in nearest if nearest[t] != preceding[t])
+        jobs = [(w, t) for w in range(len(windows)) for t in range(n_time)]
+
+        def measure(
+            job: tuple[int, int], nearest=nearest, preceding=preceding, affected=affected
+        ) -> tuple:
+            w, t = job
+            ys, xs = windows[w]
+            now = months[t][:, ys, xs]
+            plain = size(now)
+            if t not in nearest:
+                return plain, plain, plain
+            near = size(now - months[nearest[t]][:, ys, xs])
+            prev = size(now - months[preceding[t]][:, ys, xs]) if t in affected else near
+            return plain, near, prev
+
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
+            sizes = list(pool.map(measure, jobs))
+        plain_all = sum(s[0] for s in sizes)
+        near_all = sum(s[1] for s in sizes)
+        in_affected = [s for (w, t), s in zip(jobs, sizes, strict=True) if t in affected]
+        near_aff = sum(s[1] for s in in_affected)
+        prev_aff = sum(s[2] for s in in_affected)
+        plain_aff = sum(s[0] for s in in_affected)
+        result = {
+            "interval": interval,
+            "months": n_time,
+            "cells": len(windows),
+            "affected_timesteps": len(affected),
+            "level0_plain_mb": plain_all / MB,
+            "level0_star_delta_nearest_mb": near_all / MB,
+            "star_delta_over_plain": near_all / plain_all,
+            "affected_plain_mb": plain_aff / MB,
+            "affected_nearest_mb": near_aff / MB,
+            "affected_preceding_mb": prev_aff / MB,
+            "affected_increase_pct": 100 * (prev_aff - near_aff) / near_aff,
+            "store_increase_pct": 100 * (prev_aff - near_aff) / near_all,
+        }
+        results.append(result)
+        print(json.dumps(result), flush=True)
+    if args.out:
+        args.out.write_text(json.dumps(results, indent=1))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -280,9 +395,17 @@ def main() -> None:
     run_cmd.add_argument("--base-months", type=int, default=12)
     run_cmd.add_argument("--appends", type=int, default=2)
     run_cmd.add_argument("--layouts", nargs="+", choices=list(LAYOUTS), default=list(LAYOUTS))
-    run_cmd.add_argument("--encodings", nargs="+", choices=["none"], default=["none"])
+    run_cmd.add_argument(
+        "--encodings", nargs="+", choices=["auto", "star-delta"], default=["auto", "star-delta"]
+    )
     run_cmd.add_argument("--view-steps", type=int, nargs="+", default=[5, 11])
     run_cmd.set_defaults(func=run)
+
+    cost = sub.add_parser("reference-cost", help="frozen versus nearest delta references")
+    cost.add_argument("--aoi", default="ucayali_santa_maria")
+    cost.add_argument("--intervals", type=int, nargs="+", default=[6, 12])
+    cost.add_argument("--out", type=Path, default=None)
+    cost.set_defaults(func=reference_cost)
 
     child = sub.add_parser("child")
     child.add_argument("op", choices=["build", "append"])

@@ -490,11 +490,7 @@ def main() -> None:
 
     floored = sum(r.floored for r in rows)
     raw_bytes = len(kept) * 2 * grid.shape[0] * grid.shape[1] * 2
-    print(f"\nencoding: {report.encoding}; codec {report.codec} level {report.level}")
-    if report.selection:
-        print(f"  auto selection: {report.selection}")
-    else:
-        print("  no auto measurement (int16 stores are always written plain; spec 4.3)")
+    print(f"\ntrue values; codec {report.codec} level {report.level}")
     print(f"levels: {len(report.levels)}")
     for lvl in report.levels:
         print(

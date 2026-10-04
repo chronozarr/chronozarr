@@ -20,7 +20,7 @@
 | `js/test/decoder-v03.test.js` | 88, 110 | Migration/rejection fixtures or assertions that reconstruction is absent; the cache-test URL is an arbitrary identifier. |
 | `js/test/maplibre-shader.test.js` | 15 | Migration/rejection fixtures or assertions that reconstruction is absent; the cache-test URL is an arbitrary identifier. |
 | `js/test/viewer-renderer.test.js` | 21 | Migration/rejection fixtures or assertions that reconstruction is absent; the cache-test URL is an arbitrary identifier. |
-| `scripts/bench_append.py` | 6, 75, 227, 229, 231, 238, 239, 320, 322, 323, 342, 399 | Historical v0.2 experiment; header requires a pinned v0.2 checkout, not the v0.3 API. |
+| `docs/archive/bench_append_v02.py` (original script lines) | 6, 75, 227, 229, 231, 238, 239, 320, 322, 323, 342, 399 | Historical v0.2 experiment; header requires a pinned v0.2 checkout, not the v0.3 API. |
 | `site/README.md` | 51 | Explicitly historical observations or recorded v0.2 result keys, preserved as evidence. |
 | `site/scripts/sync-content.mjs` | 28, 31 | SVG alignment or URL fragments, unrelated to temporal storage. |
 | `spec/CHRONOZARR.md` | 366, 396, 398, 399, 401, 402 | Changes table or explicit unsupported-version error example; describes removal or rejection. |
@@ -30,3 +30,21 @@
 | `tests/test_doctor.py` | 162 | Migration/rejection fixtures or assertions that reconstruction is absent; the cache-test URL is an arbitrary identifier. |
 | `tests/test_format_encoding.py` | 93, 100, 119, 129, 131, 132, 133, 143 | Migration/rejection fixtures or assertions that reconstruction is absent; the cache-test URL is an arbitrary identifier. |
 | `tests/test_stac.py` | 100 | Migration/rejection fixtures or assertions that reconstruction is absent; the cache-test URL is an arbitrary identifier. |
+
+## Python API follow-up for PR 17
+
+The initial word sweep missed removed keyword arguments and attributes. The follow-up searches `src`, `scripts`, `examples`, `tests` and `js` for `encoding=`, `.temporal`, `anchor_interval`, `report.encoding`, `temporal=`, `report.selection`, `compute_anchor_schedule`, `is_anchor`, `isAnchor`, `anchor_indices` and `delta_reference`.
+
+Current example and notebook calls use only v0.3 parameters. Remaining hits have these meanings:
+
+| Files | Reason |
+|---|---|
+| `src/chronozarr/_convert_legacy.py` | Reads v0.2 metadata only during explicit conversion. |
+| `src/chronozarr/backend.py`, `tests/test_convert.py` | xarray variable/Zarr encoding, unrelated to removed chronozarr arguments. |
+| `src/chronozarr/stac.py`, `_convert_manifest.py` | UTF-8 file/text encoding. |
+| `tests/test_format_encoding.py`, `test_schema.py`, `test_stac.py`, `js/test/decoder-v03.test.js` | Legacy migration fixtures and assertions that v0.3 rejects or omits old metadata. |
+| `examples/bring_your_data/large/results/verification.json` | Recorded historical v0.2 result; preserved unchanged. |
+
+The previous append benchmark's temporal APIs are preserved only in `docs/archive/bench_append_v02.py`; the executable script now benchmarks true-value appends. The shard-index location is normalized once because zarr 3.1.6 supplies an enum and zarr 3.4.0 supplies a string. A new installed-zarr sharded-read regression exercises the actual codec and index cache without mocking the type.
+
+Follow-up validation: 548 unit tests passed on Python 3.11/zarr 3.1.6 and Python 3.13/zarr 3.4.0. The installed-wheel notebook preparation passed on Python 3.11 with leafmap 0.63.1 and geemap 0.37.2. No lockfile or Python-requirement change was made.

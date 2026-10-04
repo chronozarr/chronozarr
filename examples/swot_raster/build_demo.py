@@ -145,7 +145,6 @@ def main():
             convert(
                 manifest,
                 args.out,
-                encoding="none",
                 shard=False,
                 n_lods=2,
                 resume=True,
