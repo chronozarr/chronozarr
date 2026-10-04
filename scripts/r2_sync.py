@@ -27,7 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1] / "data" / "stores"
-DEFAULT_BUCKET = "tileripper-stores"
+DEFAULT_BUCKET = "chronozarr-stores"
 DEFAULT_ENDPOINT = "https://c92bd6376ca1cda03e137c3e21ab5272.r2.cloudflarestorage.com"
 SHORT_TTL = "public, max-age=300"
 IMMUTABLE = "public, max-age=31536000, immutable"

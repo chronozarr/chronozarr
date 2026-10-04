@@ -141,7 +141,7 @@ def test_explicit_href_id_and_license(store_path, tmp_path):
 
 
 def test_default_id_from_paths_and_urls():
-    assert default_id("https://data.tileripper.com/ucayali_santa_maria/chronozarr-2") == (
+    assert default_id("https://data.chronozarr.org/ucayali_santa_maria/chronozarr-2") == (
         "ucayali_santa_maria-chronozarr-2"
     )
     assert default_id("/tmp/stores/sahara/chronozarr") == "sahara-chronozarr"

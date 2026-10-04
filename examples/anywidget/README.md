@@ -10,7 +10,7 @@ in a trusted local Jupyter notebook, VS Code notebook or compatible anywidget ho
 ```python
 import chronozarr
 
-movie = chronozarr.player("https://data.tileripper.com/ucayali_santa_maria/png-1")
+movie = chronozarr.player("https://data.chronozarr.org/ucayali_santa_maria/png-v03")
 movie
 ```
 

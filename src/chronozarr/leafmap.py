@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 from chronozarr.view import serve_store
 
-DEFAULT_STORE = "https://data.tileripper.com/ucayali_santa_maria/chronozarr-4"
+DEFAULT_STORE = "https://data.chronozarr.org/ucayali_santa_maria_v03"
 DEFAULT_READER = "https://chronozarr.org/maplibre/layer.js"
 
 
