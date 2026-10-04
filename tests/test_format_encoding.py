@@ -289,3 +289,73 @@ def test_unknown_ignorable_extension_does_not_block_reader(tmp_path):
     manifest.write_text(json.dumps(metadata))
     assert np.array_equal(chronozarr.open_store(path).read(1), truth[1])
     assert schema.validate(path) == []
+
+
+@pytest.mark.parametrize("shard", [False, True])
+def test_legacy_null_nodata_replaces_all_copied_attributes(tmp_path, shard):
+    source, destination = tmp_path / "old", tmp_path / "new"
+    truth = make_truth(3, 2, 9, 11).astype("uint8")
+    mask = np.ones((3, 9, 11), dtype="uint8")
+    coverage = np.full(mask.shape, 100, dtype="uint8")
+    chronozarr.encode(
+        make_da(truth),
+        source,
+        nodata=None,
+        mask=mask,
+        coverage=coverage,
+        volatility=True,
+        chunk_size=4,
+        n_lods=2,
+        shard=shard,
+    )
+    root = zarr.open_group(source, mode="r+", use_consolidated=False)
+    meta = dict(root.attrs["chronozarr"])
+    meta.update(spec_version="0.2.0", temporal={"encoding": "none"})
+    root.attrs.update(
+        {
+            "chronozarr": meta,
+            "multiscales": [{"datasets": [{"path": str(k)} for k in range(2)]}],
+            "legacy_only": "copied root",
+        }
+    )
+    for k in range(2):
+        group = schema.get_group(root, str(k), "old")
+        group.attrs["legacy_only"] = "copied group"
+        for name in ("data", "mask", "coverage", "time", "band", "x", "y"):
+            array = schema.get_array(group, name, "old")
+            array.attrs["legacy_only"] = "copied array"
+            if name in ("data", "mask", "coverage"):
+                array.attrs.update({"nodata": None, "temporal": {"encoding": "none"}})
+    schema.get_array(root, "volatility", "old").attrs["legacy_only"] = "copied metric"
+    consolidate(source)
+    convert(source, destination)
+    assert chronozarr.validate(destination) == []
+    migrated = zarr.open_group(destination, mode="r", use_consolidated=False)
+    assert migrated.attrs["chronozarr"]["nodata"] is None
+    assert set(migrated.attrs) == {"chronozarr", "multiscales", "zarr_conventions"}
+    for k in range(2):
+        group = schema.get_group(migrated, str(k), "new")
+        attrs = schema.parse_level_attrs(group.attrs.asdict(), "new")
+        assert group.attrs.asdict() == attrs.to_attrs()
+        for name in ("data", "mask", "coverage"):
+            array = schema.get_array(group, name, "new")
+            assert "nodata" not in array.attrs
+            assert array.attrs.asdict() == schema.data_array_attrs(
+                attrs.crs,
+                attrs.transform,
+                *array.shape[-2:],
+                None,
+                dimensions=schema.DIMENSIONS if name == "data" else schema.PLANE_DIMENSIONS,
+            )
+        for name in ("time", "band", "x", "y"):
+            expected = {"_ARRAY_DIMENSIONS": [name]}
+            if name == "time":
+                expected.update(units=schema.TIME_UNITS, calendar=schema.TIME_CALENDAR)
+            assert schema.get_array(group, name, "new").attrs.asdict() == expected
+    assert schema.get_array(migrated, "volatility", "new").attrs.asdict() == {
+        "_ARRAY_DIMENSIONS": ["row", "col"]
+    }
+    assert np.array_equal(chronozarr.open_store(destination).read(1), truth[1])
+    assert (
+        schema.get_array(schema.get_group(root, "0", "old"), "data", "old").attrs["nodata"] is None
+    )  # Source metadata stays untouched.
