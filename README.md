@@ -41,7 +41,7 @@ chronozarr keeps native projection and lossless values, serves a timestep as one
 
 ## Install
 
-This checkout prepares `chronozarr` 0.3.0 for PyPI and npm. Both packages publish from one `v*` tag.
+This checkout prepares `chronozarr` 0.3.1 for PyPI and npm. Both packages publish from one `v*` tag.
 
 ```bash
 pip install chronozarr              # Python package and CLI; extras: geo (GeoTIFF input), notebook (view()), netcdf, dask

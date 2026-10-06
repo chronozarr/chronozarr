@@ -27,7 +27,7 @@ recipe with Python 3.13, a fresh environment and newly downloaded observations.
 The Python converter and reader are also available as `chronozarr[geo]` on PyPI. The bundle
 script currently needs this checkout because it copies the complete viewer and vendored
 JavaScript dependencies. It does not need an npm install or a JavaScript build.
-The v0.3 npm package prepared in this checkout, `chronozarr` 0.3.0, contains the reader and MapLibre layer.
+The v0.3 npm package prepared in this checkout, `chronozarr` 0.3.1, contains the reader and MapLibre layer.
 The standalone viewer copy command is available only from a locally packed checkout
 build; see [self-host the packaged viewer](../../docs/viewer-distribution.md) for that
 checkout-independent workflow.
