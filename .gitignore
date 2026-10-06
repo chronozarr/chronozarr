@@ -51,3 +51,6 @@ HANDOVER.md
 
 # Generated test coverage
 .coverage*
+
+# Claude Code local state (launch configs, worktrees)
+.claude/

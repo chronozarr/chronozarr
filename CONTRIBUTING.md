@@ -1,7 +1,5 @@
 # Contributing
 
-Documentation follows [docs/STYLE.md](docs/STYLE.md).
-
 ## Checks
 
 ```bash

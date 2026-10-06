@@ -114,7 +114,6 @@ There is no build step and no runtime dependency. Examples are in [js/README.md]
 | Embedding the viewer in a page | [docs/embedding.md](docs/embedding.md) |
 | Comparison with PMTiles, Mapbox raster-array and zarr-layer | [docs/format-comparison.md](docs/format-comparison.md) |
 | Measurements and tested reader versions | [docs/evidence.md](docs/evidence.md) |
-| Writing style for these docs | [docs/STYLE.md](docs/STYLE.md) |
 
 ## Status
 
