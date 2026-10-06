@@ -23,10 +23,10 @@ pixel, chart it. Nothing was downloaded.
 | Floor binding | 116 of 117 months | 9 of 94 months |
 
 `auto` did not measure anything: for `int16` data the writer always uses `none` (spec 4.3), so there
-is no temporal compression ratio to report. Codec zstd level 5, 4 pyramid levels. Both `water-1` stores are sharded, (T, 2, 512, 512), the encoder default when they were built. `ucayali_santa_maria/water-2` is the Ucayali store rebuilt unsharded, the default now: 17,088 files, 1730.5 MB, and every value, mask plane and coverage plane identical to `water-1` at every level, timestep and cell. Lake Mead has no `water-2`.
-The table records the original sharded build. Ucayali was subsequently rebuilt and uploaded as `water-2` on 2026-10-01; Lake Mead remained local. The current demo catalog lists imagery (`chronozarr-4`) and PNG frames (`png-1`), not either water store. The water suffixes identify dataset revisions, not spec or package versions. The historical bucket budget is not a current capacity check.
+is no temporal compression ratio to report. Codec zstd level 5, 4 pyramid levels. Both `water-1` stores are sharded, (T, 2, 512, 512), the encoder default when they were built. `ucayali_santa_maria/water-2` was the Ucayali store rebuilt unsharded (the default now): 17,088 files, 1730.5 MB, and every value, mask plane and coverage plane identical to `water-1` at every level, timestep and cell. Lake Mead never had a `water-2`. `water-2` is not hosted: it was a v0.2-format store and was deleted from hosting on 2026-10-05. It can be rebuilt with the commands below, which now write v0.3.
+The table records the original sharded build. Ucayali was subsequently rebuilt and uploaded as `water-2` on 2026-10-01; Lake Mead remained local. The current demo catalog lists the v0.3 imagery store `ucayali_santa_maria_v03` and the v0.3 PNG frames `ucayali_santa_maria/png-v03`, not either water store. The water suffixes identify dataset revisions, not spec or package versions. The historical bucket budget is not a current capacity check.
 
-To preview the upload of an existing unsharded Ucayali build, the script takes its store name from `STORE`:
+To preview the upload of a locally rebuilt unsharded Ucayali store (`water-2` is not on the host), the script takes its store name from `STORE`:
 
 ```bash
 STORE=water-2 scripts/upload_stores.sh --dry-run ucayali_santa_maria   # 17,088 objects

@@ -12,9 +12,9 @@ https://<account id>.r2.cloudflarestorage.com, from R2_ENDPOINT or --endpoint.
 Cache-Control follows docs/hosting.md: every zarr.json object, each level's time/c/0 and the
 volatility chunk get max-age=300 (they change on append); every other object is immutable.
 
-    uv run --with boto3 python scripts/r2_sync.py upload ucayali_santa_maria/water-2
-    uv run --with boto3 python scripts/r2_sync.py upload ucayali_santa_maria/water-2 --dry-run
-    uv run --with boto3 python scripts/r2_sync.py delete ucayali_santa_maria/water-1 --yes
+    uv run --with boto3 python scripts/r2_sync.py upload ucayali_santa_maria/png-v03
+    uv run --with boto3 python scripts/r2_sync.py upload ucayali_santa_maria/png-v03 --dry-run
+    uv run --with boto3 python scripts/r2_sync.py delete ucayali_santa_maria/png-v03 --yes
 """
 
 from __future__ import annotations
