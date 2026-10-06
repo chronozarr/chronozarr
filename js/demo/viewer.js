@@ -7,6 +7,7 @@ import { ASSUMED_BANDWIDTH, ancestorCells, planCoarseStages, stageLeadMs } from 
 import { chooseFrame } from './frames.js';
 import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, chooseMovieLevel, describeReason, linkAllows, snapSpeed, wireRatio } from './playback.js';
 import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js';
+import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrubLevel, scrubAhead } from './scrub.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
 import { toggleExportPanel } from './export.js';
@@ -177,6 +178,10 @@ class Viewer {
   #viewTiming = null;
   #movieMemo = null;
   #playEpoch = 0;
+  /** How fast the user is scrubbing, the level chosen for the latest step ({key, lod, baseLod, ahead}), and the timer that ends the scrub. */
+  #scrub = new ScrubSpeed();
+  #scrubMemo = null;
+  #scrubTimer = 0;
   #seekPending = false;
   /** How long the store's metadata took to fetch: one round trip to the store, more or less. */
   #roundTripMs = 0;
@@ -252,6 +257,7 @@ class Viewer {
     this.#configurePool();
     this.#playback = this.#createPlayback();
     this.#movieMemo = null;
+    this.#clearScrub();
     this.#linear = { range: null, manual: false };
     this.#gaps = { visible: false, masks: new Map(), requested: new Set() };
     this.#drawGapOverlay();
@@ -398,6 +404,7 @@ class Viewer {
     if (next === this.t) return;
     if (!playing) {
       this.#beginView('time');
+      this.#noteScrubStep(Math.abs(next - this.t));
       if (Math.abs(next - this.t) > SEEK_DISTANCE) this.#dropSpeculativeFetches({ coarseLoop: true });
     }
     this.#direction = direction ?? (next > this.t ? 1 : -1);
@@ -410,6 +417,40 @@ class Viewer {
       this.requestRender();
       this.#scheduleUrlSync();
     }
+  }
+
+  /** A manual step of `distance` timesteps: it counts toward the scrub speed, and the scrub ends SCRUB_WINDOW_MS after the last one. */
+  #noteScrubStep(distance) {
+    this.#scrub.note(performance.now(), distance);
+    clearTimeout(this.#scrubTimer);
+    this.#scrubTimer = setTimeout(() => this.endScrub(), SCRUB_WINDOW_MS);
+  }
+
+  /** Whether a scrub is drawing at a coarser level than the normal one (a movie that starts takes over). */
+  get #scrubCoarser() {
+    return !this.#playing && this.#scrubMemo !== null && this.#scrubMemo.lod > this.#scrubMemo.baseLod;
+  }
+
+  /** Forget the scrub in progress and stop loading ahead of it. True if it was drawing at a coarser level than the normal one. */
+  #clearScrub() {
+    clearTimeout(this.#scrubTimer);
+    this.#scrubTimer = 0;
+    this.#scrub.reset();
+    const coarser = this.#scrubCoarser;
+    this.#scrubMemo = null;
+    if (!this.#playing) {
+      this.#bufferPump?.controller?.abort();
+      this.#bufferPump = null;
+    }
+    return coarser;
+  }
+
+  /**
+   * The scrub is over (the pointer was released, or no step for SCRUB_WINDOW_MS): draw at the normal level again, so
+   * the frame sharpens. A scrub that never left the normal level changes nothing.
+   */
+  endScrub() {
+    if (this.#clearScrub()) this.requestRender();
   }
 
   /**
@@ -642,12 +683,15 @@ class Viewer {
     const started = performance.now();
     const { store, t } = this;
     const lod = this.#targetLod();
+    if (this.#scrubCoarser) this.#fillBuffer([t, ...this.#scrubMemo.ahead]);
     this.#updateResHint();
     const cells = this.#visibleCells(lod);
     this.#view = { lod, cells: new Set(cells.map(([row, col]) => `${row}/${col}`)) };
     const missing = cells.filter(([row, col]) => !this.#cellReady(lod, row, col, t));
     const choice = chooseFrame({
       targetLod: lod,
+      // A scrub that draws coarser than the normal level still takes a complete frame of this timestep at any level up to it.
+      finestLod: this.#scrubCoarser ? this.#scrubMemo.baseLod : lod,
       coarsestLod: store.levels.length - 1,
       t,
       isReady: (frameLod, frameT) => (frameLod === lod && frameT === t ? missing.length === 0 : this.#frameReady(frameLod, frameT)),
@@ -904,9 +948,9 @@ class Viewer {
   }
 
   /**
-   * Playback wants these timesteps (the next ones, nearest first) in memory: load the ones that are not, a few at a
-   * time and at demand priority, in order, until they all are or playback stops. A new request replaces the list of a
-   * pump that is already running; the store shares the fetches.
+   * Playback (or a scrub drawing at a coarser level) wants these timesteps (the next ones, nearest first) in memory:
+   * load the ones that are not, a few at a time and at demand priority, in order, until they all are or playback
+   * stops or the scrub ends. A new request replaces the list of a pump that is already running; the store shares the fetches.
    */
   #fillBuffer(indices) {
     const pump = (this.#bufferPump ??= { wanted: [], running: false, controller: null });
@@ -936,10 +980,12 @@ class Viewer {
     } finally {
       pump.running = false;
     }
-    if (failed) {
+    if (failed && this.#playing) {
       console.error('playback: could not fill the buffer:', failed);
       this.#playback?.pause();
       this.#showError('Playback paused', `${failed.name}: ${failed.message}`, { toast: true, code: 'playback_failed' });
+    } else if (failed) {
+      console.error('scrub: could not load the timesteps ahead:', failed);
     }
   }
 
@@ -1022,15 +1068,15 @@ class Viewer {
    * The level to draw at. While a movie plays (or `asPlaying`), the first level from the normal one on where the
    * whole loop for the visible cells fits the decoded cache and, for a loop not in memory yet, where the link can
    * feed it (chooseMovieLevel), but never coarser than the level the viewer would pick at 4x zoom-out. A playing
-   * movie keeps its level until the camera, the speed or the playback state changes. A level pinned with
-   * lodOverride is left alone.
+   * movie keeps its level until the camera, the speed or the playback state changes. While the user scrubs fast
+   * the level is the one the link can feed at the scrub speed (see #scrubLod). A level pinned with lodOverride is left alone.
    */
   #targetLod({ asPlaying = this.#playing } = {}) {
     if (this.lodOverride !== null) return this.lodOverride;
     const baseLod = this.#normalLod();
+    const deepestLod = Math.max(baseLod, this.#lodForScale(this.camera.scale / 4));
     let choice = { lod: baseLod, reason: null, detail: null };
     if (asPlaying) {
-      const deepestLod = Math.max(baseLod, this.#lodForScale(this.camera.scale / 4));
       const key = `${this.#playEpoch}|${baseLod}|${deepestLod}|${this.#visibleCells(baseLod).length}|${this.#speed}`;
       if (this.#playing && this.#movieMemo?.key === key) choice = this.#movieMemo;
       else {
@@ -1050,31 +1096,50 @@ class Viewer {
       }
     }
     this.#movie = { baseLod, lod: choice.lod, reason: choice.reason, detail: choice.detail };
-    return choice.lod;
+    return asPlaying ? choice.lod : this.#scrubLod(baseLod, deepestLod);
+  }
+
+  /**
+   * The level to draw at while the user scrubs (a drag on the timeline, repeated arrow keys): the normal level when
+   * the link can feed it at the scrub speed, else the sharpest coarser level it can feed, never coarser than
+   * `deepestLod`, and the normal level when none can (chooseScrubLevel). Only the timesteps the scrub reaches in the next second count as cold
+   * (scrubAhead), so a scrub through what is in memory already stays sharp. The normal level when nobody scrubs.
+   * It is decided once per step, so chunks landing between two steps do not change the level of a frame that is
+   * on its way; the frame, the prefetch window and the eviction order all follow it through #view.
+   */
+  #scrubLod(baseLod, deepestLod) {
+    const speed = this.#scrub.speed(performance.now());
+    if (speed === 0) return baseLod;
+    const key = `${this.#scrub.latestAt}|${baseLod}|${deepestLod}|${this.#visibleCells(baseLod).length}`;
+    if (this.#scrubMemo?.key !== key) {
+      const ahead = scrubAhead({ t: this.t, direction: this.#direction, speed, count: this.store.times.length });
+      const linkOk = (candidate, stepsPerSecond) => this.#linkCheck(candidate, stepsPerSecond, ahead).ok;
+      this.#scrubMemo = { key, lod: chooseScrubLevel({ baseLod, deepestLod, speed, linkOk }), baseLod, ahead };
+    }
+    return this.#scrubMemo.lod;
   }
 
   /**
    * Whether the link can feed a movie at this level: the wire bytes of one step (the visible cells, at the
-   * compression the caches show) times the speed, for the part of the loop not in memory yet, against the
-   * measured bandwidth (see linkAllows). The numbers go in the hint's tooltip.
+   * compression the caches show) times the speed (the movie's, or `stepsPerSecond` for a scrub), for the part of the
+   * loop not in memory yet (of `timesteps`, the whole loop by default), against the measured bandwidth (see
+   * linkAllows). The numbers go in the hint's tooltip.
    */
-  #linkCheck(lod) {
+  #linkCheck(lod, stepsPerSecond = this.#playback?.effectiveStepsPerSecond ?? this.#speed, timesteps = Array.from({ length: this.store.times.length }, (_, t) => t)) {
     const { store } = this;
     const bandwidth = store.bandwidthEstimate();
     const cells = this.#visibleCells(lod);
     const level = store.levels[lod];
     const bytesPerPixel = level.chunkBytes / (level.chunkWidth * level.chunkHeight);
-    const count = store.times.length;
     let pixels = 0;
     let cold = 0;
     for (const [row, col] of cells) {
       const { width, height } = store.cellExtent(lod, row, col);
       pixels += width * height;
-      for (let t = 0; t < count; t++) if (!store.peekRaw(lod, row, col, t)) cold++;
+      for (const t of timesteps) if (!store.peekRaw(lod, row, col, t)) cold++;
     }
     const bytesPerStep = pixels * bytesPerPixel * wireRatio(readStats(store));
-    const stepsPerSecond = this.#playback?.effectiveStepsPerSecond ?? this.#speed;
-    const coldFraction = cells.length === 0 ? 0 : cold / (cells.length * count);
+    const coldFraction = cells.length === 0 || timesteps.length === 0 ? 0 : cold / (cells.length * timesteps.length);
     return { ok: linkAllows({ bytesPerStep, stepsPerSecond, coldFraction, bandwidth }), cells: cells.length, bytesPerStep, stepsPerSecond, coldFraction, bandwidth };
   }
 
