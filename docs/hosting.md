@@ -2,7 +2,7 @@
 
 A chronozarr store is a directory of static files. A host serves it with no server code. The host must return a file by path, answer byte-range requests and send CORS headers.
 
-The prefix of a store is its path in the bucket, for example `ucayali_santa_maria/chronozarr-4`.
+The prefix of a store is its path in the bucket, for example `my_aoi/chronozarr-2`.
 
 This page has a checklist, an upload procedure, recipes for four hosts and a procedure for appending. The requirements come from [spec/CHRONOZARR.md](../spec/CHRONOZARR.md) section 9. Measurements and dates are in [evidence.md](evidence.md).
 
@@ -94,8 +94,8 @@ The three phases work for every host. The script below runs them.
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-STORE=data/stores/ucayali_santa_maria/chronozarr-4   # local store directory
-PREFIX=ucayali_santa_maria/chronozarr-4              # new for every encode
+STORE=data/stores/my_aoi/chronozarr-2   # local store directory
+PREFIX=my_aoi/chronozarr-2              # new for every encode
 CC="public, max-age=31536000, immutable"
 
 # put() goes here, from the host recipe below
