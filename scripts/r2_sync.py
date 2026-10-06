@@ -14,7 +14,7 @@ volatility chunk get max-age=300 (they change on append); every other object is 
 
     uv run --with boto3 python scripts/r2_sync.py upload ucayali_santa_maria/png-v03
     uv run --with boto3 python scripts/r2_sync.py upload ucayali_santa_maria/png-v03 --dry-run
-    uv run --with boto3 python scripts/r2_sync.py delete <aoi>/<retired-store>   # prints counts; add --yes to delete
+    uv run --with boto3 python scripts/r2_sync.py delete <aoi>/<old-store>  # add --yes
 """
 
 from __future__ import annotations
