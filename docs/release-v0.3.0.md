@@ -1,5 +1,7 @@
 # v0.3.0 release preparation
 
+Status: executed 2026-10-03/05. Stores published, catalog switched, v0.2 prefixes deleted, v0.3.0 tagged and published. Hosting later moved to data.chronozarr.org (bucket `chronozarr-stores`). The text below is the historical preparation record.
+
 Local preparation only. No store upload, catalog update, deployment, remote deletion or tag push was performed. Python (`pyproject.toml`, `uv.lock`) and JavaScript (`js/package.json`, `js/package-lock.json`) already carry 0.3.0 in the existing implementation commits; no second version bump is needed.
 
 The interleaved local experiment establishes v0.3 = v0.2 within noise, with incomplete-frame and traffic-accounting limits described in the README. The remaining text hits are accounted for in [the audit](stale-text-v03.md). `.napkin.md` was updated locally and remains ignored as established by `.gitignore`.
