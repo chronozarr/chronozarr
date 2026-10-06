@@ -33,3 +33,16 @@ test('the coarsest level bounds the search', () => {
   assert.equal(choose([[4, 5]], { targetLod: 1, t: 5, coarsestLod: 3 }), null);
   assert.deepEqual(choose([[3, 5]], { targetLod: 3, t: 5 }), { lod: 3, t: 5, kind: 'target' });
 });
+
+test('a view that draws coarser than it could takes a complete finer frame of this timestep, as good as the target', () => {
+  assert.deepEqual(choose([[1, 5], [3, 5]], { targetLod: 2, finestLod: 1, t: 5 }), { lod: 1, t: 5, kind: 'target' }, 'sharper than asked for and complete');
+  assert.deepEqual(choose([[2, 5], [3, 5]], { targetLod: 2, finestLod: 1, t: 5 }), { lod: 2, t: 5, kind: 'target' }, 'the sharpest complete one wins, not the finest allowed');
+  assert.deepEqual(choose([[3, 5]], { targetLod: 2, finestLod: 1, t: 5 }), { lod: 3, t: 5, kind: 'fallback' }, 'coarser than the target is still a fallback');
+  assert.deepEqual(choose([[0, 5]], { targetLod: 2, finestLod: 1, t: 5 }), null, 'nothing finer than finestLod is looked at');
+  assert.deepEqual(choose([[1, 5]], { targetLod: 1, finestLod: 2, t: 5 }), { lod: 1, t: 5, kind: 'target' }, 'a finestLod coarser than the target changes nothing');
+});
+
+test('with a finestLod the previous frame is still the last resort, and only an earlier timestep', () => {
+  assert.equal(choose([], { targetLod: 2, finestLod: 1, t: 5, previous: { lod: 1, t: 5 } }), null);
+  assert.deepEqual(choose([[1, 4]], { targetLod: 2, finestLod: 1, t: 5, previous: { lod: 1, t: 4 } }), { lod: 1, t: 4, kind: 'previous' });
+});
