@@ -1,18 +1,24 @@
 # chronozarr
 
-Publish a raster time series as static files. Scrub it in a browser, and read the exact values in Python.
+chronozarr turns a raster time series into static files that you can put in a storage bucket. Anyone with the link can then open the series in a web browser and play or scrub through it like a video. Clicking a pixel shows its values over time. The same files open in Python with the exact values you wrote.
 
-[Live demo](https://chronozarr.org/demo/): 117 months of Sentinel-2 imagery over the Ucayali River, Peru, served from a bucket.
+It is for data that is hard to share today: years of monthly satellite composites, model output, or any stack of georeferenced rasters on one grid. The usual choices are to send the files, which can run to many gigabytes, or to run a tile server. A tile server has to be kept running, and it usually sends the browser images. chronozarr needs no server, and the browser receives the values themselves.
+
+[Live demo](https://chronozarr.org/demo/): 117 monthly Sentinel-2 composites (2015 to 2026) of the Ucayali River in Peru, read directly from a bucket.
 
 ## How it works
 
-A chronozarr store is a Zarr v3 group. It holds a pyramid of levels, and each level holds the full time series at one resolution. The arrays hold the stored values themselves.
+A chronozarr store is a Zarr v3 group arranged so that a browser can read it over plain HTTP.
 
-The store uses the zarr-conventions for the pyramid (`multiscales`), the CRS (`proj`) and the georeferencing (`spatial`). Because of this, GDAL 3.13, xarray and CarbonPlan zarr-layer open a store without chronozarr.
+The map is divided into square cells, 512 by 512 pixels by default. Each chunk holds one cell at one timestep, with all of its bands. To show a view, the browser downloads only the chunks for the visible cells at the current timestep.
 
-Any static host serves a store if it answers byte-range requests and sends CORS headers. There is no server code to run.
+The store also holds a pyramid: each level is a copy of the series at half the resolution of the level below it. When you zoom out, the viewer switches to a coarser level, so a view of the whole area still needs only a few chunks.
 
-The browser viewer decodes chunks in web workers and draws the raw bands on the GPU. Band math, such as NDVI, runs in the shader. A click on the map returns the stored values for that pixel.
+The chunks hold the stored numbers, such as uint16 reflectance, with a scale and offset per band for physical units. The viewer draws these numbers on the GPU and computes products such as true color or NDVI there. It also downloads the timesteps around the current one in the background, so stepping through time usually needs no new download.
+
+The layout follows the Zarr conventions for pyramids (`multiscales`), coordinate systems (`proj`) and georeferencing (`spatial`). This is why other tools can read a store without chronozarr installed: xarray, GDAL 3.13, and CarbonPlan's zarr-layer for MapLibre.
+
+To publish a store, upload it to any host that answers byte-range requests and sends CORS headers. Amazon S3, Cloudflare R2 and Google Cloud Storage all work, and there is no server code to run.
 
 ## Quickstart
 
