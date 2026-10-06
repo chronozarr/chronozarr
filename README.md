@@ -6,7 +6,7 @@ Publish a raster time series as static files. Scrub it in a browser, and read th
 
 ## How it works
 
-A chronozarr store is a Zarr v3 group. It holds a pyramid of levels, and each level holds the full time series at one resolution. Every array holds the true stored values, not rendered images.
+A chronozarr store is a Zarr v3 group. It holds a pyramid of levels, and each level holds the full time series at one resolution. The arrays hold the stored values themselves.
 
 The store uses the zarr-conventions for the pyramid (`multiscales`), the CRS (`proj`) and the georeferencing (`spatial`). Because of this, GDAL 3.13, xarray and CarbonPlan zarr-layer open a store without chronozarr.
 

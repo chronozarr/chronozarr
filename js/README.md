@@ -8,7 +8,7 @@ A chronozarr store is a Zarr v3 time series of rasters with a multiscale pyramid
 
 The package is plain ES modules. There is no build step and no runtime dependency: zarrita and numcodecs are vendored (see [Licenses](#licenses)).
 
-The v0.3 CDN URLs below become available after npm publication.
+The viewer loads nothing from a third-party host at runtime and uses no web font. The MapLibre demo page, `js/maplibre/index.html`, is the one exception: it loads maplibre-gl from a pinned CDN version.
 
 ## Install
 

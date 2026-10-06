@@ -22,7 +22,7 @@ The npm package contains the full viewer: the reader, the web workers, the codec
    cp -R /path/to/your/store published/store
    ```
 
-4. Upload `published/` to a static host. Open `index.html` over HTTP or HTTPS, not from disk.
+4. Upload `published/` to a static host, and open `index.html` through the host. A browser blocks the viewer's modules when the file opens from disk.
 
 The folder works at a domain root or under a subpath. Sharded stores need a host that answers byte-range requests.
 
@@ -53,4 +53,4 @@ Without `--store`, the landing page shows "No store selected". To choose a store
 ## Test the package
 
 Run `npm run test:package` from `js/`. The test packs the package and installs it in a new temporary folder. It checks that the copy command refuses to overwrite. It then renders a synthetic store from the copied viewer under a URL subpath. It checks the time controls, the pixel inspector and embedded rendering. It also checks that the page makes no outside requests and logs no browser errors.
-The test uses the development Playwright installation. It checks packaging, not speed.
+The test uses the development Playwright installation.

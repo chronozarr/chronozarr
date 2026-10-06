@@ -48,7 +48,7 @@ Doctor does not check the requirements below. Verify them with `curl` (section 4
 
 | Requirement | Spec level | Why it matters |
 |---|---|---|
-| An absent key returns `404`, not a fallback page with `200` | MUST | A missing shard, `mask` or `coverage` array is meaningful. Readers decode a missing shard as fill. A host that answers 200 with HTML breaks that. |
+| An absent key returns `404` | MUST | A missing shard, `mask` or `coverage` array is meaningful. Readers decode a missing shard as fill. A host that answers 200 with HTML breaks that. |
 | Chunk and shard responses carry no `Content-Encoding` | MUST | The shard index stores byte offsets into the stored object. A CDN that gzips or re-encodes the body moves the bytes. |
 | Shards fit the cacheable object size of the host or CDN (sharded stores) | SHOULD | Choose `shard_time` at encode time (section 5). An unsharded store has one chunk per object, about 2 MB. |
 | Metadata is uploaded last | SHOULD | See section 2. |
@@ -232,7 +232,7 @@ Apply it with `aws s3api put-bucket-cors --bucket "$BUCKET" --cors-configuration
    npx wrangler r2 bucket domain add "$BUCKET" --domain data.example.com --zone-id <zone id>
    ```
 
-   `deploy/r2-cors.json` uses the rule format of wrangler, not the S3 array:
+   `deploy/r2-cors.json` uses wrangler's rule format. The S3 CORS array format does not work here:
 
    ```json
    {
@@ -258,22 +258,36 @@ Apply it with `aws s3api put-bucket-cors --bucket "$BUCKET" --cors-configuration
 
 Wrangler needs about 2 seconds per object. An unsharded store has thousands of objects. For the first upload of an unsharded store, use an S3 client against the S3 endpoint of R2. Each later append uploads only the objects it wrote (section 7). Upload times are in [evidence.md](evidence.md#live-store-and-publishing).
 
-**Cache Rule.** Cloudflare does not cache extensionless objects by default. Responses then stay `cf-cache-status: DYNAMIC`. Create a Cache Rule with these settings:
+#### Cache Rule
 
-- Expression: `(http.host eq "data.example.com")`. In the builder, set Field to `Hostname` and Operator to `equals`.
-- Cache eligibility: Eligible for cache.
-- Edge TTL: Ignore cache-control header and use this TTL, 1 year.
-- Browser TTL: Override origin and use this TTL, 1 year.
+Cloudflare does not cache objects without a file extension by default. Chunk keys have none, so their responses stay `cf-cache-status: DYNAMIC` until you add a Cache Rule.
 
-This rule overrides both TTLs. That is safe only because prefixes are immutable (section 2). Keep setting `Cache-Control` on each object at upload. It still matters for clients of the bare bucket and for rules that respect the origin. The verification is in [evidence.md](evidence.md#cloudflare-cache-rule).
+Create the rule in the dashboard under Caching, then Cache Rules:
 
-**`Timing-Allow-Origin`.** Add a Transform Rule of type Modify Response Header. Use the same hostname expression. Set the action to Set static, with `Timing-Allow-Origin` = `*`.
+1. Set the field to `Hostname`, the operator to `equals`, and the value to your data hostname. The expression is `(http.host eq "data.example.com")`.
+2. Set Cache eligibility to Eligible for cache.
+3. Set Edge TTL to Use cache-control header if present, bypass cache if not.
+4. Under Caching, then Configuration, set Browser Cache TTL to Respect Existing Headers.
 
-**Match on the hostname.** Put the expression in the expression editor, or use the `Hostname` field. A URI Full wildcard value silently matches nothing, and every response stays `DYNAMIC`. The dashboard warns that the rule "may not apply to your traffic" for the R2 hostname. Ignore that warning.
+The upload script sets `Cache-Control` on every object (section 7 lists the classes). The rule follows those headers. Chunks stay cached for a year, and `zarr.json` expires after 300 seconds, so an append shows up within five minutes.
 
-**Object size and miss cost.** A cache miss on a range read pulls the whole object from R2. The cost grows with the object size. An unsharded store has chunks of about 2 MB, so a miss is cheap. If you shard, a smaller `shard_time` makes a miss cheaper. Cloudflare limits the size of a cacheable object by plan. Check the current figure. Measurements: [evidence.md](evidence.md#layout-choice).
+Step 3 also keeps `404` responses out of the cache. A missing chunk means fill, and an append later creates it.
 
-**`r2.dev`.** The public development URL (`wrangler r2 bucket dev-url enable`) is rate limited. Do not use it in production. Use it for a first check only.
+Step 4 matters. The zone default raises any shorter browser lifetime to four hours, so `zarr.json` would reach browsers with `max-age=14400`.
+
+Do not match on a URI Full wildcard. That expression matches nothing, and every response stays `DYNAMIC`. The dashboard warns that a hostname rule "may not apply to your traffic" for an R2 hostname. The warning is wrong for this case. The verification is in [evidence.md](evidence.md#cloudflare-cache-rule).
+
+#### `Timing-Allow-Origin`
+
+Add a Transform Rule of type Modify Response Header. Use the same hostname expression. Set the action to Set static, with `Timing-Allow-Origin` = `*`.
+
+#### Object size and miss cost
+
+A cache miss on a range read pulls the whole object from R2, so the cost grows with object size. An unsharded store has chunks of about 2 MB, and a miss is cheap. In a sharded store, a smaller `shard_time` makes a miss cheaper. Cloudflare limits the size of a cacheable object by plan. Measurements are in [evidence.md](evidence.md#layout-choice).
+
+#### `r2.dev`
+
+The public development URL (`wrangler r2 bucket dev-url enable`) is rate limited. Use it for a first check, and use a custom domain for anything public.
 
 ### 3.3 Google Cloud Storage
 
@@ -325,7 +339,7 @@ You need an account and upload access for the product. If the product page shows
 
 Choose one of two upload routes.
 
-**Route 1: the web UI.**
+#### Route 1: the web UI
 
 1. Open the product page.
 2. Click the lock icon, then Edit Mode.
@@ -334,7 +348,7 @@ Choose one of two upload routes.
 
 The UI does not order uploads, so step 4 is a separate action. A sharded store (`--shard`) has about a hundred objects, which is workable here. An unsharded store has thousands of objects, which is not.
 
-**Route 2: an S3 client through the proxy.**
+#### Route 2: an S3 client through the proxy
 
 1. Run `source-coop login` to get temporary credentials.
 2. Create an AWS profile named `source-coop`, as the Source docs describe.
@@ -390,12 +404,25 @@ Then run `chronozarr doctor "$URL"`.
 
 ## 5. Pitfalls
 
-- **Compression in front of the store.** A CDN, proxy or bucket setting can add `Content-Encoding` to chunk or shard objects. That breaks reads. The codec chain decodes a chunk, not the HTTP layer. A shard index holds offsets in stored bytes, and a `Range` header applies to the encoded representation. Turn compression off for the store path, or use content types that the host does not compress.
-- **Cloudflare rules that match nothing.** A rule whose expression sits in a URI wildcard value applies to no request. R2 responses then stay `DYNAMIC` and carry no `Timing-Allow-Origin` (section 3.2).
-- **Fallback pages.** A static host set up for single-page apps answers unknown paths with `200` and `index.html`. The store then seems to have every shard. Serve the store from a host or prefix that returns a real `404`.
-- **Rewriting a prefix.** With `immutable` and a one-year `max-age`, a rewritten object stays stale in browsers and CDNs for up to a year. Always re-encode to a new prefix. The only in-place change is an append, and it changes only the objects in section 7.
-- **Local testing.** `python -m http.server` ignores `Range`. A sharded store then reads whole shards, and doctor reports a failure. An unsharded store reads fine. For a sharded store, use `chronozarr.view(store)` from a notebook or any static server that supports ranges.
-- **Shard size.** A store is unsharded unless you pass `--shard`. With `--shard`, `shard_time` defaults to `n_time`, so one shard holds the whole time axis of a cell. Lower `shard_time` in two cases. First, when a shard would exceed the object size that the host or CDN caches or serves. Second, when a CDN miss on a shard is too slow (section 3.2). Keep a store that will grow unsharded (section 7).
+### Compression in front of the store
+
+A CDN, proxy or bucket setting can add `Content-Encoding` to chunk or shard objects. That breaks reads. A reader decodes each chunk with the codecs named in the store metadata and expects the stored bytes unchanged. A shard index holds offsets into the stored bytes, and a `Range` header counts bytes of the encoded response. Turn compression off for the store path, or use content types that the host does not compress.
+
+### Fallback pages
+
+A static host set up for single-page apps answers unknown paths with `200` and `index.html`. The store then seems to have every shard. Serve the store from a host or prefix that returns a real `404`.
+
+### Rewriting a prefix
+
+With `immutable` and a one-year `max-age`, a rewritten object stays stale in browsers and CDNs for up to a year. Always re-encode to a new prefix. The only in-place change is an append, and it changes only the objects in section 7.
+
+### Local testing
+
+`python -m http.server` ignores `Range`. A sharded store then reads whole shards, and doctor reports a failure. An unsharded store reads fine. For a sharded store, use `chronozarr.view(store)` from a notebook or any static server that supports ranges.
+
+### Shard size
+
+A store is unsharded unless you pass `--shard`. With `--shard`, `shard_time` defaults to `n_time`, so one shard holds the whole time axis of a cell. Lower `shard_time` in two cases. First, when a shard would exceed the object size that the host or CDN caches or serves. Second, when a CDN miss on a shard is too slow (section 3.2). Keep a store that will grow unsharded (section 7).
 
 ## 6. The live store
 
@@ -471,16 +498,7 @@ The trailing shard of a cell is the shard that holds its last timestep. When the
 
 ### Cloudflare
 
-The Cache Rule in section 3.2 overrides the TTLs on every URL of the host. Behind that rule, `data.chronozarr.org` serves a rewritten `zarr.json` or trailing shard from the edge for a year. Appends are then invisible there.
-
-A host needs a rule that respects the headers of the upload script. Choose one option:
-
-- Change Edge TTL to *Use cache-control header if present, use default TTL if not* (default 1 year). Change Browser TTL to *Respect origin TTL*.
-- Keep the override rule for immutable paths. Add a rule above it that matches the mutable objects.
-
-Path patterns cannot match trailing shards, because their time index grows. The header-based rule is the simple option.
-
-You can also purge the changed URLs after the upload. A purge does not replace the TTL change, because browsers keep their own copy.
+The Cache Rule in section 3.2 follows the headers in the table above, so an append needs no rule change. A purge is not needed either: `zarr.json` expires from the edge and from browsers within 300 seconds.
 
 ### Open viewers
 

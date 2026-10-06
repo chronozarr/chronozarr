@@ -82,7 +82,7 @@ Some warm stepping and jumping samples are incomplete. Their medians do not esta
 
 ## Viewer measurements
 
-The tables in this section used earlier format versions. They are dated evidence, not v0.3 release gates.
+The tables in this section were measured on earlier format versions. They are kept as dated measurements.
 
 ### Cold open and warm switch
 
@@ -194,22 +194,35 @@ Advice that follows from the numbers:
 
 ## Live store and publishing
 
-The demo catalog points to `ucayali_santa_maria_v03` (v0.3, unsharded, 5,893 objects) and the v0.3 PNG store `ucayali_santa_maria/png-v03`. Both are on `data.chronozarr.org`. The imagery store has 117 monthly Sentinel-2 composites and 6,451,772,327 bytes.
+The demo catalog lists two v0.3 stores on `data.chronozarr.org`, in the R2 bucket `chronozarr-stores`:
 
-History of the imagery prefix:
+- `ucayali_santa_maria_v03`: 117 monthly Sentinel-2 composites, unsharded, 5,893 objects, 6,451,772,327 bytes.
+- `ucayali_santa_maria/png-v03`: the PNG frames demo, sharded, 35 objects, 112,879,724 bytes.
 
-- `ucayali_santa_maria/chronozarr-3` was sharded, 93 objects. It is historical.
-- `ucayali_santa_maria/chronozarr-4` was plain encoding, unsharded, 5,893 objects. It replaced `chronozarr-3` on 2026-10-01. The values are bit-identical.
-- `ucayali_santa_maria_v03` replaced `chronozarr-4` in the catalog.
-- The suffixes identify dataset revisions, not format versions. `chronozarr-3` and `chronozarr-4` are both spec v0.2.0.
-- The v0.2 stores (`chronozarr-4`, `png-1`) are historical. v0.3 readers reject v0.2 stores. Use `chronozarr convert` or a pinned v0.2 reader for them.
+The R2 bucket uses `deploy/r2-cors.json` and the Cache Rule in [hosting.md](hosting.md#32-cloudflare-r2).
+
+History of the imagery store:
+
+| Date | Event |
+|---|---|
+| Before 2026-10-01 | `ucayali_santa_maria/chronozarr-3`, sharded, 93 objects, published on the previous data host. |
+| 2026-10-01 | `ucayali_santa_maria/chronozarr-4`, unsharded, 5,893 objects, replaced it. The values are bit-identical. |
+| 2026-10-03 | `ucayali_santa_maria_v03` replaced `chronozarr-4` in the catalog, converted with `chronozarr convert`. |
+| 2026-10-03 | Both v0.3 stores were copied to the bucket `chronozarr-stores` and served from `data.chronozarr.org`. All 5,928 objects matched by ETag and size. |
+| 2026-10-05 | The previous bucket was deleted, with the v0.2 stores and the v0.2 water store `ucayali_santa_maria/water-2`. |
+
+The suffixes `-3` and `-4` count dataset revisions. Both stores used spec v0.2.0. v0.3 readers reject v0.2 stores; convert them with `chronozarr convert`.
 
 Doctor results:
 
-- `chronozarr-4` upload check: 13 ok, 0 failures. The check is a recorded result, not a fresh deployment verification.
-- `chronozarr-2` on 2026-09-30: 15 ok, 2 info, 0 warnings. `edge cache` was HIT, `timing-allow-origin` was `*`, `cache-control` was `max-age=31536000`. This is historical host evidence, not a fresh check of the current prefix.
+| Store | Date | Result |
+|---|---|---|
+| `ucayali_santa_maria/chronozarr-2` | 2026-09-30 | 15 ok, 2 info, 0 warnings. `edge cache` HIT, `timing-allow-origin` `*`, `cache-control` `max-age=31536000`. |
+| `ucayali_santa_maria/chronozarr-4` | not recorded | 13 ok, 0 failures, at upload. |
+| `ucayali_santa_maria_v03` | 2026-10-03 | 13 ok, 3 info, 0 warnings. Decode matched at levels 0 to 3. |
+| `ucayali_santa_maria/png-v03` | 2026-10-03 | 12 ok, 2 info, 0 warnings. Decode matched at levels 0 and 1. |
 
-The host is R2 with `deploy/r2-cors.json` and the hostname rules in [hosting.md](hosting.md#32-cloudflare-r2).
+The info lines on 2026-10-03 reported `edge cache` DYNAMIC and no `Timing-Allow-Origin`. The Cache Rule was added on 2026-10-05.
 
 Publishing times through the R2 S3 API with `scripts/r2_sync.py`:
 
@@ -226,13 +239,19 @@ The `doctor` checklist in [hosting.md](hosting.md#1-checklist) was read from `sr
 
 ### Cloudflare cache rule
 
-Verified on `data.chronozarr.org` on 2026-09-30: `zarr.json` returned MISS then HIT with an `age` header. A `206` range request on a shard returned MISS then HIT.
+Checked on `data.chronozarr.org` on 2026-10-05, with the rule from hosting section 3.2 (Edge TTL follows `Cache-Control`; zone Browser Cache TTL respects existing headers):
 
-Overriding both TTLs is safe only because prefixes are immutable.
+| Object | First request | Second request | `Cache-Control` sent |
+|---|---|---|---|
+| `ucayali_santa_maria_v03/0/data/c/0/0/0/0` | MISS | HIT | `public, max-age=31536000, immutable` |
+| `ucayali_santa_maria_v03/zarr.json` | MISS | HIT | `public, max-age=300` |
+| A `bytes=0-1023` range on a chunk | MISS, `206` | HIT, `206` | `public, max-age=31536000, immutable` |
 
-Setting `Cache-Control` on each object at upload still matters for clients of the bare bucket and for any rule that respects the origin.
+Before the zone Browser Cache TTL was changed, the same `zarr.json` reached clients with `max-age=14400`. The zone default of four hours had replaced the 300-second origin value.
 
-A Cache Rule whose expression was pasted into a URI wildcard value matches nothing. R2 responses then stay `DYNAMIC` with no `Timing-Allow-Origin`. The dashboard warning that the rule "may not apply to your traffic" for the R2 hostname is a false alarm.
+Before 2026-10-03 the data host used a rule that overrode both TTLs with one year. Verified on 2026-09-30: `zarr.json` returned MISS then HIT with an `age` header, and a `206` range request on a shard returned MISS then HIT. That rule hid appends, and section 3.2 no longer recommends it.
+
+A Cache Rule whose expression sits in a URI wildcard value matches nothing. R2 responses then stay `DYNAMIC` with no `Timing-Allow-Origin`. For an R2 hostname, the dashboard warns that the rule "may not apply to your traffic". The rule applies regardless.
 
 ### Source Cooperative
 
@@ -283,60 +302,3 @@ The same mismatch can occur for up to the short lifetime when a CDN holds an old
 - In an unsharded store, that object is the chunk of timestep 0. It is immutable for good.
 - In a sharded store, it is time shard 0. It is immutable once a second time shard exists.
 - While a sharded store has one time shard, that object is the trailing shard with `max-age=300`. Doctor warns on a versioned prefix. The warning is expected then.
-
-## Comparison notes
-
-The tool-by-tool table is in [format-comparison.md](format-comparison.md). The old README summarized three tools:
-
-- PMTiles packs tiles, images or vectors, for one moment. Its tile scheme is Web Mercator in practice. It has no native time axis. Per-tile values are whatever the image encoding carries.
-- Mapbox raster-array (MRT) is multi-band numeric tiles with a time series. Its decoder code is published in mapbox-gl-js (`src/data/mrt`). The format is tied to Mapbox's tiling service and renderer.
-- CarbonPlan ndpyramid and zarr-layer put Zarr pyramids in MapLibre with a time selector. zarr-layer supports arbitrary CRS through proj4 reprojection. Each timestep is its own chunk fetch. The v0.3 fixture opens without metadata overrides (see Reader checks).
-
-chronozarr keeps native projection and lossless values. It serves a timestep as one plain `GET` of one chunk. It pre-stages a window of the time axis in the client, so a timestep switch costs zero bytes on the wire once cached.
-
-## JavaScript dependencies
-
-- The package is the ES modules under `js/chronozarr/` and `js/maplibre/`, published as they are. There is no build step and no runtime dependency.
-- `cd js && npm install` installs only the test tooling.
-- zarrita and its codecs are vendored under `js/vendor`: zarrita 0.7.5, @zarrita/storage 0.2.0, numcodecs 0.3.2, all MIT.
-- The viewer has no runtime third-party host. Each vendored file header records its version, license and the SHA-256 of the published file. The page loads no web font.
-- The MapLibre demo page `js/maplibre/index.html` is the exception by design. It loads maplibre-gl from a pinned CDN version.
-- Usage examples: [js/README.md](../js/README.md).
-- The checkout prepares `chronozarr` 0.3.1 for PyPI and npm. Both packages publish from one `v*` tag.
-- `examples/sentinel2_pc/ingest.py` records band metadata, a 0/1 coverage plane and provenance in the store. Its `--stac` flag also writes a static STAC Collection and Item.
-
-## Development checks
-
-```bash
-uv sync --extra dev --extra geo --extra netcdf --extra dask
-uv run python scripts/check_architecture.py
-uv run coverage run -m pytest -q -m unit
-uv run coverage report
-uv run coverage json
-uv run coverage xml
-npm ci --prefix js
-npm run test:coverage --prefix js
-npm run test:browser --prefix js
-```
-
-The architecture checker and `sentrux check .` share `.sentrux/rules.toml`. First-party imports must be acyclic. Shared writer and store modules must not depend on their callers. MapLibre and shared rendering must not depend on the demo.
-
-The dependency-free checker runs in CI. It includes deferred Python imports and static JavaScript imports and re-exports. Computed runtime imports are outside its scope.
-
-Python coverage measures every package module. It writes JSON and XML to `data/reports/coverage/python/`.
-
-Native Node coverage measures only modules loaded by the Node tests under `chronozarr`, `shared`, `maplibre` and `demo`. It does not measure the browser-only viewer or GPU execution. Browser tests verify those behaviors separately.
-
-CI retains both coverage reports for 14 days.
-
-For a before and after speed check on the same local fixture:
-
-```bash
-node scripts/audit_browser.mjs js data/spike/stress6x6 data/reports/browser-bench.json
-```
-
-The script uses headless Chromium with software WebGL, three cold runs and 20 switches. Its additional `warmFullyLoaded` measurement primes all timesteps with a 2 GiB cache, because the ordinary idle prefetch intentionally stops at 64 MiB. Inspect complete frames and bytes alongside timings. Local and loopback results do not measure CDN performance.
-
-## Stale text found in the old README
-
-The old README Status section began "v0.2 draft (spec version `0.2.0`; every v0.1 store is a valid v0.2 store and readers accept both)". The same README, [spec/CHRONOZARR.md](../spec/CHRONOZARR.md) and `pyproject.toml` describe v0.3.0 and package 0.3.1. The new README states v0.3.
