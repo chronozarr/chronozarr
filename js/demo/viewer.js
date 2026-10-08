@@ -7,7 +7,7 @@ import { ASSUMED_BANDWIDTH, ancestorCells, planCoarseStages, stageLeadMs } from 
 import { chooseFrame } from './frames.js';
 import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, chooseMovieLevel, describeReason, linkAllows, snapSpeed, wireRatio } from './playback.js';
 import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js';
-import { FILL_LOOKAHEADS, SCRUB_WINDOW_MS, ScrubSpeed, chooseScrubLevel, readyRun, scrubLevels, scrubNeed, stepsAhead } from './scrub.js';
+import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrubLevel, planScrubLoads, readyRun, scrubLevels, scrubNeed, stepsAhead } from './scrub.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
 import { toggleExportPanel } from './export.js';
@@ -152,8 +152,9 @@ class Viewer {
   /** The whole-loop prefetch at the coarsest useful level, {key, controller}, and that level (-1: none). */
   #coarseLoop = null;
   #coarseLoopLod = -1;
-  /** Fills the playback buffer, or the buffer of a scrub: {wanted, running, controller}. */
+  /** Fill the playback buffer, or the buffer of a scrub, at the level in use; the probe pump fills the next sharper level ahead of a scrub: {wanted, lod (null: the level in use), running, controller}. */
   #bufferPump = null;
+  #probePump = null;
   #frameStats = { painted: 0, fallback: 0, kept: 0 };
   #view = { lod: 0, cells: new Set() };
   #maxVisibleCells = 0;
@@ -438,7 +439,7 @@ class Viewer {
     this.#scrub.reset();
     const coarser = this.#scrubCoarser;
     this.#scrubMemo = null;
-    if (!this.#playing) this.#stopBufferPump();
+    if (!this.#playing) this.#stopBufferPumps();
     return coarser;
   }
 
@@ -946,12 +947,14 @@ class Viewer {
 
   /**
    * Playback or a scrub wants these timesteps (the next ones, nearest first) in memory: load the ones that are not, a
-   * few at a time and at demand priority, in order, until they all are or playback stops or the scrub ends. A new
-   * request replaces the list of a pump that is already running; the store shares the fetches.
+   * few at a time and at demand priority, in order, until they all are or playback stops or the scrub ends. They are
+   * loaded at the level in use, or at `lod` (the probe of a scrub). A new request replaces the list of a pump that is
+   * already running; the store shares the fetches.
    */
-  #fillBuffer(indices) {
-    const pump = (this.#bufferPump ??= { wanted: [], running: false, controller: null });
+  #fillBuffer(indices, { lod = null } = {}) {
+    const pump = lod === null ? (this.#bufferPump ??= { wanted: [], lod: null, running: false, controller: null }) : (this.#probePump ??= { wanted: [], lod, running: false, controller: null });
     pump.wanted = indices;
+    pump.lod = lod;
     if (pump.running) return;
     pump.running = true;
     pump.controller = new AbortController();
@@ -964,7 +967,7 @@ class Viewer {
     try {
       let previous = '';
       while (!signal.aborted) {
-        const lod = this.#targetLod();
+        const lod = pump.lod ?? this.#targetLod();
         const batch = pump.wanted.filter((t) => !this.#frameReady(lod, t)).slice(0, BUFFER_BATCH);
         const key = batch.join(',');
         // The same batch again means the cache cannot keep what was loaded: stop rather than load it forever.
@@ -986,10 +989,16 @@ class Viewer {
     }
   }
 
-  /** Stop filling the buffer of playback or of a scrub: what is in flight and wanted by no one else is cancelled. */
-  #stopBufferPump() {
+  /** Stop filling the buffer of playback or of a scrub, and the probe: what is in flight and wanted by no one else is cancelled. */
+  #stopBufferPumps() {
     this.#bufferPump?.controller?.abort();
     this.#bufferPump = null;
+    this.#stopProbe();
+  }
+
+  #stopProbe() {
+    this.#probePump?.controller?.abort();
+    this.#probePump = null;
   }
 
   /** The chunks of timestep t of every visible cell of a level, with their masks, at demand priority. */
@@ -1015,7 +1024,7 @@ class Viewer {
   }
 
   #abortBackground() {
-    this.#stopBufferPump();
+    this.#stopBufferPumps();
     this.#coarseLoop?.controller.abort();
     this.#coarseLoop = null;
     this.#wave?.controller.abort();
@@ -1128,14 +1137,18 @@ class Viewer {
   }
 
   /**
-   * Load ahead of a scrub, at demand priority so the next step does not cancel it: the timestep on screen and
-   * FILL_LOOKAHEADS lookaheads of the ones after it, at the level in use. A scrub with one level to choose from is
-   * left to the prefetch window.
+   * Load ahead of a scrub, at demand priority so the next step does not cancel it: the level in use, and, while that
+   * level has everything it is asked to hold, a probe of the next sharper one with what is spare, so that a step up
+   * can happen (planScrubLoads). The probe stops the moment the level in use has something to load again. A scrub with
+   * one level to choose from is left to the prefetch window.
    */
   #loadAheadOfScrub() {
-    const { levels, need } = this.#scrubMemo;
+    const { lod, levels, need } = this.#scrubMemo;
     if (levels.length < 2) return;
-    this.#fillBuffer([this.t, ...stepsAhead({ t: this.t, direction: this.#direction, count: this.store.times.length, limit: FILL_LOOKAHEADS * need })]);
+    const { primary, probe } = planScrubLoads({ t: this.t, direction: this.#direction, count: this.store.times.length, levels, lod, need, isReady: (candidate, step) => this.#frameReady(candidate, step) });
+    this.#fillBuffer(primary.steps);
+    if (probe) this.#fillBuffer(probe.steps, { lod: probe.lod });
+    else this.#stopProbe();
   }
 
   /**
@@ -2103,7 +2116,7 @@ class Viewer {
     const text = buffering ? `buffering ${ahead} / ${needed}` : '';
     if (hint.textContent !== text) hint.textContent = text;
     if (buffering) button.title = 'Buffering: playback starts when the next frames are loaded (Space to cancel)';
-    if (!playing) this.#stopBufferPump();
+    if (!playing) this.#stopBufferPumps();
     this.#updateSpeedUi();
   }
 

@@ -1,12 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  FILL_LOOKAHEADS,
   LOOKAHEAD_SECONDS,
   LOW_MARK,
   MIN_SPAN_MS,
+  PROBE_MAX_NEED,
   SCRUB_WINDOW_MS,
   ScrubSpeed,
   chooseScrubLevel,
+  planScrubLoads,
   readyRun,
   scrubLevels,
   scrubNeed,
@@ -262,3 +265,46 @@ test('a scrub: slowing down shortens the lookahead until a sharper level holds i
   assert.equal(step(150, 4, 3), 2, '6.7 steps/s: level 2 holds it, level 1 does not');
   assert.equal(step(300, 3, 2), 1, '3.3 steps/s: level 1 holds it');
 });
+
+/** `isReady` for frames in memory at each level over the timesteps `from` to `through` (inclusive); other levels have none. */
+const inMemory = (table) => (lod, step) => table[lod] !== undefined && step >= table[lod][0] && step <= table[lod][1];
+const plan = (options) => planScrubLoads({ t: 30, direction: 1, count: 117, levels: overview(), lod: 3, need: 5, isReady: inMemory({}), ...options });
+
+test('planScrubLoads: the timestep on screen and the next FILL_LOOKAHEADS lookaheads at the level in use, nearest first', () => {
+  const { primary } = plan({ lod: 2 });
+  assert.equal(primary.lod, 2);
+  assert.deepEqual(primary.steps, [30, ...Array.from({ length: FILL_LOOKAHEADS * 5 }, (_, i) => 31 + i)]);
+  assert.deepEqual(plan({ direction: -1, need: 3 }).primary.steps.slice(0, 4), [30, 29, 28, 27], 'the way the scrub is going');
+  assert.deepEqual(plan({ t: 115, need: 2 }).primary.steps, [115, 116], 'not past the end of the axis');
+});
+
+test('planScrubLoads: a probe of the next sharper level, for the lookahead only, once the level in use has all it is asked to hold', () => {
+  const filled = FILL_LOOKAHEADS * 5;
+  const level3 = { 3: [30, 30 + filled] };
+  assert.deepEqual(plan({ isReady: inMemory(level3) }).probe, { lod: 2, steps: [31, 32, 33, 34, 35] });
+  assert.deepEqual(plan({ lod: 2, isReady: inMemory({ 2: [30, 30 + filled] }) }).probe, { lod: 1, steps: [31, 32, 33, 34, 35] }, 'one level up from the one in use, not the sharpest');
+  assert.equal(plan({ isReady: inMemory({ 3: [30, 30 + filled - 1] }) }).probe, null, 'a step of the level in use is still to load: the link is its');
+  assert.equal(plan({ isReady: inMemory({ 3: [31, 30 + filled] }) }).probe, null, 'the timestep on screen is not in memory at it yet');
+  assert.equal(plan({ isReady: inMemory({ 3: [0, 116], 2: [0, 116] }), lod: 3 }).probe.steps.length, 5, 'the probe never reaches past the lookahead, however much is in memory');
+  assert.equal(plan({ lod: 1, isReady: inMemory({ 1: [30, 30 + filled] }) }).probe, null, 'the normal level has nothing sharper to probe');
+});
+
+test('planScrubLoads: a scrub that needs more ahead than the viewer loads ahead of it does not probe', () => {
+  const fast = (need) => plan({ need, isReady: inMemory({ 3: [0, 116] }) });
+  assert.notEqual(fast(PROBE_MAX_NEED).probe, null);
+  assert.equal(fast(PROBE_MAX_NEED + 1).probe, null, 'a sharper level could not get ahead of it');
+  assert.equal(fast(PROBE_MAX_NEED + 1).primary.lod, 3, 'the level in use is still loaded ahead');
+});
+
+test('planScrubLoads: the probe stops at the end of the axis with the level in use', () => {
+  const { primary, probe } = plan({ t: 114, need: 5, isReady: inMemory({ 3: [114, 116] }) });
+  assert.deepEqual(primary.steps, [114, 115, 116]);
+  assert.deepEqual(probe, { lod: 2, steps: [115, 116] });
+});
+
+test('planScrubLoads: nothing to wait for, nothing to probe', () => {
+  const idle = plan({ t: 116, need: 0, isReady: inMemory({ 3: [0, 116] }) });
+  assert.deepEqual(idle.primary, { lod: 3, steps: [116] });
+  assert.equal(idle.probe, null);
+});
+

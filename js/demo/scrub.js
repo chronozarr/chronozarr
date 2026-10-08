@@ -57,7 +57,10 @@ export class ScrubSpeed {
 /**
  * A level carries the scrub while the timesteps ahead that are in memory at it last this long at the scrub's speed:
  * the lookahead, long enough for the batch of timesteps in flight (BUFFER_BATCH, viewer.js) and one slow object to
- * land.
+ * land. It was chosen by measurement on the overview of the live store at an emulated 40 MB/s, a drag of 150 ms/step,
+ * two rounds each: 0.75, 1 and 1.5 s drew the same frames (level 1 on 8 to 13 of 115, level 2 on 101 to 108), and
+ * 1 s fetched the fewest level-1 chunks, 177 to 186 against 322 to 466 (the viewer without the probe fetched 133 to 146
+ * with its idle prefetch). Level 1 cannot be carried at that speed on that link, so those chunks are the probe's cost.
  */
 export const LOOKAHEAD_SECONDS = 1;
 
@@ -69,7 +72,7 @@ export const LOOKAHEAD_SECONDS = 1;
  */
 export const LOW_MARK = 1 / 3;
 
-/** The level in use is loaded this many lookaheads ahead of the scrub, so that it keeps covering one while the next batch of timesteps is on its way. */
+/** The level in use is loaded this many lookaheads ahead, so that it keeps covering one while the sharper level is probed. */
 export const FILL_LOOKAHEADS = 2;
 
 /** The timesteps after `t` that a scrub going `direction` (1 or -1) reaches, nearest first, at most `limit` of them, stopping at the ends of the axis. */
@@ -125,4 +128,30 @@ export function chooseScrubLevel({ levels, held = null, need, ready }) {
   if (ready(levels[at]) >= Math.ceil(LOW_MARK * need)) return levels[at];
   for (let i = at + 1; i < levels.length - 1; i++) if (ready(levels[i]) >= need) return levels[i];
   return levels.at(-1);
+}
+
+/**
+ * A scrub that needs more timesteps ahead than this is faster than the viewer can load ahead of it at any level but
+ * the coarse loop (the reader's idle prefetch horizon is 12 timesteps either side of t, decoder.js). It does not probe:
+ * a sharper level that cannot get ahead of the scrub is bytes for frames nobody sees.
+ */
+export const PROBE_MAX_NEED = 12;
+
+/**
+ * What to load for a scrub that is drawing at `lod`: the timestep on screen and as many ahead as FILL_LOOKAHEADS
+ * lookaheads at that level, nearest first, and the next sharper level of `levels` for the first `need` timesteps
+ * ahead: the probe that a step up waits for. The probe is spare capacity only:
+ * - it exists while the level in use has everything it is asked to hold, so it takes nothing the level in use still needs;
+ * - it reaches no further than the lookahead, and only for scrubs of at most PROBE_MAX_NEED timesteps of it.
+ * @param {{isReady: (lod: number, t: number) => boolean}} options  `isReady` says whether the complete frame of a level at a timestep is in memory
+ * @returns {{primary: {lod: number, steps: number[]}, probe: {lod: number, steps: number[]} | null}}
+ */
+export function planScrubLoads({ t, direction, count, levels, lod, need, isReady }) {
+  const ahead = stepsAhead({ t, direction, count, limit: FILL_LOOKAHEADS * need });
+  const full = isReady(lod, t) && readyRun(ahead, (step) => isReady(lod, step)) === ahead.length;
+  const sharper = levels[levels.indexOf(lod) - 1];
+  return {
+    primary: { lod, steps: [t, ...ahead] },
+    probe: sharper !== undefined && full && need > 0 && need <= PROBE_MAX_NEED ? { lod: sharper, steps: ahead.slice(0, need) } : null,
+  };
 }
