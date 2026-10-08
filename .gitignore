@@ -54,3 +54,9 @@ HANDOVER.md
 
 # Claude Code local state (launch configs, worktrees)
 .claude/
+
+# Cloudflare wrangler local state
+.wrangler/
+
+# Jupyter autosaves
+.ipynb_checkpoints/
