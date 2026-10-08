@@ -97,6 +97,7 @@ function bindTimelineInput(viewer) {
     viewer.goToTime(timeFromEvent(e));
   });
   const endScrub = () => {
+    if (scrubbing) viewer.endScrub();
     scrubbing = false;
   };
   window.addEventListener('pointermove', (e) => scrubbing && viewer.goToTime(timeFromEvent(e)));
