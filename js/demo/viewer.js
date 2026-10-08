@@ -7,7 +7,7 @@ import { ASSUMED_BANDWIDTH, ancestorCells, planCoarseStages, stageLeadMs } from 
 import { chooseFrame } from './frames.js';
 import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, chooseMovieLevel, describeReason, linkAllows, snapSpeed, wireRatio } from './playback.js';
 import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js';
-import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrubLevel, planScrubLoads, readyRun, scrubLevels, scrubNeed, stepsAhead } from './scrub.js';
+import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrubLevel, planScrubLoads, readyRun, savesData, scrubLevels, scrubNeed, stepsAhead } from './scrub.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
 import { toggleExportPanel } from './export.js';
@@ -1115,17 +1115,19 @@ class Viewer {
    * scrub is loaded already: the sharpest level with the next LOOKAHEAD_SECONDS of timesteps in memory, kept until
    * its buffer runs low (chooseScrubLevel), never coarser than `deepestLod`. The normal level when nobody scrubs.
    * It is decided once per step, so chunks landing between two steps do not change the level of a frame that is
-   * on its way; the frame, the prefetch window and the eviction order all follow it through #view.
+   * on its way; the frame, the prefetch window and the eviction order all follow it through #view. When the browser
+   * asks to save data (savesData), the scrub stays at the coarsest of those levels.
    */
   #scrubLod(baseLod, deepestLod) {
     const speed = this.#scrub.speed(performance.now());
     if (speed === 0) return baseLod;
-    const key = `${this.#scrub.latestAt}|${baseLod}|${deepestLod}|${this.#visibleCells(baseLod).length}`;
+    const saving = savesData(globalThis.navigator?.connection);
+    const key = `${this.#scrub.latestAt}|${baseLod}|${deepestLod}|${this.#visibleCells(baseLod).length}|${saving}`;
     if (this.#scrubMemo?.key !== key) {
       const levels = scrubLevels({ baseLod, deepestLod, cellCount: (lod) => this.#visibleCells(lod).length });
       const need = scrubNeed({ speed, t: this.t, direction: this.#direction, count: this.store.times.length });
-      const lod = chooseScrubLevel({ levels, held: this.#scrubMemo?.lod, need, ready: (candidate) => this.#readyAhead(candidate, need) });
-      this.#scrubMemo = { key, lod, baseLod, levels, need };
+      const lod = saving ? levels.at(-1) : chooseScrubLevel({ levels, held: this.#scrubMemo?.lod, need, ready: (candidate) => this.#readyAhead(candidate, need) });
+      this.#scrubMemo = { key, lod, baseLod, levels, need, saving };
     }
     return this.#scrubMemo.lod;
   }
@@ -1140,14 +1142,14 @@ class Viewer {
    * Load ahead of a scrub, at demand priority so the next step does not cancel it: the level in use, and, while that
    * level has everything it is asked to hold, a probe of the next sharper one with what is spare, so that a step up
    * can happen (planScrubLoads). The probe stops the moment the level in use has something to load again. A scrub with
-   * one level to choose from is left to the prefetch window.
+   * one level to choose from is left to the prefetch window. A scrub that saves data never probes.
    */
   #loadAheadOfScrub() {
-    const { lod, levels, need } = this.#scrubMemo;
+    const { lod, levels, need, saving } = this.#scrubMemo;
     if (levels.length < 2) return;
     const { primary, probe } = planScrubLoads({ t: this.t, direction: this.#direction, count: this.store.times.length, levels, lod, need, isReady: (candidate, step) => this.#frameReady(candidate, step) });
     this.#fillBuffer(primary.steps);
-    if (probe) this.#fillBuffer(probe.steps, { lod: probe.lod });
+    if (probe && !saving) this.#fillBuffer(probe.steps, { lod: probe.lod });
     else this.#stopProbe();
   }
 

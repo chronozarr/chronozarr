@@ -155,3 +155,16 @@ export function planScrubLoads({ t, direction, count, levels, lod, need, isReady
     probe: sharper !== undefined && full && need > 0 && need <= PROBE_MAX_NEED ? { lod: sharper, steps: ahead.slice(0, need) } : null,
   };
 }
+
+/** The `effectiveType` values (navigator.connection) of a link too slow to load a sharp scrub ahead of the user. */
+const SLOW_LINKS = new Set(['slow-2g', '2g', '3g']);
+
+/**
+ * Whether a scrub should save data: the user turned on data saving in the browser (`saveData`), or the browser
+ * reports a slow link. A scrub then draws and loads only the coarsest level it may use, and the frame the user stops
+ * on sharpens as usual, so only the timesteps someone looks at cost full-resolution bytes. `connection` is
+ * `navigator.connection`, which only Chromium browsers have; without it nothing changes.
+ */
+export function savesData(connection) {
+  return Boolean(connection && (connection.saveData === true || SLOW_LINKS.has(connection.effectiveType)));
+}

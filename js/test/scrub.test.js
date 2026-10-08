@@ -11,6 +11,7 @@ import {
   chooseScrubLevel,
   planScrubLoads,
   readyRun,
+  savesData,
   scrubLevels,
   scrubNeed,
   stepsAhead,
@@ -311,3 +312,12 @@ test('planScrubLoads: nothing to wait for, nothing to probe', () => {
   assert.equal(idle.probe, null);
 });
 
+
+test('savesData: data saving or a slow link saves data; a fast link, an unknown one or no API does not', () => {
+  assert.equal(savesData({ saveData: true, effectiveType: '4g' }), true);
+  for (const effectiveType of ['slow-2g', '2g', '3g']) assert.equal(savesData({ saveData: false, effectiveType }), true, effectiveType);
+  assert.equal(savesData({ saveData: false, effectiveType: '4g' }), false);
+  assert.equal(savesData({}), false);
+  assert.equal(savesData(undefined), false);
+  assert.equal(savesData(null), false);
+});
