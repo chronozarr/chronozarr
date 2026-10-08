@@ -226,6 +226,9 @@ test('chooseScrubLevel: steps down when the level in use runs below the low mark
   assert.equal(chooseScrubLevel({ levels, held: 1, need, ready: readyOf({ 1: low - 1, 2: need - 1, 3: 40 }) }), 3, 'level 2 does not hold the lookahead either');
   assert.equal(chooseScrubLevel({ levels, held: 2, need, ready: readyOf({ 2: low - 1, 3: 40 }) }), 3);
   assert.equal(chooseScrubLevel({ levels, held: 3, need, ready: readyOf({}) }), 3, 'the deepest level has nowhere to go');
+  const four = scrubLevels({ baseLod: 0, deepestLod: 3, cellCount: (lod) => OVERVIEW_CELLS[lod] });
+  assert.deepEqual(four, [0, 1, 2, 3]);
+  assert.equal(chooseScrubLevel({ levels: four, held: 0, need, ready: readyOf({ 1: need, 2: need, 3: 40 }) }), 1, 'the sharpest of the levels that hold it, not the coarsest');
 });
 
 test('chooseScrubLevel: a held level that is not among the levels (the camera moved) starts again from the normal level', () => {
