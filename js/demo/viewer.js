@@ -7,7 +7,7 @@ import { ASSUMED_BANDWIDTH, ancestorCells, planCoarseStages, stageLeadMs } from 
 import { chooseFrame } from './frames.js';
 import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, chooseMovieLevel, describeReason, linkAllows, snapSpeed, wireRatio } from './playback.js';
 import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js';
-import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrubLevel, scrubAhead } from './scrub.js';
+import { FILL_LOOKAHEADS, SCRUB_WINDOW_MS, ScrubSpeed, chooseScrubLevel, readyRun, scrubLevels, scrubNeed, stepsAhead } from './scrub.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
 import { toggleExportPanel } from './export.js';
@@ -152,7 +152,7 @@ class Viewer {
   /** The whole-loop prefetch at the coarsest useful level, {key, controller}, and that level (-1: none). */
   #coarseLoop = null;
   #coarseLoopLod = -1;
-  /** Fills the playback buffer: {wanted, running, controller}. */
+  /** Fills the playback buffer, or the buffer of a scrub: {wanted, running, controller}. */
   #bufferPump = null;
   #frameStats = { painted: 0, fallback: 0, kept: 0 };
   #view = { lod: 0, cells: new Set() };
@@ -178,7 +178,7 @@ class Viewer {
   #viewTiming = null;
   #movieMemo = null;
   #playEpoch = 0;
-  /** How fast the user is scrubbing, the level chosen for the latest step ({key, lod, baseLod, ahead}), and the timer that ends the scrub. */
+  /** How fast the user is scrubbing, the level chosen for the latest step ({key, lod, baseLod, levels, need}), and the timer that ends the scrub. */
   #scrub = new ScrubSpeed();
   #scrubMemo = null;
   #scrubTimer = 0;
@@ -438,10 +438,7 @@ class Viewer {
     this.#scrub.reset();
     const coarser = this.#scrubCoarser;
     this.#scrubMemo = null;
-    if (!this.#playing) {
-      this.#bufferPump?.controller?.abort();
-      this.#bufferPump = null;
-    }
+    if (!this.#playing) this.#stopBufferPump();
     return coarser;
   }
 
@@ -683,7 +680,7 @@ class Viewer {
     const started = performance.now();
     const { store, t } = this;
     const lod = this.#targetLod();
-    if (this.#scrubCoarser) this.#fillBuffer([t, ...this.#scrubMemo.ahead]);
+    if (this.#scrubMemo !== null && !this.#playing) this.#loadAheadOfScrub();
     this.#updateResHint();
     const cells = this.#visibleCells(lod);
     this.#view = { lod, cells: new Set(cells.map(([row, col]) => `${row}/${col}`)) };
@@ -948,9 +945,9 @@ class Viewer {
   }
 
   /**
-   * Playback (or a scrub drawing at a coarser level) wants these timesteps (the next ones, nearest first) in memory:
-   * load the ones that are not, a few at a time and at demand priority, in order, until they all are or playback
-   * stops or the scrub ends. A new request replaces the list of a pump that is already running; the store shares the fetches.
+   * Playback or a scrub wants these timesteps (the next ones, nearest first) in memory: load the ones that are not, a
+   * few at a time and at demand priority, in order, until they all are or playback stops or the scrub ends. A new
+   * request replaces the list of a pump that is already running; the store shares the fetches.
    */
   #fillBuffer(indices) {
     const pump = (this.#bufferPump ??= { wanted: [], running: false, controller: null });
@@ -989,6 +986,12 @@ class Viewer {
     }
   }
 
+  /** Stop filling the buffer of playback or of a scrub: what is in flight and wanted by no one else is cancelled. */
+  #stopBufferPump() {
+    this.#bufferPump?.controller?.abort();
+    this.#bufferPump = null;
+  }
+
   /** The chunks of timestep t of every visible cell of a level, with their masks, at demand priority. */
   #loadTimestep(lod, t, signal) {
     return Promise.all(
@@ -1012,8 +1015,7 @@ class Viewer {
   }
 
   #abortBackground() {
-    this.#bufferPump?.controller?.abort();
-    this.#bufferPump = null;
+    this.#stopBufferPump();
     this.#coarseLoop?.controller.abort();
     this.#coarseLoop = null;
     this.#wave?.controller.abort();
@@ -1100,10 +1102,9 @@ class Viewer {
   }
 
   /**
-   * The level to draw at while the user scrubs (a drag on the timeline, repeated arrow keys): the normal level when
-   * the link can feed it at the scrub speed, else the sharpest coarser level it can feed, never coarser than
-   * `deepestLod`, and the normal level when none can (chooseScrubLevel). Only the timesteps the scrub reaches in the next second count as cold
-   * (scrubAhead), so a scrub through what is in memory already stays sharp. The normal level when nobody scrubs.
+   * The level to draw at while the user scrubs (a drag on the timeline, repeated arrow keys), from how much of the
+   * scrub is loaded already: the sharpest level with the next LOOKAHEAD_SECONDS of timesteps in memory, kept until
+   * its buffer runs low (chooseScrubLevel), never coarser than `deepestLod`. The normal level when nobody scrubs.
    * It is decided once per step, so chunks landing between two steps do not change the level of a frame that is
    * on its way; the frame, the prefetch window and the eviction order all follow it through #view.
    */
@@ -1112,34 +1113,53 @@ class Viewer {
     if (speed === 0) return baseLod;
     const key = `${this.#scrub.latestAt}|${baseLod}|${deepestLod}|${this.#visibleCells(baseLod).length}`;
     if (this.#scrubMemo?.key !== key) {
-      const ahead = scrubAhead({ t: this.t, direction: this.#direction, speed, count: this.store.times.length });
-      const linkOk = (candidate, stepsPerSecond) => this.#linkCheck(candidate, stepsPerSecond, ahead).ok;
-      this.#scrubMemo = { key, lod: chooseScrubLevel({ baseLod, deepestLod, speed, linkOk }), baseLod, ahead };
+      const levels = scrubLevels({ baseLod, deepestLod, cellCount: (lod) => this.#visibleCells(lod).length });
+      const need = scrubNeed({ speed, t: this.t, direction: this.#direction, count: this.store.times.length });
+      const lod = chooseScrubLevel({ levels, held: this.#scrubMemo?.lod, need, ready: (candidate) => this.#readyAhead(candidate, need) });
+      this.#scrubMemo = { key, lod, baseLod, levels, need };
     }
     return this.#scrubMemo.lod;
   }
 
+  /** How many timesteps in a row after the one on screen, the way the scrub is going, have a complete frame in memory at `lod`; counted up to `limit`. */
+  #readyAhead(lod, limit) {
+    const steps = stepsAhead({ t: this.t, direction: this.#direction, count: this.store.times.length, limit });
+    return readyRun(steps, (step) => this.#frameReady(lod, step));
+  }
+
+  /**
+   * Load ahead of a scrub, at demand priority so the next step does not cancel it: the timestep on screen and
+   * FILL_LOOKAHEADS lookaheads of the ones after it, at the level in use. A scrub with one level to choose from is
+   * left to the prefetch window.
+   */
+  #loadAheadOfScrub() {
+    const { levels, need } = this.#scrubMemo;
+    if (levels.length < 2) return;
+    this.#fillBuffer([this.t, ...stepsAhead({ t: this.t, direction: this.#direction, count: this.store.times.length, limit: FILL_LOOKAHEADS * need })]);
+  }
+
   /**
    * Whether the link can feed a movie at this level: the wire bytes of one step (the visible cells, at the
-   * compression the caches show) times the speed (the movie's, or `stepsPerSecond` for a scrub), for the part of the
-   * loop not in memory yet (of `timesteps`, the whole loop by default), against the measured bandwidth (see
-   * linkAllows). The numbers go in the hint's tooltip.
+   * compression the caches show) times the speed, for the part of the loop not in memory yet, against the
+   * measured bandwidth (see linkAllows). The numbers go in the hint's tooltip.
    */
-  #linkCheck(lod, stepsPerSecond = this.#playback?.effectiveStepsPerSecond ?? this.#speed, timesteps = Array.from({ length: this.store.times.length }, (_, t) => t)) {
+  #linkCheck(lod) {
     const { store } = this;
     const bandwidth = store.bandwidthEstimate();
     const cells = this.#visibleCells(lod);
     const level = store.levels[lod];
     const bytesPerPixel = level.chunkBytes / (level.chunkWidth * level.chunkHeight);
+    const count = store.times.length;
     let pixels = 0;
     let cold = 0;
     for (const [row, col] of cells) {
       const { width, height } = store.cellExtent(lod, row, col);
       pixels += width * height;
-      for (const t of timesteps) if (!store.peekRaw(lod, row, col, t)) cold++;
+      for (let t = 0; t < count; t++) if (!store.peekRaw(lod, row, col, t)) cold++;
     }
     const bytesPerStep = pixels * bytesPerPixel * wireRatio(readStats(store));
-    const coldFraction = cells.length === 0 || timesteps.length === 0 ? 0 : cold / (cells.length * timesteps.length);
+    const stepsPerSecond = this.#playback?.effectiveStepsPerSecond ?? this.#speed;
+    const coldFraction = cells.length === 0 ? 0 : cold / (cells.length * count);
     return { ok: linkAllows({ bytesPerStep, stepsPerSecond, coldFraction, bandwidth }), cells: cells.length, bytesPerStep, stepsPerSecond, coldFraction, bandwidth };
   }
 
@@ -2083,10 +2103,7 @@ class Viewer {
     const text = buffering ? `buffering ${ahead} / ${needed}` : '';
     if (hint.textContent !== text) hint.textContent = text;
     if (buffering) button.title = 'Buffering: playback starts when the next frames are loaded (Space to cancel)';
-    if (!playing) {
-      this.#bufferPump?.controller?.abort();
-      this.#bufferPump = null;
-    }
+    if (!playing) this.#stopBufferPump();
     this.#updateSpeedUi();
   }
 

@@ -1,7 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LOOKAHEAD_MAX_STEPS, MIN_SPAN_MS, SCRUB_WINDOW_MS, ScrubSpeed, chooseScrubLevel, scrubAhead } from '../demo/scrub.js';
-import { LINK_HEADROOM, linkAllows } from '../demo/playback.js';
+import {
+  LOOKAHEAD_SECONDS,
+  LOW_MARK,
+  MIN_SPAN_MS,
+  SCRUB_WINDOW_MS,
+  ScrubSpeed,
+  chooseScrubLevel,
+  readyRun,
+  scrubLevels,
+  scrubNeed,
+  stepsAhead,
+} from '../demo/scrub.js';
 
 /** A drag: one step of one timestep every `intervalMs` from `start`, `count` of them; returns the tracker and the time of the last step. */
 function drag({ intervalMs, count, start = 1000, distance = 1 }) {
@@ -90,96 +100,165 @@ test('ScrubSpeed: reset ends the scrub at once; the next step starts a new one',
   assert.ok(scrub.speed(lastAt + 90) > 0);
 });
 
-test('scrubAhead: the next second of the scrub, nearest first, the way it is going', () => {
-  assert.deepEqual(scrubAhead({ t: 10, direction: 1, speed: 4, count: 117 }), [11, 12, 13, 14]);
-  assert.deepEqual(scrubAhead({ t: 10, direction: -1, speed: 3.2, count: 117 }), [9, 8, 7, 6], 'a part of a step still needs the whole timestep');
-  assert.deepEqual(scrubAhead({ t: 10, direction: 1, speed: 0, count: 117 }), []);
+test('stepsAhead: the timesteps after t that the scrub reaches, nearest first, the way it is going', () => {
+  assert.deepEqual(stepsAhead({ t: 10, direction: 1, count: 117, limit: 4 }), [11, 12, 13, 14]);
+  assert.deepEqual(stepsAhead({ t: 10, direction: -1, count: 117, limit: 3 }), [9, 8, 7]);
+  assert.deepEqual(stepsAhead({ t: 10, direction: 1, count: 117, limit: 0 }), []);
 });
 
-test('scrubAhead: stops at the ends of the axis and at the prefetch horizon', () => {
-  assert.deepEqual(scrubAhead({ t: 114, direction: 1, speed: 25, count: 117 }), [115, 116]);
-  assert.deepEqual(scrubAhead({ t: 116, direction: 1, speed: 25, count: 117 }), [], 'nothing left to load past the last timestep');
-  assert.deepEqual(scrubAhead({ t: 2, direction: -1, speed: 25, count: 117 }), [1, 0]);
-  const fast = scrubAhead({ t: 0, direction: 1, speed: 400, count: 117 });
-  assert.equal(fast.length, LOOKAHEAD_MAX_STEPS);
-  assert.deepEqual(fast.slice(0, 3), [1, 2, 3]);
+test('stepsAhead: stops at the ends of the axis', () => {
+  assert.deepEqual(stepsAhead({ t: 114, direction: 1, count: 117, limit: 25 }), [115, 116]);
+  assert.deepEqual(stepsAhead({ t: 116, direction: 1, count: 117, limit: 25 }), [], 'nothing left past the last timestep');
+  assert.deepEqual(stepsAhead({ t: 2, direction: -1, count: 117, limit: 25 }), [1, 0]);
+  assert.deepEqual(stepsAhead({ t: 0, direction: -1, count: 117, limit: 25 }), []);
 });
 
-// What the link has to feed at each level of the Ucayali overview: the wire bytes of one step, at 9, 4 and 1 cells.
-const MB = 1e6;
-const WIRE_BYTES_PER_STEP = { 1: 12 * MB, 2: 3 * MB, 3: 0.75 * MB };
-const linkFor = ({ bandwidthMBs, coldFraction = 1 }) => (lod, speed) => linkAllows({ bytesPerStep: WIRE_BYTES_PER_STEP[lod], stepsPerSecond: speed, coldFraction, bandwidth: bandwidthMBs * MB });
-
-test('chooseScrubLevel: a scrub the link can feed stays at the normal level', () => {
-  const linkOk = linkFor({ bandwidthMBs: 60 });
-  assert.equal(chooseScrubLevel({ baseLod: 1, deepestLod: 3, speed: 3, linkOk }), 1, '36 MB/s of the 42 MB/s the link allows');
-  assert.ok(12 * MB * 3 < LINK_HEADROOM * 60 * MB);
+test('readyRun: counts the steps ready in a row from the nearest; a step that is not ready ends the run', () => {
+  const have = new Set([11, 12, 13, 15, 16]);
+  const ahead = stepsAhead({ t: 10, direction: 1, count: 117, limit: 8 });
+  assert.equal(readyRun(ahead, (step) => have.has(step)), 3, '14 is missing: 15 and 16 beyond it do not count');
+  assert.equal(readyRun(ahead, () => true), 8);
+  assert.equal(readyRun(ahead, () => false), 0);
+  assert.equal(readyRun(ahead, (step) => step !== 11), 0, 'the nearest missing: nothing ahead is ready however much lies beyond');
+  assert.equal(readyRun([], () => assert.fail('nothing to ask about')), 0);
 });
 
-test('chooseScrubLevel: a fast scrub on a slow link takes the sharpest level the link can feed', () => {
-  const baseLod = 1;
-  assert.equal(chooseScrubLevel({ baseLod, deepestLod: 3, speed: 3, linkOk: linkFor({ bandwidthMBs: 25 }) }), 2, 'the normal level needs 36 MB/s of 17.5; the next needs 9');
-  assert.equal(chooseScrubLevel({ baseLod, deepestLod: 3, speed: 6.7, linkOk: linkFor({ bandwidthMBs: 40 }) }), 2, '80 MB/s of 28 no; 20 MB/s yes');
-  assert.equal(chooseScrubLevel({ baseLod, deepestLod: 3, speed: 6.7, linkOk: linkFor({ bandwidthMBs: 25 }) }), 3, '20 MB/s of 17.5 no; 5 yes');
+test('readyRun: counts the way the scrub is going, not the way it came from', () => {
+  const have = new Set([6, 7, 8, 9, 10, 11, 12]);
+  const isReady = (step) => have.has(step);
+  assert.equal(readyRun(stepsAhead({ t: 10, direction: 1, count: 117, limit: 8 }), isReady), 2, 'forward: 11 and 12');
+  assert.equal(readyRun(stepsAhead({ t: 10, direction: -1, count: 117, limit: 8 }), isReady), 4, 'backward: 9 to 6');
 });
 
-test('chooseScrubLevel: never coarser than deepestLod, even when a coarser level would be fed', () => {
-  const linkOk = linkFor({ bandwidthMBs: 25 });
-  assert.equal(chooseScrubLevel({ baseLod: 1, deepestLod: 3, speed: 6.7, linkOk }), 3);
-  assert.equal(chooseScrubLevel({ baseLod: 1, deepestLod: 2, speed: 6.7, linkOk }), 1, 'level 3 would pass, but a view zoomed in by 2x is four times out at level 2');
-  assert.equal(chooseScrubLevel({ baseLod: 1, deepestLod: 2, speed: 6.7, linkOk: linkFor({ bandwidthMBs: 40 }) }), 2);
-  assert.equal(chooseScrubLevel({ baseLod: 2, deepestLod: 1, speed: 6.7, linkOk }), 2, 'a deepest level finer than the normal one leaves the normal level');
+test('scrubNeed: what the scrub uses during the lookahead, rounded up', () => {
+  assert.equal(scrubNeed({ speed: 4, t: 10, direction: 1, count: 117 }), Math.ceil(4 * LOOKAHEAD_SECONDS));
+  assert.equal(scrubNeed({ speed: 1000 / 150, t: 10, direction: -1, count: 117 }), Math.ceil((1000 / 150) * LOOKAHEAD_SECONDS));
+  assert.ok(scrubNeed({ speed: 25, t: 10, direction: 1, count: 117 }) > scrubNeed({ speed: 7, t: 10, direction: 1, count: 117 }), 'a faster scrub needs more ahead');
 });
 
-test('chooseScrubLevel: when no level up to deepestLod can be fed the normal level stays', () => {
-  const linkOk = linkFor({ bandwidthMBs: 10 });
-  assert.equal(chooseScrubLevel({ baseLod: 1, deepestLod: 3, speed: 100, linkOk }), 1, 'a coarser level that is not fed either only costs resolution');
-  assert.equal(chooseScrubLevel({ baseLod: 1, deepestLod: 1, speed: 100, linkOk }), 1, 'no level to drop to');
+test('scrubNeed: no more than is left in the scrub direction, and 0 when nobody scrubs', () => {
+  assert.equal(scrubNeed({ speed: 25, t: 114, direction: 1, count: 117 }), 2);
+  assert.equal(scrubNeed({ speed: 25, t: 3, direction: -1, count: 117 }), 3);
+  assert.equal(scrubNeed({ speed: 25, t: 116, direction: 1, count: 117 }), 0, 'the end of the axis: nothing more to wait for');
+  assert.equal(scrubNeed({ speed: 25, t: 0, direction: -1, count: 117 }), 0);
+  assert.equal(scrubNeed({ speed: 0, t: 50, direction: 1, count: 117 }), 0);
 });
 
-test('chooseScrubLevel: timesteps in memory cost the link nothing, whatever the speed', () => {
-  const warm = linkFor({ bandwidthMBs: 5, coldFraction: 0 });
-  assert.equal(chooseScrubLevel({ baseLod: 1, deepestLod: 3, speed: 400, linkOk: warm }), 1);
-  const halfWarm = linkFor({ bandwidthMBs: 40, coldFraction: 0.25 });
-  assert.equal(chooseScrubLevel({ baseLod: 1, deepestLod: 3, speed: 6.7, linkOk: halfWarm }), 1, '80 MB/s x 0.25 = 20 of 28');
+/** The Ucayali overview: levels 1, 2 and 3 have 9, 4 and 1 cells. */
+const OVERVIEW_CELLS = { 0: 36, 1: 9, 2: 4, 3: 1 };
+const overview = (deepestLod = 3) => scrubLevels({ baseLod: 1, deepestLod, cellCount: (lod) => OVERVIEW_CELLS[lod] });
+/** `ready` for a table of timesteps in a row ahead per level; a level that is not in the table has nothing. */
+const readyOf = (table) => (lod) => table[lod] ?? 0;
+
+test('scrubLevels: from the normal level down to deepestLod, each level with fewer cells than the one before', () => {
+  assert.deepEqual(overview(3), [1, 2, 3]);
+  assert.deepEqual(overview(2), [1, 2], 'never coarser than deepestLod');
+  assert.deepEqual(overview(1), [1]);
+  assert.deepEqual(scrubLevels({ baseLod: 2, deepestLod: 1, cellCount: (lod) => OVERVIEW_CELLS[lod] }), [2], 'a deepest level finer than the normal one leaves the normal level');
 });
 
-test('chooseScrubLevel: no scrub, no coarser level', () => {
-  const never = () => assert.fail('the link is not consulted when nobody scrubs');
-  assert.equal(chooseScrubLevel({ baseLod: 1, deepestLod: 3, speed: 0, linkOk: never }), 1);
+test('scrubLevels: a level with as many cells as a sharper one is no cheaper and is left out', () => {
+  const zoomedIn = { 0: 4, 1: 4, 2: 1, 3: 1 };
+  assert.deepEqual(scrubLevels({ baseLod: 0, deepestLod: 1, cellCount: (lod) => zoomedIn[lod] }), [0], 'zoomed in, level 1 has the same four cells as level 0');
+  assert.deepEqual(scrubLevels({ baseLod: 0, deepestLod: 3, cellCount: (lod) => zoomedIn[lod] }), [0, 2]);
 });
 
-test('chooseScrubLevel: asks the link about the scrub speed', () => {
-  const asked = [];
-  const linkOk = (lod, speed) => {
-    asked.push([lod, speed]);
-    return lod === 3;
-  };
-  assert.equal(chooseScrubLevel({ baseLod: 1, deepestLod: 3, speed: 12.5, linkOk }), 3);
-  assert.deepEqual(asked, [[1, 12.5], [2, 12.5], [3, 12.5]], 'from the normal level down, no further than the first that passes');
+// A lookahead of `need` timesteps; the level in use is dropped below `low` of them and left for a sharper one at `need`.
+const need = 12;
+const low = Math.ceil(LOW_MARK * need);
+
+test('chooseScrubLevel: a scrub starts at the normal level and stays there while it holds enough ahead', () => {
+  const levels = overview();
+  assert.equal(chooseScrubLevel({ levels, need, ready: readyOf({ 1: need, 2: need, 3: 40 }) }), 1);
+  assert.equal(chooseScrubLevel({ levels, need, ready: readyOf({ 1: low, 3: 40 }) }), 1, 'the idle prefetch left a little ahead: not enough to cover, enough to start');
 });
 
-test('a scrub: coarse while it is fast on a slow link, normal again once it stops', () => {
-  const linkOk = linkFor({ bandwidthMBs: 40 });
+test('chooseScrubLevel: the sharpest level that holds the lookahead when the normal level has nothing', () => {
+  const levels = overview();
+  assert.equal(chooseScrubLevel({ levels, need, ready: readyOf({ 1: 2, 2: need, 3: 40 }) }), 2);
+  assert.equal(chooseScrubLevel({ levels, need, ready: readyOf({ 1: 2, 2: need - 1, 3: 40 }) }), 3, 'level 2 is a step short of covering it');
+  assert.equal(chooseScrubLevel({ levels, need, ready: readyOf({ 1: 0, 2: 0, 3: need }) }), 3);
+});
+
+test('chooseScrubLevel: when no level holds the lookahead the deepest is chosen, the cheapest to load', () => {
+  assert.equal(chooseScrubLevel({ levels: overview(), need, ready: readyOf({}) }), 3);
+  assert.equal(chooseScrubLevel({ levels: overview(), need, ready: readyOf({ 1: low - 1, 2: need - 1, 3: need - 1 }) }), 3);
+});
+
+test('chooseScrubLevel: never coarser than deepestLod', () => {
+  const dry = readyOf({});
+  assert.equal(chooseScrubLevel({ levels: overview(2), need, ready: dry }), 2, 'level 3 is the coarse loop, but a view zoomed in 2x is four times out at level 2');
+  assert.equal(chooseScrubLevel({ levels: overview(1), need, ready: dry }), 1, 'no level to drop to');
+  assert.equal(chooseScrubLevel({ levels: overview(2), held: 2, need, ready: dry }), 2);
+});
+
+test('chooseScrubLevel: steps up to the sharpest level that holds the whole lookahead', () => {
+  const levels = overview();
+  assert.equal(chooseScrubLevel({ levels, held: 3, need, ready: readyOf({ 2: need, 3: 40 }) }), 2);
+  assert.equal(chooseScrubLevel({ levels, held: 3, need, ready: readyOf({ 1: need, 2: need, 3: 40 }) }), 1, 'both fill: the sharper one');
+  assert.equal(chooseScrubLevel({ levels, held: 3, need, ready: readyOf({ 1: need - 1, 2: need, 3: 40 }) }), 2, 'level 1 is a step short');
+  assert.equal(chooseScrubLevel({ levels, held: 2, need, ready: readyOf({ 1: need, 2: need }) }), 1);
+});
+
+test('chooseScrubLevel: a sharper level that fills while the level in use is dry still wins over the drop', () => {
+  assert.equal(chooseScrubLevel({ levels: overview(), held: 2, need, ready: readyOf({ 1: need, 2: 0, 3: 40 }) }), 1);
+});
+
+test('chooseScrubLevel: between the marks nothing changes, so one step more or less does not flip the level', () => {
+  const levels = overview();
+  assert.equal(chooseScrubLevel({ levels, held: 2, need, ready: readyOf({ 1: need - 1, 2: low, 3: 40 }) }), 2, 'level 1 almost fills and level 2 is running low: stay');
+  assert.equal(chooseScrubLevel({ levels, held: 2, need, ready: readyOf({ 1: need - 1, 2: need, 3: 40 }) }), 2);
+  // Level 1 fills and is taken; the scrub then uses a step of it, so it holds one less than the mark: it stays.
+  let held = chooseScrubLevel({ levels, held: 2, need, ready: readyOf({ 1: need, 2: 30 }) });
+  assert.equal(held, 1);
+  for (let ready = need - 1; ready >= low; ready--) {
+    held = chooseScrubLevel({ levels, held, need, ready: readyOf({ 1: ready, 2: 30, 3: 40 }) });
+    assert.equal(held, 1, `${ready} of ${need} ahead at level 1 is still enough to stay`);
+  }
+});
+
+test('chooseScrubLevel: steps down when the level in use runs below the low mark, to the sharpest level that holds the lookahead', () => {
+  const levels = overview();
+  assert.equal(chooseScrubLevel({ levels, held: 1, need, ready: readyOf({ 1: low - 1, 2: need, 3: 40 }) }), 2);
+  assert.equal(chooseScrubLevel({ levels, held: 1, need, ready: readyOf({ 1: low - 1, 2: need - 1, 3: 40 }) }), 3, 'level 2 does not hold the lookahead either');
+  assert.equal(chooseScrubLevel({ levels, held: 2, need, ready: readyOf({ 2: low - 1, 3: 40 }) }), 3);
+  assert.equal(chooseScrubLevel({ levels, held: 3, need, ready: readyOf({}) }), 3, 'the deepest level has nowhere to go');
+});
+
+test('chooseScrubLevel: a held level that is not among the levels (the camera moved) starts again from the normal level', () => {
+  assert.equal(chooseScrubLevel({ levels: [0, 2], held: 3, need, ready: readyOf({ 0: need }) }), 0);
+});
+
+test('chooseScrubLevel: with nothing to wait for the normal level is chosen', () => {
+  assert.equal(chooseScrubLevel({ levels: overview(), held: 3, need: 0, ready: readyOf({}) }), 1, 'every level holds enough of nothing');
+  assert.equal(chooseScrubLevel({ levels: overview(), held: 2, need: 0, ready: readyOf({}) }), 1);
+});
+
+test('a scrub: coarse while it is fast and little is loaded, the normal level again once it stops', () => {
+  const levels = overview();
   const { scrub, lastAt } = drag({ intervalMs: 40, count: 20 });
-  const levelAt = (now) => chooseScrubLevel({ baseLod: 1, deepestLod: 3, speed: scrub.speed(now), linkOk });
-  assert.equal(levelAt(lastAt), 3, '25 steps/s: 75 MB/s of the 28 the link allows is too much for level 2, 19 is fine');
-  assert.equal(levelAt(lastAt + SCRUB_WINDOW_MS - 1), 3, 'the pointer is still down, nothing has moved for a moment');
-  assert.equal(levelAt(lastAt + SCRUB_WINDOW_MS), 1, 'no step for a window: the frame sharpens');
+  const levelAt = (now, ready, t = 20) => chooseScrubLevel({ levels, held: 3, need: scrubNeed({ speed: scrub.speed(now), t, direction: 1, count: 117 }), ready });
+  const loaded = readyOf({ 1: 3, 3: 90 });
+  assert.equal(levelAt(lastAt, loaded), 3, '25 steps/s: a lookahead of dozens of steps; level 1 has three');
+  assert.equal(levelAt(lastAt + SCRUB_WINDOW_MS - 1, loaded), 3, 'the pointer is still down, nothing has moved for a moment');
+  assert.equal(levelAt(lastAt + SCRUB_WINDOW_MS, loaded), 1, 'no step for a window: the frame sharpens');
   scrub.reset();
-  assert.equal(levelAt(lastAt + 10), 1, 'pointer released');
+  assert.equal(levelAt(lastAt + 10, loaded), 1, 'pointer released');
 });
 
-test('a scrub: slowing down brings the sharper levels back while the pointer is still down', () => {
-  const linkOk = linkFor({ bandwidthMBs: 60 });
+test('a scrub: slowing down shortens the lookahead until a sharper level holds it', () => {
+  const levels = overview();
+  const needAt = (speed) => scrubNeed({ speed, t: 20, direction: 1, count: 117 });
+  // Level 1 holds what a 3.3 steps/s scrub needs, level 2 what a 6.7 steps/s one does, level 3 (the coarse loop) nearly everything.
+  const loaded = readyOf({ 1: needAt(1000 / 300), 2: needAt(1000 / 150), 3: 90 });
   const scrub = new ScrubSpeed();
   let at = 1000;
-  const step = (intervalMs, steps) => {
+  const step = (intervalMs, steps, held) => {
     for (let i = 0; i < steps; i++, at += intervalMs) scrub.note(at, 1);
     at -= intervalMs;
-    return chooseScrubLevel({ baseLod: 1, deepestLod: 3, speed: scrub.speed(at), linkOk });
+    return chooseScrubLevel({ levels, held, need: needAt(scrub.speed(at)), ready: loaded });
   };
-  assert.equal(step(40, 12), 3, '25 steps/s: 75 MB/s of the 42 the link allows is too much for level 2');
-  assert.equal(step(150, 4), 2, '6.7 steps/s: 80 MB/s is too much for level 1, 20 is fine');
-  assert.equal(step(300, 3), 1, '3.3 steps/s: 40 MB/s of 42');
+  assert.equal(step(40, 12, 3), 3, '25 steps/s: nothing but level 3 holds the lookahead');
+  assert.equal(step(150, 4, 3), 2, '6.7 steps/s: level 2 holds it, level 1 does not');
+  assert.equal(step(300, 3, 2), 1, '3.3 steps/s: level 1 holds it');
 });

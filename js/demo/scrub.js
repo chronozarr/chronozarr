@@ -1,10 +1,16 @@
-// How fast the user is scrubbing the timeline, and the level that speed asks for, with no DOM and injectable time.
+// How fast the user is scrubbing the timeline, and the level the timesteps already loaded ahead of it can carry, with no DOM and injectable time.
 //
 // A scrub is a run of manual steps (a drag on the timeline, held or repeated arrow keys). Its speed is the distance
 // covered per second over the last SCRUB_WINDOW_MS. 300 ms holds three or more steps at 7 steps/s and still follows
 // a change of pace within a third of a second. The speed is measured from one step to the latest instead of counting
 // steps per window, so a steady drag reads the same whichever way its steps fall against the window edges.
 // With no step for SCRUB_WINDOW_MS the scrub is over and the speed is 0.
+//
+// The level follows the buffer, not a throughput estimate (Huang et al., SIGCOMM 2014): a level is drawn while the
+// timesteps ahead of the one on screen are already in memory at it, as many as the scrub will use in the next
+// LOOKAHEAD_SECONDS. An estimate sees only what the viewer itself asks for, so a viewer that has dropped to a coarser
+// level asks for less, reads a slower link and drops further (Huang et al., IMC 2012); what is in memory ahead does
+// not depend on what was requested.
 
 /** The steps this close to the latest one make up the speed; with no step for this long the user has stopped scrubbing. */
 export const SCRUB_WINDOW_MS = 300;
@@ -49,38 +55,74 @@ export class ScrubSpeed {
 }
 
 /**
- * The level to draw at while scrubbing at `speed` timesteps per second: the sharpest level from the normal one
- * `baseLod` down to `deepestLod` (the level of a view four times further out, never coarser) for which
- * `linkOk(lod, speed)` says the link can feed the scrub. The normal level when the user is not scrubbing (speed 0),
- * when it passes itself, and when no level does: a coarser level that cannot be fed either only costs resolution.
- * It is the movie rule (chooseMovieLevel) without the memory test, which a scrub does not need, and without its floor
- * (a movie plays at the deepest level whatever the link says; a scrub that nothing can feed stays as it is).
- * @param {{baseLod: number, deepestLod: number, speed: number, linkOk: (lod: number, speed: number) => boolean}} options
+ * A level carries the scrub while the timesteps ahead that are in memory at it last this long at the scrub's speed:
+ * the lookahead, long enough for the batch of timesteps in flight (BUFFER_BATCH, viewer.js) and one slow object to
+ * land.
  */
-export function chooseScrubLevel({ baseLod, deepestLod, speed, linkOk }) {
-  if (!(speed > 0)) return baseLod;
-  for (let lod = baseLod; lod <= deepestLod; lod++) if (linkOk(lod, speed)) return lod;
-  return baseLod;
-}
-
-/** How far ahead of the timestep on screen the link has to keep up: the link check compares bytes per second, so the next second of the scrub. */
 export const LOOKAHEAD_SECONDS = 1;
 
-/** ...but not past the reader's idle prefetch horizon (12 timesteps either side of t, decoder.js): how much of the scrub the viewer loads ahead of it. */
-export const LOOKAHEAD_MAX_STEPS = 12;
+/**
+ * The level in use is kept until what is ahead of it falls below this fraction of the lookahead (a third of a
+ * second of scrub), and a sharper level is taken only when it holds all of the lookahead: between the two marks
+ * nothing changes. A half instead of a third drew the same frames at 40 MB/s; on the real link it dropped to level 3
+ * for 12 frames before level 2 had loaded where a third did for 2 (one round each).
+ */
+export const LOW_MARK = 1 / 3;
+
+/** The level in use is loaded this many lookaheads ahead of the scrub, so that it keeps covering one while the next batch of timesteps is on its way. */
+export const FILL_LOOKAHEADS = 2;
+
+/** The timesteps after `t` that a scrub going `direction` (1 or -1) reaches, nearest first, at most `limit` of them, stopping at the ends of the axis. */
+export function stepsAhead({ t, direction, count, limit }) {
+  const steps = [];
+  for (let next = t + direction; steps.length < limit && next >= 0 && next < count; next += direction) steps.push(next);
+  return steps;
+}
+
+/** How many of `steps` (nearest first) are ready in a row from the nearest: a step that is not ends the run, whatever lies beyond it. */
+export function readyRun(steps, isReady) {
+  let run = 0;
+  while (run < steps.length && isReady(steps[run])) run++;
+  return run;
+}
 
 /**
- * The timesteps a scrub at `speed` timesteps per second reaches in the next LOOKAHEAD_SECONDS (at most
- * LOOKAHEAD_MAX_STEPS), nearest first, going the way it is going from timestep `t` and stopping at the ends of the
- * axis. They are what the link has to deliver for the scrub: only the cold ones cost it anything, so a scrub
- * through timesteps that are in memory already needs no more of it than a pause does.
+ * How many timesteps ahead a level has to hold for a scrub at `speed` timesteps per second: what the scrub uses in
+ * LOOKAHEAD_SECONDS, but not more than are left in its direction (a scrub at the end of the axis has nothing more to wait for).
+ * 0 when nobody scrubs.
  */
-export function scrubAhead({ t, direction, speed, count }) {
-  const ahead = [];
-  for (let step = 1; step <= Math.min(Math.ceil(speed * LOOKAHEAD_SECONDS), LOOKAHEAD_MAX_STEPS); step++) {
-    const next = t + direction * step;
-    if (next < 0 || next >= count) break;
-    ahead.push(next);
-  }
-  return ahead;
+export function scrubNeed({ speed, t, direction, count }) {
+  const left = direction > 0 ? count - 1 - t : t;
+  return Math.min(Math.ceil(speed * LOOKAHEAD_SECONDS), left);
+}
+
+/**
+ * The levels a scrub can draw at, sharpest first: the normal level `baseLod`, then each coarser one down to `deepestLod`
+ * (the level of a view four times further out, never coarser) that has fewer cells than the one before, so fewer chunks
+ * per timestep. A level with as many cells only costs resolution: zoomed in, a view's level 1 has the same four cells as its level 0.
+ * @param {{baseLod: number, deepestLod: number, cellCount: (lod: number) => number}} options
+ */
+export function scrubLevels({ baseLod, deepestLod, cellCount }) {
+  const levels = [baseLod];
+  for (let lod = baseLod + 1; lod <= deepestLod; lod++) if (cellCount(lod) < cellCount(levels.at(-1))) levels.push(lod);
+  return levels;
+}
+
+/**
+ * The level to draw and load at for the next step of a scrub that needs `need` timesteps ahead (scrubNeed), given
+ * `held`, the level of the step before (the normal level when the scrub has just begun).
+ * - A sharper level than the held one is taken when it holds all `need` (the sharpest that does).
+ * - Else the held level is kept while it holds at least LOW_MARK of `need`; between the two marks nothing changes, so the
+ *   level does not flip with every step that lands or is used up.
+ * - Else the sharpest coarser level that holds all `need`, or the deepest level when none does: it is the cheapest to load.
+ * With nothing to wait for (`need` 0: no scrub, or the end of the axis) every level holds enough and the normal level is chosen.
+ * @param {{levels: number[], held?: number | null, need: number, ready: (lod: number) => number}} options
+ *   `levels` from scrubLevels; `ready(lod)` is how many timesteps in a row ahead are in memory at `lod` (at least `need` is counted).
+ */
+export function chooseScrubLevel({ levels, held = null, need, ready }) {
+  const at = Math.max(0, levels.indexOf(held));
+  for (let i = 0; i < at; i++) if (ready(levels[i]) >= need) return levels[i];
+  if (ready(levels[at]) >= Math.ceil(LOW_MARK * need)) return levels[at];
+  for (let i = at + 1; i < levels.length - 1; i++) if (ready(levels[i]) >= need) return levels[i];
+  return levels.at(-1);
 }
