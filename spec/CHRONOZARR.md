@@ -117,7 +117,7 @@ Writers SHOULD retain the native projected CRS of the AOI, for example its UTM z
 
 The root MUST declare `chronozarr` and M in `attributes.zarr_conventions`, using F's Convention Metadata Objects. Every data, mask and coverage array MUST explicitly declare P and S on that array, rather than depend on inheritance for profile conformance. Coordinate arrays and ungeoreferenced volatility MUST NOT declare S. Other registrations MAY appear only when their conventions apply without changing the baseline's ordinary stored values.
 
-Each M/P/S registration MUST contain the following UUID, name and **literal** schema/spec URL pair. Commit-based URLs MUST NOT be emitted in these registrations. The convention snapshot identities in §0.3 MUST NOT be emitted as store metadata. F's allowed registration fields and semantics apply by reference; no snapshot or extra version field is added to the registration object.
+Each M/P/S registration MUST contain the following UUID, name and literal schema/spec URL pair. Commit-based URLs MUST NOT be emitted in these registrations. The convention snapshot identities in §0.3 MUST NOT be emitted as store metadata. F's allowed registration fields and semantics apply by reference. No snapshot field or extra version field is added to the registration object.
 
 | Name | UUID | `schema_url` | `spec_url` |
 |---|---|---|---|
@@ -125,33 +125,33 @@ Each M/P/S registration MUST contain the following UUID, name and **literal** sc
 | `proj` | `f17cb550-5864-4468-aeb7-f3180cfb622f` | `https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json` | `https://github.com/zarr-conventions/proj/blob/v0.1/README.md` |
 | `spatial` | `689b58e2-cf7b-45e0-9fff-9cfc0883d6b4` | `https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json` | `https://github.com/zarr-conventions/spatial/blob/v0.1/README.md` |
 
-The root chronozarr registration MUST contain `name: "chronozarr"` and `spec_url: "https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md"`. Its profile version is recorded in the `chronozarr` block, not as a Convention Metadata Object field. This draft assigns no chronozarr UUID or schema URL.
+The root chronozarr registration MUST contain `name: "chronozarr"` and `spec_url: "https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md"`. The `chronozarr` block records its profile version. This draft assigns no chronozarr UUID or schema URL.
 
-The root MUST carry a `chronozarr` object (§3.2) and a `multiscales` object conforming to M (§3.3). Consolidated metadata and its recommendation follow M, Consolidated Metadata (§0.2); readers MUST retain the nonconsolidated fallback in §9.2.
+The root MUST carry a `chronozarr` object (§3.2) and a `multiscales` object conforming to M (§3.3). Consolidated metadata and its recommendation follow M, Consolidated Metadata (§0.2). Readers MUST retain the nonconsolidated fallback in §9.2.
 
 ### 3.2 `chronozarr` block
 
 | Field | Type | Profile rule |
 |---|---|---|
 | `spec_version` | string | Writers MUST write exactly `"0.3.0"`. Readers MUST reject every other value, including missing values, before returning data, with a message directing the user to `chronozarr convert` (§9.1). |
-| `variable` | string | Data-array name inside each level, default `"data"`; MUST be declared by writers. |
-| `times` | string[] | MUST be written, length `n_time`; each entry MUST be the ISO-8601 rendering of the corresponding time coordinate. |
-| `bands` | object[] | MUST be written, length `n_band`; object-only band descriptions, §4.4. |
-| `band_names` | string[] | Writers MUST write the ordered `bands[].name`. Readers finding only `bands` MUST derive the names rather than read the band coordinate. |
-| `nodata` | number or null | MUST be declared; §4.1. |
+| `variable` | string | Data-array name inside each level, default `"data"`. Writers MUST declare it. |
+| `times` | string[] | MUST be written, with length `n_time`. Each entry MUST be the ISO-8601 rendering of the corresponding time coordinate. |
+| `bands` | object[] | MUST be written, with length `n_band`. Entries are band-description objects (§4.4). |
+| `band_names` | string[] | Writers MUST write the ordered `bands[].name`. Readers that find only `bands` MUST derive the names rather than read the band coordinate. |
+| `nodata` | number or null | MUST be declared (§4.1). |
 | `crs` | string | MUST be an `EPSG:<code>` mirror equal to canonical P metadata on every spatial array. |
 | `levels` | object[] | Writers MUST write the ordered mirrors in §3.4. Readers MUST support their absence through §9.2. |
-| `mask_variable` | string | MUST equal `"mask"` iff masks are present at every level; otherwise MUST be absent. |
-| `coverage_variable` | string | MUST equal `"coverage"` iff coverage is present at every level; otherwise MUST be absent. |
-| `volatility_path` | string | MAY be present; MUST equal `"volatility"` iff the optional root volatility array is present (§6). Otherwise MUST be absent. |
-| `provenance` | object | MAY be present; §4.5. |
-| `shard_bytes` | object | MAY be present only for sharded stores; §7.2. |
+| `mask_variable` | string | MUST equal `"mask"` if and only if masks are present at every level. Otherwise MUST be absent. |
+| `coverage_variable` | string | MUST equal `"coverage"` if and only if coverage is present at every level. Otherwise MUST be absent. |
+| `volatility_path` | string | MAY be present. MUST equal `"volatility"` if and only if the optional root volatility array is present (§6). Otherwise MUST be absent. |
+| `provenance` | object | MAY be present (§4.5). |
+| `shard_bytes` | object | MAY be present only for sharded stores (§7.2). |
 
-No temporal-encoding fields are part of this block. The baseline MUST NOT use attributes to reinterpret ordinary chunks as encoded measurements.
+This block has no temporal-encoding fields. The baseline MUST NOT use attributes to reinterpret ordinary chunks as encoded measurements.
 
 ### 3.3 Multiscales and authoritative geometry
 
-`multiscales` MUST use M's object form with `layout`. Its entries MUST be ordered by consecutive level groups `"0"`, `"1"`, …; each `asset` MUST be the group path, not a data-array path. Each level after 0 MUST declare `derived_from` equal to the preceding group and a relative transform with `scale: [2,2]` and `translation: [0,0]`, under M's Transform Object. `resampling_method` MUST be `"average"`; exact average semantics are chronozarr rules in §5. The base entry MAY carry the identity relative transform. Legacy list/datasets metadata and tile-size hints MUST NOT be written or used for v0.3 discovery.
+`multiscales` MUST use M's object form with `layout`. Its entries MUST be ordered by the consecutive level groups `"0"`, `"1"` and so on. Each `asset` MUST be the group path, not a data-array path. Each level after 0 MUST declare `derived_from` equal to the preceding group and a relative transform with `scale: [2,2]` and `translation: [0,0]`, under M's Transform Object. `resampling_method` MUST be `"average"`. The exact average semantics are chronozarr rules in §5. The base entry MAY carry the identity relative transform. Legacy list/datasets metadata and tile-size hints MUST NOT be written or used for v0.3 discovery.
 
 Informative example of a two-level object:
 
@@ -167,17 +167,17 @@ Informative example of a two-level object:
 }
 ```
 
-Every spatial array MUST carry `proj:code: "EPSG:<code>"`, `spatial:dimensions: ["y","x"]`, `spatial:transform` and `spatial:registration: "pixel"`, and satisfy P/S. If `spatial:transform_type` is supplied it MUST be `"affine"`. Writers SHOULD also supply matching `proj:wkt2`. Optional `proj:projjson`, when supplied, MUST describe the same CRS. Optional `spatial:shape` MUST equal `[H_k,W_k]`; optional `spatial:bbox` MUST agree with the array's shape and S geometry. Equivalent properties supplied on M layout entries MUST agree with the spatial arrays. P/S are the authoritative CRS and geometry sources; chronozarr mirrors MUST NOT override them.
+Every spatial array MUST carry `proj:code: "EPSG:<code>"`, `spatial:dimensions: ["y","x"]`, `spatial:transform` and `spatial:registration: "pixel"`, and satisfy P/S. If `spatial:transform_type` is supplied, it MUST be `"affine"`. Writers SHOULD also supply matching `proj:wkt2`. Optional `proj:projjson`, when supplied, MUST describe the same CRS. Optional `spatial:shape` MUST equal `[H_k,W_k]`. Optional `spatial:bbox` MUST agree with the array's shape and S geometry. Equivalent properties supplied on M layout entries MUST agree with the spatial arrays. P/S are the authoritative CRS and geometry sources. chronozarr mirrors MUST NOT override them.
 
-Level `k` MUST have the same origin as level 0 and both pixel scales multiplied by `2^k`; all spatial arrays in a level MUST agree geometrically. Each level group MUST retain `crs`, `transform` and `resolution` mirrors. `crs` MUST equal `proj:code`; `transform` MUST equal the canonical S coefficient list without introducing another mapping; `resolution` MUST equal the positive horizontal ground sample distance at that level. Group and root mirrors MUST be validated against canonical array metadata.
+Level `k` MUST have the same origin as level 0 and both pixel scales multiplied by `2^k`. All spatial arrays in a level MUST agree geometrically. Each level group MUST retain `crs`, `transform` and `resolution` mirrors. `crs` MUST equal `proj:code`. `transform` MUST equal the canonical S coefficient list without introducing another mapping. `resolution` MUST equal the positive horizontal ground sample distance at that level. Group and root mirrors MUST be validated against canonical array metadata.
 
-Spatial arrays MAY repeat `crs` and `transform` aliases, but these MUST agree with P/S when present, and readers MUST NOT require them. Writers SHOULD emit `_CRS` on data/mask/coverage for GDAL versions below 3.13, with `{"url":"http://www.opengis.net/def/crs/EPSG/0/<code>"}` and an optional matching string `wkt`. Readers MUST NOT require `_CRS`; if present it MUST agree with `proj:code`. The reader spike found that GDAL 3.13.3 recognizes the canonical CRS without this alias, but its native subdataset/overview discovery is not the chronozarr reader contract (§9).
+Spatial arrays MAY repeat `crs` and `transform` aliases. When present, these MUST agree with P/S. Readers MUST NOT require them. Writers SHOULD emit `_CRS` on data, mask and coverage arrays for GDAL versions below 3.13, with `{"url":"http://www.opengis.net/def/crs/EPSG/0/<code>"}` and an optional matching string `wkt`. Readers MUST NOT require `_CRS`. If present, `_CRS` MUST agree with `proj:code`. [evidence.md](../docs/evidence.md#reader-checks) records the GDAL checks.
 
 ### 3.4 Mirrors and validation
 
-Readers MUST use the available `times`, `band_names` and `levels` mirrors as primary request-saving sources and MUST NOT require coordinate-array reads to obtain the same information. A validator MUST check mirror/source agreement. Disagreement is an error, not permission to silently replace authoritative P/S metadata.
+Readers MUST use the available `times`, `band_names` and `levels` mirrors as primary request-saving sources. They MUST NOT require coordinate-array reads to obtain the same information. A validator MUST check mirror/source agreement. Disagreement is an error. It does not permit silent replacement of authoritative P/S metadata.
 
-`times[i]` MUST render the exact epoch-ms coordinate value; `band_names[i]` MUST equal `bands[i].name` and, for string band coordinates, `band[i]`. The levels mirror MUST contain one entry per M layout entry, in the same order:
+`times[i]` MUST render the exact epoch-ms coordinate value. `band_names[i]` MUST equal `bands[i].name` and, for string band coordinates, `band[i]`. The levels mirror MUST contain one entry per M layout entry, in the same order:
 
 | Field | Type | Equality rule |
 |---|---|---|
@@ -187,7 +187,7 @@ Readers MUST use the available `times`, `band_names` and `levels` mirrors as pri
 | `shape` | integer[4] | MUST equal the data array shape `[n_time,n_band,H_k,W_k]`. |
 | `grid` | integer[2] | MUST equal `[ceil(H_k/cs),ceil(W_k/cs)]`. |
 
-Writers MUST emit the mirrors specified above. Their reader fallbacks in §§3.2 and 9.2 support discovery of baseline values without inventing a legacy parser. A validator MUST distinguish a missing required writer field from a decodable fallback path.
+Writers MUST emit the mirrors specified above. The reader fallbacks in §§3.2 and 9.2 support discovery of baseline values. They need no legacy parser. A validator MUST distinguish a missing required writer field from a decodable fallback path.
 
 ## 4. Validity, units and provenance
 
@@ -200,21 +200,26 @@ Writers MUST emit the mirrors specified above. Their reader fallbacks in §§3.2
 | `int16` | Representable integer, or null | null | Integer (§5). |
 | `float32` | Finite representable number, or null | null | Float (§5). |
 
-`chronozarr.nodata` MUST be one number or null. Null declares no nodata sentinel. If it is a number, it MUST equal each data array's `fill_value` and `nodata` attribute. If it is null, `fill_value` MUST be 0 and the data array's `nodata` attribute MUST be absent. NaN MUST NOT be used as nodata. Writers SHOULD NOT store NaN data; gaps SHOULD be marked using the sentinel or mask.
+`chronozarr.nodata` MUST be one number or null. Null declares no nodata sentinel. If it is a number, it MUST equal each data array's `fill_value` and `nodata` attribute. If it is null, `fill_value` MUST be 0 and the data array's `nodata` attribute MUST be absent. NaN MUST NOT be used as nodata. Writers SHOULD NOT store NaN data. Gaps SHOULD be marked using the sentinel or mask.
 
-A pixel is valid when its mask exists and equals 1; otherwise, if there is no mask and a numeric nodata sentinel exists, when its data value differs from that sentinel; otherwise it is valid. A reader with a mask MUST use it and MUST NOT also compare data to the nodata sentinel. Invalid pixels MUST be treated as missing in band math, statistics, block means and charts. Where mask equals 0 the data value is not interpreted, and writers SHOULD store `fill_value` there. A missing optional mask does not make the store invalid; it changes which of these validity rules applies.
+A pixel is valid when its mask exists and equals 1. Otherwise, if there is no mask and a numeric nodata sentinel exists, it is valid when its data value differs from that sentinel. Otherwise it is valid. A reader with a mask MUST use it and MUST NOT also compare data to the nodata sentinel. Invalid pixels MUST be treated as missing in band math, statistics, block means and charts. Where mask equals 0, the data value is not interpreted. Writers SHOULD store `fill_value` there. The mask is optional, and a missing mask changes which of these validity rules applies.
 
 ### 4.2 Mask
 
 A writer MAY supply `{level}/mask`, but MUST supply it at every level or at none. The root declaration follows §3.2. Every mask MUST contain true `uint8` values 0 (invalid) or 1 (valid), with shape `[n_time,H_k,W_k]`, dimensions `["time","y","x"]`, matching `_ARRAY_DIMENSIONS`, and `fill_value: 0`.
 
-Mask chunks MUST follow the data layout without the band axis: unsharded `[1,cs,cs]`, keys `c/{t}/{r}/{c}`; sharded `[shard_time,cs,cs]` with inner chunks `[1,cs,cs]`, keys `c/{ts}/{r}/{c}`. The declared spatial metadata and codec chain MUST follow §§3.3 and 7. A coarser mask MUST be the maximum over each padded 2×2 source block (1 if any source pixel is valid), with edge replication as in §5.
+Mask chunks MUST follow the data layout without the band axis:
+
+- unsharded `[1,cs,cs]`, keys `c/{t}/{r}/{c}`
+- sharded `[shard_time,cs,cs]` with inner chunks `[1,cs,cs]`, keys `c/{ts}/{r}/{c}`
+
+The declared spatial metadata and codec chain MUST follow §§3.3 and 7. A coarser mask MUST be the maximum over each 2×2 source block, padded by edge replication as in §5. The result is 1 if any source pixel is valid.
 
 ### 4.3 Coverage
 
 A writer MAY supply `{level}/coverage`, but MUST supply it at every level or at none. Its declaration follows §3.2. Every coverage array MUST use `uint8`, shape `[n_time,H_k,W_k]`, dimensions `["time","y","x"]`, matching `_ARRAY_DIMENSIONS`, and `fill_value: 0`. Its layout, chunk sizes, keys, spatial metadata and codec chain MUST match the mask rules, whether or not a mask exists.
 
-Level-0 coverage MUST represent the number of valid observations behind a pixel, saturated at 255. Zero denotes a pixel that was gap-filled or never observed. At a coarser level it MUST be the mean of the four edge-replicated source values, rounded to nearest integer with halves up: `(sum + 2) // 4`. Coarser values are rounded summaries, not literal independent observation counts. Coverage MUST NOT replace the mask or sentinel validity rule: a gap-filled pixel can be valid with coverage 0. Gap-fill provenance follows §4.5.
+Level-0 coverage MUST represent the number of valid observations behind a pixel, saturated at 255. Zero denotes a pixel that was gap-filled or never observed. At a coarser level it MUST be the mean of the four edge-replicated source values, rounded to nearest integer with halves up: `(sum + 2) // 4`. A coarser value is a rounded summary of its source values. Coverage MUST NOT replace the mask or sentinel validity rule. A gap-filled pixel can be valid with coverage 0. Gap-fill provenance follows §4.5.
 
 ### 4.4 Band descriptions and physical values
 
@@ -228,9 +233,9 @@ Each `chronozarr.bands` entry MUST be an object. String-only descriptions and so
 | `offset` | number | MAY be supplied; default 0. Writers SHOULD write it explicitly. |
 | `units` | string | MAY be supplied; free text, e.g. `"reflectance"` or `"fraction"`. |
 
-Physical value is `stored * scale + offset`. Consumers MUST apply that formula whenever valid physical values are shown or combined; invalid pixels MUST remain missing and MUST NOT be scaled into valid measurements. Consumers doing band math or indices SHOULD select by `common_name`, falling back to `name`, and MUST NOT assume a source's reflectance scale. An RGB uint8 band with scale 1 is interpreted in its stored units.
+Physical value is `stored * scale + offset`. Consumers MUST apply that formula whenever valid physical values are shown or combined. Invalid pixels MUST remain missing and MUST NOT be scaled into valid measurements. Consumers doing band math or indices SHOULD select by `common_name`, falling back to `name`. They MUST NOT assume a source's reflectance scale. An RGB uint8 band with scale 1 is interpreted in its stored units.
 
-Writers MUST NOT set CF `scale_factor` or `add_offset` on data arrays to silently trigger automatic scaling by generic clients. Generic readers see stored values; conversion to physical units is an explicit consumer operation. The CF time units in §2.2 are independent of this band-value rule.
+Writers MUST NOT set CF `scale_factor` or `add_offset` on data arrays to silently trigger automatic scaling by generic clients. Generic readers see stored values. Conversion to physical units is an explicit consumer operation. The CF time units in §2.2 are independent of this band-value rule.
 
 ### 4.5 Provenance
 
@@ -243,7 +248,7 @@ A writer MAY supply `chronozarr.provenance`. When present it MUST contain:
 | `gap_fill` | string | Required; `"none"` or `"carry-forward"`. Carry-forward means a pixel with no valid observation takes the previous timestep's value. |
 | `notes` | string | Optional additional explanation. |
 
-Provenance MUST describe the processing actually applied. It does not override validity or coverage interpretation.
+Provenance MUST describe the processing applied. It leaves validity and coverage interpretation unchanged.
 
 ## 5. Overview semantics
 
