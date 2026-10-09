@@ -99,6 +99,7 @@ def main():
         "bytes": sum(p.stat().st_size for p in OUT.rglob("*") if p.is_file()),
     }
     target = ROOT / "data/reports/nisar-20261002.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
 

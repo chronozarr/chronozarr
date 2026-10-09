@@ -221,6 +221,7 @@ def main():
         }
         suffix = "" if args.quality == "all" else f"-{args.quality}"
         report_path = ROOT / f"data/reports/swot-roanoke-20261002{suffix}.json"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps(report, indent=2))
         print(json.dumps(report, indent=2))
     finally:
