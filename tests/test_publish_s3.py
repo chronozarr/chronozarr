@@ -273,7 +273,7 @@ def test_a_put_failure_stops_the_phase_and_names_the_key(store):
     with Stubber(adapter.client) as stubber:
         stubber.add_response("list_objects_v2", {}, {"Bucket": "bucket", "Prefix": "p/"})
         stubber.add_client_error("put_object", **client_error("SlowDown", "reduce your rate"))
-        with pytest.raises(PublishError, match=r"phase 1 \(chunks\).*SlowDown"):
+        with pytest.raises(PublishError, match=r"phase 1 \(data chunks\).*SlowDown"):
             upload(plan, adapter, workers=1)
 
 

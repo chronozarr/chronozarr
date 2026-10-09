@@ -185,9 +185,11 @@ def test_plan_lists_objects_in_phase_order_with_cache_headers(store, adapter):
     phases = [o.phase for o in plan.objects]
     assert phases == sorted(phases)
     assert plan.objects[-1].key == "zarr.json"
-    assert {o.key for o in plan.objects if o.phase == 2} == {"zarr.json"}
-    assert all(o.key.endswith("/zarr.json") for o in plan.objects if o.phase == 1)
-    assert not any(o.key.endswith("zarr.json") for o in plan.objects if o.phase == 0)
+    assert {o.key for o in plan.objects if o.phase == 3} == {"zarr.json"}
+    assert all(o.key.endswith("/zarr.json") for o in plan.objects if o.phase == 2)
+    assert {o.key for o in plan.objects if o.phase == 1} >= {"0/time/c/0", "volatility/c/0/0"}
+    assert all(o.cache_control == SHORT_TTL for o in plan.objects if o.phase)
+    assert not any(o.key.endswith("zarr.json") for o in plan.objects if o.phase < 2)
 
     cache = {o.key: o.cache_control for o in plan.objects}
     assert cache["zarr.json"] == SHORT_TTL
@@ -300,7 +302,7 @@ def test_a_failed_phase_stops_before_metadata_and_a_rerun_resumes(store, adapter
     broken = "aoi/store-v1/0/data/c/1/0/1/1"
     adapter.fail_keys = {broken}
     with pytest.raises(
-        PublishError, match=r"phase 1 .chunks.*Run the same command again"
+        PublishError, match=r"phase 1 .data chunks.*Run the same command again"
     ) as raised:
         upload(plan, adapter, workers=1)
     assert broken in str(raised.value)
@@ -497,7 +499,7 @@ def test_upload_failure_raises_before_any_verification(store, adapter):
     def forbidden(url: str) -> list[Check]:
         raise AssertionError("verified an incomplete upload")
 
-    with pytest.raises(PublishError, match=r"phase 3 .root metadata"):
+    with pytest.raises(PublishError, match=r"phase 4 .root metadata"):
         publish(plan, adapter, check_store=forbidden)
 
 
