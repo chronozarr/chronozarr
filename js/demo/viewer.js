@@ -134,7 +134,10 @@ class Viewer {
   /** The embed parameters to keep in the address bar next to the store and the view (embed.js parseEmbedParams().query). */
   extraQuery = '';
 
-  /** Timestep of the last complete frame. */
+  /**
+   * Timestep of the last complete frame at the level the view settles on: the normal level, or a playing movie's level.
+   * A coarser frame that stands in for it (a fallback while that level loads, or a fast scrub's level) does not count.
+   */
   paintedT = -1;
 
   #formatTime = (t) => String(t);
@@ -769,7 +772,8 @@ class Viewer {
     for (const { row, col, slots } of drawable) this.#drawCell(lod, row, col, slots);
     this.#shown = { lod, t, cells: new Set(cells.map(([row, col]) => `${row}/${col}`)), kind };
     this.#dirty = false;
-    if (kind === 'target') this.paintedT = t;
+    // A fast scrub's coarser frame is the target only while the scrub lasts; like a fallback, it does not count as painted.
+    if (kind === 'target' && !(this.#scrubCoarser && lod > this.#scrubMemo.baseLod)) this.paintedT = t;
     this.#frameStats.painted++;
     if (lod > targetLod) this.#frameStats.fallback++;
     const ms = performance.now() - started;
