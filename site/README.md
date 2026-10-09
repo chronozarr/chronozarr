@@ -17,23 +17,25 @@ npm run deploy
 Deployment uses the repository's pinned Wrangler binary. Install root tooling
 with `npm ci` from the repository root if it is absent. The site has its own
 Worker, `chronozarr-docs`; the browser demo and its shared modules are copied into this same deployment by `scripts/copy-demo.mjs`.
-Build output is `docs/dist`. `worker.js` redirects www to the apex and forwards
-other requests to static assets. Unknown paths return 404.
+Build output is `docs/dist`. `worker.js` redirects www to the apex, redirects
+the paths of removed pages to their replacements, and forwards other requests to
+static assets. Unknown paths return 404.
 
 ## Content and visual direction
 
 The homepage introduces the format through a three-date Ucayali raster strip,
 then routes visitors to creating, publishing, or integrating a store. The docs
 use Vocs navigation, code blocks, search, light/dark themes, and mobile menus.
-The format specification remains labeled v0.2 Draft.
+The format specification is labeled v0.3 Draft.
 
-`npm run sync-content` imports ten existing repository documents before dev/build.
-The specification comes from `../spec/CHRONOZARR.md`, and the guides and JavaScript
-references come from `../docs` and `../js`. Edit those source documents rather
-than the ignored generated pages. The importer adapts relative links, escapes
-literal MDX prose syntax, and updates obsolete public demo URLs in README examples.
-It preserves code blocks. Hand-authored introduction and Python/CLI pages live in
-`docs/pages`; full signatures remain linked to source.
+The repository Markdown is the source of the documentation. `npm run sync-content`
+copies the documents listed in `scripts/sync-content.mjs` into `docs/pages` before
+dev and build. The root `README.md` becomes `/getting-started`, and `../docs`,
+`../js`, `../spec` and `../examples/bring_your_data` supply the other pages.
+Edit those source documents rather than the ignored generated pages. The importer
+adapts relative links, removes the README badges and escapes literal MDX prose
+syntax. It preserves code blocks. The landing page, `docs/pages/index.mdx`, is the
+only hand-written page. Keep its introduction equal to the opening of the README.
 
 The homepage loads three WebP previews totaling about 56 KiB. It does not load
 the viewer or fetch raster chunks. `scripts/make-previews.py` records their source,
