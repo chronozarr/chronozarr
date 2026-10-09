@@ -37,15 +37,15 @@ def test_wraparound_differences_roundtrip_exactly(tmp_path, shard):
 def test_stored_values_are_the_measurements(tmp_path):
     _encode(tmp_path, _cube(PREVIOUS, CURRENT), shard=False)
     raw = zarr.open_array(str(tmp_path / "s" / "0" / "data"), mode="r")
-    assert raw[0, 0, 0].tolist() == PREVIOUS.tolist()  # both timesteps store true values
-    assert raw[1, 0, 0].tolist() == CURRENT.tolist()
+    assert np.asarray(raw[0, 0, 0]).tolist() == PREVIOUS.tolist()  # both store true values
+    assert np.asarray(raw[1, 0, 0]).tolist() == CURRENT.tolist()
 
 
 def test_signed_boundary_values_remain_unsigned_measurements(tmp_path):
     truth = _cube(PREVIOUS[2:], CURRENT[2:])  # +32767 and -32768: the extremes of int16
     _encode(tmp_path, truth, shard=False)
     raw = zarr.open_array(str(tmp_path / "s" / "0" / "data"), mode="r")[1, 0, 0]
-    assert raw.tolist() == CURRENT[2:].tolist()
+    assert np.asarray(raw).tolist() == CURRENT[2:].tolist()
 
 
 def test_uint8_values_remain_unchanged(tmp_path):
@@ -55,7 +55,7 @@ def test_uint8_values_remain_unchanged(tmp_path):
     store = _encode(tmp_path, truth, shard=False)
     raw = zarr.open_array(str(tmp_path / "s" / "0" / "data"), mode="r")
     assert raw.dtype == np.uint8
-    assert raw[1, 0, 0].tolist() == current.tolist()
+    assert np.asarray(raw[1, 0, 0]).tolist() == current.tolist()
     assert np.array_equal(store.to_xarray().values, truth)
 
 
