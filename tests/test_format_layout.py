@@ -56,7 +56,7 @@ def test_coverage_is_stored_and_mean_reduced_with_rounding(tmp_path):
 
 
 def test_coverage_rounds_half_up():
-    from chronozarr.encode import _downsample_plane_pair
+    from chronozarr._writer import _downsample_plane_pair
 
     plane = np.array([[1, 1], [0, 0]], dtype=np.uint8)  # mean 0.5 -> 1
     assert _downsample_plane_pair(None, plane)[1].tolist() == [[1]]
