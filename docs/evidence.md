@@ -24,6 +24,13 @@ CarbonPlan zarr-layer 0.10.0 with zarrita 0.7.5 rendered the fixture. It needed 
 
 Separate-mask handling and framebuffer color calibration were not established.
 
+xarray needs an explicit level group. `xarray.open_zarr(store, group="0")` opens a selected level with ordinary stored values. `open_zarr` on the store root may return an empty dataset.
+
+GDAL 3.12.4 needs `_CRS` to assign the CRS. GDAL 3.13.3 assigns the CRS without that alias. It exposes the tested pyramid as subdatasets and does not attach the levels as overviews. Subdataset enumeration does not show that GDAL attaches overview levels or applies a separate mask.
+
+zarr-layer returned the known value of the true-value fixture at the correct map location.
+
+These checks cover reading only. Append, performance and cross-origin hosting were not checked for these readers.
 
 ## Layout choice
 
