@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 import pytest
 from click.testing import CliRunner
@@ -154,6 +156,15 @@ def test_geotiff_without_date_in_name_fails(tmp_path):
     result = CliRunner().invoke(main, ["encode", str(tmp_path / "*.tif"), str(tmp_path / "o")])
     assert result.exit_code == 1
     assert "cannot find a date" in result.output
+
+
+def test_geotiff_input_without_rasterio_names_the_geo_extra(tmp_path, monkeypatch):
+    (tmp_path / "scene_2024-01-15.tif").write_bytes(b"")
+    monkeypatch.setitem(sys.modules, "rasterio", None)  # makes `import rasterio` raise ImportError
+    result = CliRunner().invoke(main, ["encode", str(tmp_path / "*.tif"), str(tmp_path / "o")])
+    assert result.exit_code == 1
+    assert "uv sync --extra geo" in result.output
+    assert "chronozarr[geo]" in result.output
 
 
 def test_doctor_passes_on_a_local_store(tmp_path, zarr_input):

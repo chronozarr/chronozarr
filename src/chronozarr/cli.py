@@ -48,7 +48,8 @@ def _read_geotiffs(pattern: str) -> xr.DataArray:
         import rasterio
     except ImportError as exc:
         raise click.ClickException(
-            "GeoTIFF input needs rasterio: run `uv sync --extra ingest`"
+            "GeoTIFF input needs rasterio: run `uv sync --extra geo` "
+            "(or `pip install 'chronozarr[geo]'`)"
         ) from exc
     paths = glob.glob(pattern)
     if not paths:
