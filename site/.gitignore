@@ -1,8 +1,8 @@
 node_modules/
 .vocs/
 dist/
+docs/pages/getting-started.md
 docs/pages/specification.md
 docs/pages/guides/
-docs/pages/reference/javascript.md
-docs/pages/reference/maplibre.md
+docs/pages/reference/
 .wrangler/

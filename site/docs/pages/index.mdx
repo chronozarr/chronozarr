@@ -7,10 +7,10 @@ title: Raster time series, ready to explore.
 
 # Raster time series, ready to explore.
 
-  <p className="cz-intro">chronozarr is an open Zarr v3 layout for raster time series. Keep native coordinates and numeric values, build a multiscale pyramid, and serve it from a static bucket. Read it in Python or explore it in the browser.</p>
+  <p className="cz-intro">chronozarr turns a raster time series into static files that you can put in a storage bucket. Anyone with the link can then open the series in a web browser and play or scrub through it like a video. Clicking a pixel shows its values over time. The same files open in Python with the exact values you wrote.</p>
   <div className="cz-actions">
     <a href="/getting-started">Get started</a>
-    <a href="https://chronozarr.org/demo/">Open the live viewer</a>
+    <a href="/demo/">Open the live viewer</a>
     <a href="/specification">Read the specification</a>
   </div>
   <figure className="cz-strip" aria-label="Ucayali River satellite images across three dates">
@@ -22,9 +22,9 @@ title: Raster time series, ready to explore.
     <figcaption className="cz-caption">One place, through time. Sentinel-2 monthly composites of the Ucayali River, Peru, from the public demo store. These small RGB previews use pyramid level 3 and a display stretch; open the viewer to inspect values and coverage.</figcaption>
   </figure>
   <div className="cz-paths">
-    <section><h2>Create a store</h2><p>Start with xarray, a NetCDF file, or a manifest of rasters. Encode the time axis and pyramid once.</p><a href="/getting-started">Make your first store</a></section>
-    <section><h2>Publish it</h2><p>Upload static objects to a bucket. Check CORS, byte ranges, and decoding with the doctor command.</p><a href="/publishing">Set up hosting</a></section>
-    <section><h2>Use it anywhere</h2><p>Analyze in Python, fetch cells in JavaScript, add a MapLibre layer, or embed the chronozarr viewer.</p><a href="/integrate">Choose an integration</a></section>
+    <section><h2>Create a store</h2><p>Start with xarray, a NetCDF file, or a manifest of rasters. Encode the time axis and pyramid once.</p><a href="/getting-started#quickstart">Make your first store</a></section>
+    <section><h2>Publish it</h2><p>Upload static objects to a bucket. Check CORS, byte ranges, and decoding with the doctor command.</p><a href="/guides/hosting">Set up hosting</a></section>
+    <section><h2>Use it anywhere</h2><p>Analyze in Python, fetch cells in JavaScript, add a MapLibre layer, or embed the chronozarr viewer.</p><a href="/getting-started#documentation">Browse the documentation</a></section>
   </div>
-  <aside className="cz-compat"><strong>True-value Zarr v3.</strong>chronozarr v0.3 builds on zarr-conventions multiscales, proj and spatial v0.1. Compatible clients read true stored values directly. Level 0 preserves stored values; coarser levels are block means. <a href="/how-it-works">See how it works</a>.</aside>
+  <aside className="cz-compat"><strong>True-value Zarr v3.</strong>chronozarr v0.3 builds on zarr-conventions multiscales, proj and spatial v0.1. Compatible clients read true stored values directly. Level 0 preserves stored values; coarser levels are block means. <a href="/getting-started#how-it-works">See how it works</a>.</aside>
 </div>

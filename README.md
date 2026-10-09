@@ -16,21 +16,72 @@ A chronozarr store is a Zarr v3 group arranged so that a browser can read it ove
 
 The map is divided into square cells, 512 by 512 pixels by default. Each chunk holds one cell at one timestep, with all of its bands. To show a view, the browser downloads only the chunks for the visible cells at the current timestep.
 
-The store also holds a pyramid: each level is a copy of the series at half the resolution of the level below it. When you zoom out, the viewer switches to a coarser level, so a view of the whole area still needs only a few chunks.
+The store also holds a pyramid. Level 0 holds your values unchanged. Each coarser level is the mean of 2 by 2 blocks of the level below it, at half the resolution. When you zoom out, the viewer switches to a coarser level, so a view of the whole area still needs only a few chunks.
 
-The chunks hold the stored numbers, such as uint16 reflectance, with a scale and offset per band for physical units. The viewer draws these numbers on the GPU and computes products such as true color or NDVI there. It also downloads the timesteps around the current one in the background, so stepping through time usually needs no new download.
+```text
+my_store/
+  zarr.json                root metadata
+  0/                       level 0, the original resolution
+    data/                  (time, band, y, x)
+    time/ band/ y/ x/      coordinates
+    mask/ coverage/        optional
+  1/ 2/ ...                coarser levels
+```
 
-The layout follows the Zarr conventions for pyramids (`multiscales`), coordinate systems (`proj`) and georeferencing (`spatial`). This is why other tools can read a store without chronozarr installed: xarray, GDAL 3.13, and CarbonPlan's zarr-layer for MapLibre.
+The chunks hold the stored numbers in their original type: uint8, uint16, int16 or float32. A scale and offset per band give physical units. An optional mask marks invalid pixels. An optional coverage plane counts the valid observations behind each pixel. The viewer draws these numbers on the GPU and computes products such as true color or NDVI there. It also downloads the timesteps around the current one in the background, so stepping through time usually needs no new download.
+
+The layout follows the Zarr conventions for pyramids (`multiscales`), coordinate systems (`proj`) and georeferencing (`spatial`), all at v0.1. This is why other tools can read a store without chronozarr installed: xarray, GDAL 3.13, and CarbonPlan's zarr-layer for MapLibre.
 
 To publish a store, upload it to any host that answers byte-range requests and sends CORS headers. Amazon S3, Cloudflare R2 and Google Cloud Storage all work, and there is no server code to run.
 
 ## Quickstart
 
-Install the package with GeoTIFF support:
+Install the package with GeoTIFF support. It needs Python 3.11 or later.
 
 ```bash
 pip install "chronozarr[geo]"
 ```
+
+### Without data
+
+1. Save this script as `quickstart.py`. It writes a store of three synthetic timesteps and reads one back. The pixels are 10 m in UTM zone 31N.
+
+   ```python
+   import numpy as np
+   import xarray as xr
+   import chronozarr
+
+   values = np.arange(3 * 64 * 64, dtype=np.uint16).reshape(3, 1, 64, 64)
+   da = xr.DataArray(
+       values,
+       dims=("time", "band", "y", "x"),
+       coords={
+           "time": np.array(["2024-01-01", "2024-02-01", "2024-03-01"], dtype="datetime64[ns]"),
+           "band": ["example"],
+           "y": 5000000 - (np.arange(64) + 0.5) * 10,
+           "x": 500000 + (np.arange(64) + 0.5) * 10,
+       },
+   )
+   chronozarr.encode(da, "synthetic_store", crs="EPSG:32631", nodata=None)
+
+   store = chronozarr.open_store("synthetic_store")
+   print((store.read(t=1) == values[1]).all())
+   ```
+
+2. Run the script. It prints `True`: level 0 returns the values that you wrote.
+
+   ```bash
+   python quickstart.py
+   ```
+
+3. Check the store.
+
+   ```bash
+   chronozarr validate synthetic_store
+   chronozarr info synthetic_store
+   ```
+
+### With your data
 
 1. Write a store from a GeoTIFF time series. Use one file per timestep, with the date in each file name.
 
@@ -51,7 +102,7 @@ pip install "chronozarr[geo]"
 
    store = chronozarr.open_store("my_store")
    store.read(t=42)              # (band, y, x), exact stored values
-   ds = store.to_xarray(lod=0)   # lazy xarray Dataset
+   da = store.to_xarray(lod=0)   # xarray DataArray, loaded into memory
    ```
 
 4. Upload `my_store` to a static host. [docs/hosting.md](docs/hosting.md) has recipes for S3 with CloudFront, Cloudflare R2, Google Cloud Storage and Source Cooperative.
@@ -68,7 +119,7 @@ pip install "chronozarr[geo]"
    https://chronozarr.org/demo/?store=https://your-host/my_store
    ```
 
-The input must be on an EPSG grid with north up. To write a store from an xarray `DataArray` with dims `(time, band, y, x)`, call `chronozarr.encode(da, "my_store", crs="EPSG:32618")`.
+The input must be on an EPSG grid with north up. To write a store from an xarray `DataArray`, call `chronozarr.encode` as in the script above.
 
 ## Read a store without chronozarr
 
@@ -118,10 +169,14 @@ There is no build step and no runtime dependency. Examples are in [js/README.md]
 | Topic | Document |
 |-------|----------|
 | Format rules | [spec/CHRONOZARR.md](spec/CHRONOZARR.md) |
+| Python functions | [docs/python.md](docs/python.md) |
 | Your own data, end to end | [examples/bring_your_data](examples/bring_your_data/README.md) |
+| Georeferenced PNG frames | [docs/png-frames.md](docs/png-frames.md) |
 | Hosting and the doctor checklist | [docs/hosting.md](docs/hosting.md) |
 | Adding timesteps | [docs/append.md](docs/append.md) |
 | Embedding the viewer in a page | [docs/embedding.md](docs/embedding.md) |
+| Drawing a store on a MapLibre map | [js/maplibre/README.md](js/maplibre/README.md) |
+| More examples: Sentinel-2 ingest, water masks, notebooks, SWOT, NISAR | [examples](examples/) |
 | Comparison with PMTiles, Mapbox raster-array and zarr-layer | [docs/format-comparison.md](docs/format-comparison.md) |
 | Measurements and tested reader versions | [docs/evidence.md](docs/evidence.md) |
 
