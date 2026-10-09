@@ -34,6 +34,7 @@ VIEWER_CORS_RULE: dict[str, Any] = {
 _NEEDS = {
     "list": "s3:ListBucket",
     "put": "s3:PutObject",
+    "get": "s3:GetObject",
     "head": "s3:ListBucket",
     "read-cors": "s3:GetBucketCORS",
     "write-cors": "s3:PutBucketCORS",
@@ -140,6 +141,16 @@ class S3Adapter:
                 CacheControl=cache_control,
                 ContentType=content_type,
             )
+
+    def read_object(self, key: str) -> bytes | None:
+        try:
+            response = self._call("get", self.client.get_object, Bucket=self.bucket, Key=key)
+        except S3Error as exc:
+            if exc.code == "NoSuchKey":
+                return None
+            raise
+        with response["Body"] as body:
+            return body.read()
 
     def read_cors(self) -> list[dict[str, Any]]:
         try:

@@ -782,6 +782,14 @@ convert_command.help = f"{convert_command.help}\n\n{FIDELITY_HELP}"
     "cached for a year, so prefer a fresh prefix.",
 )
 @click.option(
+    "--update",
+    is_flag=True,
+    help="The prefix already holds an earlier version of STORE (published, then appended to): "
+    "upload only the new and changed objects, new chunks first and the root zarr.json last, and "
+    "keep the public URL and link. Refuses a prefix that is not an earlier state of STORE, and "
+    "a sharded append that rewrites a trailing shard. Not atomic; rerun to resume.",
+)
+@click.option(
     "--apply-cors",
     is_flag=True,
     help="If the CORS check fails, add the viewer rule after the bucket's existing rules. "
@@ -798,6 +806,7 @@ def publish_command(
     region: str | None,
     dry_run: bool,
     overwrite: bool,
+    update: bool,
     apply_cors: bool,
     workers: int,
 ) -> None:
@@ -808,6 +817,10 @@ def publish_command(
     checks against --public-url and prints a chronozarr.org/demo link only if they pass. The
     dataset stays on your host; its storage and delivery charges are yours. chronozarr.org
     serves the viewer, not the data. Credentials come from boto3's chain and are never printed.
+
+    With --update the prefix already holds an earlier version of STORE: only the objects that
+    `chronozarr append` produced are uploaded, and the link stays the same. See docs/append.md for
+    what readers see while it runs.
     """
     from chronozarr._publish_adapters import open_adapter
     from chronozarr.publish import (
@@ -819,12 +832,26 @@ def publish_command(
         plan_store,
         publish,
     )
+    from chronozarr.publish_update import plan_update, publish_update
 
+    if update and overwrite:
+        raise click.UsageError(
+            "--update and --overwrite exclude each other: --update never replaces a chunk."
+        )
     try:
         target = parse_destination(destination)
         adapter = open_adapter(target, profile=profile, endpoint_url=endpoint_url, region=region)
         plan = plan_store(store, target, adapter, public_url)
-        if dry_run:
+        if update:
+            update_plan = plan_update(plan, adapter)
+            click.echo(update_plan.summary(adapter))
+            if dry_run:
+                click.echo("dry run: nothing was uploaded")
+                return
+            result = publish_update(
+                update_plan, adapter, apply_cors=apply_cors, workers=workers, log=click.echo
+            )
+        elif dry_run:
             state = inspect_destination(plan, adapter)
             click.echo(plan.summary(adapter, state.describe(overwrite)))
             if state.conflicts and not overwrite:
@@ -833,15 +860,16 @@ def publish_command(
                 )
             click.echo("dry run: nothing was uploaded")
             return
-        click.echo(plan.summary(adapter))
-        result = publish(
-            plan,
-            adapter,
-            overwrite=overwrite,
-            apply_cors=apply_cors,
-            workers=workers,
-            log=click.echo,
-        )
+        else:
+            click.echo(plan.summary(adapter))
+            result = publish(
+                plan,
+                adapter,
+                overwrite=overwrite,
+                apply_cors=apply_cors,
+                workers=workers,
+                log=click.echo,
+            )
     except PublishError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(f"\nchronozarr doctor {plan.public_url}")
@@ -858,7 +886,12 @@ def publish_command(
             err=True,
         )
         sys.exit(1)
-    click.echo(f"\nverified. Open the store in the viewer:\n\n  {result.link}\n")
+    opening = (
+        "verified. The viewer link is unchanged; open it (reload a page that is already open):"
+        if update
+        else "verified. Open the store in the viewer:"
+    )
+    click.echo(f"\n{opening}\n\n  {result.link}\n")
     click.echo(
         "The dataset stays on your host and its storage and delivery charges are yours; "
         "chronozarr.org supplies the viewer only."

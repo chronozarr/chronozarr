@@ -11,10 +11,11 @@ credentials write. The public URL (`https://...`) is where a browser reads. Noth
 one from the other except through the adapter, and the viewer link is built from the public URL
 after `chronozarr.doctor` has passed against it.
 
-Upload order follows docs/hosting.md section 2: chunk and shard objects, then the group and array
-`zarr.json` files, then the root `zarr.json` (which carries the consolidated metadata). A phase
-starts only after every object of the previous phase is stored, so a reader that finds the root
-finds a complete store.
+Upload order follows docs/hosting.md section 2: chunk and shard objects, then the time and
+volatility chunks (the only chunks a later append rewrites), then the group and array `zarr.json`
+files, then the root `zarr.json` (which carries the consolidated metadata). A phase starts only
+after every object of the previous phase is stored, so a reader that finds the root finds a
+complete store. `chronozarr.publish_update` runs the same phases for an appended store.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ from chronozarr.view import viewer_url
 
 IMMUTABLE = "public, max-age=31536000, immutable"
 SHORT_TTL = "public, max-age=300"
-PHASES = ("chunks", "group and array metadata", "root metadata")
+PHASES = ("data chunks", "time and volatility chunks", "group and array metadata", "root metadata")
 _MD5_HEX = re.compile(r"^[0-9a-f]{32}$")
 _MUTABLE_KEY = re.compile(r"^(\d+/time/c/0|volatility/c/.*)$")
 _LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
@@ -261,8 +262,10 @@ def _count(n: int, noun: str) -> str:
 
 def _phase(key: str) -> int:
     if key == "zarr.json":
+        return 3
+    if key.endswith("/zarr.json"):
         return 2
-    return 1 if key.endswith("/zarr.json") else 0
+    return 1 if _MUTABLE_KEY.match(key) else 0
 
 
 def plan_store(
@@ -330,7 +333,7 @@ def _md5(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _same_content(local: LocalObject, remote: RemoteObject) -> bool:
+def same_content(local: LocalObject, remote: RemoteObject) -> bool:
     if local.size != remote.size:
         return False
     return not _MD5_HEX.match(remote.etag) or _md5(local.path) == remote.etag
@@ -368,7 +371,7 @@ def inspect_destination(plan: PublishPlan, adapter: StorageAdapter) -> Destinati
     remote = adapter.list_objects(dest.prefix)
     local = {dest.key(o.key): o for o in plan.objects}
     shared = {key for key in remote if key in local}
-    different = {key for key in shared if not _same_content(local[key], remote[key])}
+    different = {key for key in shared if not same_content(local[key], remote[key])}
     return DestinationState(
         identical=frozenset(shared - different),
         different=frozenset(different),
@@ -376,43 +379,20 @@ def inspect_destination(plan: PublishPlan, adapter: StorageAdapter) -> Destinati
     )
 
 
-@dataclass(frozen=True)
-class UploadReport:
-    uploaded: int
-    skipped: int
-    uploaded_bytes: int
-
-
-def upload(
-    plan: PublishPlan,
+def put_objects(
+    todo: list[LocalObject],
+    dest: Destination,
     adapter: StorageAdapter,
     *,
-    overwrite: bool = False,
-    workers: int = 16,
-    log: Log = lambda _: None,
-) -> UploadReport:
-    """Store every object of `plan`, chunks first and the root `zarr.json` last.
+    workers: int,
+    log: Log,
+) -> int:
+    """Store `todo` phase by phase and return how many objects were stored.
 
-    Objects already in the destination with the same size and checksum are skipped, so running
-    the same command again resumes an interrupted upload and does nothing once it is complete.
-    A prefix holding any other object is refused unless `overwrite` is set; `overwrite`
-    replaces objects with different content and never deletes anything.
+    A phase starts only after every object of the earlier phases is stored. When any object of a
+    phase fails the later phases are not started, so the root `zarr.json` is never written
+    after a failure. Running the same command again resumes.
     """
-    dest = plan.destination
-    state = inspect_destination(plan, adapter)
-    if state.conflicts and not overwrite:
-        examples = ", ".join(sorted(state.foreign | state.different)[:3])
-        raise PublishError(
-            f"{dest.uri} already holds {len(state.foreign)} object(s) that are not in this store "
-            f"and {len(state.different)} that differ from it (for example {examples}). Refusing "
-            "to overwrite. Publish to a fresh prefix (a new name or version, since objects are "
-            "cached for a year), or pass --overwrite to replace differing objects. Objects not "
-            "in the store are never deleted."
-        )
-    todo = [o for o in plan.objects if dest.key(o.key) not in state.identical]
-    skipped = len(plan.objects) - len(todo)
-    if state.identical:
-        log(f"resuming: {skipped:,} of {len(plan.objects):,} objects already stored and identical")
     done = 0
     for index, name in enumerate(PHASES):
         batch = [o for o in todo if o.phase == index]
@@ -448,9 +428,51 @@ def upload(
             raise PublishError(
                 f"upload stopped in phase {index + 1} ({name}): {len(errors)} object(s) failed, "
                 f"first {key}: {type(exc).__name__}: {exc}. Later phases were not started, so the "
-                "store is not complete and has no root zarr.json yet. Run the same command again "
-                "to resume; stored objects are skipped."
+                "root zarr.json was not written. Run the same command again to resume; stored "
+                "objects are skipped."
             ) from exc
+    return done
+
+
+@dataclass(frozen=True)
+class UploadReport:
+    uploaded: int
+    skipped: int
+    uploaded_bytes: int
+
+
+def upload(
+    plan: PublishPlan,
+    adapter: StorageAdapter,
+    *,
+    overwrite: bool = False,
+    workers: int = 16,
+    log: Log = lambda _: None,
+) -> UploadReport:
+    """Store every object of `plan`, chunks first and the root `zarr.json` last.
+
+    Objects already in the destination with the same size and checksum are skipped, so running
+    the same command again resumes an interrupted upload and does nothing once it is complete.
+    A prefix holding any other object is refused unless `overwrite` is set; `overwrite`
+    replaces objects with different content and never deletes anything.
+    """
+    dest = plan.destination
+    state = inspect_destination(plan, adapter)
+    if state.conflicts and not overwrite:
+        examples = ", ".join(sorted(state.foreign | state.different)[:3])
+        raise PublishError(
+            f"{dest.uri} already holds {len(state.foreign)} object(s) that are not in this store "
+            f"and {len(state.different)} that differ from it (for example {examples}). Refusing "
+            "to overwrite. Publish to a fresh prefix (a new name or version, since objects are "
+            "cached for a year), pass --update when the prefix holds an earlier version of this "
+            "store that you have since appended to, or pass --overwrite to replace differing "
+            "objects. Objects not in the store are never deleted."
+        )
+    todo = [o for o in plan.objects if dest.key(o.key) not in state.identical]
+    skipped = len(plan.objects) - len(todo)
+    if state.identical:
+        log(f"resuming: {skipped:,} of {len(plan.objects):,} objects already stored and identical")
+    done = put_objects(todo, dest, adapter, workers=workers, log=log)
     return UploadReport(done, skipped, sum(o.size for o in todo))
 
 
@@ -521,6 +543,24 @@ def publish(
         f"stored {report.uploaded:,} objects ({report.uploaded_bytes:,} bytes), "
         f"{report.skipped:,} already present"
     )
+    return verify_hosted(plan, report, adapter, apply_cors, check_store, log)
+
+
+def verify_hosted(
+    plan: PublishPlan,
+    report: UploadReport,
+    adapter: StorageAdapter,
+    apply_cors: bool,
+    check_store: Callable[[str], list[Check]],
+    log: Log,
+    *,
+    extra_checks: Callable[[], list[Check]] = lambda: [],
+) -> PublishResult:
+    """Run the doctor checks (and `extra_checks`) against the public URL; link only if none fail.
+
+    The bucket's CORS configuration changes only when `apply_cors` is set and a CORS check
+    failed; the existing rules are kept.
+    """
     log(f"checking {plan.public_url} the way a browser reads it")
     checks = check_store(plan.public_url)
     cors_changed = False
@@ -530,6 +570,7 @@ def publish(
         notes = (note,)
         if cors_changed:
             checks = check_store(plan.public_url)
+    checks = [*checks, *extra_checks()]
     link = None if failures(checks) else viewer_url(plan.public_url)
     return PublishResult(report, checks, link, cors_changed, notes)
 
