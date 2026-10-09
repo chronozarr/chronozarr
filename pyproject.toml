@@ -56,6 +56,8 @@ geemap = ["geemap>=0.37.2", "leafmap>=0.63.1"]
 dask = ["dask>=2024.1"]
 # h5netcdf and h5py: NetCDF input for `convert` and `encode`.
 netcdf = ["h5netcdf>=1.3", "h5py>=3.10"]
+# boto3: `convert` lists an s3:// prefix of GeoTIFFs with the caller's AWS credential chain.
+s3 = ["boto3>=1.34"]
 ingest = [
     "pystac>=1.10",
     "pystac-client>=0.8",

@@ -6,14 +6,28 @@ by cell. Peak memory is about one timestep times `read_ahead`; disk is the raw s
 work directory, once more in `encode`'s cell-major spill, plus the output. Staged timesteps are
 the unit of `resume`: an interrupted run keeps them, and a rerun reads only the missing ones.
 
-Three input kinds are recognised from SOURCE:
+Four input kinds are recognised from SOURCE:
 
 * a manifest (`.csv` or `.json`) of COG or image-frame (PNG) URIs with timestamps, one URI per
   timestep;
+* a directory, a glob or an S3 prefix of GeoTIFFs, listed and dated from their file names (the
+  manifest, written for you);
 * a Zarr store (local path or http(s) URL) with a chosen variable;
 * a NetCDF file (`.nc`, `.nc4`, `.cdf`) with a chosen variable (needs an xarray NetCDF engine).
 
 Needs rasterio (`chronozarr[geo]`) for COG manifests and for the CRS handling of all kinds.
+
+Discovered GeoTIFFs. A directory, a glob (`dir/**/*.tif` recurses) or an S3 prefix
+(`s3://bucket/path/`, listed with the AWS credential chain and boto3, `chronozarr[s3]`) is not
+searched recursively unless a glob says so, and only `.tif` and `.tiff` files count. A file is
+dated from its name only when the name holds exactly one date: YYYYMMDD, YYYY-MM-DD or YYYY_MM_DD
+(a day), YYYY-MM or YYYY_MM (the first of the month). A bare six-digit YYYYMM is not read because
+it cannot be told from YYMMDD. `date_pattern` (`--date-pattern`, strptime-like with `%Y %m %d %H
+%M %S`) replaces these rules and finds the date where the pattern says. A name with no date, with
+several different dates or with an impossible one, and two files with the same date, are reported;
+none is guessed or dropped. What the files hold is checked as for a manifest, and everything found
+wrong, in the names and in the files, is reported together, per file, in one `PreflightError`
+(`--dry-run` writes nothing and reports the same). `write_manifest_to` exports the files and dates.
 
 Fidelity rules. The store carries the source's scale, offset, units and validity, or the
 conversion fails; nothing is guessed.
@@ -122,6 +136,16 @@ from chronozarr._convert_cog import (
 )
 from chronozarr._convert_cog import (
     _tolerate_unlocated_frames,
+)
+from chronozarr._convert_discover import (
+    Discovery as Discovery,
+)
+from chronozarr._convert_discover import (
+    check_manifest_target,
+    discover,
+    is_discovery_source,
+    show_time,
+    write_manifest,
 )
 from chronozarr._convert_manifest import (
     Entry as Entry,
@@ -237,14 +261,20 @@ class Plan:
     est_encode_s: float
     warped: int
     samples: dict[int, Step] = field(default_factory=dict, repr=False)
+    discovered: bool = False  # the files were found by listing, not named by a manifest
 
-    def lines(self, read_ahead: int = 2) -> list[str]:
+    def lines(self, read_ahead: int = 2, list_files: bool = False) -> list[str]:
         info = self.source.info
         times = self.source.times
         out = [
             f"source:     {self.source.kind}, {self.n_time} timesteps "
             f"({np.datetime_as_string(times[0], unit='D')} .. "
             f"{np.datetime_as_string(times[-1], unit='D')})",
+        ]
+        if list_files and self.discovered and isinstance(self.source, CogManifestSource):
+            out.append(f"files:      {len(self.source.entries)}, dated from their names")
+            out.extend(f"  {show_time(e.time)}  {e.uri}" for e in self.source.entries)
+        out += [
             f"grid:       {info.grid.describe()}",
             f"data:       {info.n_band} bands ({', '.join(info.band_names)}), {info.dtype.name}",
             "scaling:    "
@@ -314,33 +344,56 @@ def plan_conversion(
     chunk_size: int = 512,
     n_lods: int | None = None,
     sample: bool = True,
+    date_pattern: str | None = None,
 ) -> Plan:
     """Open the source, check it is consistent and estimate the conversion.
 
     Reads `SAMPLE_TIMESTEPS` timesteps (when `sample`) to measure read time and compression.
-    Raises `PreflightError` with every problem found in the files when the sources of a manifest
-    cannot be one series.
+    Raises `PreflightError` with every problem found in the files (and, for a discovered series,
+    in their dated names) when the sources cannot be one series.
     """
     text = str(source_path)
     suffix = Path(text).suffix.lower()
     is_manifest = suffix in (".csv", ".json")
+    discovered = not is_manifest and is_discovery_source(text)
+    if date_pattern is not None and not discovered:
+        raise ValueError(
+            f"--date-pattern applies to a directory, glob or S3 prefix of GeoTIFFs, not to {text}"
+        )
     source: Source
-    if is_manifest:
+    if is_manifest or discovered:
         if variable is not None or dims is not None or mask_var is not None:
             raise ValueError(
-                "--variable, --dims and --mask-var apply to Zarr and NetCDF input, not manifests"
+                "--variable, --dims and --mask-var apply to Zarr and NetCDF input, not "
+                "manifests or GeoTIFFs"
             )
-        manifest = read_manifest(Path(text))
-        if bounds is not None and manifest.bounds is not None:
+        manifest_bounds: Bounds | None = None
+        if is_manifest:
+            manifest = read_manifest(Path(text))
+            entries, band_names = manifest.entries, manifest.bands
+            undated: list[str] = []
+            prior: list[Problem] = []
+            manifest_bounds = manifest.bounds
+        else:
+            found = discover(text, date_pattern)
+            entries, band_names, undated, prior = (
+                found.entries,
+                None,
+                found.undated,
+                found.problems,
+            )
+        if bounds is not None and manifest_bounds is not None:
             raise ValueError(
                 f"{text} has bounds and bounds were also passed (--bounds); give them once"
             )
-        frame_bounds = manifest.bounds if bounds is None else check_bounds(bounds, "--bounds")
+        frame_bounds = manifest_bounds if bounds is None else check_bounds(bounds, "--bounds")
         if frame_bounds is not None and crs is None:
             raise ValueError("bounds need crs (--crs EPSG:xxxxx), the CRS they are in")
         source = CogManifestSource(
-            manifest.entries,
-            manifest.bands,
+            entries,
+            band_names,
+            undated=undated,
+            prior_problems=prior,
             target_crs=crs,
             target_transform=None
             if transform is None
@@ -398,6 +451,7 @@ def plan_conversion(
         sample_read_s=None,
         est_encode_s=timestep_bytes * n_time / ENCODE_BYTES_PER_S,
         warped=len(source.warped),
+        discovered=discovered,
     )
     if sample:
         seconds = []
@@ -569,16 +623,25 @@ def convert(
     resume: bool = False,
     dry_run: bool = False,
     read_ahead: int = 2,
+    date_pattern: str | None = None,
+    write_manifest_to: str | Path | None = None,
     on_plan: Callable[[Plan], None] | None = None,
     progress: Callable[[int, int], None] | None = None,
     **encode_options: Any,
 ) -> ConvertReport:
     """Convert `source` into a chronozarr store at `out` without holding the whole stack.
 
-    `source` is a manifest (`.csv`/`.json`), a Zarr store (path or URL) or a NetCDF file; see the
-    module docstring. The grid comes from the first source (manifests) or the x/y coordinates
-    (Zarr, NetCDF) unless `crs`, `transform` and `shape` override it for a manifest, in which
-    case sources off the grid are warped with the explicit `resampling`.
+    `source` is a manifest (`.csv`/`.json`), a directory, glob or S3 prefix of GeoTIFFs, a Zarr
+    store (path or URL) or a NetCDF file; see the module docstring. The grid comes from the first
+    source (manifests, GeoTIFFs) or the x/y coordinates (Zarr, NetCDF) unless `crs`, `transform`
+    and `shape` override it for a manifest, in which case sources off the grid are warped with the
+    explicit `resampling`.
+
+    A directory, glob or S3 prefix of GeoTIFFs is listed and each file dated from its name, like
+    a manifest of those files (module docstring, "Discovered GeoTIFFs"). `date_pattern` is a
+    strptime-like pattern (`%Y %m %d %H %M %S`) that says where the date is; `write_manifest_to`
+    writes the files and dates found as a `.csv` or `.json` manifest (`convert` reads it back),
+    also on a dry run, and refuses to overwrite a file.
 
     Image frames (PNG) are manifest sources. `crs` names the CRS of frames that carry none (a
     world file has none). `bounds` is `(west, south, east, north)` in the units of `crs`, the
@@ -600,6 +663,8 @@ def convert(
     """
     if read_ahead < 1:
         raise ValueError(f"read_ahead must be >= 1, got {read_ahead}")
+    if write_manifest_to is not None:
+        check_manifest_target(Path(write_manifest_to))
     out_path = Path(out)
     if not dry_run and out_path.exists() and any(out_path.iterdir()):
         raise FileExistsError(
@@ -619,7 +684,15 @@ def convert(
         bounds=bounds,
         chunk_size=encode_options.get("chunk_size", 512),
         n_lods=encode_options.get("n_lods"),
+        date_pattern=date_pattern,
     )
+    if write_manifest_to is not None:
+        if not plan.discovered or not isinstance(plan.source, CogManifestSource):
+            raise ValueError(
+                "--write-manifest exports the files found in a directory, glob or S3 prefix; "
+                "this source is already a manifest or is not a set of GeoTIFFs"
+            )
+        write_manifest(plan.source.entries, Path(write_manifest_to))
     if on_plan is not None:
         on_plan(plan)
     if dry_run:
