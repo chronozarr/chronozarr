@@ -12,11 +12,11 @@ from click.testing import CliRunner
 
 import chronozarr
 from chronozarr import schema
+from chronozarr._writer import VOLATILITY_SCALE
 from chronozarr.append import AppendReport, append, is_store
 from chronozarr.cli import main
 from chronozarr.convert import convert
 from chronozarr.doctor import diagnose
-from chronozarr.encode import VOLATILITY_SCALE
 from tests.narrow import array_at, required
 from tests.synthetic import (
     BANDS,
@@ -25,7 +25,7 @@ from tests.synthetic import (
     make_da,
     make_times,
     make_truth,
-    reference_anchor_schedule,
+    reference_comparison_schedule,
 )
 
 pytestmark = pytest.mark.unit
@@ -266,7 +266,7 @@ def test_plain_store_volatility_uses_the_nominal_schedule_for_new_steps(tmp_path
     store = tmp_path / "store"
     encode_head(truth, store, 8, shard=True, shard_time=4)
     append(store, window(truth, 8, 13))
-    refs = reference_anchor_schedule(13, 6)
+    refs = reference_comparison_schedule(13, 6)
     assert np.allclose(
         read_volatility(store), expected_volatility(truth[:13], refs), rtol=1e-4, atol=1e-7
     )

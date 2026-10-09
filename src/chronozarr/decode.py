@@ -193,7 +193,7 @@ class ChronoStore:
     def _read_region(
         self, level: Level, timesteps: Sequence[int], ys: slice, xs: slice
     ) -> np.ndarray:
-        """Read ordinary stored values, with no cross-timestep reconstruction."""
+        """Read the stored values of `timesteps` over a window: (time, band, y, x)."""
         try:
             return np.asarray(level.data.oindex[np.asarray(timesteps, dtype=np.int64), :, ys, xs])
         except (ValueError, OSError, IndexError):

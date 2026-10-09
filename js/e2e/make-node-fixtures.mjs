@@ -1,6 +1,6 @@
 // Writes the fixture stores that ten of the node tests read from data/spike/ (a gitignored directory a clean checkout
 // does not have, so those tests skip in CI): decoder.test.js (the synthetic_* stores), codec.test.js (synthetic_sharded
-// and synthetic_gzip) and codec-v02.test.js (codec_bench). They are generated from js/support/synthetic-store.js with
+// and synthetic_gzip) and codec-blosc.test.js (codec_bench). They are generated from js/support/synthetic-store.js with
 // real compressors (zstd and gzip from node:zlib, blosc from the vendored numcodecs), so the decoders are tested
 // against bytes that another implementation wrote. A fixture that already exists is left alone, so running this on a
 // machine that has the real ones changes nothing.

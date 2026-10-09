@@ -35,19 +35,19 @@ async function assertLossless(store, spec, t, lod = 0) {
 
 const base = { nTime: 5, nBand: 2, height: 40, width: 33, chunk: 32,  sharded: true };
 
-// ---- dtypes and modular residuals ----
+// ---- dtypes ----
 
-test('uint16 full-range values remain exact without reconstruction', async () => {
+test('uint16 full-range values remain exact', async () => {
   // Adjacent timesteps span nearly the full uint16 range.
   const values = (t, b, y, x) => (t % 2 === 0 ? 100 + b + x : 60000 + b + x + y);
   const spec = { ...base, nTime: 5, values };
-  const store = await openStore('memory://wrap', { store: buildSyntheticStore(spec), workers: 0 });
+  const store = await openStore('memory://full-range', { store: buildSyntheticStore(spec), workers: 0 });
   assert.equal(store.dtype, 'uint16');
   assert.equal(store.attrs.dtype, 'uint16');
   for (let t = 0; t < 5; t++) await assertLossless(store, spec, t);
   const raw = await store.getRaw(0, 0, 0, 1);
   assert.equal(raw[0], 60000, 'the raw chunk holds true values');
-  assert.equal(store.samplePixel(0, 0, 0, 1, 3, 2)[1], 60000 + 1 + 2 + 3 - 0, 'samplePixel adds modulo 2^16 as well');
+  assert.equal(store.samplePixel(0, 0, 0, 1, 3, 2)[1], 60000 + 1 + 2 + 3 - 0, 'samplePixel reads the stored value');
 });
 
 test('uint8 stores return true values in Uint8Array', async () => {
@@ -98,16 +98,16 @@ test('an unsupported dtype names itself', async () => {
   await assert.rejects(openStore('memory://f64', { store: readable, workers: 0 }), /dtype is float64, expected one of uint8,uint16,int16,float32/);
 });
 
-// ---- temporal encoding "none" ----
+// ---- one chunk per timestep ----
 
 test('every v0.3 timestep is one data-chunk read', async () => {
   const spec = { ...base, specVersion: '0.3.0' };
   const readable = buildSyntheticStore(spec);
-  const store = await openStore('memory://none', { store: readable, workers: 0 });
+  const store = await openStore('memory://one-chunk', { store: readable, workers: 0 });
   assert.equal(store.attrs.spec_version, '0.3.0');
   const before = readable.log.length;
   await store.getCell(0, 0, 0, 3);
-  assert.equal(readable.log.slice(before).filter((c) => c.range && 'offset' in c.range).length, 1, 'one inner-chunk read (plus the shard index), no anchor');
+  assert.equal(readable.log.slice(before).filter((c) => c.range && 'offset' in c.range).length, 1, 'one inner-chunk read (plus the shard index)');
   const cell = await store.getCell(0, 0, 0, 3);
   assert.equal(cell.data, store.peekRaw(0, 0, 0, 3), 'the cached array itself');
   for (let t = 0; t < 5; t++) await assertLossless(store, spec, t);

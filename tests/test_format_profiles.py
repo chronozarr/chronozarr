@@ -80,7 +80,7 @@ def test_nodata_null_treats_zero_as_a_value(tmp_path):
     assert array_at(zarr.open_group(str(tmp_path / "s"), mode="r"), "0/data").fill_value == 0
 
 
-def test_star_delta_with_a_nonzero_nodata_roundtrips(tmp_path):
+def test_a_nonzero_nodata_roundtrips(tmp_path):
     truth = make_truth(4, 1, 13, 11)
     truth[:, :, 0, :] = 65535
     _, store = _encode(tmp_path, truth, nodata=65535)

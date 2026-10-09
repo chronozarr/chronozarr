@@ -387,13 +387,12 @@ test('getCoarseFrame loads one true-value chunk per cell at demand priority', as
 });
 
 test('getCoarseFrame returns true values at every timestep', async () => {
-  const store = await openStore('memory://coarse-anchor', { store: buildSyntheticStore(PYRAMID), workers: 0 });
-  const frame = await store.getCoarseFrame(2, [[0, 0]], 4);
-  assert.equal(frame.cells[0].data, store.peekRaw(2, 0, 0, 4));
-  const none = await openStore('memory://coarse-none', { store: buildSyntheticStore({ ...PYRAMID }), workers: 0 });
-  const plain = await none.getCoarseFrame(2, [[0, 0]], 5);
-  assert.equal(plain.cells[0].data, none.peekRaw(2, 0, 0, 5));
-  assert.equal(plain.t, 5);
+  const store = await openStore('memory://coarse-frame', { store: buildSyntheticStore(PYRAMID), workers: 0 });
+  for (const t of [4, 5]) {
+    const frame = await store.getCoarseFrame(2, [[0, 0]], t);
+    assert.equal(frame.cells[0].data, store.peekRaw(2, 0, 0, t));
+    assert.equal(frame.t, t);
+  }
 });
 
 test('getCoarseFrame holds its chunks against eviction until it resolves, even with a tiny cache', async () => {
