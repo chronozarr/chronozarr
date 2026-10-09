@@ -107,15 +107,23 @@ pip install "chronozarr[geo]"
    da = store.to_xarray(lod=0)   # xarray DataArray, loaded into memory
    ```
 
-4. Upload `my_store` to a static host. [docs/hosting.md](docs/hosting.md) has recipes for S3 with CloudFront, Cloudflare R2, Google Cloud Storage and Source Cooperative.
+4. Look at the store on your machine before you upload it.
 
-5. Check the host.
+   ```bash
+   chronozarr preview my_store
+   ```
+
+   The command serves the store on `127.0.0.1`, opens the viewer in your browser and stops on Ctrl-C. See [docs/python.md](docs/python.md#preview-from-the-command-line).
+
+5. Upload `my_store` to a static host. [docs/hosting.md](docs/hosting.md) has recipes for S3 with CloudFront, Cloudflare R2, Google Cloud Storage and Source Cooperative.
+
+6. Check the host.
 
    ```bash
    chronozarr doctor https://your-host/my_store
    ```
 
-6. Open the store in the hosted viewer:
+7. Open the store in the hosted viewer:
 
    ```
    https://chronozarr.org/demo/?store=https://your-host/my_store
@@ -146,6 +154,7 @@ Run `chronozarr <command> --help` for every option.
 | `append STORE INPUT` | Adds timesteps at the end of a store. See [docs/append.md](docs/append.md) |
 | `validate STORE` | Checks a store against the spec. Exits with status 1 on failure |
 | `info STORE` | Prints the times, bands and levels of a store |
+| `preview STORE` | Serves a local store on `127.0.0.1` and opens it in the viewer. Ctrl-C stops it |
 | `doctor TARGET` | Checks a hosted URL or a local store. See [docs/hosting.md](docs/hosting.md) |
 | `export-cog STORE OUT_DIR` | Writes true-value COGs for GDAL and QGIS. Needs the `geo` extra |
 | `stac STORE --out DIR` | Writes a static STAC Collection and Item. Needs the `geo` extra |

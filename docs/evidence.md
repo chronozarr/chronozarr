@@ -436,3 +436,23 @@ The same mismatch can occur for up to the short lifetime when a CDN holds an old
 - In an unsharded store, that object is the chunk of timestep 0. It is immutable for good.
 - In a sharded store, it is time shard 0. It is immutable once a second time shard exists.
 - While a sharded store has one time shard, that object is the trailing shard with `max-age=300`. Doctor warns on a versioned prefix. The warning is expected then.
+
+## Local preview and remote notebooks
+
+Checked on 2026-10-09 on macOS with Python 3.11 and a synthetic store of 6 timesteps, 2 bands and 200 by 220 pixels.
+
+### Self-hosted viewer
+
+`chronozarr preview STORE --viewer-dir DIR` served a viewer folder written by `chronozarr-viewer`. The viewer opened at `http://127.0.0.1:<port>/_viewer/demo/index.html`, read the store from the same server and painted the first timestep.
+
+### Proxy route
+
+A stand-in for `jupyter-server-proxy` removed the prefix `/user/ada/proxy/<port>` and answered 403 without a login cookie. With the cookie, the viewer opened at `/user/ada/proxy/<port>/_viewer/demo/index.html?store=/user/ada/proxy/<port>/store`. It made 103 store requests through the proxy and painted the first timestep. The notebook player (`player.js`) also reached `ready` with the two paths on the proxy origin. This was not run on a live JupyterHub or with the real `jupyter-server-proxy`.
+
+### Port in use
+
+With `--port` set, `chronozarr preview` fails when anything listens on the port. A `python -m http.server --bind 0.0.0.0` process on the port gave the error "port 8795 on 127.0.0.1 is already in use". A plain bind on `127.0.0.1` next to a listener on `0.0.0.0` succeeds on macOS when `SO_REUSEADDR` is set, so the server also connects to the port before it binds.
+
+### Interrupt
+
+A SIGINT stopped the command with exit status 0 after it printed "stopped". The same port was free for a new bind afterwards.

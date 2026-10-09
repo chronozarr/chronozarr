@@ -422,7 +422,7 @@ With `immutable` and a one-year `max-age`, a rewritten object stays stale in bro
 
 ### Local testing
 
-`python -m http.server` ignores `Range`. A sharded store then reads whole shards, and doctor reports a failure. An unsharded store reads fine. For a sharded store, use `chronozarr.view(store)` from a notebook or any static server that supports ranges.
+`python -m http.server` ignores `Range`. A sharded store then reads whole shards, and doctor reports a failure. An unsharded store reads fine. For a sharded store, use `chronozarr preview STORE`, `chronozarr.view(store)` from a notebook, or any static server that supports ranges. To show a local store to someone on another machine without a bucket, see [Share a store through a tunnel](python.md#share-a-store-through-a-tunnel).
 
 ### Shard size
 

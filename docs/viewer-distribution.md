@@ -33,6 +33,16 @@ cd published
 uv run --with rangehttpserver python -m RangeHTTPServer 8000
 ```
 
+## Preview a local store with the copied viewer
+
+`chronozarr preview` and `chronozarr.view` normally load the viewer from `https://chronozarr.org/demo/`. Pass the copied folder to serve the viewer from your own machine. No internet access is needed.
+
+```sh
+chronozarr preview my_store --viewer-dir published
+```
+
+In a notebook, pass `viewer_dir="published"` to `chronozarr.view` or `chronozarr.player`. The folder needs `demo/index.html`, which the copy command writes. The same server serves the viewer and the store, so there is no CORS or mixed-content step. On JupyterHub the viewer and the store go through `jupyter-server-proxy`. See [python.md](python.md#remote-notebooks).
+
 ## Use a store on another host
 
 Give an absolute URL instead of a path:
