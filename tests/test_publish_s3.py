@@ -58,8 +58,8 @@ def client_error(code: str, message: str = "nope") -> dict[str, Any]:
 def test_open_adapter_dispatches_on_scheme():
     adapter = open_adapter(Destination("s3", "bucket", "p"), region="eu-west-1")
     assert isinstance(adapter, S3Adapter)
-    with pytest.raises(PublishError, match=r"unsupported destination scheme gs://"):
-        open_adapter(Destination("gs", "bucket", "p"))
+    with pytest.raises(PublishError, match=r"unsupported destination scheme ftp://"):
+        open_adapter(Destination("ftp", "bucket", "p"))
 
 
 def test_r2_is_the_same_adapter_with_an_endpoint():

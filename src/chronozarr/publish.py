@@ -3,8 +3,9 @@
 The module separates what every host needs (validate, plan, order, resume, verify, link) from what
 one host provides (`StorageAdapter`). `chronozarr._publish_s3` implements the adapter for AWS S3
 and, through an endpoint URL, Cloudflare R2 and other S3-compatible services;
-`chronozarr._publish_adapters.open_adapter` picks one by destination scheme. Another provider
-needs a new `_publish_<name>.py` and a scheme there.
+`chronozarr._publish_gcs` for Google Cloud Storage and `chronozarr._publish_azure` for Azure Blob
+Storage. `chronozarr._publish_adapters.open_adapter` picks one by destination scheme. Another
+provider needs a new `_publish_<name>.py` and a scheme there.
 
 Two addresses are kept apart throughout. The destination (`s3://bucket/prefix`) is where the
 credentials write. The public URL (`https://...`) is where a browser reads. Nothing here derives
