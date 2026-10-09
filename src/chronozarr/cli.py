@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import glob
+import inspect
 import re
 import sys
 import time
@@ -17,6 +18,7 @@ import numpy as np
 import xarray as xr
 
 from chronozarr import schema
+from chronozarr._convert_discover import is_discovery_source
 from chronozarr._convert_source import UndeclaredNaNError
 from chronozarr.append import append, is_store
 from chronozarr.bands import (
@@ -137,6 +139,24 @@ def _read_geotiffs(pattern: str, crs: str | None) -> _GeotiffStack:
         mask=None if valid is None else xr.DataArray(valid, dims=schema.PLANE_DIMENSIONS),
         nodata=info.nodata,
         bands=info.bands,
+    )
+
+
+def _refuse_files_for_convert(input: str, out: Path) -> None:
+    """Point a manifest, directory or S3 prefix at `convert`, the entry point for files on disk."""
+    lowered = input.lower()
+    if lowered.endswith((".csv", ".json")):
+        kind = "a manifest"
+    elif lowered.startswith("s3://") or (
+        not any(ch in input for ch in _GLOB_CHARS) and is_discovery_source(input)
+    ):
+        kind = "a directory, S3 prefix or file of GeoTIFFs"
+    else:
+        return
+    raise click.ClickException(
+        f"'{input}' is {kind}, which `chronozarr encode` does not read. Use "
+        f"`chronozarr convert {input} {out}`: it lists, checks and streams the files one "
+        "timestep at a time"
     )
 
 
@@ -354,10 +374,14 @@ def encode_command(
     band_roles: tuple[str, ...],
     **options: Any,
 ) -> None:
-    """Encode INPUT into a chronozarr store at OUT.
+    """Encode INPUT into a chronozarr store at OUT, holding the whole stack in memory.
 
     INPUT is a Zarr store or NetCDF file with dims (time, band, y, x), or a quoted glob of
     GeoTIFFs, one per timestep, with the date in the file name.
+
+    For raster files on disk or in S3 use `chronozarr convert` instead: it takes directories,
+    globs, S3 prefixes, manifests, Zarr and NetCDF, reads one timestep at a time and reports
+    every incompatible file before writing.
 
     GeoTIFFs of uint8, uint16, int16 or float32 are read as `convert` reads COGs: band names,
     scale, offset, units, nodata and masks come from the files (see `convert --help`). The files
@@ -369,6 +393,7 @@ def encode_command(
     """
     roles = _band_roles(band_roles)
     file_options: dict[str, Any] = {}
+    _refuse_files_for_convert(input, out)
     if any(ch in input for ch in _GLOB_CHARS):
         with _command_errors():
             stack = _read_geotiffs(input, crs)
@@ -749,7 +774,24 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
 )
 @click.option("--resume", is_flag=True, help="Reuse timesteps staged by an interrupted run.")
 @click.option(
-    "--dry-run", is_flag=True, help="Check the source and print size and time estimates."
+    "--date-pattern",
+    default=None,
+    help="Directory, glob or S3 prefix only: where the date is in each file name, with %Y %m "
+    "%d %H %M %S (for example 'ndvi_%Y%m%d'). Default: YYYYMMDD, YYYY-MM-DD or YYYY-MM, read "
+    "only when a name holds exactly one date.",
+)
+@click.option(
+    "--write-manifest",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Directory, glob or S3 prefix only: write the files and dates found as a manifest "
+    "(.csv or .json) that convert reads back. Refuses to overwrite.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Check every file and print the dates, size and time estimates; writes no store. "
+    "Reports all problems at once, grouped per file, with suggested fixes.",
 )
 @click.option(
     "--read-ahead",
@@ -776,15 +818,32 @@ def convert_command(
     dry_run: bool,
     read_ahead: int,
     band_roles: tuple[str, ...],
+    date_pattern: str | None,
+    write_manifest: Path | None,
     **options: Any,
 ) -> None:
-    """Convert SOURCE into a chronozarr store at OUT without loading the whole stack.
+    """Convert existing raster files into a chronozarr store at OUT, one timestep at a time.
 
-    SOURCE is a manifest (.csv with columns uri,datetime[,bands] or .json) of COG or PNG frame
-    URIs, a Zarr store (path or URL) or a NetCDF file, the last two with --variable. Each
-    timestep is read, resampled if needed, staged under the work directory and then encoded
-    cell by cell. The size and time estimate is printed first; --dry-run stops there.
+    This is the command for files on disk or in S3. SOURCE is one of:
 
+    \b
+      a directory, quoted glob or s3:// prefix of GeoTIFFs, each dated from its file name
+      a manifest (.csv with columns uri,datetime[,bands] or .json) of COG or PNG frame URIs
+      a Zarr store (path or URL) or a NetCDF file, the last two with --variable
+
+    A directory or S3 prefix is not searched recursively; use a glob such as 'dir/**/*.tif'
+    for subdirectories. S3 prefixes are listed with your AWS credentials and need
+    `pip install 'chronozarr[s3]'`. A date is read from a name only when it holds exactly one
+    (YYYYMMDD, YYYY-MM-DD or YYYY-MM); otherwise the file is reported and --date-pattern or a
+    manifest says where the date is. --write-manifest saves what was found.
+
+    Every file is checked before anything is read in bulk: dates, grid and CRS, bands, dtype,
+    scale, offset, units and nodata. All problems are reported together, per file, with a
+    suggested fix; nothing is resampled or rescaled unless you ask (--resampling). Each timestep
+    is then read, staged under the work directory and encoded cell by cell. The size and time
+    estimate is printed first; --dry-run stops there.
+
+    For a Zarr or NetCDF array that fits in memory, `chronozarr encode` is the shorter route.
     --band-role NAME=ROLE sets a band's common name, e.g. for a manifest that names its bands
     (those get none) or sources whose band names the viewer does not know.
     """
@@ -794,7 +853,7 @@ def convert_command(
     def show_plan(plan: Plan) -> None:
         nonlocal migration
         migration = plan.source.kind == "chronozarr v0.2"
-        for line in plan.lines(read_ahead):
+        for line in plan.lines(read_ahead, list_files=dry_run):
             click.echo(line)
 
     def show_progress(done: int, total: int) -> None:
@@ -823,10 +882,14 @@ def convert_command(
             resume=resume,
             dry_run=dry_run,
             read_ahead=read_ahead,
+            date_pattern=date_pattern,
+            write_manifest_to=write_manifest,
             on_plan=show_plan,
             progress=show_progress,
             **_encode_kwargs(options),
         )
+    if write_manifest is not None:
+        click.echo(f"wrote manifest {write_manifest}")
     if report.encode is None:
         click.echo("dry run: nothing was written")
         return
@@ -845,7 +908,7 @@ def convert_command(
     click.echo(f"preview it: {preview_command(out)}")
 
 
-convert_command.help = f"{convert_command.help}\n\n{FIDELITY_HELP}"
+convert_command.help = f"{inspect.cleandoc(convert_command.help or '')}\n\n{FIDELITY_HELP}"
 
 
 @main.command("publish")

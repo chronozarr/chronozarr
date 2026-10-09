@@ -27,6 +27,8 @@ march.tif,2024-03-01
 
 Each row names one raster and its ISO-8601 date. A URI is an HTTP URL or a path relative to the manifest. For a first run, use rasters on the same north-up grid with the same CRS, bands, dtype, scales and offsets. The converter keeps the band descriptions and the scale and offset metadata of the source rasters, so set them there. Band names such as `red`, `green`, `blue` and `nir` let the viewer offer the matching products. A single measured variable also works.
 
+If your rasters are GeoTIFFs with the date in each file name, you can skip the manifest: `uv run chronozarr convert "rasters/*.tif" /tmp/my-series --dry-run --write-manifest observations.csv` lists the files and dates it found, checks every file, and writes `observations.csv` in the format above. It reads a date only when a name holds exactly one (`20240131`, `2024-01-31` or `2024-01`); `--date-pattern "ndvi_%Y%m%d"` says where the date is otherwise. The same command also takes a directory or an `s3://` prefix (`uv sync --extra s3`). Fix whatever it reports, then use `observations.csv` or the same source in the steps below.
+
 For a sample, download three Sentinel-2 acquisitions near Lake Mead from May to July 2020. This needs network access but no account and no API key.
 
 ```sh
