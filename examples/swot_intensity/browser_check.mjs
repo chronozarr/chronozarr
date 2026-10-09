@@ -4,7 +4,6 @@ import path from 'node:path';
 import { chromium } from '../../js/node_modules/playwright/index.mjs';
 import { startStaticServer } from '../../js/support/static-server.js';
 
-const band = process.argv.includes('--hv') ? 1 : 0;
 const root = path.resolve(import.meta.dirname, '../..');
 const server = await startStaticServer(root, 8765);
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
@@ -14,11 +13,11 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/leafmap-check.html', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><body></body></html>' }));
   await page.goto('http://127.0.0.1:8765/leafmap-check.html');
-  await page.evaluate(async (band) => {
+  await page.evaluate(async () => {
     document.body.innerHTML = '<div id="widget"></div>';
     const values = await (await fetch('/data/reports/swot-intensity/model.json')).json();
     const options = values.calls.find(([method]) => method === 'addLayer')[1][0].options;
-    if (JSON.stringify(options.range) !== '[30,80]' || options.band !== band) throw Error('Missing fixed display limits');
+    if (JSON.stringify(options.range) !== '[30,80]' || options.band !== 0) throw Error('Missing fixed display limits');
     const listeners = new Map();
     const model = {
       get: key => values[key], set: (key, value) => { values[key] = value; },
@@ -28,7 +27,7 @@ try {
     };
     const widget = (await import('/data/reports/swot-intensity/widget.js')).default;
     window.dispose = await widget.render({ model, el: document.getElementById('widget') });
-  }, band);
+  });
   await page.waitForFunction(() => document.querySelector('input[type=range]')?.disabled === false, null, { timeout: 60000 });
   assert.equal(await page.locator('input[type=range]').getAttribute('max'), '1');
   await page.waitForFunction(() => document.querySelector('canvas')?.width > 0);
@@ -36,7 +35,7 @@ try {
   await page.locator('input[type=range]').dispatchEvent('input');
   await page.waitForFunction(() => document.querySelector('label span').textContent.includes('2025-05-06'));
   await page.waitForTimeout(1500);
-  await page.screenshot({ path: path.join(root, `data/reports/swot-intensity/browser${band ? '-hv' : ''}.png`) });
+  await page.screenshot({ path: path.join(root, 'data/reports/swot-intensity/browser.png') });
   assert.deepEqual(errors, []);
   await page.evaluate(() => window.dispose());
   console.log('SWOT intensity leafmap: float layer opens with fixed range, two-date slider changes time, canvas renders and cleanup succeeds; no page errors.');
