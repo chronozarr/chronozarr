@@ -76,10 +76,6 @@ export class ChunkCache {
     return this.#entries.has(key);
   }
 
-  touch(entry) {
-    entry.used = ++this.#clock;
-  }
-
   /** The decoded array for a key (counts as a use), or undefined. */
   decoded(key) {
     const entry = this.#entries.get(key);
