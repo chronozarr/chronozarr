@@ -1,3 +1,12 @@
+// Pages removed when the docs became single-source. Each old path goes to the page that now holds its content.
+const moved = {
+  '/how-it-works': '/getting-started#how-it-works',
+  '/publishing': '/guides/hosting',
+  '/integrate': '/getting-started#documentation',
+  '/examples': '/getting-started#documentation',
+  '/reference/cli': '/getting-started#commands',
+};
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -9,6 +18,8 @@ export default {
       url.pathname = '/demo/';
       return Response.redirect(url.toString(), 301);
     }
+    const target = moved[url.pathname.replace(/\/$/, '')];
+    if (target) return Response.redirect(new URL(target, url).toString(), 301);
     return env.ASSETS.fetch(request);
   },
 };
