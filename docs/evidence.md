@@ -9,6 +9,7 @@ This file holds measurements, tested versions, dates and caveats. User docs link
 - [Viewer measurements](#viewer-measurements)
 - [Appending](#appending)
 - [PNG frames](#png-frames)
+- [NISAR and SWOT example data](#nisar-and-swot-example-data)
 - [Embedding](#embedding)
 - [MapLibre layer](#maplibre-layer)
 - [JavaScript dependencies](#javascript-dependencies)
@@ -251,6 +252,48 @@ Other results from 2026-10-09, with GDAL 3.10.3 through rasterio 1.4.4:
 - Frames of different sizes with `--bounds` failed and named both frames.
 
 World files and `.aux.xml` files next to `http(s)` PNGs were checked against a local range server, not a CDN. The date is not recorded.
+
+## NISAR and SWOT example data
+
+On 2026-10-09 the source files of `examples/nisar`, `examples/swot_raster` and `examples/swot_intensity` were matched to public granules. The CMR queries read metadata only. No Earthdata login was used and no granule was downloaded.
+
+### NISAR example
+
+The two `.npz` extracts carry no product ID. The README names the only granules that CMR returns for the window on the two dates.
+
+- The window is x 512270 to 523430 m and y 888070 to 904510 m in EPSG:32618. Its centre is at -74.84 degrees longitude and 8.11 degrees latitude.
+- A query of `NISAR_L2_GCOV_PROVISIONAL_V1` at that point on 2026-06-22 and on 2026-08-21 returned one granule for each date. The same query of `NISAR_L2_GCOV_BETA_V1` with the window box returned none.
+- Both granules are track 119, frame 6, ascending, mode 2005, dual-polarization HH and HV, product version 1.0.11. They are cycles 23 and 28, 60 days apart.
+- Both footprints contain the four corners of the window.
+- The extract arrays were not compared with the granules, because the download needs an Earthdata login. The match rests on the date and the footprint.
+- `extract_window.py` was run on synthetic HDF5 files that have the group and dataset names of the GCOV grid. It was not run on a real granule.
+
+### SWOT raster example
+
+The two NetCDF files in the author's directory have the MD5 checksums that CMR lists for `SWOT_L2_HR_Raster_100m_D` (`dd574a747bd9e09d97a4e4f5e70d289e` for 2025-11-14 and `ba558cc86cd6c7622ccb2e50f4938854` for 2026-07-12). This query returns both granules:
+
+```sh
+curl -sG https://cmr.earthdata.nasa.gov/search/granules.csv \
+  -d short_name=SWOT_L2_HR_Raster_100m_D \
+  -d 'readable_granule_name[]=*UTM18S_N_x_x_x_041_369_109F_20251114T234531*' \
+  -d 'readable_granule_name[]=*UTM18S_N_x_x_x_053_076_046F_20260712T211127*' \
+  -d 'options[readable_granule_name][pattern]=true'
+```
+
+- The default store is `data/stores/swot_roanoke/local-20261002`. WSE is in metres above the geoid of the source product, with its delivered corrections.
+- The build intersects the aligned EPSG:32618 grids. It searches the overlap at a stride of 64 pixels for the 512 x 512 window with the most shared valid pixels. It stages GeoTIFF crops with no warp and no interpolation.
+- Valid pixels fall from 93,717 to 26,049 on 2025-11-14 and from 65,672 to 30,589 on 2026-07-12 with `--quality good`. With `--quality usable` they fall to 76,521 and 59,971. The build never excludes a negative value.
+- The build checks level-0 float bit patterns and masks, xarray values, and the values, masks, units and grid of a COG export. Both xarray interfaces keep the units in `band_units` and set the variable units to `m`.
+- The build writes source paths, SHA-256 hashes, windows and counts to `data/reports/swot-roanoke-20261002.json`, with `-good` and `-usable` versions. All three stores pass these checks and the browser check.
+- The browser check compares chunk and mask hashes with Python. It checks negative readouts and units on both dates. It compares the MapLibre `getValueAt` with a source pixel and saves `data/reports/swot-roanoke-viewer.png`.
+- The MapLibre demo accepts `p=band` for this store, and the leafmap helper uses `product="band"`.
+- The player reads the local store through a range and CORS server, so the browser may ask for local-network permission. The notebooks turn off the floating sidebar of leafmap, as the [leafmap example](../examples/leafmap/README.md) explains.
+
+### SWOT intensity example
+
+The `source` tags of the two 5 m GeoTIFFs name `SWOT_L1B_HR_SLC_025_244_102R_20241211T161411_20241211T161422_PGD0_01.nc` and `SWOT_L1B_HR_SLC_032_244_102R_20250506T172942_20250506T172953_PGD0_01.nc`. The local SLC files of these names have the MD5 checksums that CMR lists for `SWOT_L1B_HR_SLC_D`: `0b79d78429ba02b47a9590a219fa21da` for 2024-12-11 and `67a1551ff4d035c45558fa152a7306f8` for 2025-05-06. Each file is 2.0 GB.
+
+That collection also holds `SWOT_L1B_HR_SLC_032_244_102R_20250506T172942_20250506T172953_PID0_01.nc`, a different file for the same pass. Only the `PGD0` name matches the tag. The 60 m and 5 m GeoTIFFs are outputs of `swot-slc-geocode`, a private project, and no archive holds them.
 
 ## Embedding
 

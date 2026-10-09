@@ -339,7 +339,7 @@ def _commit_metadata(
         levels=levels,
         shard_bytes=shard_bytes,
     )
-    # `multiscales` is not rewritten: it stays byte-identical (spec 14), so a store published
+    # `multiscales` is not rewritten: it stays byte-identical (spec 8.3), so a store published
     # with `pixels_per_tile` keeps it.
     target.root.attrs.update({"chronozarr": updated.to_attrs()})
     with warnings.catch_warnings():

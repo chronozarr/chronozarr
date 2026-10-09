@@ -1,5 +1,6 @@
 """Build a native-grid NISAR cached-extract demo; sources are read only."""
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -10,16 +11,24 @@ import xarray as xr
 import chronozarr
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = Path.home() / "geodata/nisar_swot_water_detection/pilot_20260904"
+DEFAULT_SOURCE = Path.home() / "geodata/nisar_swot_water_detection/pilot_20260904"
 OUT = ROOT / "data/stores/nisar/local-20261002"
 DATES = ["2026-06-22", "2026-08-21"]
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE)
+    source_root = parser.parse_args().source_root
     frames, masks, records = [], [], []
     reference = None
     for date in DATES:
-        path = SOURCE / f"nisar_{date.replace('-', '')}_frequencyA.npz"
+        path = source_root / f"nisar_{date.replace('-', '')}_frequencyA.npz"
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"{path} not found. Pass --source-root with the directory that holds the "
+                "extracts. examples/nisar/README.md describes how to make them."
+            )
         with np.load(path, allow_pickle=False) as z:
             grid = [z[k].copy() for k in ["x", "y", "epsg"]]
             if reference is None:
@@ -99,6 +108,7 @@ def main():
         "bytes": sum(p.stat().st_size for p in OUT.rglob("*") if p.is_file()),
     }
     target = ROOT / "data/reports/nisar-20261002.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
 
