@@ -8,6 +8,7 @@ import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -17,16 +18,24 @@ import xarray as xr
 
 from chronozarr import schema
 from chronozarr.append import append, is_store
-from chronozarr.convert import FIDELITY_HELP, RESAMPLING_METHODS, Plan, convert
+from chronozarr.convert import (
+    FIDELITY_HELP,
+    RESAMPLING_METHODS,
+    CogManifestSource,
+    Entry,
+    Plan,
+    convert,
+)
 from chronozarr.decode import open_store
 from chronozarr.doctor import DEFAULT_ORIGIN, diagnose
 from chronozarr.encode import EncodeReport, encode
 from chronozarr.export import export_cog, select_times
-from chronozarr.schema import SchemaError, validate
+from chronozarr.schema import Band, SchemaError, validate
 from chronozarr.stac import write_stac
 
 _DATE_IN_NAME = re.compile(r"(?<!\d)(\d{4})-?(\d{2})(?:-?(\d{2}))?(?!\d)")
 _GLOB_CHARS = "*?["
+_READ_ROWS = 512  # rows read at a time from a GeoTIFF; not the store chunk size
 
 
 def _time_from_name(path: str) -> np.datetime64:
@@ -42,46 +51,71 @@ def _time_from_name(path: str) -> np.datetime64:
         raise click.ClickException(f"invalid date in file name '{path}': {exc}") from exc
 
 
-def _read_geotiffs(pattern: str) -> xr.DataArray:
-    """One GeoTIFF per timestep (date parsed from the file name), bands stacked."""
-    try:
-        import rasterio
-    except ImportError as exc:
-        raise click.ClickException(
-            "GeoTIFF input needs rasterio: run `uv sync --extra ingest`"
-        ) from exc
+@dataclass(frozen=True)
+class _GeotiffStack:
+    """The timesteps of a GeoTIFF glob and the band metadata and validity the files declare."""
+
+    data: xr.DataArray  # (time, band, y, x) in the files' dtype; attrs hold the CRS and transform
+    mask: xr.DataArray | None  # (time, y, x) uint8, 1 = valid; None when validity is a sentinel
+    nodata: float | int | None
+    bands: tuple[Band, ...]
+
+
+def _read_geotiffs(pattern: str, crs: str | None) -> _GeotiffStack:
+    """One GeoTIFF per timestep (date parsed from the file name), bands stacked.
+
+    The files are read as `chronozarr convert` reads a manifest of COGs, so dtype, band names,
+    scale, offset, units, nodata and masks follow its fidelity rules (`convert --help`). Every
+    file must be on one grid; nothing is resampled. `crs` stands in for a file that has none.
+    """
     paths = glob.glob(pattern)
     if not paths:
         raise click.ClickException(f"no files match '{pattern}'")
-    entries = sorted((_time_from_name(p), p) for p in paths)
+    entries = [Entry(path, time) for time, path in sorted((_time_from_name(p), p) for p in paths)]
+    source = CogManifestSource(
+        entries,
+        None,
+        target_crs=crs,
+        target_transform=None,
+        target_shape=None,
+        resampling="nearest",  # only so that an off-grid file is reported below, not warped
+        nodata="auto",
+        chunk_size=_READ_ROWS,
+    )
+    if 0 in source.warped:
+        raise click.ClickException(
+            f"--crs {crs} is not the CRS of '{entries[0].uri}', and this command does not "
+            "reproject. Use `chronozarr convert` with a manifest, or drop --crs"
+        )
+    if source.warped:
+        raise click.ClickException(
+            f"'{entries[min(source.warped)].uri}' differs from '{entries[0].uri}' in CRS, "
+            "transform or shape, and this command does not resample. Use `chronozarr convert` "
+            "with a manifest and --resampling"
+        )
 
-    frames = []
-    reference: tuple | None = None
-    band_names: list[str] = []
-    for _, path in entries:
-        with rasterio.open(path) as src:
-            signature = (src.crs, src.transform, src.shape, src.count)
-            if reference is None:
-                reference = signature
-                if src.crs is None:
-                    raise click.ClickException(f"'{path}' has no CRS")
-                band_names = [d or str(i + 1) for i, d in enumerate(src.descriptions)]
-            elif signature != reference:
-                raise click.ClickException(
-                    f"'{path}' differs from '{entries[0][1]}' in CRS, transform, shape or bands"
-                )
-            if src.dtypes[0] != "uint16":
-                raise click.ClickException(
-                    f"'{path}' is {src.dtypes[0]}; only uint16 is supported"
-                )
-            frames.append(src.read())
-    assert reference is not None
-    crs, affine, _, _ = reference
-    return xr.DataArray(
-        np.stack(frames),
-        dims=schema.DIMENSIONS,
-        coords={"time": np.array([t for t, _ in entries]), "band": band_names},
-        attrs={"crs": crs.to_string(), "transform": list(affine)[:6]},
+    info = source.info
+    grid = info.grid
+    data = np.empty((len(entries), info.n_band, grid.height, grid.width), dtype=info.dtype)
+    valid = (
+        np.empty((len(entries), grid.height, grid.width), dtype=np.uint8) if info.mask else None
+    )
+    for t in range(len(entries)):
+        step = source.read(t)
+        data[t] = step.data
+        if valid is not None:
+            assert step.valid is not None  # a source with a mask returns a plane per timestep
+            valid[t] = step.valid
+    return _GeotiffStack(
+        data=xr.DataArray(
+            data,
+            dims=schema.DIMENSIONS,
+            coords={"time": np.array(source.times), "band": list(info.band_names)},
+            attrs={"crs": grid.crs, "transform": list(grid.transform)},
+        ),
+        mask=None if valid is None else xr.DataArray(valid, dims=schema.PLANE_DIMENSIONS),
+        nodata=info.nodata,
+        bands=info.bands,
     )
 
 
@@ -233,13 +267,23 @@ def encode_command(
 
     INPUT is a Zarr store or NetCDF file with dims (time, band, y, x), or a quoted glob of
     GeoTIFFs, one per timestep, with the date in the file name.
+
+    GeoTIFFs of uint8, uint16, int16 or float32 are read as `convert` reads COGs: band names,
+    scale, offset, units, nodata and masks come from the files (see `convert --help`). The files
+    must share one grid, and the whole stack is read into memory. To resample or to stream the
+    files one timestep at a time, use `convert`.
     """
+    file_options: dict[str, Any] = {}
     if any(ch in input for ch in _GLOB_CHARS):
-        da = _read_geotiffs(input)
+        with _command_errors():
+            stack = _read_geotiffs(input, crs)
+        da = stack.data
+        crs = None  # da.attrs holds the files' CRS, which --crs had to match
+        file_options = {"bands": stack.bands, "nodata": stack.nodata, "mask": stack.mask}
     else:
         da = _read_xarray(input, variable)
     with _command_errors():
-        report = encode(da, out, crs=crs, **_encode_kwargs(options))
+        report = encode(da, out, crs=crs, **file_options, **_encode_kwargs(options))
     click.echo(_encode_summary(out, report))
 
 
@@ -269,11 +313,11 @@ def append_command(
             if crs is not None or variable is not None:
                 raise click.UsageError("--crs and --variable do not apply to a chronozarr store")
             report = append(store, Path(input), workers=workers)
+        elif any(ch in input for ch in _GLOB_CHARS):
+            stack = _read_geotiffs(input, crs)
+            report = append(store, stack.data, workers=workers, bands=stack.bands, mask=stack.mask)
         else:
-            da = _read_geotiffs(input) if any(ch in input for ch in _GLOB_CHARS) else None
-            if da is None:
-                da = _read_xarray(input, variable)
-            report = append(store, da, crs=crs, workers=workers)
+            report = append(store, _read_xarray(input, variable), crs=crs, workers=workers)
     click.echo(
         f"appended {report.n_appended} timestep(s) to {store}: {report.n_time} in total, "
         f"wrote {report.objects_written} objects ({report.bytes_written / 1e6:.1f} MB) "

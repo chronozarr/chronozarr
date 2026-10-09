@@ -83,13 +83,13 @@ pip install "chronozarr[geo]"
 
 ### With your data
 
-1. Write a store from uint16 GeoTIFFs. Use one file per timestep, with the date in each file name.
+1. Write a store from GeoTIFFs. Use one file per timestep, with the date in each file name.
 
    ```bash
    chronozarr encode "scenes/*.tif" my_store
    ```
 
-   `encode` reads uint16 GeoTIFFs only. Use `chronozarr convert` for other data types.
+   `encode` reads uint8, uint16, int16 and float32 GeoTIFFs. Band names, scale, offset, units and nodata come from the files. A file with no nodata value gives a store with no nodata. All files must share one grid. Use `chronozarr convert` to resample the files or to read them one timestep at a time.
 
 2. Check the store against the spec.
 
@@ -141,7 +141,7 @@ Run `chronozarr <command> --help` for every option.
 
 | Command | What it does |
 |---------|--------------|
-| `encode INPUT OUT` | Writes a store from a Zarr store, a NetCDF file or a quoted glob of uint16 GeoTIFFs |
+| `encode INPUT OUT` | Writes a store from a Zarr store, a NetCDF file or a quoted glob of GeoTIFFs |
 | `convert SOURCE OUT` | Writes a store one timestep at a time, from a manifest of COGs or PNG frames, a Zarr store or a NetCDF file. Also converts a v0.2 store to v0.3 |
 | `append STORE INPUT` | Adds timesteps at the end of a store. See [docs/append.md](docs/append.md) |
 | `validate STORE` | Checks a store against the spec. Exits with status 1 on failure |
