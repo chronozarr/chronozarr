@@ -12,7 +12,7 @@ from PIL import Image
 import chronozarr
 
 ROOT = Path(__file__).resolve().parents[2]
-store = chronozarr.open_store(ROOT / "data/stores/ucayali_santa_maria/chronozarr-4")
+store = chronozarr.open_store(ROOT / "data/stores/ucayali_santa_maria_v03")
 for date, name in [("2016-08", "2016"), ("2020-08", "2020"), ("2025-08", "2025")]:
     t = next(i for i, value in enumerate(store.times) if str(value).startswith(date))
     # R, G, B = B04, B03, B02. Level 3 is a block-mean overview.
