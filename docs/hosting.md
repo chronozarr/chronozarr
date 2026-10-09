@@ -4,7 +4,7 @@ A chronozarr store is a directory of static files. A host serves it with no serv
 
 The prefix of a store is its path in the bucket, for example `my_aoi/chronozarr-2`.
 
-This page has a checklist, an upload procedure, recipes for four hosts and a procedure for appending. The requirements come from [spec/CHRONOZARR.md](../spec/CHRONOZARR.md) section 9. Measurements and dates are in [evidence.md](evidence.md).
+This page has a checklist, an upload procedure, recipes for four hosts and a procedure for appending. The requirements come from [spec/CHRONOZARR.md](../spec/CHRONOZARR.md) section 8. Measurements and dates are in [evidence.md](evidence.md).
 
 ## 1. Checklist
 
@@ -343,7 +343,7 @@ Choose one of two upload routes.
 
 1. Open the product page.
 2. Click the lock icon, then Edit Mode.
-3. Drag in the level directories (`0/`, `1/`, ...) and `volatility/`.
+3. Drag in the level directories (`0/`, `1/`, ...), and `volatility/` if the store has one.
 4. Drag in the root `zarr.json` by itself, last.
 
 The UI does not order uploads, so step 4 is a separate action. A sharded store (`--shard`) has about a hundred objects, which is workable here. An unsharded store has thousands of objects, which is not.
@@ -430,7 +430,7 @@ The demo catalog points to `ucayali_santa_maria_v03`. R2 serves it with `deploy/
 
 ## 7. Appending to a live store
 
-`chronozarr append STORE INPUT` adds timesteps at the end of a store, in place (spec section 14). It writes the shards or chunks that gain data and the metadata. Every other object keeps its bytes and its cache entry.
+`chronozarr append STORE INPUT` adds timesteps at the end of a store, in place (spec section 8.3). It writes the shards or chunks that gain data and the metadata. Every other object keeps its bytes and its cache entry.
 
 ### Choose a layout
 
