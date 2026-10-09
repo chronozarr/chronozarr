@@ -58,7 +58,7 @@ def test_downsample_excludes_nodata_and_keeps_all_nodata_blocks():
     level[0, 0, 0, :2] = [10, 0]  # block (0,0): one valid pixel -> 10
     level[0, 0, 1, :2] = [0, 0]
     level[0, 0, 0:2, 2:4] = [[5, 6], [7, 8]]  # block (0,1): mean 6 (26 // 4)
-    from chronozarr.encode import downsample_2x
+    from chronozarr._writer import downsample_2x
 
     out = downsample_2x(level[0])
     assert out.tolist() == [[[10, 6], [0, 0]]]

@@ -12,11 +12,11 @@ from click.testing import CliRunner
 
 import chronozarr
 from chronozarr import schema
+from chronozarr._writer import VOLATILITY_SCALE
 from chronozarr.append import AppendReport, append, is_store
 from chronozarr.cli import main
 from chronozarr.convert import convert
 from chronozarr.doctor import diagnose
-from chronozarr.encode import VOLATILITY_SCALE
 from tests.narrow import array_at, required
 from tests.synthetic import (
     BANDS,

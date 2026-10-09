@@ -21,15 +21,9 @@ from zarr.errors import ZarrUserWarning
 
 from chronozarr import schema
 from chronozarr._writer import (
-    DEFAULT_CELLS_IN_FLIGHT as DEFAULT_CELLS_IN_FLIGHT,
-)
-from chronozarr._writer import (
-    VOLATILITY_SCALE as VOLATILITY_SCALE,
-)
-from chronozarr._writer import (
-    Block as Block,
-)
-from chronozarr._writer import (
+    DEFAULT_CELLS_IN_FLIGHT,
+    VOLATILITY_SCALE,
+    Block,
     _ArraySource,
     _CellWriter,
     _iso_times,
@@ -45,15 +39,6 @@ from chronozarr._writer import (
     _Source,
     _spill_timesteps,
     _write_time_coord,
-)
-from chronozarr._writer import (
-    _downsample_plane_pair as _downsample_plane_pair,
-)
-from chronozarr._writer import (
-    downsample_2x as downsample_2x,
-)
-from chronozarr._writer import (
-    downsample_block as downsample_block,
 )
 from chronozarr.schema import (
     Band,
