@@ -13,7 +13,13 @@ from tests.synthetic import build_store, make_truth
 pytestmark = pytest.mark.unit
 
 REPO = Path(__file__).resolve().parents[1]
-IMPORT = re.compile(r"""(?:from|import)\s*['"](\.{1,2}/[^'"]+)['"]""")
+# Static and dynamic imports, plus module-relative URLs (the decode worker, zarrita codecs).
+# The dynamic forms fail only at runtime: demo/embed.js reaches maplibre/ through import()
+# and swallows the error.
+IMPORTS = (
+    re.compile(r"""\b(?:from|import)\s*\(?\s*['"](\.{1,2}/[^'"]+)['"]"""),
+    re.compile(r"""\bnew URL\(\s*['"](\.{1,2}/[^'"]+)['"]\s*,\s*import\.meta\.url"""),
+)
 
 
 def load_bundle_module():
@@ -33,8 +39,10 @@ def test_every_relative_import_in_the_bundle_resolves_inside_it(tmp_path):
     load_bundle_module().build_bundle(store, output)
     missing = []
     for script in output.rglob("*.js"):
-        for target in IMPORT.findall(script.read_text(encoding="utf-8", errors="ignore")):
-            resolved = (script.parent / target).resolve()
-            if not resolved.is_file() or not resolved.is_relative_to(output.resolve()):
-                missing.append(f"{script.relative_to(output)} imports {target}")
+        text = script.read_text(encoding="utf-8", errors="ignore")
+        for pattern in IMPORTS:
+            for target in pattern.findall(text):
+                resolved = (script.parent / target).resolve()
+                if not resolved.is_file() or not resolved.is_relative_to(output.resolve()):
+                    missing.append(f"{script.relative_to(output)} imports {target}")
     assert not missing, "\n".join(missing)
