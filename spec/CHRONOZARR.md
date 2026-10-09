@@ -331,7 +331,7 @@ Other compression codecs, other blosc `cname` values, and `shuffle: "bitshuffle"
 
 ### 8.1 HTTP host contract
 
-Stores are served as objects by key from a static host; no application server is required. Z's node metadata representation applies by reference (§0.2).
+Stores are served as objects by key from a static host. No application server is required. Z's node metadata representation applies by reference (§0.2).
 
 | Host behavior | Requirement |
 |---|---|
@@ -344,57 +344,107 @@ Stores are served as objects by key from a static host; no application server is
 | `Cache-Control: public, max-age=31536000, immutable` on immutable objects | SHOULD; mutable append objects use §8.3. |
 | `Timing-Allow-Origin: *` | MAY. |
 
-Bounded ranges avoid the suffix-range CORS preflight on tested browsers. Cross-origin transfer-size measurement without Timing-Allow-Origin may report zero, so consumers can use exposed Content-Length for byte accounting. Directory listing MUST NOT be required; consumers MUST derive keys from metadata and MUST NOT depend on object content types.
+[evidence.md](../docs/evidence.md#hosting-observations) records the CORS preflight and Timing-Allow-Origin checks. Directory listing MUST NOT be required. Consumers MUST derive keys from metadata and MUST NOT depend on object content types.
 
 ### 8.2 Immutable publication
 
-A re-encode MUST be written under a new prefix, never over an existing published store. The only permitted in-place growth is append under §§8.3–8.4, preserving old values.
+A re-encode MUST be written under a new prefix, never over an existing published store. The only permitted in-place growth is append under §§8.3–8.4. Append preserves old values.
 
-Initial upload order SHOULD be data/plane chunks and shards first, then metadata below the root, and root metadata last. The reader uses root metadata as the publication marker. Metadata-last publication does not make a multi-object update atomic and does not excuse incomplete working-copy validation.
+Initial upload order SHOULD be:
+
+1. data and plane chunks and shards
+2. metadata below the root
+3. root metadata
+
+The reader uses root metadata as the publication marker. Metadata-last publication leaves a multi-object update non-atomic. Complete working-copy validation is still required.
 
 ### 8.3 Append restrictions and writes
 
-A store MAY grow only at the end of its time axis. New dates MUST be strictly after the previous final date, and MUST have compatible grid, bands (including units/scales/offsets), dtype, CRS and nodata. A store with a mask or coverage MUST receive that plane for every new timestep; a store without the plane MUST NOT acquire it through append. Existing grid geometry, level count, cell size, layout and codec configuration MUST remain compatible.
+A store MAY grow only at the end of its time axis. New dates MUST be strictly after the previous final date. New dates MUST have compatible grid, bands (including units, scales and offsets), dtype, CRS and nodata. A store with a mask or coverage MUST receive that plane for every new timestep. A store without the plane MUST NOT acquire it through append. Existing grid geometry, level count, cell size, layout and codec configuration MUST remain compatible.
 
-The writer MUST construct an append in a working copy and validate it before publication. It MUST extend every level's data and declared mask/coverage shapes to the new `n_time`, rewrite the time coordinate as a single chunk of the new length, update `chronozarr.times`, `levels[].shape`, affected `shard_bytes`, array shapes and consolidated metadata when present. Optional volatility, if present, MUST be updated to satisfy §6 over the enlarged series; its absence does not require adding it. Each new overview timestep MUST be derived by the same §5 rules as a fresh encode. M layout and fixed geometry remain unchanged.
+The writer MUST construct an append in a working copy and validate it before publication. It MUST:
 
-Unsharded append MUST write only new timestep chunk objects and the mutable metadata/coordinates/optional metric. With sharding, only shards receiving new timesteps MAY be replaced: the previously partial trailing shard and any newly created time shards. Earlier completed shards MUST remain byte-identical. A replaced trailing shard MUST retain byte-identical encoded chunks and unchanged decoded values for all existing timesteps, although I does not promise identical offsets in a rewritten object.
+- extend every level's data and declared mask and coverage shapes to the new `n_time`,
+- rewrite the time coordinate as a single chunk of the new length, and
+- update `chronozarr.times`, `levels[].shape`, affected `shard_bytes`, array shapes and consolidated metadata when present.
 
-Every existing unsharded data/mask/coverage chunk MUST remain byte-identical. All old band, x and y coordinate values and objects, level geometry, and M layout MUST remain unchanged. The existing prefix of the time coordinate MUST remain unchanged in value even though its single chunk is rewritten. No previously published data or validity meaning may change.
+Optional volatility, if present, MUST be updated to satisfy §6 over the enlarged series. Its absence does not require adding it. Each new overview timestep MUST be derived by the same §5 rules as a fresh encode. M layout and fixed geometry remain unchanged.
 
-Objects that MAY change in place are root and descendant node metadata, each level's time-coordinate chunk, optional volatility, and previously partial trailing shards. All other existing chunk/shard objects MUST remain immutable. Hosts SHOULD give mutable objects short cache lifetimes. Append publication SHOULD upload new/replacement chunks and shards first, then time-coordinate chunks and optional volatility, then descendant metadata, and finally root metadata. Metadata-last ordering does not provide atomicity or automatic rollback; the working copy and validation are required.
+Unsharded append MUST write only new timestep chunk objects and the mutable metadata, coordinates and optional metric. With sharding, only shards receiving new timesteps MAY be replaced. These are the previously partial trailing shard and any newly created time shards. Earlier completed shards MUST remain byte-identical. A replaced trailing shard MUST retain byte-identical encoded chunks and unchanged decoded values for all existing timesteps. I does not promise identical offsets in a rewritten object.
+
+Every existing unsharded data, mask and coverage chunk MUST remain byte-identical. All old band, x and y coordinate values and objects, level geometry, and M layout MUST remain unchanged. The existing prefix of the time coordinate MUST remain unchanged in value even though its single chunk is rewritten. No previously published data or validity meaning may change.
+
+The following objects MAY change in place:
+
+- root and descendant node metadata
+- each level's time-coordinate chunk
+- optional volatility
+- previously partial trailing shards
+
+All other existing chunk and shard objects MUST remain immutable. Hosts SHOULD give mutable objects short cache lifetimes. Append publication SHOULD upload objects in this order:
+
+1. new or replacement chunks and shards
+2. time-coordinate chunks and optional volatility
+3. descendant metadata
+4. root metadata
+
+Metadata-last ordering provides neither atomicity nor automatic rollback. The working copy and validation are required.
 
 ### 8.4 Reader snapshots and stale-index recovery
 
-A reader holding a previous root metadata snapshot MUST continue to interpret its listed timesteps with the previous shapes and compatible geometry. It MUST reload root metadata to discover new timesteps. Preservation of old bytes and values is required; preservation of offsets by a particular writer is not a universal guarantee.
+A reader holding a previous root metadata snapshot MUST continue to interpret its listed timesteps with the previous shapes and compatible geometry. It MUST reload root metadata to discover new timesteps. Preservation of old bytes and values is required. Preservation of offsets by a particular writer is not a universal guarantee.
 
-For a mutable trailing shard, a reader MUST NOT blindly apply cached offsets from an old shard version to replacement bytes. A reader detecting a version/length mismatch, invalid index, failed index checksum or incompatible chunk read MUST discard the affected index, refresh metadata/length information and refetch the current index before retrying. Readers MUST keep array shapes consistent with their selected metadata snapshot; older listed timesteps remain readable from the updated shard's index. A stale listed length can put an end-index range at the wrong byte location. Reloading root/array metadata and obtaining the current object length are the recovery path. Once a subsequent shard begins, the previously completed shard MUST remain unchanged. Unsharded stores have no index-replacement hazard.
+For a mutable trailing shard, a reader MUST NOT blindly apply cached offsets from an old shard version to replacement bytes. A reader that detects a version or length mismatch, an invalid index, a failed index checksum or an incompatible chunk read MUST:
+
+- discard the affected index,
+- refresh metadata and length information, and
+- refetch the current index before retrying.
+
+Readers MUST keep array shapes consistent with their selected metadata snapshot. Older listed timesteps remain readable from the updated shard's index. A stale listed length can put an end-index range at the wrong byte location. Reloading root and array metadata and obtaining the current object length are the recovery path. Once a subsequent shard begins, the previously completed shard MUST remain unchanged. Unsharded stores have no index-replacement hazard.
 
 ## 9. Consumer contract
 
 ### 9.1 Profile and version rejection
 
-A conforming reader MUST first GET `{store}/zarr.json` (or open the equivalent local root metadata) and check `attributes.chronozarr.spec_version`. It MUST accept exactly `"0.3.0"` and MUST reject any other or missing value before producing data. The error MUST name the unsupported/missing version and direct the user to `chronozarr convert`, for example: `Unsupported chronozarr spec_version 0.2.0; convert the store with chronozarr convert before opening it with a v0.3 reader.`
+A conforming reader MUST first GET `{store}/zarr.json` (or open the equivalent local root metadata) and check `attributes.chronozarr.spec_version`. It MUST accept exactly `"0.3.0"`. It MUST reject any other or missing value before producing data. The error MUST name the unsupported or missing version and direct the user to `chronozarr convert`, for example: `Unsupported chronozarr spec_version 0.2.0; convert the store with chronozarr convert before opening it with a v0.3 reader.`
 
-v0.2 stores are converted, not read by v0.3 readers. There is no dual-version parser, automatic URL fallback, legacy band-string scale inference or legacy multiscales-list path. The conversion operation is outside the normal reader contract and this draft does not claim its implementation is already available.
+v0.3 readers do not read v0.2 stores. A v0.2 store is converted first. There is no dual-version parser, automatic URL fallback, legacy band-string scale inference or legacy multiscales-list path. The conversion operation is outside the normal reader contract.
 
-Readers MUST enforce the ordinary-value baseline and inherited Z extension rules before returning measurements. Mandatory-extension handling is inherited from Z, Extensions; this profile does not substitute an ignorable attribute flag for that mechanism.
+Readers MUST enforce the ordinary-value baseline and inherited Z extension rules before returning measurements. Mandatory-extension handling is inherited from Z, Extensions. This profile does not substitute an ignorable attribute flag for that mechanism.
 
 ### 9.2 Metadata discovery and fallback
 
-Readers MUST take timestamps from `chronozarr.times`, band objects from `chronozarr.bands`, the variable name from `chronozarr.variable`, and validity inputs from `nodata`, `mask_variable` and `coverage_variable`. They MUST use band-name and level mirrors when present (§3.4), deriving missing `band_names` from the band objects.
+Readers MUST take:
 
-When `levels` is absent, readers MUST enumerate M's ordered `layout[].asset` groups and obtain canonical P/S geometry plus data shape/chunk/codec metadata at each level. Readers MUST use available consolidated metadata for those properties and MUST fall back to individual group/array node metadata when consolidation is absent. They MUST derive `cs` from inner chunks (§2.1), report any unsupported `data_type` or codec by name, and reject metadata contradictions rather than invent a geometry override. Mirrors avoid mandatory coordinate-array reads; validation MAY read their sources to test agreement.
+- timestamps from `chronozarr.times`,
+- band objects from `chronozarr.bands`,
+- the variable name from `chronozarr.variable`, and
+- validity inputs from `nodata`, `mask_variable` and `coverage_variable`.
 
-A generic client is not automatically a conforming chronozarr reader. Informative examples: `xarray.open_zarr(store, group="0")` opens a selected level with ordinary stored values; root `open_zarr` may be an empty dataset. GDAL subdataset enumeration is not proof that it attaches overview levels or applies a separate mask. These behaviors do not relax the contract for a chronozarr-aware consumer.
+They MUST use band-name and level mirrors when present (§3.4), deriving missing `band_names` from the band objects.
+
+When `levels` is absent, readers MUST:
+
+- enumerate M's ordered `layout[].asset` groups, and
+- obtain canonical P/S geometry plus data shape, chunk and codec metadata at each level.
+
+Readers MUST use available consolidated metadata for those properties. They MUST fall back to individual group and array node metadata when consolidation is absent. They MUST:
+
+- derive `cs` from inner chunks (§2.1),
+- report any unsupported `data_type` or codec by name, and
+- reject metadata contradictions rather than invent a geometry override.
+
+Mirrors avoid mandatory coordinate-array reads. Validation MAY read their sources to test agreement.
+
+A generic client is not automatically a conforming chronozarr reader. [evidence.md](../docs/evidence.md#reader-checks) records how xarray and GDAL read a v0.3 store. A chronozarr-aware consumer follows this contract whatever a generic client does.
 
 ### 9.3 Level, value and plane access
 
 Readers MUST select the largest level index `k` whose `resolution` does not exceed the requested output ground sample distance, or `k=0` if none qualifies. For a requested timestep and spatial cell they MUST read one ordinary data chunk using §§2 and 7, with the standard I decoding and Z bounds rules inherited in §0.2. They MUST NOT require another timestep's chunk to obtain that value.
 
-Readers MUST apply §4.1 validity in math, statistics and charts, and §4.4 scale/offset wherever physical values are shown or combined. They MUST read mask or coverage planes only when their corresponding declarations are present, and MUST NOT treat coverage as a validity substitute. Optional volatility MUST NOT be required for opening or reading data.
+Readers MUST apply §4.1 validity in math, statistics and charts, and §4.4 scale/offset wherever physical values are shown or combined. They MUST read mask or coverage planes only when their corresponding declarations are present. They MUST NOT treat coverage as a validity substitute. Optional volatility MUST NOT be required for opening or reading data.
 
-Readers SHOULD cache decoded data chunks for the session and SHOULD prefetch ordinary frames to reduce interaction latency. They MUST retain the per-shard index cache and array-handle reuse rules in §7.2, while recovering correctly for mutable trailing shards (§8.4). Consolidated root discovery and mirrors preserve a single-root-request metadata path; the format does not promise a particular network latency or that every generic reader uses that path.
+Readers SHOULD cache decoded data chunks for the session. They SHOULD prefetch ordinary frames to reduce interaction latency. They MUST retain the per-shard index cache and array-handle reuse rules in §7.2, while recovering correctly for mutable trailing shards (§8.4). Consolidated root discovery and mirrors preserve a single-root-request metadata path.
 
 ## 10. Changes from 0.2
 
