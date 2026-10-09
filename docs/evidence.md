@@ -8,10 +8,13 @@ This file holds measurements, tested versions, dates and caveats. User docs link
 - [v0.3 against v0.2](#v03-against-v02)
 - [Viewer measurements](#viewer-measurements)
 - [Appending](#appending)
+- [PNG frames](#png-frames)
+- [Embedding](#embedding)
+- [MapLibre layer](#maplibre-layer)
+- [JavaScript dependencies](#javascript-dependencies)
+- [Comparison notes](#comparison-notes)
 - [Live store and publishing](#live-store-and-publishing)
 - [Hosting observations](#hosting-observations)
-- [Comparison notes](#comparison-notes)
-- [JavaScript dependencies](#javascript-dependencies)
 - [Development checks](#development-checks)
 - [Stale text found in the old README](#stale-text-found-in-the-old-readme)
 
@@ -163,7 +166,7 @@ The cost is the full-resolution frame of a scrub step on a slow link. It lands l
 
 ## Appending
 
-Appending one month to a 12-month Ucayali store (4 bands, 36 cells at level 0). A re-encode of the same store took 32 s and wrote 6.3 GB. 2026-10-01..
+Appending one month to a 12-month Ucayali store (4 bands, 36 cells at level 0). A re-encode of the same store took 32 s and wrote 6.3 GB. 2026-10-01.
 
 | Layout | Append wall time | Bytes written per month | Rewritten |
 |---|---:|---:|---|
@@ -171,7 +174,7 @@ Appending one month to a 12-month Ucayali store (4 bands, 36 cells at level 0). 
 | Yearly time shards | 0.6 s | 55 to 660 MB, 4.4 GB over a 12-month cycle | the trailing shard, whole |
 | Whole-axis shard (`--shard`) | 0.6 s | 55 MB, then 111 MB and growing | a second shard that grows every month |
 
-These are v0.2 measurements. [append.md](append.md) states they are historical and not a new v0.3 timing.
+These are v0.2 measurements. They were not repeated for v0.3.
 
 Cost model for a sharded store:
 
@@ -189,6 +192,115 @@ Advice that follows from the numbers:
 
 - Choose a finite `--shard-time` (12 for monthly data) only when object count matters more than the rewrite cost.
 - Choose the whole-axis `--shard-time` for archives that are not appended to.
+
+## PNG frames
+
+### Example run
+
+`examples/png_frames/` was run on the Ucayali mosaics when it was added, on 2026-10-01 (commit `a2b557d`). The machine was an M3 Max laptop with other work running. The writer was v0.2, and the store was `png-1`.
+
+The 36 frames cover 2019-01 to 2021-12. Each is a 1024 x 1024 pixel window at row 768, column 1280 of the 2765 x 2759 mosaic. The stretch maps DN 185 to 1758 to 0 to 255. The masked share of a frame runs from 0 to 76.8 %. Six of the 36 frames are over 3 % masked.
+
+| Quantity | Value |
+|---|---|
+| Frames on disk | 74.7 MB for 36 PNGs, with GDAL's default PNG compression |
+| One PNG | 2.08 MB, against 4.19 MB of raw RGBA |
+| Raw in the store | 113.2 MB of bands and 37.7 MB of mask |
+| Store | 112.9 MB in 35 files |
+| Level 0 | 89.6 MB, with its masks |
+| Level 1 | 23.2 MB, with its masks |
+| Masks | 0.23 MB |
+| `convert` | read 0.5 s, encode 1.0 s, 1.5 s in all |
+| Read of one 1024 x 1024 frame | about 0.03 s |
+
+The store is 1.5 times the size of the PNGs. Level 1 is a quarter of level 0. PNG row filters compress rendered imagery better than zstd on the raw bytes: level 0 alone is 1.2 times the PNGs.
+
+The 35 files are a sharded layout. The writer default has been unsharded since 2026-10-01, so a rerun writes more objects.
+
+### Checks on the example
+
+- `chronozarr validate` printed "conforms to chronozarr 0.2.0". `chronozarr doctor` on the local path gave 3 ok, 0 info, 0 warnings and 0 failures.
+- `check_store.py` found, for all 36 frames, that the red, green, blue and mask of the store equal the red, green, blue and alpha != 0 of the PNG, bit for bit.
+- The same frames without world files, converted with `--crs EPSG:32718 --bounds 498450,9151960,508690,9162200`, gave a store identical to `png-1` in data, mask and transform. So did the frames with an `.aux.xml` each and no `--crs`.
+- In the headless viewer with software WebGL, True color was the active product and the only color product enabled. False color, NDVI, NDWI and Water were disabled.
+- A masked pixel was drawn as the background color (9, 12, 18). The valid pixel six pixels to its right was drawn as the stored color.
+- A click read the stored `red`, `green` and `blue` values (200, 238, 184 at pixel 154, 43 of 2019-10), which is what the PNG holds there. Playback buffered, stepped through six timesteps and stopped. There were no console errors.
+- The screenshots were `data/reports/viewer_ucayali_png_truecolor.png` (2019-10, 38 % masked) and `data/reports/viewer_ucayali_png_edge.png` (the masked edge at 8x with the inspector open).
+
+### Sidecar and conversion checks
+
+On 2026-10-09 three synthetic frames of 48 x 64 pixels in EPSG:32718 with 10 m pixels were converted with the commands of the guide. The three setups were a world file with `--crs`, an `.aux.xml` with no options, and no sidecar with `--crs` and `--bounds`. Each store passed `chronozarr validate`, which printed "conforms to chronozarr 0.3.0".
+
+Other results from 2026-10-09, with GDAL 3.10.3 through rasterio 1.4.4:
+
+- A frame with a world file and an `.aux.xml` read its transform from the world file and its CRS from the `.aux.xml`.
+- GDAL wrote the world file of a PNG with the extension `.wld`. It held 498455 and 9162195 for a frame with its upper-left corner at 498450, 9162200 and 10 m pixels. That is the center of the upper-left pixel.
+- A palette PNG gave the error text shown in the guide.
+- A gray PNG became a store with one band named `1`. An RGBA PNG became three bands named `red`, `green` and `blue`, plus a mask.
+- Frames of different sizes with `--bounds` failed and named both frames.
+
+World files and `.aux.xml` files next to `http(s)` PNGs were checked against a local range server, not a CDN. The date is not recorded.
+
+## Embedding
+
+Checked on 2026-10-09 against `https://chronozarr.org`:
+
+- `GET /demo/` returned 200 with no `X-Frame-Options` header and no `Content-Security-Policy` header.
+- `GET /demo?embed=1&store=x` returned 301 to `/demo/?embed=1&store=x`.
+- `GET /examples/embed.html` returned 307 to `/examples/embed`, which returned 200.
+
+Also on 2026-10-09, a host page on `http://127.0.0.1:8791` drove the viewer on `http://127.0.0.1:8765` with the live store `ucayali_santa_maria_v03`:
+
+- A `set` with `range: [0, 0.3]` changed `state.range`, and `range: null` reset it to `null`.
+- A `set` with `range: [2, 1]` returned `bad_set`.
+- A message with `v: 2` and a message with the type `chronozarr:nope` returned `bad_message`.
+- A `set` with `t: 5000` returned `bad_set`.
+
+The sample messages in the guide are values from that run. The live store has 117 timesteps, and they are not consecutive months: the second timestep is 2016-04-01. The first click was at pixel (1155, 1394), at level 0.
+
+The browser test `js/e2e/viewer-embed.spec.js` covers the 320 px layout. Sandbox settings other than `allow-scripts allow-same-origin` are untested.
+
+## MapLibre layer
+
+### Placement checks
+
+The layer and `js/maplibre/verify/` were added on 2026-09-30 (commit `bdc5938`). The results below are for the Ucayali store in Chromium on an M-series Mac at 1280 x 800, with bearing 0 unless noted. They carry no date.
+
+| Check | Result |
+|---|---|
+| Footprint outline at zoom 9.5 (level 3), 11 (level 2), 12.5 (level 0) and 15.5 (level 0), and at bearing 30 with pitch 45, and at bearing -50 with pitch 40 | 0 to 8 pixels per view were drawn outside the pyproj outline, and none was more than 0.001 px beyond it |
+| Unlit pixels within 8 px inside the outline, about 400 sampled evenly per view | every one was a nodata gap at level 0 |
+| Interior texel boundaries, levels 0 to 3, at about 4 px per texel | 60 to 84 boundaries per level, wherever neighbouring texels differ |
+| Offset of those boundaries from pyproj | all within 0.496 px, where 0.5 px is the limit of pixel-center sampling, with a mean offset below 0.03 px and no stray boundaries |
+| Colors against `js/demo/viewer.js`, same store, timestep and texel | 20 of 20 texel and product pairs identical in 8 bits (NDVI, NDWI, water, true color and false color) |
+
+### Error bounds
+
+`js/test/maplibre-mesh.test.js` asserts two bounds. A mesh of 8 x 8 quads over a 512 px cell of a 10 m UTM store stays within 0.01 px at zoom 22, from interpolation plus float32 rounding. The error falls as the divisions grow. Cells that share an edge share their edge vertices to 1e-11 of the world, so the raster has no seams.
+
+### Loading order and prefetch
+
+These numbers carry no date. The first view fetches the coarsest level first. On a 3 MB/s link with 120 ms latency, for 4 cells at level 0 of the Ucayali store (12 MB), the first pixels appeared after 2.5 s instead of 5.5 s. The full-detail view was ready after 7.6 s instead of 5.8 s. On a fast link neither differed.
+
+With `prefetch: true` the demo moved 260 MB in 40 s for a 4-cell view of the Ucayali store.
+
+## JavaScript dependencies
+
+### MapLibre GL JS
+
+The MapLibre layer was tested with MapLibre GL JS 6.10.0 only. The npm registry lists 6.10.0 as published on 2026-09-15. `js/maplibre/index.html` loads that version from cdn.jsdelivr.net. On 2026-10-09 the latest release was 6.13.0, which was not tested. The layer needs MapLibre 5 or later, which passes `defaultProjectionData.mainMatrix`.
+
+### CDN headers
+
+On 2026-10-09 jsDelivr and unpkg both returned `access-control-allow-origin: *` for `chronozarr@0.3.1/chronozarr/decoder.js`.
+
+### Vendored packages
+
+The headers of the files in `js/vendor/` record these versions: zarrita 0.7.5, @zarrita/storage 0.2.0, numcodecs 0.3.2 and gifenc 1.0.3. Each header also holds the SHA-256 of the published file, except the gifenc header, which holds its license text.
+
+## Comparison notes
+
+The statements about other tools in [format-comparison.md](format-comparison.md) were read from their documentation and source on 2026-09-30. Two were checked again on 2026-10-09. The `mapbox-gl-js` repository has the directory `src/data/mrt`. The README of zarr-layer states arbitrary CRS support through proj4 and lists the WGS84 UTM zones. The other statements were not checked again.
 
 ## Live store and publishing
 
