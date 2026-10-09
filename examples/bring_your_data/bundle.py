@@ -33,6 +33,10 @@ def build_bundle(store: Path, output: Path) -> None:
     for name in modules:
         shutil.copytree(REPO / "js" / name, output / name, ignore=shutil.ignore_patterns("verify"))
     shutil.copyfile(REPO / "js/favicon.svg", output / "favicon.svg")
+    # A root-absolute favicon link misses under a subpath; both pages sit one level below the root.
+    favicon_root, favicon_relative = 'href="/favicon.svg"', 'href="../favicon.svg"'
+    viewer_page = output / "demo/index.html"
+    viewer_page.write_text(viewer_page.read_text().replace(favicon_root, favicon_relative))
     # Resolve URLs at runtime so the same bundle works at a domain root or under a subpath.
     (output / "index.html").write_text(
         '<!doctype html><meta charset="utf-8"><title>chronozarr viewer</title>\n'
@@ -41,7 +45,7 @@ def build_bundle(store: Path, output: Path) -> None:
         "location.replace(viewer.href);</script>\n"
     )
     (output / "examples").mkdir()
-    host = (REPO / "js/examples/embed.html").read_text()
+    host = (REPO / "js/examples/embed.html").read_text().replace(favicon_root, favicon_relative)
     start = host.index("  const DEFAULT_STORE = ")
     end = host.index(";", start) + 1
     host = (
