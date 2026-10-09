@@ -1,19 +1,11 @@
 # Notebook player
 
-`chronozarr.player` shows a chronozarr store in a notebook widget. The widget has a time slider and a play button. You can set the timestep, the product and the playback speed from Python. You can also read the pixel that you clicked.
+`chronozarr.player` shows a chronozarr store in a notebook widget with a time slider and a play button. You can set the timestep, the product and the speed from Python, and you can read the pixel that you clicked. The `chronozarr` 0.3.1 release on PyPI includes the player. You need a trusted local Jupyter notebook, VS Code notebook or compatible anywidget host. The host must allow an iframe and serve the notebook over HTTP or HTTPS.
 
-The example opens a store of 36 rendered PNG frames of the Ucayali River in Peru, one for each month from 2019-01 to 2021-12. The `chronozarr` 0.3.1 release on PyPI includes the player.
-
-## What you need
-
-- The `notebook` extra of `chronozarr`.
-- A trusted local Jupyter notebook, VS Code notebook or compatible anywidget host that allows an iframe.
-- Network access to the hosted viewer and store, which are public and need no account.
-
-## Steps
+## Run it
 
 1. Install the extra with `uv add 'chronozarr[notebook]'`. In this checkout, run `uv sync --extra notebook` instead.
-2. Open `demo.ipynb` in the notebook host.
+2. Open `demo.ipynb`. It opens a public store of 36 rendered PNG frames of the Ucayali River, one for each month from 2019-01 to 2021-12.
 3. Create the player and display it.
 
    ```python
@@ -37,48 +29,17 @@ The example opens a store of 36 rendered PNG frames of the Ucayali River in Peru
    movie.close()
    ```
 
-### Check the player in a browser
+The widget shows only the play button and the time slider. Pass `controls=True` to add the date, product and speed menus. The attributes `times`, `products`, `bands` and `ready` arrive after the viewer opens the store. `ready` does not mean that every image chunk has painted. During playback `t` is the requested timestep, and the values in `click` belong to the painted timestep. The browser sends its state to the kernel at most ten times per second.
+
+The viewer runs in an iframe, and the widget accepts messages only from its exact origin and window. By default the iframe loads the viewer from `https://chronozarr.org/demo/`. Set `viewer=` to use a self-hosted viewer, and make the store send CORS headers that allow its origin. A local store path works as the first argument. The player serves it with the same range and CORS server as `chronozarr.view`. A remote kernel needs port forwarding, and the browser may ask for local-network permission.
+
+## Check it in a browser
 
 ```sh
 node examples/anywidget/browser_check.mjs
 node examples/anywidget/browser_check.mjs --live
 ```
 
-Run both commands from the repository root. They need Node.js and the browser tooling from `npm ci --prefix js`.
+Both commands need Node.js and `npm ci --prefix js`, and they run without a Jupyter kernel. The first opens the local store `data/stores/ucayali_santa_maria/png-1`. Build it with `examples/png_frames/render_frames.py` and `examples/png_frames/convert.sh`, which read the monthly mosaics from the [Sentinel-2 example](../sentinel2_pc/README.md). The second command uses the hosted viewer and store.
 
-The first command opens the local store `data/stores/ucayali_santa_maria/png-1`. Build that store with `examples/png_frames/render_frames.py` and `examples/png_frames/convert.sh`, which read the Ucayali monthly mosaics from the [Sentinel-2 example](../sentinel2_pc/README.md). The second command uses the hosted viewer and store and needs no local data.
-
-Both commands test the frontend model of the widget and the iframe protocol. They cover the metadata, kernel-style trait changes, the controls, playback, click values, errors, sender rejection and cleanup. They run without a Jupyter kernel.
-
-On 2026-10-02 a JupyterLab test used the real anywidget extensions. The notebook showed the live PNG player. A slider change reached the kernel (`movie.t == 12`). The metadata arrived (`len(movie.times) == 36`). Setting `movie.t = 9` in Python moved the live iframe to that timestep.
-
-## What you get
-
-### The widget
-
-The widget shows only the play button and the time slider. Pass `controls=True` to add the date, product and speed menus. With `product="band"` the widget also shows the band menu and the display limits.
-
-Python and browser controls stay in step, so moving the slider changes `movie.t` and setting `movie.t` moves the slider. The browser sends its state to the kernel at most ten times per second, while the browser controls and the rendering update immediately.
-
-| Attribute | Content |
-|-----------|---------|
-| `times`, `products`, `bands` | The store metadata, which arrives after the viewer opens the store |
-| `ready` | True once the metadata has arrived. Image chunks may still be painting. |
-| `t` | The requested timestep |
-| `click` | The most recent clicked pixel, with its physical band values and validity. The values belong to the painted timestep. |
-| `state` | The viewer state that the viewer last acknowledged, including camera and date |
-| `error` | The last viewer error, or `{}` |
-
-### Hosted and local stores
-
-The viewer runs in an iframe and uses the v1 embed contract. The widget accepts a message only when both the origin and the sending window match the viewer. After each change from Python or from the browser, it asks the viewer for its state with `chronozarr:get`. An invalid command produces an `error` and restores the last accepted state.
-
-A hosted store needs no raster server. By default the iframe loads the viewer from `https://chronozarr.org/demo/`, and `viewer=` selects a self-hosted viewer. The store must send CORS headers that allow the origin of that viewer.
-
-The `store` argument can also be a local path. The player serves it with the same range and CORS server as `chronozarr.view`. The browser must be able to reach that server. A remote kernel needs port forwarding, and the browser may ask for local-network permission.
-
-Closing the widget removes its iframe, listeners and timers. The shared local store server keeps the lifecycle that `view()` uses.
-
-## Limits
-
-The notebook must be served over HTTP or HTTPS. Otherwise the widget shows a status message and does not open the store.
+On 2026-10-02 a JupyterLab test used the real anywidget extensions. A slider change reached the kernel (`movie.t == 12`), and `movie.t = 9` in Python moved the live iframe.
