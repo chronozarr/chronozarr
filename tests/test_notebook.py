@@ -1,7 +1,10 @@
 """Notebook boundary checks; browser_check.mjs exercises the real embed protocol."""
 
+import html
 import importlib
+import re
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -81,3 +84,32 @@ def test_scientific_display_traits():
                 widget.range = limits
     finally:
         widget.close()
+
+
+def test_proxy_view_preserves_initial_display_options(tmp_path, monkeypatch):
+    view_module = importlib.import_module("chronozarr.view")
+    store = tmp_path / "store"
+    store.mkdir()
+    (store / "zarr.json").write_text("{}")
+    viewer_dir = tmp_path / "viewer"
+    (viewer_dir / "demo").mkdir(parents=True)
+    (viewer_dir / "demo" / "index.html").write_text("<!doctype html>")
+    monkeypatch.setenv("JUPYTERHUB_SERVICE_PREFIX", "/user/ada/")
+    try:
+        page = view_module.view(
+            store, viewer_dir=viewer_dir, t=2, product="band", band="HV_dB", range=[-25, 0]
+        ).data
+        iframe = re.search(r'<iframe src="([^"]+)"', page)
+        assert iframe is not None
+        url = urlsplit(html.unescape(iframe.group(1)))
+        server = view_module.serve_store(store)
+        assert url.path == f"/user/ada/proxy/{server.port}/_viewer/demo/index.html"
+        assert parse_qs(url.query) == {
+            "store": [f"/user/ada/proxy/{server.port}/store"],
+            "t": ["2"],
+            "p": ["band"],
+            "b": ["HV_dB"],
+            "r": ["-25,0"],
+        }
+    finally:
+        view_module.serve_store(store).close()

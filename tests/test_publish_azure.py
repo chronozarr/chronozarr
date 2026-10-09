@@ -450,7 +450,7 @@ def test_an_interrupted_upload_resumes_without_a_root_in_the_container(store, se
     victim = [o for o in plan.objects if o.phase == 0][-1]
     name = f"aoi/store-v1/{victim.key}"
     service.fail_names[name] = azure_errors.ServiceResponseError("flaky")
-    with pytest.raises(PublishError, match=r"phase 1 \(chunks\).*ServiceResponseError"):
+    with pytest.raises(PublishError, match=r"phase 1 \(data chunks\).*ServiceResponseError"):
         upload(plan, adapter, workers=1)
     assert "aoi/store-v1/zarr.json" not in service.objects
     del service.fail_names[name]

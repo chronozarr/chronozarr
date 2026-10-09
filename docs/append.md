@@ -67,7 +67,7 @@ The command stops before it writes, and lists every reason, in these cases.
 - The prefix holds an object that the local store lacks.
 - A hosted chunk or shard has other bytes than the local one.
 - The prefix is empty, or holds an upload that stopped before the root `zarr.json`. Use `chronozarr publish` without `--update`.
-- The adapter cannot read an object back. The S3 adapter, which serves R2 too, can.
+- The adapter cannot read an object back. The AWS S3, R2, GCS and Azure adapters can.
 
 Sharded stores: an append rewrites the shard that receives the new timestep. A shard is a chunk, and a first `chronozarr publish` marks it `immutable`. Browsers and CDNs can keep it for a year. A new root next to an old shard gives wrong index reads, so `--update` refuses to replace a shard. Publish that store to a new prefix. An append that opens a new shard rewrites none, and `--update` publishes it. Keep a store that will grow unsharded, which is the encoder default.
 

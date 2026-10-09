@@ -572,7 +572,7 @@ Costs and measurements: [evidence.md](evidence.md#appending) and [append.md](app
 
 ### Publishing an append
 
-`--update` accepts the destination, `--public-url`, `--profile`, `--endpoint-url`, `--region`, `--apply-cors`, `--workers` and `--dry-run` of a first publish. It rejects `--overwrite`. It needs the S3 adapter (AWS S3 and R2), which can read the hosted root back.
+`--update` accepts the destination, `--public-url`, `--profile`, `--endpoint-url`, `--region`, `--apply-cors`, `--workers` and `--dry-run` of a first publish. It rejects `--overwrite`. AWS S3, R2, GCS and Azure support updates. Each adapter can read the hosted root back.
 
 Dry run prints the hosted and local number of timesteps, the objects per phase and the cache headers, and writes nothing. A plain `chronozarr publish` still refuses a prefix that holds other objects and mentions `--update`.
 

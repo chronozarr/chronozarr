@@ -353,7 +353,7 @@ def test_an_interrupted_upload_resumes_without_a_root_in_the_bucket(store, clien
     plan = plan_for(store, adapter)
     victim = [o for o in plan.objects if o.phase == 0][-1]
     client.fail_keys[f"aoi/store-v1/{victim.key}"] = api.ServiceUnavailable("flaky")
-    with pytest.raises(PublishError, match=r"phase 1 \(chunks\).*ServiceUnavailable"):
+    with pytest.raises(PublishError, match=r"phase 1 \(data chunks\).*ServiceUnavailable"):
         upload(plan, adapter, workers=1)
     assert "aoi/store-v1/zarr.json" not in client.objects
     del client.fail_keys[f"aoi/store-v1/{victim.key}"]
