@@ -1,18 +1,18 @@
 # chronozarr v0.3.0
 
-**Status:** Draft
+Status: Draft
 
-**Date:** 2026-10-03
+Date: 2026-10-03
 
-**Spec version string:** `0.3.0`
+Spec version string: `0.3.0`
 
-**Supersedes:** chronozarr v0.2.0 through explicit store conversion. This draft does not assert that existing chronozarr libraries implement v0.3.0.
+Supersedes: chronozarr v0.2.0. A v0.2.0 store becomes a v0.3.0 store through explicit conversion.
 
 ## 0. Scope and upstream references
 
-chronozarr defines a true-value raster time-series profile of Zarr v3, with a multiscale pyramid, band descriptions, validity planes, metadata mirrors and static publishing rules. Every array contains ordinary stored values. Physical units are obtained by applying the declared band scale and offset; stored values need no chronozarr-specific reconstruction. The profile supports a single EPSG north-up grid per store. It composes the zarr-conventions **multiscales**, **proj** and **spatial** conventions; it is aligned with this GeoZarr convention work, not certified against an adopted OGC GeoZarr standard.
+chronozarr defines a profile of Zarr v3 for raster time series with true stored values. The profile covers a multiscale pyramid, band descriptions, validity planes, metadata mirrors and static publishing rules. Every array holds ordinary stored values. Applying the declared band scale and offset gives physical units. Stored values need no chronozarr-specific reconstruction. Each store has one EPSG north-up grid. The profile composes the zarr-conventions multiscales, proj and spatial conventions. It is aligned with this GeoZarr convention work. It is not certified against an adopted OGC GeoZarr standard.
 
-MUST, MUST NOT, SHOULD, SHOULD NOT and MAY express requirements as in RFC 2119. Sections 0.3 and 10, examples explicitly labelled informative, and implementation observations are informative. Other sections are normative. Upstream requirements incorporated below apply in addition to chronozarr restrictions. Registration URLs identify the literal v0.1 conventions; snapshot identities are documentation provenance, not store attributes.
+MUST, MUST NOT, SHOULD, SHOULD NOT and MAY express requirements as in RFC 2119. Sections 0.3 and 10 are informative. So are examples explicitly labelled informative and implementation observations. All other sections are normative. Upstream requirements incorporated below apply in addition to chronozarr restrictions. Registration URLs identify the literal v0.1 conventions. Snapshot identities record documentation provenance. Stores do not carry them as attributes.
 
 ### 0.1 Normative upstream authorities
 
@@ -28,7 +28,7 @@ MUST, MUST NOT, SHOULD, SHOULD NOT and MAY express requirements as in RFC 2119. 
 
 ### 0.2 Rules inherited by reference
 
-The following mechanisms are defined by their upstream sections, rather than restated by chronozarr. Profile choices that restrict their use appear in the later sections.
+The upstream sections in the table define these mechanisms. Later sections give the profile choices that restrict their use.
 
 | Mechanism | Governing upstream section |
 |---|---|
@@ -41,42 +41,42 @@ The following mechanisms are defined by their upstream sections, rather than res
 | Node metadata representation and naming | Z, Stored representation; Array metadata; Group metadata. |
 | Standard shard decoding and array bounds | I, Decoding; Z, Array metadata / shape and Chunk grids. Profile access and missing-data interpretation are in §§4, 7 and 9. |
 
-The regular-grid and default chunk-key-encoding mechanisms are likewise those of Z, Chunk grids and Storage / Chunk key encoding; chronozarr selects the particular choices in §2.1. Compression algorithms and binary representations follow their upstream codec specifications; §7.3 restricts the supported configurations.
+Z, Chunk grids and Storage / Chunk key encoding define the regular-grid and default chunk-key-encoding mechanisms. §2.1 selects the profile's choices. Upstream codec specifications define compression algorithms and binary representations. §7.3 restricts the supported configurations.
 
 ### 0.3 Informative reference snapshots
 
-These are the inspected snapshots recorded by the migration plan. They document the source versions inspected; convention registrations instead use the literal URLs required in §3.1. The historical sources below do not impose TileMatrixSet or archived GeoZarr requirements on this profile.
+The table lists the snapshots that the migration plan recorded as inspected. Convention registrations use the literal URLs required in §3.1. The historical sources below impose no TileMatrixSet or archived GeoZarr requirements on this profile.
 
-| Source | Inspected immutable snapshot | Date / role |
-|---|---|---|
-| GeoZarr SWG | [d636b05abbfaa9851d3f12e91335bda22a127243](https://github.com/zarr-developers/geozarr-spec/tree/d636b05abbfaa9851d3f12e91335bda22a127243) | 2026-07-06; informative convention-composition context. |
-| Archived OGC draft | [82cba263ff53db4a9ab25366e3e3ed3777ff3f77](https://github.com/zarr-developers/geozarr-spec/tree/82cba263ff53db4a9ab25366e3e3ed3777ff3f77/standard/template) | 2025-12-08; historical `archives-2025` design only. |
-| F | [d8077b612759013c0380c4ee562ade2873141da4](https://github.com/zarr-conventions/zarr-conventions-spec/blob/d8077b612759013c0380c4ee562ade2873141da4/README.md) | 2026-06-18; framework. |
-| M | [9b78efa75fef0fed302d9cf880037c569354d860](https://github.com/zarr-conventions/multiscales/blob/9b78efa75fef0fed302d9cf880037c569354d860/README.md) | 2026-06-12; v0.1, Pilot. |
-| P | [5ca5b2f92e5c7245f957d9128b289ee535f0720d](https://github.com/zarr-conventions/proj/blob/5ca5b2f92e5c7245f957d9128b289ee535f0720d/README.md) | 2026-06-12; v0.1, Pilot. |
-| S | [54d81b7ced0376e63ee10f34db31db7d08dcc28d](https://github.com/zarr-conventions/spatial/blob/54d81b7ced0376e63ee10f34db31db7d08dcc28d/README.md) | 2026-06-12; v0.1, Pilot. |
-| ndpyramid schema | [bad4c49461fe51cde7e1035a0504ed4d8780efa3](https://github.com/carbonplan/ndpyramid/blob/bad4c49461fe51cde7e1035a0504ed4d8780efa3/docs/schema.md) | 2026-04-06; historical layout comparison. |
-| Z / B / I | [ad8fc8df42441c84039c94569980e485e4c09870](https://github.com/zarr-developers/zarr-specs/tree/ad8fc8df42441c84039c94569980e485e4c09870/docs/v3) | 2026-09-21; core and codec sources. |
+| Source | Inspected immutable snapshot | Date | Role |
+|---|---|---|---|
+| GeoZarr SWG | [d636b05abbfaa9851d3f12e91335bda22a127243](https://github.com/zarr-developers/geozarr-spec/tree/d636b05abbfaa9851d3f12e91335bda22a127243) | 2026-07-06 | Informative convention-composition context. |
+| Archived OGC draft | [82cba263ff53db4a9ab25366e3e3ed3777ff3f77](https://github.com/zarr-developers/geozarr-spec/tree/82cba263ff53db4a9ab25366e3e3ed3777ff3f77/standard/template) | 2025-12-08 | Historical `archives-2025` design only. |
+| F | [d8077b612759013c0380c4ee562ade2873141da4](https://github.com/zarr-conventions/zarr-conventions-spec/blob/d8077b612759013c0380c4ee562ade2873141da4/README.md) | 2026-06-18 | Framework. |
+| M | [9b78efa75fef0fed302d9cf880037c569354d860](https://github.com/zarr-conventions/multiscales/blob/9b78efa75fef0fed302d9cf880037c569354d860/README.md) | 2026-06-12 | v0.1, Pilot. |
+| P | [5ca5b2f92e5c7245f957d9128b289ee535f0720d](https://github.com/zarr-conventions/proj/blob/5ca5b2f92e5c7245f957d9128b289ee535f0720d/README.md) | 2026-06-12 | v0.1, Pilot. |
+| S | [54d81b7ced0376e63ee10f34db31db7d08dcc28d](https://github.com/zarr-conventions/spatial/blob/54d81b7ced0376e63ee10f34db31db7d08dcc28d/README.md) | 2026-06-12 | v0.1, Pilot. |
+| ndpyramid schema | [bad4c49461fe51cde7e1035a0504ed4d8780efa3](https://github.com/carbonplan/ndpyramid/blob/bad4c49461fe51cde7e1035a0504ed4d8780efa3/docs/schema.md) | 2026-04-06 | Historical layout comparison. |
+| Z / B / I | [ad8fc8df42441c84039c94569980e485e4c09870](https://github.com/zarr-developers/zarr-specs/tree/ad8fc8df42441c84039c94569980e485e4c09870/docs/v3) | 2026-09-21 | Core and codec sources. |
 
-Pilot conventions may change before stabilizing. A later upstream convention version requires a deliberate profile revision; this draft declares v0.1. Measured reader evidence and its limits are in [the reader checks](../docs/evidence.md#reader-checks): xarray needs an explicit level group; GDAL 3.12.4 needs `_CRS` for CRS assignment; GDAL 3.13.3 assigns the CRS without that alias but exposes the tested pyramid as subdatasets rather than attached overviews. zarr-layer 0.10.0 with zarrita 0.7.5 rendered the true-value fixture and returned its known value at the correct map location. These observations do not establish append, performance or cross-origin hosting conformance for those readers.
+Pilot conventions may change before they stabilize. A later upstream convention version requires a deliberate profile revision. This draft declares v0.1. [evidence.md](../docs/evidence.md#reader-checks) records the reader checks, with versions and limits.
 
 ### 0.4 Reserved future work
 
-A storage extension for temporal encoding is reserved for future work and is outside this baseline. Such an extension must be fail-closed in unaware readers: an unaware reader MUST reject the extension before returning any encoded data as measurements. No storage-extension syntax, algorithm, registration or decoding mechanism is specified here. The baseline MUST NOT use temporal encoding or require another timestep to decode a data chunk; safely ignorable convention attributes cannot change stored-value interpretation into a storage-decoding operation.
+A storage extension for temporal encoding is reserved for future work. It is outside this baseline. Such an extension must be fail-closed in unaware readers. An unaware reader MUST reject the extension before returning any encoded data as measurements. This document specifies no storage-extension syntax, algorithm, registration or decoding mechanism. The baseline MUST NOT use temporal encoding or require another timestep to decode a data chunk. A safely ignorable convention attribute cannot change the interpretation of stored values into a storage-decoding operation.
 
 ## 1. Scientific and access guarantees
 
-1. **Exact level-0 roundtrip.** A conforming writer followed by a conforming read of level 0 MUST return the exact input stored values in the input dtype. Writers MUST NOT quantize, round or apply lossy compression to level-0 data. Derived overview rounding is specified in §5.
-2. **Bounded random access.** Any timestep of any cell at any level MUST require only one data-chunk read after the relevant metadata and, if applicable, shard index are available. There is no sequential timestep dependency. Optional validity/coverage reads are separate plane reads, not additional data chunks.
-3. **dtype preservation.** Data MUST be stored and returned in the declared data dtype. The format MUST NOT convert between integer and float or quantize stored data. Physical values are derived at read time (§4.4); they are not substituted into the stored array.
-4. **Self-description.** Group and array metadata MUST fully describe layout, bands, timestamps, CRS, geometry, chunk grid, codecs and declared optional planes. A reader MUST NOT need a sidecar or an external metadata service to determine the store's values and geometry.
-5. **Ordinary values.** Every data, coordinate and auxiliary array MUST hold its true stored values. Reading with a generic Zarr v3 client that supports the declared codecs yields those values; interpreting physical units and profile validity still requires §§4 and 9.
+1. A conforming writer followed by a conforming read of level 0 MUST return the exact input stored values in the input dtype. Writers MUST NOT quantize, round or apply lossy compression to level-0 data. §5 specifies derived overview rounding.
+2. Any timestep of any cell at any level MUST require only one data-chunk read after the relevant metadata and, if applicable, shard index are available. A timestep does not depend on other timesteps. Reads of optional validity or coverage planes are plane reads, and they do not count as data-chunk reads.
+3. Data MUST be stored and returned in the declared data dtype. The format MUST NOT convert between integer and float or quantize stored data. Physical values are derived at read time (§4.4). The stored array does not contain them.
+4. Group and array metadata MUST fully describe layout, bands, timestamps, CRS, geometry, chunk grid, codecs and declared optional planes. A reader MUST NOT need a sidecar or an external metadata service to determine the store's values and geometry.
+5. Every data, coordinate and auxiliary array MUST hold its true stored values. A generic Zarr v3 client that supports the declared codecs reads those values. Interpreting physical units and profile validity still requires §§4 and 9.
 
 ## 2. Time-series array profile
 
 ### 2.1 Levels and data cells
 
-The root MUST contain consecutive level groups named `"0"`, `"1"`, …, with no gaps. Each group MUST contain the data array named by `chronozarr.variable`, coordinate arrays `time`, `band`, `y`, `x`, and any declared optional planes. The data variable name defaults to `"data"`; readers MUST NOT hardcode it. Level 0 is the native grid. Level shapes follow §5.
+The root MUST contain consecutive level groups named `"0"`, `"1"` and so on, with no gaps. Each group MUST contain the data array named by `chronozarr.variable`, the coordinate arrays `time`, `band`, `y` and `x`, and any declared optional planes. The data variable name defaults to `"data"`. Readers MUST NOT hardcode the name. Level 0 is the native grid. Level shapes follow §5.
 
 | Data-array property | Profile restriction |
 |---|---|
@@ -88,9 +88,9 @@ The root MUST contain consecutive level groups named `"0"`, `"1"`, …, with no 
 | Fill / nodata attribute | MUST follow §4.1. |
 | Codec chain | MUST follow §7.3, inside the indexed-sharding codec when applicable. |
 
-`cs` MUST be a positive even integer, identical at every level, with equal row and column chunk sizes. Writers SHOULD use 256 or 512, with 512 the default; readers MUST accept other positive even sizes, including small test fixtures. Readers MUST derive `cs` from the data array's spatial inner chunk dimensions (indices 2 and 3), using I's inner `chunk_shape` when sharded, and MUST NOT derive it from multiscales metadata or assume 256/512. Every data chunk MUST hold all bands of one timestep of one cell; the band chunk index is 0.
+`cs` MUST be a positive even integer, identical at every level, with equal row and column chunk sizes. Writers SHOULD use 256 or 512, with 512 the default. Readers MUST accept other positive even sizes, including small test fixtures. Readers MUST derive `cs` from the data array's spatial inner chunk dimensions (indices 2 and 3), using I's inner `chunk_shape` when sharded. They MUST NOT derive `cs` from multiscales metadata or assume 256 or 512. Every data chunk MUST hold all bands of one timestep of one cell. The band chunk index is 0.
 
-At level `k`, cell `(r,c)` is the spatial slice `[r*cs:(r+1)*cs, c*cs:(c+1)*cs]` for any timestep and band. Row 0 is the north edge. The cell grid MUST equal `[ceil(H_k/cs), ceil(W_k/cs)]`. Elements used as out-of-shape padding by the upstream chunk representation MUST equal the ordinary `fill_value`; edge extent and bounds handling are governed by §0.2, not a separate chronozarr edge-size formula.
+At level `k`, cell `(r,c)` is the spatial slice `[r*cs:(r+1)*cs, c*cs:(c+1)*cs]` for any timestep and band. Row 0 is the north edge. The cell grid MUST equal `[ceil(H_k/cs), ceil(W_k/cs)]`. Elements that the upstream chunk representation uses as out-of-shape padding MUST equal the ordinary `fill_value`. §0.2 governs edge extent and bounds handling.
 
 ### 2.2 Coordinates and dimensions
 
@@ -101,15 +101,15 @@ At level `k`, cell `(r,c)` is the spatial slice `[r*cs:(r+1)*cs, c*cs:(c+1)*cs]`
 | `y` | `float64`, length `H_k` | MUST contain decreasing projected pixel-centre y coordinates in the declared CRS. |
 | `x` | `float64`, length `W_k` | MUST contain increasing projected pixel-centre x coordinates in the declared CRS. |
 
-Every array, including coordinates and optional volatility, MUST declare `dimension_names` and `_ARRAY_DIMENSIONS` with identical lists. A coordinate array uses its own one-element dimension list. Each coordinate array SHOULD occupy a single chunk. The time and band coordinate values MUST be identical at every level. Coordinates MUST agree with the canonical spatial metadata (§3.3); x/y describe centres under S's pixel registration.
+Every array, including coordinates and optional volatility, MUST declare `dimension_names` and `_ARRAY_DIMENSIONS` with identical lists. A coordinate array uses its own one-element dimension list. Each coordinate array SHOULD occupy a single chunk. The time and band coordinate values MUST be identical at every level. Coordinates MUST agree with the canonical spatial metadata (§3.3). The x and y coordinates describe centres under S's pixel registration.
 
-The ISO timestamp and band-name mirrors MUST agree exactly with their coordinate sources (§3.4). If `band` contains integer indices, `band_names` MUST instead agree with the ordered `bands[].name`; names are not compared to those integer indices. Readers MUST NOT require int64 or variable-length string coordinate reads when valid mirrors supply the needed information.
+The ISO timestamp and band-name mirrors MUST agree exactly with their coordinate sources (§3.4). If `band` contains integer indices, `band_names` MUST instead agree with the ordered `bands[].name`. Names are not compared with those integer indices. Readers MUST NOT require int64 or variable-length string coordinate reads when valid mirrors supply the needed information.
 
 ### 2.3 EPSG north-up grid restriction
 
-All spatial arrays MUST use the same EPSG CRS and north-up affine geometry. Non-EPSG CRSs and rotated grids are outside this profile. In the S coefficient notation, horizontal pixel scale MUST be positive, vertical pixel scale negative, and both rotation/shear coefficients zero. This restricts S's transform without redefining its coefficient ordering or mapping (§0.2).
+All spatial arrays MUST use the same EPSG CRS and north-up affine geometry. Non-EPSG CRSs and rotated grids are outside this profile. In the S coefficient notation, horizontal pixel scale MUST be positive, vertical pixel scale negative, and both rotation/shear coefficients zero. This restricts S's transform. It leaves S's coefficient ordering and mapping unchanged (§0.2).
 
-Writers SHOULD retain the native projected CRS of the AOI, for example its UTM zone. Writers SHOULD NOT reproject storage to Web Mercator: it does not preserve pixel ground area, which affects area-sensitive block means and statistics. The EPSG restriction does not make all EPSG CRSs equal-area. Geometry and mirror agreement follow §3.3.
+Writers SHOULD retain the native projected CRS of the AOI, for example its UTM zone. Writers SHOULD NOT reproject storage to Web Mercator. Web Mercator does not preserve pixel ground area. This affects area-sensitive block means and statistics. Geometry and mirror agreement follow §3.3.
 
 ## 3. chronozarr attributes and mirrors
 
