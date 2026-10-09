@@ -37,9 +37,19 @@ def compare(
 
     def chrono():
         store = chronozarr.open_store(store_path)
+
+        def mask_at(t: int) -> np.ndarray:
+            mask = store.read_mask(t=t)
+            if mask is None:
+                raise ValueError(
+                    f"{store_path} has no mask plane at t={t}; "
+                    "the comparison needs the COG validity masks stored with the data"
+                )
+            return mask
+
         return (
             np.stack([store.read(t=t) for t in range(len(rows))]),
-            np.stack([store.read_mask(t=t) for t in range(len(rows))]).astype(bool),
+            np.stack([mask_at(t) for t in range(len(rows))]).astype(bool),
         )
 
     def plain():

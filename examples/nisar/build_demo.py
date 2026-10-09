@@ -44,6 +44,7 @@ def main():
                     "mask_sha256": hashlib.sha256(valid.astype("uint8").tobytes()).hexdigest(),
                 }
             )
+    assert reference is not None, "DATES must list at least one date"
     x, y, epsg = reference
     dx, dy = float(x[1] - x[0]), float(y[1] - y[0])
     assert np.allclose(np.diff(x), dx) and np.allclose(np.diff(y), dy)
@@ -75,7 +76,9 @@ def main():
     store = chronozarr.open_store(OUT)
     for i in range(2):
         assert np.array_equal(store.read(i).view("uint32"), values[i].view("uint32"))
-        assert np.array_equal(store.read_mask(i), masks[i])
+        mask = store.read_mask(i)
+        assert mask is not None, f"store has no mask plane at t={i}"
+        assert np.array_equal(mask, masks[i])
     assert store.to_xarray().band_units.values.tolist() == ["dB", "dB", "1", "1"]
     report = {
         "store": str(OUT),

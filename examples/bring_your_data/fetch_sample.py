@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import planetary_computer as pc
 import rasterio
-from rasterio.crs import CRS
+from rasterio.crs import CRS  # ty: ignore[unresolved-import]  # compiled module, no stubs
 from rasterio.transform import array_bounds
 from rasterio.warp import transform_bounds
 
@@ -31,8 +31,13 @@ def fetch_sample(output: Path) -> None:
         raise FileExistsError(f"Output already exists: {output}; choose a new directory")
     # These are example-only helpers; no remote-data dependency enters the Python package.
     sys.path.insert(0, str(REPO / "examples/sentinel2_pc"))
-    from catalog import PC_STAC_URL, S2_COLLECTION, search_scenes_by_month
-    from mosaic import compute_target_grid, load_scene
+    # ty cannot follow the sys.path insert above, so it cannot resolve these two helper modules.
+    from catalog import (  # ty: ignore[unresolved-import]
+        PC_STAC_URL,
+        S2_COLLECTION,
+        search_scenes_by_month,
+    )
+    from mosaic import compute_target_grid, load_scene  # ty: ignore[unresolved-import]
 
     scenes = search_scenes_by_month(BBOX, "2020-05-01", "2020-07-31", max_cloud_pct=20)
     missing = set(MONTHS) - scenes.keys()
