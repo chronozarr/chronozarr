@@ -26,17 +26,14 @@ export default defineConfig({
       { text: 'Embed the viewer', link: '/guides/embedding' },
       { text: 'Self-host the packaged viewer', link: '/guides/viewer-distribution' },
       { text: 'PNG frames', link: '/guides/png-frames' },
-      { text: 'Water masks', link: '/guides/water-masks' },
     ] },
     { text: 'Reference', items: [
-      { text: 'Specification v0.2 (draft)', link: '/specification' },
+      { text: 'Specification v0.3 (draft)', link: '/specification' },
       { text: 'Python and xarray', link: '/reference/python' },
       { text: 'Command line', link: '/reference/cli' },
       { text: 'JavaScript reader', link: '/reference/javascript' },
       { text: 'MapLibre layer', link: '/reference/maplibre' },
       { text: 'Format comparison', link: '/guides/format-comparison' },
-      { text: 'Measured comparisons', link: '/guides/comparisons' },
-      { text: 'Matched rendered comparison', link: '/guides/rendered-comparison' },
     ] },
   ],
 })
