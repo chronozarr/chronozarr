@@ -89,6 +89,8 @@ export async function runSession({ system, profileName, view, servers, startT = 
     await page.addScriptTag({ path: new URL('common.js', import.meta.url).pathname });
     await page.addScriptTag({ path: new URL(spec.driver, import.meta.url).pathname });
 
+    if (system === 'A') await page.evaluate((storeUrl) => window.__driver.prewarm({ storeUrl }), servers.store);
+
     const pre = await rafGaps(page, 1500);
     record.raf = { preMedianMs: round(median(pre), 2), pre: pre.length };
     record.page = await page.evaluate(() => ({ dpr: window.devicePixelRatio, innerWidth: window.innerWidth, innerHeight: window.innerHeight }));

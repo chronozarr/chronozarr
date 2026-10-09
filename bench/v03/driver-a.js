@@ -42,6 +42,20 @@
   window.__driver = {
     name: 'chronozarr',
 
+    /**
+     * Before the link is throttled: start the reader's decode workers and warm their codecs by opening and closing the
+     * store once (js/chronozarr/pool.js keeps the shared pool alive for 30 s after its last lease is released, and the
+     * viewer's loadStore leases the same pool). Without it the workers fetch their scripts and the zstd WASM during the
+     * measured open, eight times over because the HTTP cache is off, over the throttled link; B and C have loaded their
+     * code (bundle, MapLibre) before the link is throttled, and a real session loads it once at page load.
+     */
+    async prewarm({ storeUrl }) {
+      const { openStore } = await import('/js/chronozarr/decoder.js');
+      const store = await openStore(storeUrl);
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      store.close();
+    },
+
     async open({ storeUrl, search, pin, timeoutMs }) {
       const v = viewer();
       v.probe = onProbe;
