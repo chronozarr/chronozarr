@@ -26,11 +26,52 @@ To publish a store, upload it to any host that answers byte-range requests and s
 
 ## Quickstart
 
-Install the package with GeoTIFF support:
+Install the package with GeoTIFF support. It needs Python 3.11 or later.
 
 ```bash
 pip install "chronozarr[geo]"
 ```
+
+### Without data
+
+1. Save this script as `quickstart.py`. It writes a store from three synthetic timesteps of 64 by 64 pixels, 10 m in UTM zone 31N, and reads one back.
+
+   ```python
+   import numpy as np
+   import xarray as xr
+   import chronozarr
+
+   values = np.arange(3 * 64 * 64, dtype=np.uint16).reshape(3, 1, 64, 64)
+   da = xr.DataArray(
+       values,
+       dims=("time", "band", "y", "x"),
+       coords={
+           "time": np.array(["2024-01-01", "2024-02-01", "2024-03-01"], dtype="datetime64[ns]"),
+           "band": ["example"],
+           "y": 5000000 - (np.arange(64) + 0.5) * 10,
+           "x": 500000 + (np.arange(64) + 0.5) * 10,
+       },
+   )
+   chronozarr.encode(da, "synthetic_store", crs="EPSG:32631", nodata=None)
+
+   store = chronozarr.open_store("synthetic_store")
+   print((store.read(t=1) == values[1]).all())
+   ```
+
+2. Run the script. It prints `True`: level 0 returns the values that you wrote.
+
+   ```bash
+   python quickstart.py
+   ```
+
+3. Check the store.
+
+   ```bash
+   chronozarr validate synthetic_store
+   chronozarr info synthetic_store
+   ```
+
+### With your data
 
 1. Write a store from a GeoTIFF time series. Use one file per timestep, with the date in each file name.
 
@@ -68,7 +109,7 @@ pip install "chronozarr[geo]"
    https://chronozarr.org/demo/?store=https://your-host/my_store
    ```
 
-The input must be on an EPSG grid with north up. To write a store from an xarray `DataArray` with dims `(time, band, y, x)`, call `chronozarr.encode(da, "my_store", crs="EPSG:32618")`.
+The input must be on an EPSG grid with north up. To write a store from an xarray `DataArray`, call `chronozarr.encode` as in the script above.
 
 ## Read a store without chronozarr
 
