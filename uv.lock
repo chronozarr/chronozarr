@@ -14,7 +14,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-09-26T22:21:50.587467Z"
+exclude-newer = "2026-10-02T14:33:24.485524Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -345,6 +345,7 @@ version = "0.3.1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
+    { name = "numcodecs" },
     { name = "numpy" },
     { name = "xarray" },
     { name = "zarr", version = "3.1.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -402,6 +403,7 @@ requires-dist = [
     { name = "ipython", marker = "extra == 'notebook'", specifier = ">=8" },
     { name = "leafmap", marker = "extra == 'geemap'", specifier = ">=0.63.1" },
     { name = "leafmap", marker = "extra == 'leafmap'", specifier = ">=0.63.1" },
+    { name = "numcodecs", specifier = ">=0.14" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "planetary-computer", marker = "extra == 'ingest'", specifier = ">=1.0" },
     { name = "pystac", marker = "extra == 'ingest'", specifier = ">=1.10" },
