@@ -25,14 +25,16 @@
     --surface-2: #1a2030;
     --border: #222a3a;
     --text: #e4e7ef;
-    --text-2: #6e7a99;
-    --text-3: #3e4a63;
+    --text-2: #9aa5c1;
+    --text-3: #7f8baa;
     --accent: #3b82f6;
+    /* The fill of selected and primary controls under white text: 5.2:1, where --accent gives 3.7:1. */
+    --accent-solid: #2563eb;
     --accent-dim: rgba(59, 130, 246, 0.15);
     --green: #34d399;
     --amber: #f59e0b;
     --red: #ef4444;
-    --water: #2563eb;
+    --water: #60a5fa;
     --radius: 8px;
     /* The map canvas and what floats over it do not follow the chrome's palette: the canvas background is the renderer's. */
     --canvas-bg: #111620;
@@ -53,8 +55,9 @@
     --border: #d5dbe6;
     --text: #141a29;
     --text-2: #4a5772;
-    --text-3: #64718d;
+    --text-3: #5a6785;
     --accent: #2563eb;
+    --accent-solid: #2563eb;
     --accent-dim: rgba(37, 99, 235, 0.14);
     --green: #047857;
     --amber: #b45309;
@@ -93,6 +96,11 @@
     gap: 8px 16px;
     flex-shrink: 0;
   }
+  /* One focus ring for every control; a control that styles :focus itself (borders of the fields) keeps that as well. */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
   .brand {
     font-size: 15px;
     font-weight: 700;
@@ -116,7 +124,6 @@
     font-size: 12px;
     font-family: inherit;
     cursor: pointer;
-    outline: none;
     transition: border-color 0.15s;
   }
   select option {
@@ -157,7 +164,7 @@
   .products button:hover:not(:disabled) { color: var(--text); }
   .products button:disabled { opacity: 0.35; cursor: not-allowed; }
   .products button.active {
-    background: var(--accent);
+    background: var(--accent-solid);
     color: #fff;
     box-shadow: 0 1px 3px rgba(0,0,0,0.3);
   }
@@ -213,8 +220,8 @@
     margin: 0 auto;
     text-align: center;
     font-size: 12px;
-    color: var(--text-3);
-    background: var(--overlay-bg);
+    color: var(--text-2);
+    background: var(--overlay-bg-strong);
     padding: 6px 16px;
     border-radius: 20px;
     border: 1px solid var(--border);
@@ -223,6 +230,7 @@
     backdrop-filter: blur(4px);
   }
   .click-hint.hidden { opacity: 0; }
+  .hint-touch { display: none; }
   #gap-canvas {
     position: absolute;
     inset: 0;
@@ -280,7 +288,7 @@
     pointer-events: none;
   }
   .error-overlay.toast p { word-break: break-word; }
-  .error-overlay h3 { color: var(--red); font-size: 14px; margin-bottom: 8px; }
+  .error-overlay h2 { color: var(--red); font-size: 14px; margin-bottom: 8px; }
   .error-overlay p { font-size: 12px; color: var(--text-2); }
 
   /* ---- Sidebar ---- */
@@ -318,7 +326,7 @@
   }
   .sidebar-section:last-child { border-bottom: none; }
   .section-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--text-3);
     margin-bottom: 12px;
@@ -396,15 +404,15 @@
   }
 
   /* Chart of the clicked pixel over time */
-  .chart-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; font-weight: 600; margin-bottom: 6px; }
+  .chart-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
   .chart-svg { width: 100%; height: auto; display: block; cursor: crosshair; touch-action: none; }
   .chart-grid { stroke: var(--border); stroke-width: 1; }
-  .chart-axis { fill: var(--text-3); font-size: 9px; font-variant-numeric: tabular-nums; }
+  .chart-axis { fill: var(--text-3); font-size: 10px; font-variant-numeric: tabular-nums; }
   .chart-marker { stroke: var(--accent); stroke-width: 1.5; }
   .chart-hover { stroke: var(--text-2); stroke-width: 1; stroke-dasharray: 2 2; }
   .chart-gap-key { color: var(--text-2); font-weight: 500; display: inline-flex; align-items: center; gap: 4px; }
   .chart-gap-key i { width: 7px; height: 7px; border: 1.3px solid var(--text-2); border-radius: 50%; display: inline-block; }
-  .chart-status { font-size: 11px; color: var(--text-2); margin-top: 6px; font-variant-numeric: tabular-nums; min-height: 14px; }
+  .chart-status { font-size: 12px; color: var(--text-2); margin-top: 6px; font-variant-numeric: tabular-nums; min-height: 14px; }
   .no-data { color: var(--amber); font-weight: 600; }
 
   /* ---- Timeline ---- */
@@ -488,6 +496,8 @@
     border-radius: 50%;
     transform: translate(-50%, -50%);
     z-index: 1;
+    /* --text-3 is a text colour (4.5:1); the marks of the track need 3:1, and dimmer ones keep the marker readable. */
+    opacity: 0.7;
   }
   .timeline-tick:hover {
     width: 8px;
@@ -495,6 +505,7 @@
     background: var(--text-2);
   }
   .timeline-tick.active {
+    opacity: 1;
     width: 12px;
     height: 12px;
     background: var(--accent);
@@ -532,7 +543,7 @@
   .play-btn:hover:not(:disabled) { border-color: var(--text-2); color: var(--text); }
   .play-btn:disabled { opacity: 0.35; cursor: not-allowed; }
   .play-btn .icon-pause { display: none; }
-  .play-btn.playing { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .play-btn.playing { background: var(--accent-solid); border-color: var(--accent-solid); color: #fff; }
   .play-btn.playing .icon-play { display: none; }
   .play-btn.playing .icon-pause { display: block; }
   /* Playback is on but waiting for frames: a ring turns around the button until it starts. */
@@ -550,7 +561,7 @@
   }
   @keyframes buffer-spin { to { transform: rotate(360deg); } }
   #buffer-hint {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--accent);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
@@ -563,11 +574,12 @@
   }
   .speed input[type=range] {
     width: 84px;
+    height: 24px;
     accent-color: var(--accent);
     cursor: pointer;
   }
   #res-hint {
-    font-size: 10px;
+    font-size: 12px;
     color: var(--amber);
     white-space: nowrap;
   }
@@ -589,7 +601,6 @@
     font-size: 12px;
     font-family: inherit;
     font-variant-numeric: tabular-nums;
-    outline: none;
   }
   .stretch input:focus { border-color: var(--accent); }
   .stretch button {
@@ -603,7 +614,7 @@
   }
   .stretch button:hover { border-color: var(--text-2); color: var(--text); }
   #speed-label {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-2);
     font-variant-numeric: tabular-nums;
     min-width: 64px;
@@ -642,7 +653,7 @@
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
     font-size: 12px;
   }
-  .export-panel h3 { font-size: 12px; font-weight: 600; margin-bottom: 10px; color: var(--text); }
+  .export-panel h2 { font-size: 12px; font-weight: 600; margin-bottom: 10px; color: var(--text); }
   .export-panel label { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; color: var(--text-2); }
   .export-panel label select { max-width: 170px; }
   .export-panel .export-rate { color: var(--text-2); margin-bottom: 10px; }
@@ -650,8 +661,8 @@
   .export-actions button, .export-download {
     flex: 1;
     height: 30px;
-    background: var(--accent);
-    border: 1px solid var(--accent);
+    background: var(--accent-solid);
+    border: 1px solid var(--accent-solid);
     color: #fff;
     border-radius: 6px;
     font: inherit;
@@ -822,6 +833,29 @@
   html[data-controls="0"] .month-nav button { display: none; }
   html[data-controls="0"] #time-label { min-width: 0; font-size: 12px; font-weight: 500; text-align: left; color: var(--text-2); }
 
+  @media (pointer: coarse) {
+    /* A finger: targets of 44 px (WCAG 2.5.5), and fields of 16 px, below which iOS Safari zooms the page in when one takes focus. */
+    select, .stretch input { font-size: 16px; }
+    /* Two quick taps on a step button must step twice, not zoom the page. */
+    button { touch-action: manipulation; }
+    .stretch input { width: 92px; }
+    select, .stretch input, .stretch button, .products button { min-height: 44px; }
+    .play-btn, .month-nav button, .inspector-close, html[data-embed] .inspector-close { width: 44px; height: 44px; }
+    .export-btn, .export-actions button, .export-download { height: 44px; }
+    .export-download { line-height: 42px; }
+    .timeline-track { height: 44px; }
+    .speed input[type=range] { width: 120px; height: 44px; }
+    .hint-pointer { display: none; }
+    .hint-touch { display: inline; }
+    /* The wordmark of an embed keeps its place in the header and grows its hit area into the padding around it. */
+    html[data-embed] .embed-wordmark { padding: 15px 8px; margin: -11px -6px -11px auto; }
+  }
+  @media (pointer: coarse) and (height < 500px) {
+    /* A phone on its side: the product select of the compact header keeps the header to one row, so the map keeps its height. */
+    .products, .nav-sep { display: none; }
+    .product-select { display: block; flex: 1 1 140px; min-width: 0; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .sidebar { transition: none; }
     .play-btn.buffering::after, .timeline-tick.active.loading { animation: none; }
@@ -831,12 +865,12 @@
 <body>
 
 <nav>
-  <div class="brand">chrono<span>zarr</span></div>
+  <h1 class="brand">chrono<span>zarr</span></h1>
   <div class="nav-sep"></div>
-  <select id="catalog-select" hidden></select>
+  <select id="catalog-select" aria-label="Dataset" hidden></select>
   <div class="products" id="products"></div>
   <select id="product-select" class="product-select" aria-label="Product"></select>
-  <select id="band-select" hidden></select>
+  <select id="band-select" aria-label="Band" hidden></select>
   <div class="stretch" id="stretch" hidden>
     <input id="stretch-min" type="number" step="any" title="Stretch minimum" aria-label="Stretch minimum">
     <span>–</span>
@@ -852,9 +886,9 @@
     <canvas id="gap-canvas"></canvas>
     <pre class="perf-overlay" id="perf-overlay" hidden aria-label="Performance overlay"></pre>
     <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-    <div class="click-hint" id="click-hint">Click anywhere to inspect · scroll to zoom · drag to pan</div>
-    <div class="error-overlay" id="error-overlay">
-      <h3 id="error-title">Error</h3>
+    <div class="click-hint" id="click-hint"><span class="hint-pointer">Click anywhere to inspect · scroll to zoom · drag to pan</span><span class="hint-touch">Tap anywhere to inspect · drag to pan</span></div>
+    <div class="error-overlay" id="error-overlay" role="alert">
+      <h2 id="error-title">Error</h2>
       <p id="error-message">Something went wrong</p>
     </div>
   </section>
@@ -878,17 +912,17 @@
   </aside>
 </main>
 
-<div class="timeline-bar">
+<section class="timeline-bar" aria-label="Timeline">
   <button id="play-btn" class="play-btn" title="Play (Space)" aria-label="Play (Space)" disabled>
     <svg class="icon-play" width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><path d="M3 1.5v11l9-5.5z"/></svg>
     <svg class="icon-pause" width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="2.5" y="2" width="3" height="10" rx="0.6"/><rect x="8.5" y="2" width="3" height="10" rx="0.6"/></svg>
   </button>
   <div class="month-nav">
-    <button id="prev-btn" title="Previous timestep">&#8249;</button>
+    <button id="prev-btn" title="Previous timestep" aria-label="Previous timestep">&#8249;</button>
     <span id="time-label">&mdash;</span>
-    <button id="next-btn" title="Next timestep">&#8250;</button>
+    <button id="next-btn" title="Next timestep" aria-label="Next timestep">&#8250;</button>
   </div>
-  <div class="timeline-track" id="timeline-track">
+  <div class="timeline-track" id="timeline-track" role="slider" tabindex="0" aria-label="Timestep" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
     <div class="timeline-line"></div>
   </div>
   <div class="speed">
@@ -899,10 +933,10 @@
   </div>
   <button id="gap-toggle" class="export-btn" title="Hatch the pixels no scene observed this timestep (their value is carried over)" aria-pressed="false" hidden>Gaps</button>
   <button id="export-btn" class="export-btn" title="Export the loop as WebM or GIF" disabled>Export</button>
-</div>
+</section>
 
 <div id="export-panel" class="export-panel" hidden role="dialog" aria-label="Export loop">
-  <h3>Export loop</h3>
+  <h2>Export loop</h2>
   <label>Format
     <select id="export-format"><option value="webm">WebM video</option><option value="gif">GIF</option></select>
   </label>
