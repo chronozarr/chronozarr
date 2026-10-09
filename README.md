@@ -159,10 +159,14 @@ There is no build step and no runtime dependency. Examples are in [js/README.md]
 | Topic | Document |
 |-------|----------|
 | Format rules | [spec/CHRONOZARR.md](spec/CHRONOZARR.md) |
+| Python functions | [docs/python.md](docs/python.md) |
 | Your own data, end to end | [examples/bring_your_data](examples/bring_your_data/README.md) |
+| Georeferenced PNG frames | [docs/png-frames.md](docs/png-frames.md) |
 | Hosting and the doctor checklist | [docs/hosting.md](docs/hosting.md) |
 | Adding timesteps | [docs/append.md](docs/append.md) |
 | Embedding the viewer in a page | [docs/embedding.md](docs/embedding.md) |
+| Drawing a store on a MapLibre map | [js/maplibre/README.md](js/maplibre/README.md) |
+| More examples: Sentinel-2 ingest, water masks, notebooks, SWOT, NISAR | [examples](examples/) |
 | Comparison with PMTiles, Mapbox raster-array and zarr-layer | [docs/format-comparison.md](docs/format-comparison.md) |
 | Measurements and tested reader versions | [docs/evidence.md](docs/evidence.md) |
 
