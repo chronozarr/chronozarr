@@ -4,20 +4,6 @@
 # are descriptive.
 
 aois:
-  sahara_tamanrasset:
-    label: "Sahara (Tamanrasset, Algeria)"
-    description: "Hyper-arid desert, near-zero vegetation change, extreme low temporal entropy"
-    bbox: [5.40, 22.70, 5.65, 22.95]   # lon_min, lat_min, lon_max, lat_max
-    epsg: 32631  # UTM zone 31N
-    expected_behavior: "Best-case for delta encoding: near-zero residuals month-to-month"
-
-  iowa_ames:
-    label: "Iowa Cropland (near Ames, IA)"
-    description: "Corn/soybean rotation, strong phenological cycle, seasonal snow"
-    bbox: [-93.80, 41.95, -93.55, 42.20]  # lon_min, lat_min, lon_max, lat_max
-    epsg: 32615  # UTM zone 15N
-    expected_behavior: "Stress-test for deltas: large seasonal swings, snow/bare/crop transitions"
-
   nile_delta:
     label: "Nile Delta (Kafr El Sheikh, Egypt)"
     description: "Irrigated agriculture abutting desert, canals, coastal lagoons"
