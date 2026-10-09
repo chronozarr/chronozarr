@@ -102,7 +102,7 @@ pip install "chronozarr[geo]"
 
    store = chronozarr.open_store("my_store")
    store.read(t=42)              # (band, y, x), exact stored values
-   ds = store.to_xarray(lod=0)   # lazy xarray Dataset
+   da = store.to_xarray(lod=0)   # xarray DataArray, loaded into memory
    ```
 
 4. Upload `my_store` to a static host. [docs/hosting.md](docs/hosting.md) has recipes for S3 with CloudFront, Cloudflare R2, Google Cloud Storage and Source Cooperative.
