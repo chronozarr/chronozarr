@@ -293,7 +293,7 @@ export async function openStore(baseUrl, options = {}) {
     datasets,
     names,
     levelMirror: cz.levels ?? null,
-    transform: Array.isArray(transform) && transform.length === 6 && transform.every(Number.isFinite) ? transform : null,
+    transform,
     dataMetas,
     storage,
     specs,
@@ -357,7 +357,7 @@ export class ChronoStore {
     this.variable = names.data;
     this.times = cz.times;
     this.crs = cz.crs;
-    /** Affine [a, b, c, d, e, f] from level-0 pixel (col, row) to projected x, y; null if the store declares none. */
+    /** Affine [a, b, c, d, e, f] from level-0 pixel (col, row) to projected x, y. */
     this.transform = transform;
     this.#readable = readable;
     this.#decoder = decoder;
@@ -396,7 +396,6 @@ export class ChronoStore {
         if (aux) requireStore(aux.innerShape[1] === chunkHeight && aux.innerShape[2] === chunkWidth, url, `level ${lod} ${names[kind]} chunks are ${aux.innerShape.slice(1)}, data chunks are ${chunkHeight}x${chunkWidth}`);
       }
       const mirror = levelMirror?.[lod];
-      const a = transform?.[0];
       return {
         lod,
         path: datasets[lod].path,
@@ -409,8 +408,8 @@ export class ChronoStore {
         gridRows: Math.ceil(height / chunkHeight),
         gridCols: Math.ceil(width / chunkWidth),
         chunkBytes: nBand * chunkHeight * chunkWidth * bytesPerElement,
-        resolution: mirror?.resolution ?? (a === undefined ? null : Math.abs(a) * 2 ** lod),
-        transform: mirror?.transform ?? (transform ? [transform[0] * 2 ** lod, transform[1], transform[2], transform[3], transform[4] * 2 ** lod, transform[5]] : null),
+        resolution: mirror?.resolution ?? Math.abs(transform[0]) * 2 ** lod,
+        transform: mirror?.transform ?? [transform[0] * 2 ** lod, transform[1], transform[2], transform[3], transform[4] * 2 ** lod, transform[5]],
       };
     });
 
@@ -423,7 +422,6 @@ export class ChronoStore {
       spec_version: String(cz.spec_version),
       bands,
       band_names: bandNames,
-      bandNames,
       nodata: this.nodata,
       dtype: this.dtype,
       levels: this.levels.map((l) => ({ path: l.path, resolution: l.resolution, transform: l.transform, shape: [l.nTime, l.nBand, l.height, l.width], grid: [l.gridRows, l.gridCols] })),
