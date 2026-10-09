@@ -46,6 +46,8 @@ from chronozarr.store import redact_url
 
 from chronozarr.view import VIEWER_URL, viewer_url
 
+from chronozarr.view import preview, preview_command
+
 _DATE_IN_NAME = re.compile(r"(?<!\d)(\d{4})-?(\d{2})(?:-?(\d{2}))?(?!\d)")
 _GLOB_CHARS = "*?["
 _READ_ROWS = 512  # rows read at a time from a GeoTIFF; not the store chunk size
@@ -385,6 +387,7 @@ def encode_command(
             file_options["bands"] = assign_roles(named, roles)
         report = encode(da, out, crs=crs, **file_options, **_encode_kwargs(options))
     click.echo(_encode_summary(out, report))
+    click.echo(f"preview it: {preview_command(out)}")
 
 
 @main.command("append")
@@ -514,6 +517,59 @@ def doctor_command(target: str, origin: str, full_read_limit_mb: float) -> None:
     )
     if counts["fail"]:
         sys.exit(1)
+
+
+@main.command("preview")
+@click.argument("store", type=click.Path(path_type=Path))
+@click.option(
+    "--port",
+    type=click.IntRange(0, 65535),
+    default=0,
+    help="Port on 127.0.0.1 (default: a free one). An occupied port is an error.",
+)
+@click.option(
+    "--viewer-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Self-hosted viewer folder (output of `chronozarr-viewer`), served by the same server. "
+    "Needs no internet access.",
+)
+@click.option(
+    "--viewer",
+    default=None,
+    help="URL of another viewer deployment (default: https://chronozarr.org/demo/, which needs "
+    "internet access; the store is still read from this machine).",
+)
+@click.option(
+    "--base-url",
+    default=None,
+    help="Absolute http(s) URL at which your browser reaches this server's root, when a proxy "
+    "or port forward maps a different address to it. The server still listens on 127.0.0.1 only.",
+)
+@click.option("--no-open", is_flag=True, help="Print the URL without opening a browser.")
+def preview_command_(
+    store: Path,
+    port: int,
+    viewer_dir: Path | None,
+    viewer: str | None,
+    base_url: str | None,
+    no_open: bool,
+) -> None:
+    """Serve the local store STORE and open it in the viewer. Ctrl-C stops the server.
+
+    The server answers byte ranges with CORS on 127.0.0.1 and nothing else can reach it. The
+    viewer comes from chronozarr.org unless --viewer-dir or --viewer is given.
+    """
+    with _command_errors():
+        preview(
+            store,
+            port=port,
+            viewer=viewer,
+            viewer_dir=viewer_dir,
+            base_url=base_url,
+            open_browser=not no_open,
+            echo=click.echo,
+        )
 
 
 @main.command("export-cog")
@@ -784,11 +840,13 @@ def convert_command(
             f"verified every value in {len(report.encode.levels)} levels, "
             f"{report.plan.n_time} timesteps; total {report.total_s:.1f} s"
         )
+        click.echo(f"preview it: {preview_command(out)}")
         return
     click.echo(
         f"read {report.n_staged} timesteps ({report.n_reused} reused) in {report.read_s:.1f} s, "
         f"encoded in {report.encode_s:.1f} s, total {report.total_s:.1f} s"
     )
+    click.echo(f"preview it: {preview_command(out)}")
 
 
 convert_command.help = f"{convert_command.help}\n\n{FIDELITY_HELP}"

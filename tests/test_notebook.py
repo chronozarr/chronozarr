@@ -2,7 +2,6 @@
 
 import importlib
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -27,19 +26,27 @@ def test_hosted_player_traits_and_serialization():
         widget.close()
 
 
-def test_local_player_uses_range_server(monkeypatch, tmp_path):
-    notebook = importlib.import_module("chronozarr.notebook")
-    calls = []
-
-    def serve(path, *, port):
-        calls.append((path, port))
-        return SimpleNamespace(url="http://127.0.0.1:1234/store")
-
-    monkeypatch.setattr(notebook, "serve_store", serve)
-    widget = player(tmp_path, port=1234)
+def test_local_player_uses_range_server(tmp_path):
+    view_module = importlib.import_module("chronozarr.view")
+    (tmp_path / "zarr.json").write_text("{}")
+    widget = player(tmp_path)
     try:
-        assert calls == [(str(tmp_path), 1234)]
-        assert widget.store_url == "http://127.0.0.1:1234/store"
+        server = view_module.serve_store(tmp_path)
+        assert widget.store_url == server.url
+        assert widget.viewer_url == "https://chronozarr.org/demo/"
+        assert widget.access is not None and widget.access.server is server
+    finally:
+        widget.close()
+        server.close()
+
+
+def test_player_accepts_paths_on_the_notebook_origin():
+    widget = player("https://example.org/store", viewer="/user/ada/proxy/8765/_viewer/demo/")
+    try:
+        assert widget.viewer_url == "/user/ada/proxy/8765/_viewer/demo/"
+        for bad in ("//evil.example/x", "relative/path", "ftp://x/y"):
+            with pytest.raises(TraitError, match="HTTP"):
+                widget.viewer_url = bad
     finally:
         widget.close()
 
