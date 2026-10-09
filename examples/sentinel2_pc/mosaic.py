@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # SCL values to KEEP (everything else is masked)
 # 4=vegetation, 5=bare_soil, 6=water, 7=unclassified (low prob cloud)
-# 11=snow/ice (keep for Iowa winter)
+# 11=snow/ice (kept: snow cover is a real surface state)
 SCL_VALID = {4, 5, 6, 7, 11}
 
 # GDAL environment for efficient COG reads over HTTPS

@@ -111,12 +111,12 @@ def test_bands_and_chronozarr_fields(store_path):
 
 
 def test_write_stac_makes_files_with_relative_href_for_local_stores(store_path, tmp_path):
-    collection_path, item_path = write_stac(store_path, tmp_path / "catalog", title="Sahara")
+    collection_path, item_path = write_stac(store_path, tmp_path / "catalog", title="Ucayali")
     assert collection_path == tmp_path / "catalog" / "collection.json"
     assert item_path == tmp_path / "catalog" / "aoi_one-chronozarr-2" / "aoi_one-chronozarr-2.json"
     collection = json.loads(collection_path.read_text())
     item = json.loads(item_path.read_text())
-    assert collection["title"] == "Sahara"
+    assert collection["title"] == "Ucayali"
     href = item["assets"]["zarr"]["href"]
     assert not Path(href).is_absolute()
     assert (item_path.parent / href).resolve() == store_path.resolve()
@@ -144,7 +144,7 @@ def test_default_id_from_paths_and_urls():
     assert default_id("https://data.chronozarr.org/ucayali_santa_maria/chronozarr-2") == (
         "ucayali_santa_maria-chronozarr-2"
     )
-    assert default_id("/tmp/stores/sahara/chronozarr") == "sahara-chronozarr"
+    assert default_id("/tmp/stores/lake_mead/chronozarr") == "lake_mead-chronozarr"
 
 
 def test_pystac_can_read_the_documents(store_path, tmp_path):

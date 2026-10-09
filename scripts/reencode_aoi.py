@@ -6,7 +6,7 @@ iterable, so peak memory does not grow with the number of months. Prints wall ti
 
 Usage:
     uv run python scripts/reencode_aoi.py --aoi ucayali_santa_maria --store-name chronozarr-4
-    uv run python scripts/reencode_aoi.py --aoi sahara_tamanrasset \
+    uv run python scripts/reencode_aoi.py --aoi lake_mead \
         --codec blosc-zstd-shuffle
 """
 

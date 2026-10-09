@@ -60,20 +60,20 @@ Run from the repository root.
 uv sync --extra ingest
 
 # full archive (2015-07 to 2026-04) for one AOI, download + encode
-uv run python examples/sentinel2_pc/ingest.py --aoi sahara_tamanrasset
+uv run python examples/sentinel2_pc/ingest.py --aoi ucayali_santa_maria
 
 # one month into a scratch directory
-uv run python examples/sentinel2_pc/ingest.py --aoi sahara_tamanrasset \
+uv run python examples/sentinel2_pc/ingest.py --aoi ucayali_santa_maria \
     --start 2024-01-01 --end 2024-01-31 --out-dir /tmp/ingest_smoke
 
 # encode existing mosaics only
-uv run python examples/sentinel2_pc/ingest.py --aoi sahara_tamanrasset --skip-download
+uv run python examples/sentinel2_pc/ingest.py --aoi ucayali_santa_maria --skip-download
 
 # encode existing mosaics and write the STAC catalog beside the store
-uv run python examples/sentinel2_pc/ingest.py --aoi sahara_tamanrasset --skip-download --stac
+uv run python examples/sentinel2_pc/ingest.py --aoi ucayali_santa_maria --skip-download --stac
 
 # check the result
-uv run chronozarr doctor data/stores/sahara_tamanrasset/chronozarr
+uv run chronozarr doctor data/stores/ucayali_santa_maria/chronozarr
 ```
 
 AOI names are the keys under `aois:` in `aois.yaml`. A chronozarr store is immutable: if
