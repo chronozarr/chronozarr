@@ -1,6 +1,6 @@
 # Hosting a chronozarr store
 
-A chronozarr store is a directory of static files. A host serves it with no server code. The host must return a file by path, answer byte-range requests and send CORS headers.
+A chronozarr store is a directory of static files. A host serves it with no server code. The host must return a file by path and send CORS headers. A sharded store also needs byte-range requests.
 
 The prefix of a store is its path in the bucket, for example `my_aoi/chronozarr-2`.
 
@@ -14,8 +14,8 @@ The source of the checks is `src/chronozarr/doctor.py`.
 
 Doctor reports one of three levels when a requirement is missing:
 
-- `fail` means the store breaks a MUST in the spec.
-- `warn` means the store breaks a SHOULD in the spec.
+- `fail` means a browser reader cannot read the store, or the layout or a decode is wrong.
+- `warn` means advice: the store breaks a SHOULD in the spec, or readers pay a measurable cost.
 - `info` reports a fact with no judgement.
 
 Doctor exits with status 1 only when a check fails. Warnings and info lines do not change the exit status.
@@ -50,7 +50,7 @@ Doctor does not check the requirements below. Verify them with `curl` (section 4
 |---|---|---|
 | An absent key returns `404` | MUST | A missing shard, `mask` or `coverage` array is meaningful. Readers decode a missing shard as fill. A host that answers 200 with HTML breaks that. |
 | Chunk and shard responses carry no `Content-Encoding` | MUST | The shard index stores byte offsets into the stored object. A CDN that gzips or re-encodes the body moves the bytes. |
-| Shards fit the cacheable object size of the host or CDN (sharded stores) | SHOULD | Choose `shard_time` at encode time (section 5). An unsharded store has one chunk per object, about 2 MB. |
+| Shards fit the cacheable object size of the host or CDN (sharded stores) | SHOULD | Choose `shard_time` at encode time (section 5). An unsharded store has one chunk per object. The largest object of the live store is 1.8 MB. |
 | Metadata is uploaded last | SHOULD | See section 2. |
 | The prefix is never rewritten | MUST | See section 2. |
 
@@ -59,7 +59,7 @@ Preflight and range notes:
 - A browser sends a preflight only for a suffix range. It sends no preflight for a bounded `bytes=a-b`.
 - A store written with `shard_bytes` lets a reader fetch every shard index as a bounded range. Rows 6 and 7 then cost nothing in practice. Doctor still reports them.
 - An unsharded store is the encoder default. A reader fetches it with plain `GET` requests and no `Range` header.
-- Without `Timing-Allow-Origin`, in-page benchmarks under-report bytes. Details: [evidence.md](evidence.md#timing-allow-origin).
+- Without `Timing-Allow-Origin`, a benchmark that reads resource timing under-reports bytes. Details: [evidence.md](evidence.md#timing-allow-origin).
 
 ## 2. Immutable prefixes and upload order
 
@@ -283,11 +283,11 @@ Add a Transform Rule of type Modify Response Header. Use the same hostname expre
 
 #### Object size and miss cost
 
-A cache miss on a range read pulls the whole object from R2, so the cost grows with object size. An unsharded store has chunks of about 2 MB, and a miss is cheap. In a sharded store, a smaller `shard_time` makes a miss cheaper. Cloudflare limits the size of a cacheable object by plan. Measurements are in [evidence.md](evidence.md#layout-choice).
+A cache miss on a range read pulls the whole object from R2, so the cost grows with object size. In the live unsharded store the largest chunk object is 1.8 MB, and a miss is cheap. In a sharded store, a smaller `shard_time` makes a miss cheaper. Cloudflare limits the size of a cacheable object by plan. Measurements are in [evidence.md](evidence.md#layout-choice).
 
 #### One cached copy per requesting site
 
-With a CORS policy, R2 sends `Vary: Origin`, so Cloudflare caches a separate copy of each object for each site that requests it. Visitors of one site share a cache. Each other site that embeds the viewer, and each client that sends no `Origin` header (Python, GDAL, curl), starts with a cache miss on every object. A Transform Rule that removes `Vary` does not merge the copies. Measurements are in [evidence.md](evidence.md#cache-copies-per-requesting-site).
+With a CORS policy, R2 sends `Vary: Origin`, so Cloudflare caches a separate copy of each object for each site that requests it. Visitors of one site share a cache. A site that serves the reader or the viewer from its own origin starts with a cache miss on every object. So does a client that sends no `Origin` header (Python, GDAL, curl). An iframe of the hosted viewer sends `Origin: https://chronozarr.org`. A Transform Rule that removes `Vary` does not merge the copies. Measurements are in [evidence.md](evidence.md#cache-copies-per-requesting-site).
 
 #### `r2.dev`
 
@@ -430,7 +430,7 @@ A store is unsharded unless you pass `--shard`. With `--shard`, `shard_time` def
 
 ## 6. The live store
 
-The demo catalog points to `ucayali_santa_maria_v03`. R2 serves it with `deploy/r2-cors.json` and the hostname rules from section 3.2. The history of its prefixes and its doctor results are in [evidence.md](evidence.md#live-store-and-publishing).
+The demo catalog lists `ucayali_santa_maria_v03` and `ucayali_santa_maria/png-v03`. R2 serves them with `deploy/r2-cors.json` and the Cache Rule from section 3.2. The history of its prefixes and its doctor results are in [evidence.md](evidence.md#live-store-and-publishing).
 
 ## 7. Appending to a live store
 

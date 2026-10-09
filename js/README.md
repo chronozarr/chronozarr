@@ -48,6 +48,7 @@ or at a CDN:
 | `chronozarr` | `openStore(url, options)` and the `ChronoStore` that it resolves to |
 | `chronozarr/maplibre` | `ChronozarrLayer`, a MapLibre GL JS custom layer |
 | `chronozarr/decode-worker` | The module worker that `openStore` starts for decoding |
+| `chronozarr/geolibre` | `createChronozarrPlugin`, a GeoLibre plugin that adds a store as a MapLibre layer |
 
 The `chronozarr` import also exports the helpers `chunkKey`, `defaultTotalBytes`, `FetchError`, `samplePixelFrom`, `scrubCost` and `windowOrder`. `import.meta.resolve('chronozarr/decode-worker')` returns the URL of the worker, for example for the `spawnWorker` option.
 
@@ -64,11 +65,11 @@ import { openStore } from 'chronozarr';
 
 const store = await openStore('https://your-host/v03-store');
 console.log(store.times.length, store.bands, store.dtype, store.crs);
-// 117 [ 'B02', 'B03', 'B04', 'B08' ] 'uint16' 'EPSG:32718'
+// 117 [ 'B02', 'B03', 'B04', 'B08' ] uint16 EPSG:32718
 
 const lod = store.levels.length - 1; // the coarsest pyramid level
 const { data, chunkWidth, chunkHeight } = await store.getCell(lod, 0, 0, 5); // row 0, col 0, timestep 5
-// data: typed array of the store's dtype, laid out [band][y][x] over the padded chunk. Read-only.
+// data: typed array of the store's dtype, laid out [band][y][x] over the padded chunk. Do not write to it: the cache holds this array.
 const stored = (band, y, x) => data[band * chunkHeight * chunkWidth + y * chunkWidth + x];
 const { scale, offset } = store.attrs.bands[2]; // B04
 console.log(stored(2, 100, 100) * scale + offset); // reflectance

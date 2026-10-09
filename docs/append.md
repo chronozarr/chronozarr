@@ -10,7 +10,7 @@
 - a Zarr store or NetCDF file with dims `(time, band, y, x)`
 - a quoted glob of GeoTIFFs, one per timestep, with the date in each file name
 
-The grid, bands, dtype, CRS and nodata of `INPUT` must match `STORE`. Three options adjust the read:
+The grid, bands, dtype, CRS and nodata of `INPUT` must match `STORE`. The command has three options:
 
 | Option | Meaning |
 |---|---|
@@ -31,4 +31,4 @@ For a sharded store that will grow, choose a finite `--shard-time` only when the
 
 An append is not atomic. Run it on a working copy and check the copy with `chronozarr validate` before you publish.
 
-Publish the data objects first and the root `zarr.json` last. Then invalidate the cached objects that changed. [hosting.md](hosting.md#7-appending-to-a-live-store) has the procedure and the cache lifetimes.
+Publish the data objects first and the root `zarr.json` last. The objects that an append changes carry `max-age=300`, so cached copies expire within five minutes. [hosting.md](hosting.md#7-appending-to-a-live-store) has the procedure and the cache lifetimes.

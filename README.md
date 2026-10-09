@@ -32,7 +32,7 @@ The chunks hold the stored numbers in their original type: uint8, uint16, int16 
 
 The layout follows the Zarr conventions for pyramids (`multiscales`), coordinate systems (`proj`) and georeferencing (`spatial`), all at v0.1. This is why other tools can read a store without chronozarr installed: xarray, GDAL 3.13, and CarbonPlan's zarr-layer for MapLibre.
 
-To publish a store, upload it to any host that answers byte-range requests and sends CORS headers. Amazon S3, Cloudflare R2 and Google Cloud Storage all work, and there is no server code to run.
+To publish a store, upload it to a static host that sends CORS headers. A sharded store also needs byte-range requests. The demo store is on Cloudflare R2, and there is no server code to run.
 
 ## Quickstart
 
@@ -83,11 +83,13 @@ pip install "chronozarr[geo]"
 
 ### With your data
 
-1. Write a store from a GeoTIFF time series. Use one file per timestep, with the date in each file name.
+1. Write a store from uint16 GeoTIFFs. Use one file per timestep, with the date in each file name.
 
    ```bash
    chronozarr encode "scenes/*.tif" my_store
    ```
+
+   `encode` reads uint16 GeoTIFFs only. Use `chronozarr convert` for other data types.
 
 2. Check the store against the spec.
 
@@ -131,7 +133,7 @@ import xarray as xr
 ds = xr.open_zarr("my_store", group="0", zarr_format=3, chunks=None)
 ```
 
-GDAL 3.13 reads the CRS, the georeferencing and the values. It lists each level as a separate subdataset. To get Cloud Optimized GeoTIFFs for older GDAL or QGIS, run `chronozarr export-cog my_store out_dir`.
+GDAL 3.13 reads the CRS, the georeferencing and the values. It attaches the coarser levels as overviews when you open the data array as `ZARR:"my_store":/0/data`. A single time-slice subdataset shows no overviews. To get Cloud Optimized GeoTIFFs for older GDAL or QGIS, run `chronozarr export-cog my_store out_dir`.
 
 ## Commands
 
@@ -139,7 +141,7 @@ Run `chronozarr <command> --help` for every option.
 
 | Command | What it does |
 |---------|--------------|
-| `encode INPUT OUT` | Writes a store from a Zarr store, a NetCDF file or a quoted GeoTIFF glob |
+| `encode INPUT OUT` | Writes a store from a Zarr store, a NetCDF file or a quoted glob of uint16 GeoTIFFs |
 | `convert SOURCE OUT` | Writes a store one timestep at a time, from a manifest of COGs or PNG frames, a Zarr store or a NetCDF file. Also converts a v0.2 store to v0.3 |
 | `append STORE INPUT` | Adds timesteps at the end of a store. See [docs/append.md](docs/append.md) |
 | `validate STORE` | Checks a store against the spec. Exits with status 1 on failure |
@@ -156,10 +158,11 @@ Other extras: `notebook` adds `chronozarr.view(store)`, which shows a local stor
 npm install chronozarr
 ```
 
-The package has three parts:
+The package has four parts:
 
 - `chronozarr` is a DOM-free reader. It returns one cell of one timestep as a typed array.
 - `chronozarr/maplibre` is a MapLibre custom layer that draws a store.
+- `chronozarr/geolibre` is a GeoLibre plugin that adds a store as a MapLibre layer.
 - `chronozarr-viewer` copies the full viewer into a folder that you can host next to your store. See [docs/viewer-distribution.md](docs/viewer-distribution.md).
 
 There is no build step and no runtime dependency. Examples are in [js/README.md](js/README.md).

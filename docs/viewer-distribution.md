@@ -26,10 +26,11 @@ The npm package contains the full viewer: the reader, the web workers, the codec
 
 The folder works at a domain root or under a subpath. Sharded stores need a host that answers byte-range requests.
 
-To preview the folder on your machine, use a server that answers byte-range requests:
+To preview the folder on your machine, use a server that answers byte-range requests. Start it inside the folder:
 
 ```sh
-uv run --with rangehttpserver python -m RangeHTTPServer 8000 --directory published
+cd published
+uv run --with rangehttpserver python -m RangeHTTPServer 8000
 ```
 
 ## Use a store on another host

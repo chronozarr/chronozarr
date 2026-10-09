@@ -97,7 +97,7 @@ These members are read-only: `opened`, `store`, `times`, `bounds`, `bandNames`, 
 
 A time change never refetches what the reader has cached. The GPU pool keeps recently shown chunks, and the reader cache (`layer.store`) holds decoded chunks. While a new timestep loads, the previous one stays on screen.
 
-With `prefetch: true` the reader also fills its caches in the background through `store.prefetch`. It fetches the nearest timesteps first, within its cache and speculative-bandwidth budgets. Scrubbing a whole time series then finds most timesteps cached. Prefetch can move hundreds of MB, and [evidence.md](../../docs/evidence.md#maplibre-layer) has a measured example.
+With `prefetch: true` the reader also fills its caches in the background through `store.prefetch`. It fetches the nearest timesteps first, up to `horizonSteps` (12) on either side of `t`, within its cache and speculative-bandwidth budgets. While nobody scrubs, it starts at most `idleBytes` (64 MiB) per view. Both are `openStore` options, listed in [js/README.md](../README.md#read-a-store). A scrub then finds the timesteps near `t` cached. Prefetch can move hundreds of MB, and [evidence.md](../../docs/evidence.md#maplibre-layer) has a measured example.
 
 ### Stored data and colors
 

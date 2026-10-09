@@ -1,6 +1,6 @@
 # Python API
 
-The `chronozarr` package writes a store, reads it and opens it in xarray. The [README](../README.md) has a first run. This page lists the functions. Each function has a docstring that lists every option.
+The `chronozarr` package writes a store, reads it and opens it in xarray. The [README](../README.md) has a first run. This page lists the functions. The docstring of `chronozarr.encode` lists every option of `encode`.
 
 ## Write a store
 
