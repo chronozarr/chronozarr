@@ -534,6 +534,13 @@ test.describe('postMessage', () => {
 
 // ---- the demo page ----
 
+/** The demo page's click readout, {row name: shown text}. */
+async function readout(page) {
+  const names = await page.locator('#click dt').allTextContents();
+  const values = await page.locator('#click dd').allTextContents();
+  return Object.fromEntries(names.map((name, i) => [name, values[i]]));
+}
+
 test.describe('the demo host page (examples/embed.html)', () => {
   test.use({ viewport: { width: 1000, height: 900 } });
 
@@ -562,10 +569,61 @@ test.describe('the demo host page (examples/embed.html)', () => {
     await expect(page.locator('#click')).toContainText('2024-01-05');
     await expect(page.locator('#click')).toContainText('50, 40');
     const expected = expectedValues(4, 50, 40);
+    // The frame on screen is level 0, so the readout has no Level row.
     await expect(page.locator('#click dt')).toHaveText(['Time', 'Pixel', 'Lon, lat', 'B02', 'B03', 'B04', 'B08']);
     const shown = await page.locator('#click dd').allTextContents();
     expect(Number(shown[3])).toBeCloseTo(expected.B02, 5);
     expect(Number(shown[6])).toBeCloseTo(expected.B08, 4);
+  });
+
+  test('its readout names the level when a click lands on a coarser frame', async ({ page, servers, storeUrl }) => {
+    // One object per chunk, so the URL of a level-0 read names its timestep: level 0 of timesteps 2 and 3 is held back.
+    const plain = 'u16_plain';
+    let release;
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    await page.route(new RegExp(`/${plain}/0/data/c/[23]/`), async (route) => {
+      await held;
+      await route.continue();
+    });
+    await page.goto(`${servers.appUrl}/examples/embed.html?store=${encodeURIComponent(await storeUrl(plain))}`);
+    await expect(page.locator('#slider')).toBeEnabled();
+    const frame = page.frames().find((f) => f.url().startsWith(`${servers.appUrl}/demo/`));
+    await frame.waitForFunction(() => window.chronozarr.viewer.paintedT === 0);
+    await frame.waitForFunction(() => Boolean(window.chronozarr.viewer.store.peekRaw(1, 0, 0, 2)));
+
+    // The slider dragged fast: two steps a moment apart are a scrub. Level 0 of t=3 is not in memory, so it draws t=2 at level 1.
+    await page.evaluate(() => {
+      const slider = document.getElementById('slider');
+      for (const t of [1, 2]) {
+        slider.value = String(t);
+        slider.dispatchEvent(new Event('input'));
+      }
+    });
+    await frame.waitForFunction(() => {
+      const shown = window.chronozarr.viewer.shownFrame;
+      return shown?.t === 2 && shown.lod === 1;
+    });
+    await clickPixel(page, frame, 50, 40);
+    await expect(page.locator('#click dt')).toHaveText(['Time', 'Pixel', 'Level', 'Lon, lat', 'B02', 'B03', 'B04', 'B08']);
+    const coarse = await readout(page);
+    expect([coarse.Time, coarse.Pixel, coarse.Level]).toEqual(['2024-01-03', '50, 40', '1 (2× coarser)']);
+    const level1 = expectedValues(2, 50, 40, { store: plain, lod: 1 });
+    for (const [band, value] of Object.entries(level1)) expect(Number(coarse[band]), band).toBeCloseTo(value, 5);
+
+    // Once level 0 arrives, the same click reads the level-0 pixel and the Level row is gone.
+    release();
+    await frame.waitForFunction(() => {
+      const shown = window.chronozarr.viewer.shownFrame;
+      return shown?.t === 2 && shown.lod === 0;
+    });
+    await clickPixel(page, frame, 50, 40);
+    await expect(page.locator('#click dt')).toHaveText(['Time', 'Pixel', 'Lon, lat', 'B02', 'B03', 'B04', 'B08']);
+    const sharp = await readout(page);
+    const level0 = expectedValues(2, 50, 40, { store: plain });
+    expect(level0.B02, 'the fixture tells the two levels apart at this pixel').not.toBeCloseTo(level1.B02, 5);
+    for (const [band, value] of Object.entries(level0)) expect(Number(sharp[band]), band).toBeCloseTo(value, 5);
   });
 });
 
