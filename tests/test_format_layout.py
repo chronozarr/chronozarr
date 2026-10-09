@@ -448,9 +448,9 @@ def _fake_pyproj(monkeypatch, *, known: bool = True):
             return f'PROJCRS["fake EPSG:{self.code}"]'
 
     pyproj = types.ModuleType("pyproj")
-    pyproj.CRS = CRS  # ty: ignore[unresolved-attribute]
+    pyproj.CRS = CRS  # ty: ignore[unresolved-attribute]  # ModuleType declares no CRS
     exceptions = types.ModuleType("pyproj.exceptions")
-    exceptions.CRSError = CRSError  # ty: ignore[unresolved-attribute]
+    exceptions.CRSError = CRSError  # ty: ignore[unresolved-attribute]  # ModuleType: no CRSError
     monkeypatch.setitem(sys.modules, "pyproj", pyproj)
     monkeypatch.setitem(sys.modules, "pyproj.exceptions", exceptions)
 
