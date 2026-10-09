@@ -118,7 +118,10 @@ export default {
         const state = message.state;
         activeBand = state.band;
         bandRanges.set(activeBand, state.range ?? null);
-        const desired = first ? { playing: model.get('playing'), speed: model.get('speed'), band: model.get('band') ?? '', range: model.get('range') ?? null, ...pending } : null;
+        const desired = first ? {
+          playing: model.get('playing'), speed: model.get('speed'), range: model.get('range') ?? null,
+          ...(model.get('band') ? { band: model.get('band') } : {}), ...pending,
+        } : null;
         update({ ready: true, times: message.times, products: message.products, bands: message.bands,
           state, t: state.t, product: state.product, band: state.band, range: state.range ?? null, playing: state.playing, speed: state.speed });
         if (desired) { pending = desired; flush(); }

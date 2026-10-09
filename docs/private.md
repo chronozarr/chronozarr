@@ -139,14 +139,14 @@ Where a token in `store=` ends up, and how to limit it:
 
 | Place | What happens today | What to do |
 |---|---|---|
-| Address bar and history | The viewer writes `store=<url>` to the address bar (`syncUrl` in `js/demo/viewer.js`), so the token enters history and any copied link | Treat every copied link as the token. Use a short lifetime |
+| Address bar and history | The original `?store=<signed-url>` navigation contains the token. After the store opens, the viewer replaces the displayed URL with the store origin and path, without its query. A copied original link still contains the token. | Treat every copied signed link as the token. Use a short lifetime. |
 | Request for the viewer page | The query string goes to the host of the page | Use 3.1 or 3.2 when the host of the viewer must not see the token |
-| Browser console | A failed request logs its full URL, query included (`#send` in `js/chronozarr/http.js`) | Do not share console output or screenshots of it |
-| Error overlay | "Could not open store" shows the error message, which holds the URL | Do not share screenshots of it |
-| Store menu | On a page with a catalog, a store you open adds a menu entry labelled with its URL | Use a page without a catalog, or section 3.1 or 3.2 |
-| Embedded page | The wordmark link carries the same `store` value ([embedding.md](embedding.md#6-stores-and-access)) | Use a token that is safe for every viewer of the page |
+| Browser console | Reader retry messages, failed-open messages and displayed URLs redact the query. Some diagnostic paths still log the `FetchError` object, whose `url` property is the request URL. | Do not share developer-tools output or screenshots when a signed store has failed. |
+| Error overlay | Viewer error text redacts HTTP URL queries before it is shown. | The path and host can still identify the store; do not use the overlay as a secret-safe sharing channel. |
+| Store menu | A catalog-page label for an opened store omits the query. Its internal option value remains the URL used to read the store. | Do not treat the page's JavaScript state as a credential vault. |
+| Embedded page | The iframe URL contains the `store` value, so the token is saved with the embedding page or notebook output. The embed wordmark opens the viewer without copying `store=`. | Use a token that is safe for every viewer of the embedded page, or use a same-origin protected viewer. |
 | Notebook output | `view(url)` writes the URL into the iframe `src` and the caption of the cell output (`view` in `src/chronozarr/view.py`), and Jupyter saves it in the `.ipynb` file | Use `view` with a local directory (3.1). Clear outputs before you commit or share a notebook |
-| Python and CLI tools | `HttpStore` appends each key after the whole URL, so a query token ends up in the path (`src/chronozarr/store.py`). `doctor`, `info` and `open_store` do not work with a token URL | Check a local copy, or an unprotected test copy |
+| Python and CLI tools | `HttpStore` joins each Zarr key onto the URL path and carries the query onto every object request. `open_store`, `info` and `doctor` work with prefix-wide token URLs; their displayed URLs redact the query. | Keep the original command argument out of shell history and CI logs. |
 | Shell history and CI logs | A URL on the command line is recorded | Use a profile or an environment variable for credentials, not a URL |
 
 Check a link before you share it:

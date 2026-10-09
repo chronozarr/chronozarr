@@ -80,3 +80,36 @@ test('the notebook player puts product, band and limits in the iframe URL', asyn
   await page.waitForFunction(() => window.values.ready);
   expect(await page.evaluate(() => window.values.state.range)).toEqual([-50, 300]);
 });
+
+test('the notebook player does not send an empty initial band', async ({ page, servers, stores, storeUrl }) => {
+  const store = await storeUrl('i16_band');
+  const hostDir = path.join(stores.dir, 'player-empty-band');
+  await mkdir(hostDir, { recursive: true });
+  await copyFile(PLAYER, path.join(hostDir, 'player.js'));
+  await writeFile(
+    path.join(hostDir, 'host.html'),
+    `<!doctype html><meta charset="utf-8"><body></body>
+<script type="module">
+  const values = {
+    store_url: ${JSON.stringify(store)}, viewer_url: ${JSON.stringify(`${servers.appUrl}/demo/index.html`)},
+    controls: false, height: 400, theme: 'light', t: 0, product: '', band: '', range: null,
+    speed: 4, playing: false, times: [], products: [], bands: [], ready: false, state: {}, click: {}, error: {},
+  };
+  window.values = values;
+  const listeners = new Map();
+  const model = {
+    get: (key) => values[key],
+    set(key, value) { values[key] = value; for (const callback of listeners.get('change:' + key) ?? []) callback(); },
+    save_changes() {},
+    on(key, callback) { if (!listeners.has(key)) listeners.set(key, new Set()); listeners.get(key).add(callback); },
+    off(key, callback) { listeners.get(key)?.delete(callback); },
+  };
+  const widget = (await import('./player.js')).default;
+  widget.render({ model, el: document.body });
+</script>`,
+  );
+  await page.goto(`${servers.dataUrl}/player-empty-band/host.html`);
+  await page.waitForFunction(() => window.values.ready);
+  await page.waitForTimeout(100);
+  expect(await page.evaluate(() => window.values.error)).toEqual({});
+});
