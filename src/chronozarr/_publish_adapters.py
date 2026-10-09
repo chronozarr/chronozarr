@@ -40,8 +40,13 @@ def open_adapter(
 
         _reject_s3_options("gs", profile=profile, endpoint_url=endpoint_url, region=region)
         return GcsAdapter(destination.bucket)
+    if destination.scheme == "az":
+        from chronozarr._publish_azure import AzureAdapter
+
+        _reject_s3_options("az", profile=profile, endpoint_url=endpoint_url, region=region)
+        return AzureAdapter(destination.bucket, destination.prefix)
     raise PublishError(
         f"unsupported destination scheme {destination.scheme}://. Supported: s3:// (AWS S3, and "
-        "Cloudflare R2 or another S3-compatible service with --endpoint-url) and gs:// (Google "
-        "Cloud Storage)."
+        "Cloudflare R2 or another S3-compatible service with --endpoint-url), gs:// (Google "
+        "Cloud Storage), and az:// (Azure Blob Storage)."
     )

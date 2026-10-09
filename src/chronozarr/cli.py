@@ -646,7 +646,7 @@ convert_command.help = f"{convert_command.help}\n\n{FIDELITY_HELP}"
 @click.option(
     "--destination",
     required=True,
-    metavar="s3://BUCKET/PREFIX | gs://BUCKET/PREFIX",
+    metavar="s3://BUCKET/PREFIX | gs://BUCKET/PREFIX | az://ACCOUNT/CONTAINER/PREFIX",
     help="Where to write: a storage location, not a browser URL. Use a fresh PREFIX per version.",
 )
 @click.option(
@@ -654,8 +654,8 @@ convert_command.help = f"{convert_command.help}\n\n{FIDELITY_HELP}"
     default=None,
     metavar="HTTPS_URL",
     help="Address browsers read the store from (custom domain or CDN, ending at the store "
-    "root). Required for R2 and other --endpoint-url hosts; for AWS S3 and Google Cloud "
-    "Storage it defaults to the bucket's own HTTPS endpoint.",
+    "root). Required for R2 and other --endpoint-url hosts; for AWS S3, Google Cloud "
+    "Storage and Azure Blob Storage it defaults to the storage's own HTTPS endpoint.",
 )
 @click.option(
     "--profile", default=None, help="Named AWS profile for s3:// (default: boto3's own chain)."
@@ -705,7 +705,7 @@ def publish_command(
     checks against --public-url and prints a chronozarr.org/demo link only if they pass. The
     dataset stays on your host; its storage and delivery charges are yours. chronozarr.org
     serves the viewer, not the data. Credentials come from the provider's own chain (boto3,
-    Google Application Default Credentials) and are never printed.
+    Google Application Default Credentials, Azure DefaultAzureCredential) and are never printed.
     """
     from chronozarr._publish_adapters import open_adapter
     from chronozarr.publish import (

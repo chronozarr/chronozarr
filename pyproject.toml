@@ -76,6 +76,10 @@ publish = [
 publish-gcs = [
     "google-cloud-storage>=2.16",
 ]
+publish-azure = [
+    "azure-identity>=1.15",
+    "azure-storage-blob>=12.19",
+]
 
 [project.scripts]
 chronozarr = "chronozarr.cli:main"
