@@ -202,7 +202,13 @@ Writers MUST emit the mirrors specified above. The reader fallbacks in §§3.2 a
 
 `chronozarr.nodata` MUST be one number or null. Null declares no nodata sentinel. If it is a number, it MUST equal each data array's `fill_value` and `nodata` attribute. If it is null, `fill_value` MUST be 0 and the data array's `nodata` attribute MUST be absent. NaN MUST NOT be used as nodata. Writers SHOULD NOT store NaN data. Gaps SHOULD be marked using the sentinel or mask.
 
-A pixel is valid when its mask exists and equals 1. Otherwise, if there is no mask and a numeric nodata sentinel exists, it is valid when its data value differs from that sentinel. Otherwise it is valid. A reader with a mask MUST use it and MUST NOT also compare data to the nodata sentinel. Invalid pixels MUST be treated as missing in band math, statistics, block means and charts. Where mask equals 0, the data value is not interpreted. Writers SHOULD store `fill_value` there. The mask is optional, and a missing mask changes which of these validity rules applies.
+A pixel's validity follows the first case that applies:
+
+1. If the mask exists, the pixel is valid if and only if its mask value is 1.
+2. If there is no mask and a numeric nodata sentinel exists, the pixel is valid if and only if its data value differs from that sentinel.
+3. Otherwise, the pixel is valid.
+
+A reader with a mask MUST use it and MUST NOT also compare data to the nodata sentinel. Invalid pixels MUST be treated as missing in band math, statistics, block means and charts. Where mask equals 0, the data value is not interpreted. Writers SHOULD store `fill_value` there. A missing optional mask does not make the store invalid. It changes which of these validity rules applies.
 
 ### 4.2 Mask
 
@@ -281,7 +287,7 @@ volatility[r,c] = clip(
     0, 1)
 ```
 
-When written, this value MUST be computed from exact differences: int32 for integer data and float64 for float32 data. The mean MUST include invalid source pixels, as in the existing publisher metric. The mean MUST use level 0 only. The value MUST be 0 if D is empty, including `s=1` or `n_time=1`. An all-zero mean likewise yields 0. Results MUST be clipped to [0,1] and stored as float32. The divisor 10000 is fixed for every dtype. It reflects the original reflectance normalization. It is not a physical unit. For other sources it remains a relative temporal-change metric.
+When written, this value MUST be computed from exact differences: int32 for integer data and float64 for float32 data. The mean MUST include invalid source pixels, as in the existing publisher metric. The mean MUST use level 0 only. The value MUST be 0 if D is empty, including `s=1` or `n_time=1`. An all-zero mean likewise yields 0. Results MUST be clipped to [0,1] and stored as float32. The divisor 10000 is fixed for every dtype. It reflects the original reflectance normalization. It is not a physical unit. For other sources it remains a relative temporal-change metric, and its values are not calibrated change magnitudes.
 
 Readers MAY use volatility to order prefetch or draw change overviews. They MUST distinguish optional metric availability from data decodability. A present array that violates this definition is a conformance error. An absent array is not a conformance error.
 
