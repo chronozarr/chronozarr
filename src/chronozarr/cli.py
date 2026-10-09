@@ -42,11 +42,7 @@ from chronozarr.export import export_cog, select_times
 from chronozarr.schema import Band, SchemaError, validate
 from chronozarr.stac import write_stac
 from chronozarr.store import redact_url
-
-
-from chronozarr.view import VIEWER_URL, viewer_url
-
-from chronozarr.view import preview, preview_command
+from chronozarr.view import VIEWER_URL, preview, preview_command, viewer_url
 
 _DATE_IN_NAME = re.compile(r"(?<!\d)(\d{4})-?(\d{2})(?:-?(\d{2}))?(?!\d)")
 _GLOB_CHARS = "*?["

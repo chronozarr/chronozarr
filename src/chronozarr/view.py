@@ -22,8 +22,8 @@ import contextlib
 import errno
 import html
 import importlib
-import math
 import importlib.util
+import math
 import os
 import posixpath
 import re
@@ -632,8 +632,6 @@ def diagnose_view(store: str | Path) -> None:
     if server is None:
         raise ValueError(f"no local server is running for {path}: call view() or player() first")
     print(access_for(server).diagnose())
-
-
 
 
 def view(
