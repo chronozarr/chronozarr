@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import warnings
+from typing import Any
 
 import numpy as np
 import pytest
@@ -15,6 +16,7 @@ from zarr.storage import LocalStore
 import chronozarr
 from chronozarr import schema
 from chronozarr.convert import convert
+from tests.narrow import array_at, attrs_block, required
 from tests.synthetic import build_store, make_da, make_truth, reference_reduce
 from tests.test_reads import CountingStore
 
@@ -47,20 +49,21 @@ def test_v03_roundtrip_every_level(tmp_path, dtype, shard):
     assert chronozarr.validate(path) == []
     store = chronozarr.open_store(path)
     root = zarr.open_group(path, mode="r")
-    assert "temporal" not in root.attrs["chronozarr"]
+    assert "temporal" not in attrs_block(root, "chronozarr")
     assert "volatility" not in root
     for k in range(len(store.levels)):
         if k:
             truth, mask, coverage = reference_reduce(
                 truth, nodata=None, mask=mask, coverage=coverage
             )
+            assert mask is not None and coverage is not None
         assert np.array_equal(store.to_xarray(k).values, truth)
         assert np.array_equal(
             schema.get_array(schema.get_group(root, str(k), "s"), "data", "s")[:], truth
         )
         for t in range(len(truth)):
-            assert np.array_equal(store.read_mask(t, k), mask[t])
-            assert np.array_equal(store.read_coverage(t, k), coverage[t])
+            assert np.array_equal(required(store.read_mask(t, k)), mask[t])
+            assert np.array_equal(required(store.read_coverage(t, k)), coverage[t])
 
 
 @pytest.mark.parametrize("version", ["0.2.0", "0.1.0", "0.3.1", "9.0.0", None])
@@ -68,7 +71,7 @@ def test_versions_rejected_before_values(tmp_path, version):
     path = tmp_path / "s"
     build_store(path, make_truth(2, 1, 4, 4), shard=False, chunk_size=4)
     root = zarr.open_group(path, mode="r+", use_consolidated=False)
-    attrs = dict(root.attrs["chronozarr"])
+    attrs = attrs_block(root, "chronozarr")
     if version is None:
         attrs.pop("spec_version")
     else:
@@ -115,7 +118,7 @@ def test_exact_legacy_conversion_preserves_existing_overviews(tmp_path, shard, e
         provenance={"sources": ["synthetic"], "composite": "none", "gap_fill": "none"},
     )
     root = zarr.open_group(source, mode="r+", use_consolidated=False)
-    meta = dict(root.attrs["chronozarr"])
+    meta = attrs_block(root, "chronozarr")
     meta["spec_version"] = "0.2.0"
     comparisons = [0, 3, 6]
     refs = {
@@ -211,7 +214,8 @@ def test_append_matches_fresh_values_and_metric(tmp_path, volatility):
         assert np.array_equal(a.to_xarray(k).values, b.to_xarray(k).values)
     if volatility:
         assert np.array_equal(
-            zarr.open_group(path)["volatility"][:], zarr.open_group(fresh)["volatility"][:]
+            array_at(zarr.open_group(path), "volatility")[:],
+            array_at(zarr.open_group(fresh), "volatility")[:],
         )
 
 
@@ -225,7 +229,7 @@ def test_literal_registrations_required(tmp_path, name):
         if name == "multiscales"
         else schema.get_array(schema.get_group(root, "0", "s"), "data", "s")
     )
-    registrations = list(node.attrs["zarr_conventions"])
+    registrations: list[dict[str, Any]] = json.loads(json.dumps(node.attrs["zarr_conventions"]))
     for entry in registrations:
         if entry["name"] == name:
             entry["schema_url"] = entry["schema_url"].replace("refs/tags/v0.1", "main")
@@ -309,7 +313,7 @@ def test_legacy_null_nodata_replaces_all_copied_attributes(tmp_path, shard):
         shard=shard,
     )
     root = zarr.open_group(source, mode="r+", use_consolidated=False)
-    meta = dict(root.attrs["chronozarr"])
+    meta = attrs_block(root, "chronozarr")
     meta.update(spec_version="0.2.0", temporal={"encoding": "none"})
     root.attrs.update(
         {
@@ -331,7 +335,7 @@ def test_legacy_null_nodata_replaces_all_copied_attributes(tmp_path, shard):
     convert(source, destination)
     assert chronozarr.validate(destination) == []
     migrated = zarr.open_group(destination, mode="r", use_consolidated=False)
-    assert migrated.attrs["chronozarr"]["nodata"] is None
+    assert attrs_block(migrated, "chronozarr")["nodata"] is None
     assert set(migrated.attrs) == {"chronozarr", "multiscales", "zarr_conventions"}
     for k in range(2):
         group = schema.get_group(migrated, str(k), "new")
@@ -340,10 +344,12 @@ def test_legacy_null_nodata_replaces_all_copied_attributes(tmp_path, shard):
         for name in ("data", "mask", "coverage"):
             array = schema.get_array(group, name, "new")
             assert "nodata" not in array.attrs
+            height, width = array.shape[-2:]
             assert array.attrs.asdict() == schema.data_array_attrs(
                 attrs.crs,
                 attrs.transform,
-                *array.shape[-2:],
+                height,
+                width,
                 None,
                 dimensions=schema.DIMENSIONS if name == "data" else schema.PLANE_DIMENSIONS,
             )
