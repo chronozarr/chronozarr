@@ -646,7 +646,7 @@ convert_command.help = f"{convert_command.help}\n\n{FIDELITY_HELP}"
 @click.option(
     "--destination",
     required=True,
-    metavar="s3://BUCKET/PREFIX",
+    metavar="s3://BUCKET/PREFIX | gs://BUCKET/PREFIX",
     help="Where to write: a storage location, not a browser URL. Use a fresh PREFIX per version.",
 )
 @click.option(
@@ -654,16 +654,21 @@ convert_command.help = f"{convert_command.help}\n\n{FIDELITY_HELP}"
     default=None,
     metavar="HTTPS_URL",
     help="Address browsers read the store from (custom domain or CDN, ending at the store "
-    "root). Required for R2 and other --endpoint-url hosts; for AWS S3 it defaults to the "
-    "bucket's regional endpoint.",
+    "root). Required for R2 and other --endpoint-url hosts; for AWS S3 and Google Cloud "
+    "Storage it defaults to the bucket's own HTTPS endpoint.",
 )
-@click.option("--profile", default=None, help="Named AWS profile (default: boto3's own chain).")
+@click.option(
+    "--profile", default=None, help="Named AWS profile for s3:// (default: boto3's own chain)."
+)
 @click.option(
     "--endpoint-url",
     default=None,
-    help="S3-compatible endpoint, e.g. https://<account id>.r2.cloudflarestorage.com for R2.",
+    help="S3-compatible endpoint for s3://, e.g. https://<account id>.r2.cloudflarestorage.com "
+    "for R2.",
 )
-@click.option("--region", default=None, help="Region (R2 endpoints use `auto` without this).")
+@click.option(
+    "--region", default=None, help="Region for s3:// (R2 endpoints use `auto` without this)."
+)
 @click.option(
     "--dry-run", is_flag=True, help="Print the plan and what is already stored; upload nothing."
 )
@@ -699,7 +704,8 @@ def publish_command(
     headers, skips objects that are already stored (so a rerun resumes), runs the `doctor`
     checks against --public-url and prints a chronozarr.org/demo link only if they pass. The
     dataset stays on your host; its storage and delivery charges are yours. chronozarr.org
-    serves the viewer, not the data. Credentials come from boto3's chain and are never printed.
+    serves the viewer, not the data. Credentials come from the provider's own chain (boto3,
+    Google Application Default Credentials) and are never printed.
     """
     from chronozarr._publish_adapters import open_adapter
     from chronozarr.publish import (

@@ -83,7 +83,14 @@ Do not request the final URL before phase 3 ends. A CDN caches a `404` for secon
 
 ### `chronozarr publish`
 
-`chronozarr publish STORE` runs the three phases below against an S3 bucket or an S3-compatible bucket such as Cloudflare R2. It then checks the hosted store with `chronozarr doctor` and prints a viewer link. It needs the `publish` extra, which adds boto3: `uv sync --extra publish` or `pip install 'chronozarr[publish]'`.
+`chronozarr publish STORE` runs the three phases below against an S3 bucket, an S3-compatible bucket such as Cloudflare R2, or a Google Cloud Storage bucket. It then checks the hosted store with `chronozarr doctor` and prints a viewer link. Each provider has its own optional extra, so you install one SDK only:
+
+| Provider | Destination | Extra | SDK | Credentials |
+|---|---|---|---|---|
+| AWS S3, Cloudflare R2 | `s3://BUCKET/PREFIX` | `publish` | boto3 | boto3's chain |
+| Google Cloud Storage | `gs://BUCKET/PREFIX` | `publish-gcs` | google-cloud-storage | Application Default Credentials |
+
+Install an extra with `uv sync --extra publish-gcs` or `pip install 'chronozarr[publish-gcs]'`.
 
 ```bash
 # AWS S3. The credentials come from boto3's chain: environment, ~/.aws, SSO or an instance role.
@@ -97,7 +104,15 @@ chronozarr publish my_store \
   --destination s3://my-bucket/aoi/store-v1 \
   --endpoint-url https://<account id>.r2.cloudflarestorage.com \
   --public-url https://data.example.com/aoi/store-v1
+
+# Google Cloud Storage. Run `gcloud auth application-default login` once, or set
+# GOOGLE_APPLICATION_CREDENTIALS. Without --public-url the store URL is
+# https://storage.googleapis.com/my-bucket/aoi/store-v1.
+chronozarr publish my_store \
+  --destination gs://my-bucket/aoi/store-v1
 ```
+
+`--profile`, `--endpoint-url` and `--region` are S3 options. The command rejects them with a `gs://` destination.
 
 Add `--dry-run` to print the plan and what the prefix already holds, with nothing uploaded.
 
@@ -105,18 +120,18 @@ The destination and the public URL are two addresses:
 
 | | Destination | Public URL |
 |---|---|---|
-| Form | `s3://BUCKET/PREFIX` | `https://HOST/PREFIX` |
+| Form | `s3://BUCKET/PREFIX` or `gs://BUCKET/PREFIX` | `https://HOST/PREFIX` |
 | Used by | the upload, with your credentials | browsers and the viewer link |
-| Source | `--destination` | `--public-url`, or for AWS S3 without a CDN the regional endpoint of the bucket |
+| Source | `--destination` | `--public-url`, or without a CDN the HTTPS endpoint of the bucket (AWS S3 and Google Cloud Storage) |
 
-An `s3://` address is rejected as a public URL, and so is a URL with credentials, a query string (a signed URL) or a fragment, because the URL ends up in a link that other people open. For R2 there is no default: the storage endpoint is authenticated, so give the custom domain or the public endpoint of the bucket. For AWS the default `https://BUCKET.s3.REGION.amazonaws.com/PREFIX` serves objects only when the bucket allows public reads. For a private bucket behind CloudFront (section 3.1), pass the distribution URL.
+An `s3://` address is rejected as a public URL, and so is a URL with credentials, a query string (a signed URL) or a fragment, because the URL ends up in a link that other people open. For R2 there is no default: the storage endpoint is authenticated, so give the custom domain or the public endpoint of the bucket. For AWS the default `https://BUCKET.s3.REGION.amazonaws.com/PREFIX` serves objects only when the bucket allows public reads. For a private bucket behind CloudFront (section 3.1), pass the distribution URL. For Google Cloud Storage the default is `https://storage.googleapis.com/BUCKET/PREFIX`. It serves objects only when the bucket allows anonymous reads. The command never uses `storage.cloud.google.com`, because that host authenticates with cookies and does not answer CORS.
 
 What the command does, in order:
 
 1. Validates the store, as `chronozarr validate` does. A store that fails is not uploaded.
 2. Prints the plan: destination, public URL, object count, bytes, the three phases and the cache headers.
 3. Lists the prefix. A prefix that holds only objects identical to the store (same size and MD5) is an interrupted upload and resumes. A prefix that holds any other object is refused. Use a new prefix for every version. `--overwrite` replaces objects whose content differs. It never deletes, and it leaves a one-year cached copy stale for readers that already loaded it.
-4. Uploads in the three phases of "Metadata last". A phase starts after the previous one is fully stored. If an upload fails, the command stops with no root `zarr.json` in the bucket and names the failing key. Running the same command again skips the stored objects, so a retry repeats no work and a finished upload is a no-op. boto3 retries each request up to five times before a failure is reported.
+4. Uploads in the three phases of "Metadata last". A phase starts after the previous one is fully stored. If an upload fails, the command stops with no root `zarr.json` in the bucket and names the failing key. Running the same command again skips the stored objects, so a retry repeats no work and a finished upload is a no-op. boto3 retries each request up to five times before a failure is reported. The Google client retries transient errors with its default policy, which the command requests explicitly for every upload.
 5. Runs the doctor checks against the public URL, with `Origin: https://chronozarr.org`.
 6. Prints `https://chronozarr.org/demo/?store=<URL-encoded public URL>` only when no check failed. Warnings are printed and do not block the link. When a check fails, the objects stay in the bucket, no link is printed and the exit status is 1.
 
@@ -126,11 +141,12 @@ CORS and public access:
 
 - The command reads the bucket's CORS rules only when the doctor reports a CORS failure. Without `--apply-cors` it prints the rule the viewer needs and the number of rules that exist, and changes nothing.
 - With `--apply-cors` it writes the existing rules unchanged, in their order, followed by the viewer rule (the rule of `deploy/r2-cors.json`), and runs the checks again. Putting the new rule last means no request that an existing rule answers today changes its answer. If an earlier rule already matches the viewer's requests without the headers it needs, the checks still fail and you merge the rules by hand.
+- Google Cloud Storage keeps CORS on the bucket as a list of rules. The command reads it with `storage.buckets.get` and writes it with `storage.buckets.update`. The viewer rule is the one in section 3.3.
 - S3 CORS needs `s3:GetBucketCORS` and `s3:PutBucketCORS`. An R2 token with Object Read and Write cannot manage CORS. Use a token with bucket admin permission, or run `npx wrangler r2 bucket cors set` (section 3.2).
 - When a bucket sits behind CloudFront, CORS comes from the response headers policy (section 3.1), and the bucket's CORS rules are not what the checks see.
-- The command never changes a bucket's public access block, bucket policy, custom domains or cache rules. When the objects are stored but the doctor gets 403 or 404, it prints what to change in the provider's console. Setting CORS does not make private objects readable.
+- The command never changes a bucket's public access block, bucket policy, IAM bindings, custom domains or cache rules. For Google Cloud Storage that includes `allUsers` grants and public access prevention. When the objects are stored but the doctor gets 403 or 404, it prints what to change in the provider's console. Setting CORS does not make private objects readable.
 
-The command does not create buckets. The dataset stays in your bucket, and its storage and delivery charges are yours. chronozarr.org serves the viewer and holds no data. Google Cloud Storage and Azure Blob Storage are not supported yet; use the recipes in section 3.
+The command does not create buckets. The dataset stays in your bucket, and its storage and delivery charges are yours. chronozarr.org serves the viewer and holds no data. Azure Blob Storage is not supported yet.
 
 ### The upload script
 
