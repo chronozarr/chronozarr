@@ -23,7 +23,7 @@ The floor (`--floor`, default NDWI 0, the McFeeters convention for open water) s
 little or no water from thresholding noise: on a unimodal histogram Otsu splits the land mode in
 two and labels half the scene water. Where land is dense forest (Ucayali) Otsu separates forest
 from everything else at about -0.3, never water from land, so there the floor is the threshold;
-docs/user-zero.md has the sweep that picked -0.15 for that reach (turbid water sits near NDWI 0).
+A threshold sweep picked -0.15 for that reach (turbid water sits near NDWI 0).
 
 Dark pixels: L2A clips reflectance at DN 1, and in many pre-2022 winter months the whole of Lake
 Mead is DN 1 in every band. Green and nir are then both at the floor and ndwi is 0 or noise, so

@@ -7,7 +7,7 @@
 //   node cog/decode-bench.mjs [timestep=2] [repeats=7]
 //
 // Needs the COG for that date in data/cogs/ucayali_santa_maria and data/cogs-variants/<yyyy-mm>/zstd5_pred2.tif
-// (uv run python cog/codec_sizes.py ...; see docs/comparisons.md).
+// (uv run python cog/codec_sizes.py ...).
 
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';

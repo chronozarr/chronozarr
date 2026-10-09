@@ -1,9 +1,5 @@
 # PNG frames to a store
 
-chronozarr v0.3 is a raster time-series profile built on Zarr v3 and zarr-conventions multiscales, proj and spatial v0.1. Every data array contains true stored values; physical units use per-band scale and offset. Volatility is optional. v0.3 readers require explicit migration of v0.2 stores: `chronozarr convert OLD_STORE NEW_STORE`.
-
-The measurements below describe historical v0.2 artifacts, not current writer options. Convert those stores before opening them with v0.3 libraries.
-
 A sequence of georeferenced PNGs, one per date, becomes a scrubbable chronozarr store with
 `chronozarr convert`. There is no GeoTIFF step. The frames are what exporters hand over: Earth Engine
 thumbnails, QGIS "Save as image" (with its world file option), matplotlib figures, drone and

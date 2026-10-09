@@ -1,7 +1,5 @@
 # Bring your own raster time series
 
-chronozarr v0.3 is a raster time-series profile built on Zarr v3 and zarr-conventions multiscales, proj and spatial v0.1. Every data array contains true stored values; physical units use per-band scale and offset. Volatility is optional. v0.3 readers require explicit migration of v0.2 stores: `chronozarr convert OLD_STORE NEW_STORE`.
-
 Convert your observations, read their numeric values in Python, and publish a viewer and an
 embed example alongside the data. The output is an independent static directory: no requests
 to chronozarr.org or its demo stores are needed to view it. JavaScript dependencies, including
@@ -20,9 +18,9 @@ uv sync --extra geo
 
 uv selects an installed Python automatically. To choose a specific version, use
 `uv sync --python 3.13 --extra geo` (add `--extra ingest` for the sample download).
-The locked codec dependency may need a source build on Python 3.14. The
-[clean-checkout reproduction](results/clean-checkout-20261002/README.md) verified the full
-recipe with Python 3.13, a fresh environment and newly downloaded observations.
+The locked codec dependency may need a source build on Python 3.14. The full recipe was
+verified from a clean checkout with Python 3.13, a fresh environment and newly downloaded
+observations.
 
 The Python converter and reader are also available as `chronozarr[geo]` on PyPI. The bundle
 script currently needs this checkout because it copies the complete viewer and vendored
@@ -65,7 +63,6 @@ resampling preserves the original satellite grid's values. The local comparison 
 three full-resolution frames and masks with fresh handles and warm filesystem caches, rotating
 reader order. It measures Python read pipelines, not browser or CDN performance.
 
-See [the recorded run](results/lake-mead-2020/README.md) for results and limitations.
 
 ## 2. Describe your observations
 
@@ -158,14 +155,8 @@ Record your source type, dimensions, bands, dates, browser and hosting provider;
 command and any failure; and whether the viewer, embed controls and Python values work. Include
 `bundle.json` and `chronozarr doctor` output. Do not include credentials or signed URLs.
 
-The [bounded browser comparison](../../bench/adoption/README.md) checks equivalent level-0
-COG/plain-Zarr values and masks; the [shared-renderer comparison](../../bench/rendered/README.md)
-also reconciles rendered pixels. The [twelve-date extension](extended/README.md) and
-[larger-source check](large/README.md) verify real observations, append and browser values.
-[HTTP snapshot and stress checks](http_stress/README.md) exercise already-open readers,
-cache eviction and transient request failures. These are same-machine checks; remote/CDN
-delivery, larger-scale memory behavior and outside-user adoption remain open.
-Successful local playback alone does not establish speed, savings, or scale.
+The scripts in `extended/`, `large/` and `http_stress/` check twelve real dates, a larger
+source, append, and readers under cache pressure and failed requests, all on one machine.
 
 ## Optional browser verification from the checkout
 

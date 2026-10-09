@@ -1,6 +1,6 @@
 """chronozarr schema: attribute dataclasses, layout helpers, and store validation.
 
-The layout is documented in spec/CHRONOZARR.md and spec/CHANGES-0.2.md. This module owns
+The layout is documented in spec/CHRONOZARR.md. This module owns
 everything both the writer and the reader must agree on: attribute names,
 pyramid geometry, dtype profiles, and the checks that decide whether a Zarr v3 store is a
 conforming chronozarr store. Only v0.3.0 is accepted; older stores need explicit conversion.

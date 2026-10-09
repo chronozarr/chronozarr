@@ -1,7 +1,5 @@
 # Sentinel-2 ingest example
 
-chronozarr v0.3 is a raster time-series profile built on Zarr v3 and zarr-conventions multiscales, proj and spatial v0.1. Every data array contains true stored values; physical units use per-band scale and offset. Volatility is optional. v0.3 readers require explicit migration of v0.2 stores: `chronozarr convert OLD_STORE NEW_STORE`.
-
 Builds a chronozarr store from Sentinel-2 L2A scenes on Microsoft Planetary Computer. It is an
 example of producing input for `chronozarr.encode`; it is not part of the `chronozarr` package.
 
