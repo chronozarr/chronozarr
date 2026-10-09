@@ -115,11 +115,6 @@ def parse_time(value: str) -> np.datetime64:
         raise SchemaError(f"time '{value}' is not an ISO-8601 date or datetime") from exc
 
 
-def time_shard_count(n_time: int, shard_time: int) -> int:
-    """Number of shards along the time axis."""
-    return math.ceil(n_time / shard_time)
-
-
 def shard_key(level: str, variable: str, t_shard: int, row: int, col: int) -> str:
     """Store key of one shard object of a sharded array."""
     return f"{level}/{variable}/c/{t_shard}/0/{row}/{col}"
