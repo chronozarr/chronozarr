@@ -23,7 +23,6 @@ CarbonPlan zarr-layer 0.10.0 with zarrita 0.7.5 rendered the fixture. It needed 
 
 Separate-mask handling and framebuffer color calibration were not established.
 
-Full reader evidence: [geozarr-profile.md](geozarr-profile.md#8-reader-spike).
 
 ## Layout choice
 
@@ -35,7 +34,6 @@ Every store written sharded stays valid.
 
 Why the default changed: a cold open of the published sharded store spent 6.5 of 6.8 s on the nine shard-index reads. A CDN miss on a 2 KB range at the end of an 83 to 174 MB shard pulls the whole object. An append to a sharded store rewrites the trailing shard.
 
-Details of the same measurement are in [comparisons.md](comparisons.md).
 
 Cloudflare documents a 512 MB cacheable object limit on the Free, Pro and Business plans. Check the current figure. A shard is about `n_time` times the compressed size of one cell-timestep. The sharded Ucayali store has 117 timesteps and shards up to 174 MB.
 
@@ -165,7 +163,7 @@ The cost is the full-resolution frame of a scrub step on a slow link. It lands l
 
 ## Appending
 
-Appending one month to a 12-month Ucayali store (4 bands, 36 cells at level 0). A re-encode of the same store took 32 s and wrote 6.3 GB. 2026-10-01. Full tables: [archive/append-v02.md](archive/append-v02.md).
+Appending one month to a 12-month Ucayali store (4 bands, 36 cells at level 0). A re-encode of the same store took 32 s and wrote 6.3 GB. 2026-10-01..
 
 | Layout | Append wall time | Bytes written per month | Rewritten |
 |---|---:|---:|---|

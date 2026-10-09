@@ -1,7 +1,5 @@
 # chronozarr
 
-chronozarr v0.3 is a raster time-series profile built on Zarr v3 and zarr-conventions multiscales, proj and spatial v0.1. Every data array contains true stored values; physical units use per-band scale and offset. Volatility is optional. v0.3 readers require explicit migration of v0.2 stores: `chronozarr convert OLD_STORE NEW_STORE`.
-
 Browser and Node reader for [chronozarr](https://github.com/chronozarr/chronozarr) stores, plus a MapLibre GL JS custom layer that draws one.
 
 A chronozarr store is a Zarr v3 time series of rasters with a multiscale pyramid, written one object per chunk by default and optionally sharded, laid out so a client reads one timestep of one map cell with one HTTP request (a plain `GET` of one chunk; for a sharded store one range read of a shard once its index is cached). The reader turns `(lod, row, col, t)` into a typed array: it caches shard indexes (sharded stores), decodes in a worker pool, prefetches a window of the time axis around the current timestep. It reads spec 0.3 stores ([spec](https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md)). The Python package `chronozarr` writes them.

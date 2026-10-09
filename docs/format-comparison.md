@@ -17,7 +17,7 @@ The question each format answers is different, so the table ends with the case f
 
 - **Large downloads for wide views.** Values are lossless and unquantized. A 9-cell overview of the 117-month Ucayali store is about 11.7 MB per timestep; a cold loop over it is bound by the link.
 - **Client memory.** Scrubbing depends on worker decoding, cached chunks and time-window prefetch.
-- **Reader coverage.** GDAL 3.13.3 read the two-level v0.3 fixture with correct EPSG:32618, transforms and all six oracle values, without warnings, both with and without `_CRS`; selected raster slices did not expose automatic overviews. CarbonPlan zarr-layer 0.10.0 with zarrita 0.7.5 rendered it without CRS, bounds or spatial-dimension overrides and returned 1107 at the checked pixel centre. Separate-mask handling and framebuffer color calibration were not established. See [reader evidence](geozarr-profile.md#8-reader-spike).
+- **Reader coverage.** GDAL 3.13.3 read the two-level v0.3 fixture with correct EPSG:32618, transforms and all six oracle values, without warnings, both with and without `_CRS`; selected raster slices did not expose automatic overviews. CarbonPlan zarr-layer 0.10.0 with zarrita 0.7.5 rendered it without CRS, bounds or spatial-dimension overrides and returned 1107 at the checked pixel centre. Separate-mask handling and framebuffer color calibration were not established. See [reader evidence](evidence.md#reader-checks).
 - **Not a tile server.** Products (true color, NDVI, water) are band math in the client's fragment shader. Anything that needs server-side rendering, mosaicking of many sources or arbitrary expressions belongs with COG + TiTiler.
 
 ## What the others cost that chronozarr avoids

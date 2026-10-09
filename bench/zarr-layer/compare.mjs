@@ -18,7 +18,7 @@
 // is then the real link to that CDN. --source local reads the same files from this repository's range server (HTTP/1.1, so
 // at most 6 connections per origin for either tool); CDP throttling then defines the whole link.
 //
-// zarr-layer opens the store unmodified, with the constructor options `crs` and `bounds` it needs and `zarrVersion: 3` (docs/comparisons.md).
+// zarr-layer opens the store unmodified, with the constructor options `crs` and `bounds` it needs and `zarrVersion: 3`.
 
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';

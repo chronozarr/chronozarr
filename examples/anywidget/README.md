@@ -1,7 +1,5 @@
 # Notebook player
 
-chronozarr v0.3 is a raster time-series profile built on Zarr v3 and zarr-conventions multiscales, proj and spatial v0.1. Every data array contains true stored values; physical units use per-band scale and offset. Volatility is optional. v0.3 readers require explicit migration of v0.2 stores: `chronozarr convert OLD_STORE NEW_STORE`.
-
 The notebook player is included in the `chronozarr` 0.3.1 release prepared here. Install the notebook
 extra with `uv add 'chronozarr[notebook]'`; for this checkout use
 `uv sync --extra notebook`. Open `demo.ipynb`

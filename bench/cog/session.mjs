@@ -20,7 +20,7 @@
 //   node cog/session.mjs [--reps 3] [--out results/cog-vs-chronozarr.json]
 //
 // Needs data/cogs/ucayali_santa_maria (uv run chronozarr export-cog ... --level 0) and results/pixel-reference-*.json
-// (uv run python cog/pixel_reference.py ...); see docs/comparisons.md for the exact commands.
+// (uv run python cog/pixel_reference.py ...).
 
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';

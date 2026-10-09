@@ -10,7 +10,7 @@ Read `.napkin.md` first every session.
 ## Layout
 
 ```
-spec/CHRONOZARR.md        normative format spec (v0.3.0); spec/CHANGES-0.2.md only points to its section 13
+spec/CHRONOZARR.md        normative format spec (v0.3.0)
 src/chronozarr/           Python package; CLI `chronozarr` (commands: append | encode | validate | info | doctor | export-cog | stac | convert)
   schema.py               attribute dataclasses, layout helpers, validate()
   encode.py               encode(): pyramid, true values, optional volatility, optional sharding (default off), shard_bytes, mask/coverage

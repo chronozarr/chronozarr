@@ -1,7 +1,5 @@
 # chronozarr on MapLibre
 
-chronozarr v0.3 is a raster time-series profile built on Zarr v3 and zarr-conventions multiscales, proj and spatial v0.1. Every data array contains true stored values; physical units use per-band scale and offset. Volatility is optional. v0.3 readers require explicit migration of v0.2 stores: `chronozarr convert OLD_STORE NEW_STORE`.
-
 `ChronozarrLayer` draws a chronozarr store on a MapLibre GL JS map as a custom layer. It opens the store with
 `js/chronozarr/decoder.js`, picks the pyramid level from the map zoom, uploads the raw chunks of the visible cells
 as integer (or float) textures, and runs the product band math in the

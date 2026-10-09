@@ -1,1 +1,0 @@
-The current specification is the [chronozarr v0.3.0 draft](CHRONOZARR.md). Its consolidated migration table is section 10, [“Changes from 0.2”](CHRONOZARR.md#10-changes-from-02). This file remains as a pointer for existing links; v0.2 stores require explicit conversion before a v0.3 reader opens them.
