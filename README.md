@@ -147,6 +147,7 @@ Run `chronozarr <command> --help` for every option.
 | `validate STORE` | Checks a store against the spec. Exits with status 1 on failure |
 | `info STORE` | Prints the times, bands and levels of a store |
 | `doctor TARGET` | Checks a hosted URL or a local store. See [docs/hosting.md](docs/hosting.md) |
+| `publish STORE --destination s3://BUCKET/PREFIX` | Uploads a store to S3 or R2, checks the hosted store and prints a viewer link. Needs the `publish` extra. See [docs/hosting.md](docs/hosting.md#chronozarr-publish) |
 | `export-cog STORE OUT_DIR` | Writes true-value COGs for GDAL and QGIS. Needs the `geo` extra |
 | `stac STORE --out DIR` | Writes a static STAC Collection and Item. Needs the `geo` extra |
 

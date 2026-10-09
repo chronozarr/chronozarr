@@ -747,3 +747,119 @@ def convert_command(
 
 
 convert_command.help = f"{convert_command.help}\n\n{FIDELITY_HELP}"
+
+
+@main.command("publish")
+@click.argument("store", type=click.Path(path_type=Path))
+@click.option(
+    "--destination",
+    required=True,
+    metavar="s3://BUCKET/PREFIX",
+    help="Where to write: a storage location, not a browser URL. Use a fresh PREFIX per version.",
+)
+@click.option(
+    "--public-url",
+    default=None,
+    metavar="HTTPS_URL",
+    help="Address browsers read the store from (custom domain or CDN, ending at the store "
+    "root). Required for R2 and other --endpoint-url hosts; for AWS S3 it defaults to the "
+    "bucket's regional endpoint.",
+)
+@click.option("--profile", default=None, help="Named AWS profile (default: boto3's own chain).")
+@click.option(
+    "--endpoint-url",
+    default=None,
+    help="S3-compatible endpoint, e.g. https://<account id>.r2.cloudflarestorage.com for R2.",
+)
+@click.option("--region", default=None, help="Region (R2 endpoints use `auto` without this).")
+@click.option(
+    "--dry-run", is_flag=True, help="Print the plan and what is already stored; upload nothing."
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    help="Replace objects whose content differs from the store. Never deletes. Objects are "
+    "cached for a year, so prefer a fresh prefix.",
+)
+@click.option(
+    "--apply-cors",
+    is_flag=True,
+    help="If the CORS check fails, add the viewer rule after the bucket's existing rules. "
+    "Without this flag the bucket's CORS configuration is only read. Public access is never "
+    "changed.",
+)
+@click.option("--workers", type=click.IntRange(min=1), default=16, show_default=True)
+def publish_command(
+    store: Path,
+    destination: str,
+    public_url: str | None,
+    profile: str | None,
+    endpoint_url: str | None,
+    region: str | None,
+    dry_run: bool,
+    overwrite: bool,
+    apply_cors: bool,
+    workers: int,
+) -> None:
+    """Upload STORE to your own static hosting and print a verified viewer link.
+
+    Validates the store, uploads chunks before metadata (root zarr.json last) with cache
+    headers, skips objects that are already stored (so a rerun resumes), runs the `doctor`
+    checks against --public-url and prints a chronozarr.org/demo link only if they pass. The
+    dataset stays on your host; its storage and delivery charges are yours. chronozarr.org
+    serves the viewer, not the data. Credentials come from boto3's chain and are never printed.
+    """
+    from chronozarr._publish_adapters import open_adapter
+    from chronozarr.publish import (
+        PublishError,
+        failures,
+        format_checks,
+        inspect_destination,
+        parse_destination,
+        plan_store,
+        publish,
+    )
+
+    try:
+        target = parse_destination(destination)
+        adapter = open_adapter(target, profile=profile, endpoint_url=endpoint_url, region=region)
+        plan = plan_store(store, target, adapter, public_url)
+        if dry_run:
+            state = inspect_destination(plan, adapter)
+            click.echo(plan.summary(adapter, state.describe(overwrite)))
+            if state.conflicts and not overwrite:
+                raise click.ClickException(
+                    "dry run: publishing would be refused, see prefix above"
+                )
+            click.echo("dry run: nothing was uploaded")
+            return
+        click.echo(plan.summary(adapter))
+        result = publish(
+            plan,
+            adapter,
+            overwrite=overwrite,
+            apply_cors=apply_cors,
+            workers=workers,
+            log=click.echo,
+        )
+    except PublishError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"\nchronozarr doctor {plan.public_url}")
+    click.echo(format_checks(result.checks))
+    for note in result.notes:
+        click.echo(f"\n{note}")
+    if result.link is None:
+        if any(not c.name.startswith("CORS") for c in failures(result.checks)):
+            click.echo(f"\n{adapter.access_help()}")
+        click.echo(
+            "\nnot verified: the objects are stored but the hosted store failed the checks "
+            "above, so no link is printed. Fix the listed items and run the same command again; "
+            "stored objects are skipped.",
+            err=True,
+        )
+        sys.exit(1)
+    click.echo(f"\nverified. Open the store in the viewer:\n\n  {result.link}\n")
+    click.echo(
+        "The dataset stays on your host and its storage and delivery charges are yours; "
+        "chronozarr.org supplies the viewer only."
+    )
