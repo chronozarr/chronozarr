@@ -79,11 +79,13 @@ The root `zarr.json` marks that a store exists. Upload in three phases:
 
 A reader that finds the root then finds a complete store.
 
+`chronozarr publish` splits phase 1 in two. It uploads the `time/c/0` and `volatility` chunks after the other chunks, because an append rewrites only those.
+
 Do not request the final URL before phase 3 ends. A CDN caches a `404` for seconds to minutes. A cached `404` on the root `zarr.json` makes a finished store look absent.
 
 ### `chronozarr publish`
 
-`chronozarr publish STORE` runs the three phases below against an S3 bucket or an S3-compatible bucket such as Cloudflare R2. It then checks the hosted store with `chronozarr doctor` and prints a viewer link. It needs the `publish` extra, which adds boto3: `uv sync --extra publish` or `pip install 'chronozarr[publish]'`.
+`chronozarr publish STORE` runs the four phases below against an S3 bucket or an S3-compatible bucket such as Cloudflare R2. It then checks the hosted store with `chronozarr doctor` and prints a viewer link. It needs the `publish` extra, which adds boto3: `uv sync --extra publish` or `pip install 'chronozarr[publish]'`.
 
 ```bash
 # AWS S3. The credentials come from boto3's chain: environment, ~/.aws, SSO or an instance role.
@@ -114,13 +116,13 @@ An `s3://` address is rejected as a public URL, and so is a URL with credentials
 What the command does, in order:
 
 1. Validates the store, as `chronozarr validate` does. A store that fails is not uploaded.
-2. Prints the plan: destination, public URL, object count, bytes, the three phases and the cache headers.
-3. Lists the prefix. A prefix that holds only objects identical to the store (same size and MD5) is an interrupted upload and resumes. A prefix that holds any other object is refused. Use a new prefix for every version. `--overwrite` replaces objects whose content differs. It never deletes, and it leaves a one-year cached copy stale for readers that already loaded it.
-4. Uploads in the three phases of "Metadata last". A phase starts after the previous one is fully stored. If an upload fails, the command stops with no root `zarr.json` in the bucket and names the failing key. Running the same command again skips the stored objects, so a retry repeats no work and a finished upload is a no-op. boto3 retries each request up to five times before a failure is reported.
+2. Prints the plan: destination, public URL, object count, bytes, the four phases and the cache headers.
+3. Lists the prefix. A prefix that holds only objects identical to the store (same size and MD5) is an interrupted upload and resumes. A prefix that holds any other object is refused. Use a new prefix for every version. A store that you published and then appended to is the exception: use `--update` ([section 7](#publishing-an-append)). `--overwrite` replaces objects whose content differs. It never deletes, and it leaves a one-year cached copy stale for readers that already loaded it.
+4. Uploads in four phases: data chunks, then the time and volatility chunks, then the group and array `zarr.json` files, then the root `zarr.json`. A phase starts after the previous one is fully stored. If an upload fails, the command stops with no root `zarr.json` in the bucket and names the failing key. Running the same command again skips the stored objects, so a retry repeats no work and a finished upload is a no-op. boto3 retries each request up to five times before a failure is reported.
 5. Runs the doctor checks against the public URL, with `Origin: https://chronozarr.org`.
 6. Prints `https://chronozarr.org/demo/?store=<URL-encoded public URL>` only when no check failed. Warnings are printed and do not block the link. When a check fails, the objects stay in the bucket, no link is printed and the exit status is 1.
 
-Cache headers follow the table in section 7. Every `zarr.json`, each level's `time/c/0` and the `volatility` chunks get `public, max-age=300`. Every other object gets `public, max-age=31536000, immutable`. The command does not mark the last shard of a sharded store as short-lived. Before you append to a store that you published sharded, upload its trailing shards again with the short lifetime (section 7).
+Cache headers follow the table in section 7. Every `zarr.json`, each level's `time/c/0` and the `volatility` chunks get `public, max-age=300`. Every other object gets `public, max-age=31536000, immutable`. The command does not mark the last shard of a sharded store as short-lived. `--update` therefore refuses a sharded append that rewrites a trailing shard (section 7).
 
 CORS and public access:
 
@@ -512,7 +514,7 @@ Costs and measurements: [evidence.md](evidence.md#appending) and [append.md](app
    ```bash
    mkdir -p work/aoi-working
    cp -R data/stores/aoi/chronozarr-4 work/aoi-working/chronozarr-4
-   touch work/stamp
+   touch work/stamp                                       # only for scripts/upload_stores.sh
    ```
 
 3. Append to the copy.
@@ -527,13 +529,43 @@ Costs and measurements: [evidence.md](evidence.md#appending) and [append.md](app
    chronozarr validate work/aoi-working/chronozarr-4
    ```
 
-5. Publish only the objects that the append changed. The script uploads shards and chunks first and the root `zarr.json` last.
+5. Publish the append. `chronozarr publish --update` compares the copy with the prefix and uploads only the new and changed objects. It keeps the public URL, so the shared viewer link stays valid.
 
    ```bash
-   STORE=chronozarr-4 ROOT=work scripts/upload_stores.sh --newer-than work/stamp --trailing-ttl 300 aoi-working
+   chronozarr publish work/aoi-working/chronozarr-4 \
+     --destination s3://my-bucket/aoi/chronozarr-4 \
+     --public-url https://data.example.com/aoi/chronozarr-4 \
+     --update --dry-run
    ```
 
-The script reads `$ROOT/<aoi>/$STORE`. The working copy must sit at `work/<aoi>/chronozarr-4`.
+   Run it again without `--dry-run` to upload.
+
+### Publishing an append
+
+`--update` accepts the destination, `--public-url`, `--profile`, `--endpoint-url`, `--region`, `--apply-cors`, `--workers` and `--dry-run` of a first publish. It rejects `--overwrite`. It needs the S3 adapter (AWS S3 and R2), which can read the hosted root back.
+
+Dry run prints the hosted and local number of timesteps, the objects per phase and the cache headers, and writes nothing. A plain `chronozarr publish` still refuses a prefix that holds other objects and mentions `--update`.
+
+What `--update` writes, in order:
+
+| Phase | Objects | Cache-Control |
+|---|---|---|
+| 1 | New data chunks of the new timesteps | `public, max-age=31536000, immutable` |
+| 2 | `time/c/0` of each level, `volatility` chunks | `public, max-age=300` |
+| 3 | Level and array `zarr.json` | `public, max-age=300` |
+| 4 | Root `zarr.json` | `public, max-age=300` |
+
+The command refuses a prefix that is not an earlier state of the local store, and a sharded append that rewrites a trailing shard. It deletes nothing. The update is not atomic. [append.md](append.md#publishing) lists what a reader sees between two puts, how a cache that holds the old root behaves and how to resume.
+
+After the upload the command runs `chronozarr doctor` against the public URL and then reads the public root `zarr.json` with `Cache-Control: no-cache`. It prints the link only when the root lists the new number of timesteps. A CDN can still serve the old root for up to 300 seconds. The command then exits with status 1 and no link. The objects are stored, and the same command run later only checks.
+
+For a host without an adapter, use `scripts/upload_stores.sh`. It uploads the files that changed since a stamp file, with the same order and headers.
+
+```bash
+STORE=chronozarr-4 ROOT=work scripts/upload_stores.sh --newer-than work/stamp --trailing-ttl 300 aoi-working
+```
+
+The script reads `$ROOT/<aoi>/$STORE`. The working copy must sit at `work/<aoi>/chronozarr-4`. Create `work/stamp` with `touch` before the append.
 
 ### Cache classes
 
@@ -549,6 +581,8 @@ Only these objects change in place. They need a short lifetime.
 | every other shard | no append rewrites it | `public, max-age=31536000, immutable` |
 | every chunk of an unsharded store | new timesteps are new keys | `public, max-age=31536000, immutable` |
 
+`chronozarr publish --update` does not rewrite the trailing-shard row. It refuses a sharded append that changes one (see [append.md](append.md#publishing)).
+
 The trailing shard of a cell is the shard that holds its last timestep. When the next shard opens, the old shard becomes immutable. It keeps `max-age=300`, because `--newer-than` does not touch it. To fix that, upload those shards once without `--newer-than`. A run without `--newer-than` sets the header of every object from the current state of the whole store.
 
 ### Cloudflare
@@ -557,7 +591,7 @@ The Cache Rule in section 3.2 follows the headers in the table above, so an appe
 
 ### Open viewers
 
-A viewer keeps the root `zarr.json` it loaded until the page reloads. It shows the old timesteps until then. Reload the page to see the new timesteps.
+A viewer keeps the root `zarr.json` it loaded until the page reloads. It shows the old timesteps until then. Reload the page to see the new timesteps. The shared link does not change.
 
 A stale viewer of a sharded store can fail to read a shard index. Reloading fixes it. An unsharded store has no shard index, so it has no such failure. Details: [evidence.md](evidence.md#open-viewers-after-an-append).
 

@@ -199,6 +199,18 @@ An unsharded append uploads only the objects it wrote. The measurement had 63 ob
 
 An append to a live store has not been exercised yet.
 
+### Mixed states during an update
+
+2026-10-09, zarr 3.1.6, a synthetic 50 x 70 pixel store appended from 4 to 6 timesteps, copied to local directories (no host). Each directory mixes objects of the two states, as a reader could see them between two puts of `chronozarr publish --update`.
+
+| Mix | Result |
+|---|---|
+| Root and array metadata at 4 timesteps, `0/time/c/0` at 6 | `zarr.open_group(...)["0/time"][:]` raises `ValueError: cannot reshape array of size 6 into shape (4,)`, with and without consolidated metadata |
+| Same mix | `chronozarr.open_store(...).to_xarray(lod=0)` reads 4 timesteps: it takes `times` from the root |
+| Level 0 `zarr.json` files at 6 timesteps, root at 4 | With consolidated metadata, `0/data` has shape (4, ...). Without it, `0/data` has shape (6, ...) next to 4 root `times`, and reading `0/time` raises `ValueError` |
+
+The update tests in `tests/test_publish_update.py` run against a fake bucket. The update has not run against AWS S3 or R2.
+
 Advice that follows from the numbers:
 
 - Choose a finite `--shard-time` (12 for monthly data) only when object count matters more than the rewrite cost.
