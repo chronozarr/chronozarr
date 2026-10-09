@@ -61,6 +61,15 @@ class FakeBlob:
             }
         )
         self.client.objects[self.name] = (len(data), b64_md5(data))
+        self.client.contents[self.name] = data
+
+    def download_as_bytes(self, **options: Any) -> bytes:
+        self.client.downloads.append({"key": self.name, **options})
+        if self.client.read_error:
+            raise self.client.read_error
+        if self.name not in self.client.contents:
+            raise api.NotFound(f"No such object: {self.name}")
+        return self.client.contents[self.name]
 
 
 class FakeBucket:
@@ -93,6 +102,9 @@ class FakeClient:
         self.uploads: list[dict[str, Any]] = []
         self.listings: list[tuple[str, str | None]] = []
         self.fail_keys: dict[str, Exception] = {}
+        self.contents: dict[str, bytes] = {}
+        self.downloads: list[dict[str, Any]] = []
+        self.read_error: Exception | None = None
         self.list_error: Exception | None = None
         self.initial_cors: list[dict[str, Any]] = []
         self.cors_read_error: Exception | None = None
@@ -453,3 +465,35 @@ def test_access_help_offers_remedies_and_changes_nothing(adapter):
     assert "allUsers" in text
     assert "public access prevention" in text
     assert "--public-url" in text
+
+
+# -- reading one object ------------------------------------------------------------------------
+
+
+def test_read_object_returns_the_bytes_with_explicit_retry(client, adapter):
+    client.contents["p/zarr.json"] = b'{"a": 1}'
+    assert adapter.read_object("p/zarr.json") == b'{"a": 1}'
+    (call,) = client.downloads
+    assert call["key"] == "p/zarr.json"
+    assert call["retry"] is DEFAULT_RETRY
+    assert call["timeout"] > 0
+
+
+def test_read_object_returns_none_for_a_missing_key(client, adapter):
+    assert adapter.read_object("p/missing") is None
+
+
+def test_read_object_names_the_permission_and_hides_the_provider_message(client, adapter):
+    client.read_error = api.Forbidden("no access for user@example.org")
+    with pytest.raises(PublishError, match=r"access denied.*storage\.objects\.get") as raised:
+        adapter.read_object("p/zarr.json")
+    assert "user@example.org" not in str(raised.value)
+
+
+def test_read_object_maps_other_provider_errors_and_propagates_bugs(client, adapter):
+    client.read_error = api.ServiceUnavailable("busy")
+    with pytest.raises(PublishError, match=r"ServiceUnavailable.*busy"):
+        adapter.read_object("p/zarr.json")
+    client.read_error = RuntimeError("a bug")
+    with pytest.raises(RuntimeError, match="a bug"):
+        adapter.read_object("p/zarr.json")

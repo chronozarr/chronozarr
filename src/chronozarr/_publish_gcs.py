@@ -24,6 +24,7 @@ from chronozarr.publish import PublishError, RemoteObject
 
 PUBLIC_HOST = "https://storage.googleapis.com"
 UPLOAD_TIMEOUT_S = 300
+DOWNLOAD_TIMEOUT_S = 120
 
 # GCS has one `responseHeader` list, used for both Access-Control-Allow-Headers and
 # Access-Control-Expose-Headers (docs/hosting.md section 3.3).
@@ -43,6 +44,7 @@ VIEWER_CORS_RULE: dict[str, Any] = {
 
 _NEEDS = {
     "list": "storage.objects.list",
+    "read": "storage.objects.get",
     "put": "storage.objects.create (and storage.objects.delete to overwrite)",
     "read-cors": "storage.buckets.get",
     "write-cors": "storage.buckets.update",
@@ -109,6 +111,20 @@ class GcsAdapter:
             retry=DEFAULT_RETRY,
             timeout=UPLOAD_TIMEOUT_S,
         )
+
+    def read_object(self, key: str) -> bytes | None:
+        """The object's bytes, or None when the key does not exist."""
+        from google.api_core.exceptions import NotFound
+        from google.cloud.storage.retry import DEFAULT_RETRY
+
+        try:
+            return self.bucket.blob(key).download_as_bytes(
+                retry=DEFAULT_RETRY, timeout=DOWNLOAD_TIMEOUT_S
+            )
+        except NotFound:
+            return None
+        except Exception as exc:
+            self._reraise("read", exc)
 
     def read_cors(self) -> list[dict[str, Any]]:
         self._call("read-cors", self.bucket.reload, fields="cors")

@@ -49,6 +49,7 @@ VIEWER_CORS_RULE: dict[str, Any] = {
 
 _ROLES = {
     "list": "the Storage Blob Data Reader or Storage Blob Data Contributor role",
+    "read": "the Storage Blob Data Reader or Storage Blob Data Contributor role",
     "put": "the Storage Blob Data Contributor role",
     "read-cors": "the Storage Account Contributor role (Microsoft.Storage/storageAccounts/"
     "blobServices/read), or an account key through AZURE_STORAGE_CONNECTION_STRING",
@@ -159,6 +160,19 @@ class AzureAdapter:
                 overwrite=True,
                 content_settings=settings,
             )
+
+    def read_object(self, key: str) -> bytes | None:
+        """The object's bytes, or None when the key does not exist."""
+        from azure.core.exceptions import ResourceNotFoundError
+
+        try:
+            return self.container.download_blob(self._blob_prefix(key)).readall()
+        except ResourceNotFoundError as exc:
+            if getattr(exc, "error_code", None) == "ContainerNotFound":
+                self._reraise("read", exc)
+            return None
+        except Exception as exc:
+            self._reraise("read", exc)
 
     def read_cors(self) -> list[dict[str, Any]]:
         properties = self._call("read-cors", self.service.get_service_properties)

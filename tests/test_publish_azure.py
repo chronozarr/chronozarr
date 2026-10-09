@@ -70,6 +70,14 @@ class FakeContainer:
             }
         )
         self.service.objects[name] = (len(content), bytearray(hashlib.md5(content).digest()))
+        self.service.contents[name] = content
+
+    def download_blob(self, name: str) -> SimpleNamespace:
+        if self.service.read_error:
+            raise self.service.read_error
+        if name not in self.service.contents:
+            raise azure_errors.ResourceNotFoundError("BlobNotFound")
+        return SimpleNamespace(readall=lambda: self.service.contents[name])
 
 
 class FakeService:
@@ -83,6 +91,8 @@ class FakeService:
         self.uploads: list[dict[str, Any]] = []
         self.listings: list[tuple[str, str | None]] = []
         self.fail_names: dict[str, Exception] = {}
+        self.contents: dict[str, bytes] = {}
+        self.read_error: Exception | None = None
         self.list_error: Exception | None = None
         self.cors: list[CorsRule] = []
         self.cors_read_error: Exception | None = None
@@ -593,3 +603,44 @@ def test_access_help_explains_account_scope_and_the_two_anonymous_access_setting
     assert "allow-blob-public-access" in text
     assert "--public-access blob" in text
     assert "--public-url" in text
+
+
+# -- reading one object ------------------------------------------------------------------------
+
+
+def test_read_object_returns_the_bytes_and_strips_the_container(service, adapter):
+    service.contents["aoi/store-v1/zarr.json"] = b'{"a": 1}'
+    assert adapter.read_object("stores/aoi/store-v1/zarr.json") == b'{"a": 1}'
+
+
+def test_read_object_returns_none_for_a_missing_blob(service, adapter):
+    assert adapter.read_object("stores/aoi/store-v1/missing") is None
+
+
+class StorageNotFound(azure_errors.ResourceNotFoundError):
+    error_code: str | None = None
+
+
+def test_a_missing_container_is_an_error_not_a_missing_object(service, adapter):
+    error = StorageNotFound("The specified container does not exist.")
+    error.error_code = "ContainerNotFound"
+    service.read_error = error
+    with pytest.raises(PublishError, match="container 'stores' in account 'myaccount' was not"):
+        adapter.read_object("stores/p/zarr.json")
+
+
+def test_read_object_names_the_role_and_hides_the_provider_message(service, adapter):
+    service.read_error = forbidden()
+    with pytest.raises(
+        PublishError, match=r"AuthorizationPermissionMismatch.*Blob Data"
+    ) as raised:
+        adapter.read_object("stores/p/zarr.json")
+    assert "user@example.org" not in str(raised.value)
+
+
+def test_read_object_refuses_a_key_outside_the_container_and_propagates_bugs(service, adapter):
+    with pytest.raises(PublishError, match="outside container 'stores'"):
+        adapter.read_object("other/p/zarr.json")
+    service.read_error = RuntimeError("a bug")
+    with pytest.raises(RuntimeError, match="a bug"):
+        adapter.read_object("stores/p/zarr.json")
