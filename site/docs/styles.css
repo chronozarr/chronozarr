@@ -20,3 +20,23 @@
 .cz-compat { padding: 20px 24px; background: var(--vocs-color_background2); border-radius: 6px; font-size: 15px; line-height: 1.75; }
 .cz-compat strong { display: block; margin-bottom: 5px; }
 @media (max-width: 650px) { .cz-home { padding: 32px 20px 48px; } .cz-intro { font-size: 18px; } .cz-frames { gap: 6px; } .cz-frame figcaption { font-size: 12px; } .cz-paths { grid-template-columns: 1fr; gap: 24px; } }
+
+/* Accessibility fixes to Vocs 1.4.1 (the class names below are its production names; check them when Vocs is upgraded). */
+/* Secondary text of the light theme: #838383 on the search field's #f6f6f6 is 3.5:1. */
+:root:not(.dark) { --vocs-color_text3: #6e6e6e; }
+/* Code tokens of the light theme under 4.5:1 on the code background (the github-light colours Vocs ships). */
+:root:not(.dark) pre.shiki span[style*="color:#D73A49" i] { color: #cb2431 !important; }
+:root:not(.dark) pre.shiki span[style*="color:#E36209" i] { color: #b94d00 !important; }
+:root:not(.dark) pre.shiki span[style*="color:#22863A" i] { color: #1d7a34 !important; }
+/* A finger: the header, menu, sidebar, footer and copy controls are 16 to 32 px; make them 44 px. The header rows are 48 px, so they keep their height.
+   `:root` raises the specificity above the Vocs rules, which are loaded after this file. */
+@media (pointer: coarse) {
+  :root .vocs_MobileTopNav_menuTrigger, :root .vocs_MobileTopNav_outlineTrigger, :root .vocs_MobileTopNav_navigationItem { min-height: 44px; min-width: 44px; }
+  :root .vocs_MobileSearch_searchButton { width: 44px; height: 44px; margin-right: -8px; }
+  :root .vocs_Sidebar_items { gap: 0; }
+  :root .vocs_Sidebar_item { display: flex; align-items: center; min-height: 44px; }
+  :root .vocs_Socials_button { padding: 14px; }
+  :root .vocs_CopyButton { width: 44px; height: 44px; }
+  :root .vocs_Footer_navigationItem { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) { :root .vocs_MobileTopNav_outlineTrigger { animation: none; } }
