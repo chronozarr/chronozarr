@@ -44,7 +44,7 @@ pip install "chronozarr[geo]"
 
 ### Without data
 
-1. Save this script as `quickstart.py`. It writes a store from three synthetic timesteps of 64 by 64 pixels, 10 m in UTM zone 31N, and reads one back.
+1. Save this script as `quickstart.py`. It writes a store of three synthetic timesteps and reads one back. The pixels are 10 m in UTM zone 31N.
 
    ```python
    import numpy as np
