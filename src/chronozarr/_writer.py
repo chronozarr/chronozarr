@@ -138,9 +138,7 @@ def _downsample_plane_pair(
     return reduced_mask, reduced_coverage
 
 
-def downsample_block(
-    block: Block, nodata: int | float | None, pool: ThreadPoolExecutor | None = None
-) -> Block:
+def downsample_block(block: Block, nodata: int | float | None, pool: ThreadPoolExecutor) -> Block:
     """The next pyramid level of a block: data, mask and coverage reduced by 2 per timestep."""
     n_time, n_band, height, width = block.data.shape
     out_h, out_w = -(-height // 2), -(-width // 2)
@@ -160,11 +158,7 @@ def downsample_block(
         if coverage is not None:
             coverage[t] = reduced_coverage
 
-    if pool is None:
-        for t in range(n_time):
-            one(t)
-    else:
-        list(pool.map(one, range(n_time)))
+    list(pool.map(one, range(n_time)))
     return Block(data, mask, coverage)
 
 

@@ -115,11 +115,6 @@ def parse_time(value: str) -> np.datetime64:
         raise SchemaError(f"time '{value}' is not an ISO-8601 date or datetime") from exc
 
 
-def time_shard_count(n_time: int, shard_time: int) -> int:
-    """Number of shards along the time axis."""
-    return math.ceil(n_time / shard_time)
-
-
 def shard_key(level: str, variable: str, t_shard: int, row: int, col: int) -> str:
     """Store key of one shard object of a sharded array."""
     return f"{level}/{variable}/c/{t_shard}/0/{row}/{col}"
@@ -403,7 +398,7 @@ def _optional_number(mapping: Mapping[str, Any], key: str, where: str) -> float 
 
 
 def parse_band(raw: Any, where: str) -> Band:
-    """A band given as a name (v0.1) or as an object with optional scale/offset/units."""
+    """A band given as a name (encoder input) or as an object with optional scale/offset/units."""
     if isinstance(raw, str):
         if not raw:
             raise _fail(where, "band name must not be empty")
@@ -532,7 +527,7 @@ def _parse_nodata(value: Any, where: str) -> int | float | None:
 
 
 def parse_chronozarr(block: Any, where: str = "chronozarr") -> Chronozarr:
-    """Validate and parse the `chronozarr` root attribute block (v0.1 or v0.2)."""
+    """Validate and parse the `chronozarr` root attribute block (spec 0.3.0 only)."""
     version = block.get("spec_version") if isinstance(block, Mapping) else None
     if version != SPEC_VERSION:
         raise _fail(

@@ -10,7 +10,7 @@
 - a Zarr store or NetCDF file with dims `(time, band, y, x)`
 - a quoted glob of GeoTIFFs, one per timestep, with the date in each file name
 
-The grid, bands, dtype, CRS and nodata of `INPUT` must match `STORE`. The command has three options:
+The grid, bands, dtype, CRS and nodata of `INPUT` must match `STORE`. For GeoTIFFs this includes how the files mark invalid pixels: the nodata they declare (or none) must be the store's, and they must give a mask (an alpha band, an internal mask or a nodata of NaN) exactly when the store has one. The command checks this before it copies or writes anything, and the message names both values. The command has three options:
 
 | Option | Meaning |
 |---|---|

@@ -113,6 +113,9 @@
     const rows = [
       ['Time', shortDate(click.time)],
       ['Pixel', `${click.pixel.x}, ${click.pixel.y}`],
+      // The values belong to the frame on screen. While a view loads or a scrub is fast, that frame can come from a coarser
+      // level, and the values are then those of the larger pixel that covers this one.
+      ...(click.level > 0 ? [['Level', `${click.level} (${2 ** click.level}× coarser)`]] : []),
       ['Lon, lat', click.lon === null ? 'not georeferenced' : `${click.lon.toFixed(5)}, ${click.lat.toFixed(5)}`],
       ...Object.entries(click.values).map(([band, value]) => [band, value === null ? 'no data' : String(Number(value.toPrecision(5)))]),
     ];

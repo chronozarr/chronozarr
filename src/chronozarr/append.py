@@ -279,21 +279,12 @@ def _plan(target: _Target, n_new: int) -> _Plan:
     return _Plan(target.n_time, target.n_time + n_new)
 
 
-@dataclass(frozen=True)
-class _CellDone:
-    seconds: float
-
-
-def _append_cell(
-    block: Block, arrays: _LevelArrays, ys: slice, xs: slice, plan: _Plan
-) -> _CellDone:
-    started = time.perf_counter()
+def _append_cell(block: Block, arrays: _LevelArrays, ys: slice, xs: slice, plan: _Plan) -> None:
     arrays.data[plan.old_n : plan.new_n, :, ys, xs] = block.data
     if arrays.mask is not None and block.mask is not None:
         arrays.mask[plan.old_n : plan.new_n, ys, xs] = block.mask
     if arrays.coverage is not None and block.coverage is not None:
         arrays.coverage[plan.old_n : plan.new_n, ys, xs] = block.coverage
-    return _CellDone(time.perf_counter() - started)
 
 
 # --- Metadata ------------------------------------------------------------------------------------
@@ -348,7 +339,7 @@ def _commit_metadata(
         levels=levels,
         shard_bytes=shard_bytes,
     )
-    # `multiscales` is not rewritten: it stays byte-identical (spec 14), so a store published
+    # `multiscales` is not rewritten: it stays byte-identical (spec 8.3), so a store published
     # with `pixels_per_tile` keeps it.
     target.root.attrs.update({"chronozarr": updated.to_attrs()})
     with warnings.catch_warnings():
@@ -495,7 +486,7 @@ def _write(
                 array.resize((plan.new_n, *array.shape[1:]))
 
     cs = target.chunk_size
-    writer = _CellWriter[_CellDone](cells_in_flight)
+    writer = _CellWriter[None](cells_in_flight)
     compute = ThreadPoolExecutor(max_workers=os.cpu_count() or 1)
     pyramid = _Pyramid(
         target.shapes,

@@ -475,7 +475,7 @@ def _decode_level(source: Any, store: ChronoStore, lod: int, full_read_limit: in
             name,
             "fail",
             "; ".join(problems),
-            "The stored chunks do not reconstruct consistently. Re-encode the store and compare "
+            "The stored chunks do not decode consistently. Re-encode the store and compare "
             "with `chronozarr validate`; do not serve it.",
         )
     return Check(name, "ok", "; ".join(notes))

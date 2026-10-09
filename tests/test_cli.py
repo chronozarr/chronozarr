@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 import pytest
 from click.testing import CliRunner
@@ -9,7 +11,7 @@ from click.testing import CliRunner
 import chronozarr
 from chronozarr import schema
 from chronozarr.cli import main
-from tests.synthetic import make_da, make_truth
+from tests.synthetic import CRS, TRANSFORM, make_da, make_truth
 
 pytestmark = pytest.mark.unit
 
@@ -154,6 +156,338 @@ def test_geotiff_without_date_in_name_fails(tmp_path):
     result = CliRunner().invoke(main, ["encode", str(tmp_path / "*.tif"), str(tmp_path / "o")])
     assert result.exit_code == 1
     assert "cannot find a date" in result.output
+
+
+def test_geotiff_input_without_rasterio_names_the_geo_extra(tmp_path, monkeypatch):
+    (tmp_path / "scene_2024-01-15.tif").write_bytes(b"")
+    monkeypatch.setitem(sys.modules, "rasterio", None)  # makes `import rasterio` raise ImportError
+    result = CliRunner().invoke(main, ["encode", str(tmp_path / "*.tif"), str(tmp_path / "o")])
+    assert result.exit_code == 1
+    assert "uv sync --extra geo" in result.output
+    assert "chronozarr[geo]" in result.output
+
+
+_DATES = ("S2_20240115", "S2_20240215", "S2_20240315")
+_SPEC_DTYPES = ("uint8", "uint16", "int16", "float32")
+_SENTINEL = {"uint8": 0, "uint16": 0, "int16": -32768, "float32": -9999.0}
+
+
+def _random_frames(dtype: str, n_time: int = 3, n_band: int = 2) -> np.ndarray:
+    """(time, band, 20, 30) values of `dtype` that never equal the `_SENTINEL` of that dtype."""
+    rng = np.random.default_rng(11)
+    shape = (n_time, n_band, 20, 30)
+    if dtype == "float32":
+        return rng.uniform(-50, 500, shape).astype("float32")
+    info = np.iinfo(dtype)
+    return rng.integers(info.min + 1, info.max + 1, shape).astype(dtype)
+
+
+def _write_geotiffs(directory, names, frames, *, nodata=None, scale=None, transform=TRANSFORM):
+    """One GeoTIFF per (band, y, x) frame, named `<name>.tif`; returns the glob that finds them."""
+    rasterio = pytest.importorskip("rasterio")
+    from rasterio.transform import Affine
+
+    directory.mkdir(exist_ok=True)
+    for name, frame in zip(names, frames, strict=True):
+        with rasterio.open(
+            directory / f"{name}.tif",
+            "w",
+            driver="GTiff",
+            height=frame.shape[1],
+            width=frame.shape[2],
+            count=frame.shape[0],
+            dtype=frame.dtype.name,
+            crs=CRS,
+            transform=Affine(*transform),
+            nodata=nodata,
+        ) as dst:
+            dst.write(frame)
+            if scale is not None:
+                dst.scales = [scale] * frame.shape[0]
+                dst.offsets = [10.0] * frame.shape[0]
+                dst.units = ["m"] * frame.shape[0]
+    return str(directory / "*.tif")
+
+
+@pytest.mark.parametrize("dtype", _SPEC_DTYPES)
+def test_encode_geotiff_glob_keeps_dtype_nodata_scale_and_offset(tmp_path, dtype):
+    frames = _random_frames(dtype)
+    frames[:, :, :2, :2] = _SENTINEL[dtype]
+    pattern = _write_geotiffs(
+        tmp_path / "tifs", _DATES, frames, nodata=_SENTINEL[dtype], scale=0.5
+    )
+    out = tmp_path / "out"
+    result = _run("encode", pattern, str(out), "--chunk-size", "16", "--crs", CRS)
+    assert result.exit_code == 0, result.output
+
+    store = chronozarr.open_store(out)
+    values = store.to_xarray().values
+    assert values.dtype == np.dtype(dtype)
+    assert np.array_equal(values, frames)
+    assert store.nodata == _SENTINEL[dtype]
+    assert store.attrs.mask_variable is None
+    assert [(b.scale, b.offset, b.units) for b in store.attrs.bands] == [(0.5, 10.0, "m")] * 2
+    assert _run("validate", str(out)).exit_code == 0
+
+
+@pytest.mark.parametrize("dtype", _SPEC_DTYPES)
+def test_encode_geotiff_glob_without_declared_nodata_stores_none(tmp_path, dtype):
+    frames = _random_frames(dtype)
+    frames[:, :, :2, :2] = 0  # a zero is data when no nodata is declared, as in `convert`
+    pattern = _write_geotiffs(tmp_path / "tifs", _DATES, frames)
+    out = tmp_path / "out"
+    result = _run("encode", pattern, str(out), "--chunk-size", "16")
+    assert result.exit_code == 0, result.output
+
+    store = chronozarr.open_store(out)
+    assert store.nodata is None
+    assert store.attrs.mask_variable is None
+    assert np.array_equal(store.to_xarray().values, frames)
+
+
+def _nan_frames() -> np.ndarray:
+    """float32 frames with NaN in band 0 only: a pixel invalid in any band is invalid for all."""
+    frames = _random_frames("float32")
+    frames[:, 0, 3:5, 6:9] = np.nan
+    return frames
+
+
+def _expected_valid() -> np.ndarray:
+    valid = np.ones((20, 30), dtype=np.uint8)
+    valid[3:5, 6:9] = 0
+    return valid
+
+
+def _assert_nan_pixels_masked(store, frames, times):
+    valid = _expected_valid()
+    for t in times:
+        stored = store.read(t)
+        assert not np.isnan(stored).any()
+        assert np.array_equal(store.read_mask(t), valid)
+        assert (stored[0, 3:5, 6:9] == 0).all()
+        assert np.array_equal(stored[0][valid == 1], frames[t, 0][valid == 1])
+        assert np.array_equal(stored[1], frames[t, 1])
+
+
+def test_encode_float32_geotiffs_with_nan_nodata_write_a_mask(tmp_path):
+    frames = _nan_frames()
+    pattern = _write_geotiffs(tmp_path / "tifs", _DATES, frames, nodata=float("nan"))
+    out = tmp_path / "out"
+    result = _run("encode", pattern, str(out), "--chunk-size", "16")
+    assert result.exit_code == 0, result.output
+
+    store = chronozarr.open_store(out)
+    assert store.attrs.mask_variable is not None
+    assert store.nodata is None
+    _assert_nan_pixels_masked(store, frames, range(3))
+    assert _run("validate", str(out)).exit_code == 0
+
+
+def test_encode_float32_geotiffs_with_undeclared_nan_fail_naming_the_file(tmp_path):
+    frames = _random_frames("float32")
+    frames[1, 0, 0, 0] = np.nan
+    pattern = _write_geotiffs(tmp_path / "tifs", _DATES, frames)
+    out = tmp_path / "out"
+    result = CliRunner().invoke(main, ["encode", pattern, str(out)])
+    assert result.exit_code == 1
+    assert "S2_20240215.tif" in result.output
+    assert "NaN" in result.output
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("command", ["encode", "append"])
+def test_undeclared_nan_hint_points_to_what_the_command_can_do(tmp_path, command):
+    frames = _random_frames("float32")
+    if command == "encode":
+        frames[1, 0, 0, 0] = np.nan
+        args = ["encode", _write_geotiffs(tmp_path / "tifs", _DATES, frames), str(tmp_path / "o")]
+        bad_file = "S2_20240215.tif"
+    else:
+        out = _encode_first_two(tmp_path, frames)
+        frames[2, 0, 0, 0] = np.nan
+        args = ["append", str(out), _later_files(tmp_path, frames)]
+        bad_file = "S2_20240315.tif"
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 1
+    assert bad_file in result.output
+    # `--nodata` is an option of `convert` only; neither command accepts it
+    assert "pass --nodata nan" not in result.output
+    assert "chronozarr convert --nodata nan" in result.output
+    assert "gdal_edit.py -a_nodata nan" in result.output
+
+
+def test_append_float32_geotiffs_with_nan_nodata_continues_the_mask(tmp_path):
+    frames = _nan_frames()
+    first = _write_geotiffs(tmp_path / "first", _DATES[:2], frames[:2], nodata=float("nan"))
+    later = _write_geotiffs(tmp_path / "later", _DATES[2:], frames[2:], nodata=float("nan"))
+    out = tmp_path / "out"
+    assert _run("encode", first, str(out), "--chunk-size", "16").exit_code == 0
+    result = _run("append", str(out), later)
+    assert result.exit_code == 0, result.output
+
+    store = chronozarr.open_store(out)
+    assert len(store.times) == 3
+    _assert_nan_pixels_masked(store, frames, range(3))
+    assert _run("validate", str(out)).exit_code == 0
+
+
+def _tree(path):
+    """Every file under `path` with its bytes."""
+    return {p.relative_to(path): p.read_bytes() for p in sorted(path.rglob("*")) if p.is_file()}
+
+
+def _encode_first_two(tmp_path, frames, **declared):
+    """A store of the first two timesteps, whose files declare `declared` (see _write_geotiffs)."""
+    pattern = _write_geotiffs(tmp_path / "first", _DATES[:2], frames[:2], **declared)
+    out = tmp_path / "out"
+    assert _run("encode", pattern, str(out), "--chunk-size", "16").exit_code == 0
+    return out
+
+
+def _later_files(tmp_path, frames, **declared):
+    return _write_geotiffs(tmp_path / "later", _DATES[2:], frames[2:], **declared)
+
+
+@pytest.fixture
+def no_append(monkeypatch):
+    """`append()` copies the whole store before it compares anything, so a refusal that is meant
+    to cost nothing has to come before the call."""
+
+    def refuse_to_run(*args, **kwargs):
+        raise AssertionError("append() was called, so the store was copied before the refusal")
+
+    monkeypatch.setattr("chronozarr.cli.append", refuse_to_run)
+
+
+def _assert_append_refused(out, later, *fragments):
+    before = _tree(out)
+    result = CliRunner().invoke(main, ["append", str(out), later], catch_exceptions=False)
+    assert result.exit_code == 1, result.output
+    for fragment in fragments:
+        assert fragment in result.output, result.output
+    assert _tree(out) == before, "a refused append must leave the store untouched"
+
+
+def test_append_geotiffs_declaring_another_nodata_is_refused(tmp_path, no_append):
+    frames = _random_frames("uint16")
+    out = _encode_first_two(tmp_path, frames, nodata=0)
+    later = _later_files(tmp_path, frames, nodata=1)
+    _assert_append_refused(
+        out,
+        later,
+        "the files have nodata 1, the store has nodata 0",
+        "gdal_edit.py -a_nodata 0",
+        "encode it again from all its files",
+    )
+
+
+def test_append_geotiffs_declaring_no_nodata_to_a_store_with_one_is_refused(tmp_path, no_append):
+    frames = _random_frames("uint16")
+    out = _encode_first_two(tmp_path, frames, nodata=0)
+    later = _later_files(tmp_path, frames)
+    _assert_append_refused(
+        out,
+        later,
+        "the files have no nodata, the store has nodata 0",
+        "gdal_edit.py -a_nodata 0",
+    )
+
+
+def test_append_geotiffs_declaring_nodata_to_a_store_with_none_is_refused(tmp_path, no_append):
+    frames = _random_frames("uint16")
+    out = _encode_first_two(tmp_path, frames)
+    later = _later_files(tmp_path, frames, nodata=0)
+    _assert_append_refused(
+        out,
+        later,
+        "the files have nodata 0, the store has no nodata",
+        "gdal_edit.py -unsetnodata",
+    )
+
+
+def test_append_geotiffs_without_a_mask_to_a_masked_store_is_refused(tmp_path, no_append):
+    out = _encode_first_two(tmp_path, _nan_frames(), nodata=float("nan"))
+    assert chronozarr.open_store(out).attrs.mask_variable is not None
+    later = _later_files(tmp_path, _random_frames("float32"))  # no NaN, no nodata: no mask
+    _assert_append_refused(
+        out,
+        later,
+        "the store has a mask and the files give none",
+        "alpha band, an internal mask, or NaN declared as nodata",
+    )
+
+
+def test_append_geotiffs_with_a_mask_to_a_store_without_one_is_refused(tmp_path, no_append):
+    out = _encode_first_two(tmp_path, _random_frames("float32"), nodata=-9999.0)
+    assert chronozarr.open_store(out).attrs.mask_variable is None
+    later = _later_files(tmp_path, _nan_frames(), nodata=float("nan"))
+    _assert_append_refused(
+        out,
+        later,
+        "the files give a mask",
+        "the store has none, which append cannot add",
+        "the files have no nodata, the store has nodata -9999.0",
+    )
+
+
+@pytest.mark.parametrize("declared", [{"nodata": 0}, {}], ids=["nodata-0", "no-nodata"])
+def test_append_geotiffs_with_the_stores_validity_rule_is_accepted(tmp_path, declared):
+    frames = _random_frames("uint16")
+    out = _encode_first_two(tmp_path, frames, **declared)
+    later = _later_files(tmp_path, frames, **declared)
+    result = _run("append", str(out), later)
+    assert result.exit_code == 0, result.output
+
+    store = chronozarr.open_store(out)
+    assert len(store.times) == 3
+    assert store.nodata == declared.get("nodata")
+    assert np.array_equal(store.to_xarray().values, frames)
+    assert _run("validate", str(out)).exit_code == 0
+
+
+def test_encode_geotiff_glob_rejects_files_of_different_dtypes(tmp_path):
+    frames = [
+        _random_frames("uint16")[0],
+        _random_frames("float32")[0],
+        _random_frames("uint16")[2],
+    ]
+    pattern = _write_geotiffs(tmp_path / "tifs", _DATES, frames)
+    result = CliRunner().invoke(main, ["encode", pattern, str(tmp_path / "out")])
+    assert result.exit_code == 1
+    assert "S2_20240215.tif is float32" in result.output
+    assert "S2_20240115.tif is uint16" in result.output
+
+
+@pytest.mark.parametrize("dtype", ["float64", "int32"])
+def test_encode_geotiff_glob_names_an_unsupported_dtype(tmp_path, dtype):
+    frames = _random_frames("float32").astype(dtype)
+    pattern = _write_geotiffs(tmp_path / "tifs", _DATES, frames)
+    result = CliRunner().invoke(main, ["encode", pattern, str(tmp_path / "out")])
+    assert result.exit_code == 1
+    assert dtype in result.output
+    assert "uint8" in result.output
+    assert "gdal_translate" in result.output
+
+
+def test_encode_geotiff_glob_does_not_resample_a_file_off_the_grid(tmp_path):
+    frames = _random_frames("uint16")
+    _write_geotiffs(tmp_path / "tifs", _DATES[:2], frames[:2])
+    shifted = (*TRANSFORM[:2], TRANSFORM[2] + 10.0, *TRANSFORM[3:])
+    pattern = _write_geotiffs(tmp_path / "tifs", _DATES[2:], frames[2:], transform=shifted)
+    result = CliRunner().invoke(main, ["encode", pattern, str(tmp_path / "out")])
+    assert result.exit_code == 1
+    assert "S2_20240315.tif" in result.output
+    assert "does not resample" in result.output
+
+
+def test_encode_geotiff_glob_does_not_reproject_to_another_crs(tmp_path):
+    pattern = _write_geotiffs(tmp_path / "tifs", _DATES, _random_frames("uint16"))
+    result = CliRunner().invoke(
+        main, ["encode", pattern, str(tmp_path / "out"), "--crs", "EPSG:32632"]
+    )
+    assert result.exit_code == 1
+    assert "--crs EPSG:32632" in result.output
+    assert "does not reproject" in result.output
 
 
 def test_doctor_passes_on_a_local_store(tmp_path, zarr_input):

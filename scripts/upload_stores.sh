@@ -5,7 +5,7 @@
 # STORE selects the prefix under each AOI (default chronozarr), e.g. STORE=chronozarr-3; ROOT
 # overrides the local tree.
 #
-# Cache-Control per object (spec 14):
+# Cache-Control per object (spec 8.1 for immutable objects, 8.3 for the ones an append rewrites):
 #   immutable (1 year)   every chunk and shard object except those below
 #   max-age=SECONDS      zarr.json files, time/c/0 and volatility/c/* (rewritten by an append), and
 #                        for each cell, level and sharded variable the shard holding the last
