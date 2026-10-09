@@ -1,12 +1,14 @@
 # chronozarr
 
-Browser and Node reader for [chronozarr](https://github.com/chronozarr/chronozarr) stores, plus a MapLibre GL JS custom layer that draws one.
+Browser and Node reader for [chronozarr](https://github.com/chronozarr/chronozarr) stores. The package also has a MapLibre GL JS custom layer that draws a store.
 
-A chronozarr store is a Zarr v3 time series of rasters with a multiscale pyramid, written one object per chunk by default and optionally sharded, laid out so a client reads one timestep of one map cell with one HTTP request (a plain `GET` of one chunk; for a sharded store one range read of a shard once its index is cached). The reader turns `(lod, row, col, t)` into a typed array: it caches shard indexes (sharded stores), decodes in a worker pool, prefetches a window of the time axis around the current timestep. It reads spec 0.3 stores ([spec](https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md)). The Python package `chronozarr` writes them.
+A chronozarr store is a Zarr v3 time series of rasters with a multiscale pyramid. The writer makes one object per chunk by default and can shard the chunks. A client reads one timestep of one map cell with one HTTP request. For an unsharded store that request is a plain `GET` of one chunk. For a sharded store it is one range read of a shard, once the shard index is cached.
 
-The package is plain ES modules. There is no build step and no runtime dependency: zarrita and numcodecs are vendored (see [Licenses](#licenses)).
+The reader turns `(lod, row, col, t)` into a typed array. It caches the shard indexes of sharded stores, decodes in a worker pool and prefetches a window of the time axis around the current timestep. It reads spec 0.3 stores ([spec](https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md)). The Python package `chronozarr` writes them.
 
-The viewer loads nothing from a third-party host at runtime and uses no web font. The MapLibre demo page, `js/maplibre/index.html`, is the one exception: it loads maplibre-gl from a pinned CDN version.
+The package is plain ES modules with no build step and no runtime dependency, because zarrita and numcodecs are vendored (see [Licenses](#licenses)).
+
+The viewer loads nothing from a third-party host at runtime and uses no web font. The MapLibre demo page, `js/maplibre/index.html`, loads a pinned version of maplibre-gl from a CDN.
 
 ## Install
 
@@ -41,13 +43,19 @@ or at a CDN:
 </script>
 ```
 
-| Import | Provides |
+| Import | Content |
 |---|---|
-| `chronozarr` | `openStore(url, options)`, the `ChronoStore` it resolves to, and helpers (`applyDelta`, `chunkKey`, `scrubCost`, `windowOrder`, `samplePixelFrom`, `FetchError`) |
+| `chronozarr` | `openStore(url, options)` and the `ChronoStore` that it resolves to |
 | `chronozarr/maplibre` | `ChronozarrLayer`, a MapLibre GL JS custom layer |
-| `chronozarr/decode-worker` | the module worker that `openStore` starts for decoding; `import.meta.resolve('chronozarr/decode-worker')` finds it, for example for the `spawnWorker` option |
+| `chronozarr/decode-worker` | The module worker that `openStore` starts for decoding |
 
-The decode worker is found relative to `decoder.js` (`new URL('./decode-worker.js', import.meta.url)`), so it loads wherever the package files are served from: `node_modules`, a static host, or a CDN. A cross-origin worker script, which is what a CDN is, is started through a same-origin `blob:` URL that imports it; the CDN has to send CORS headers (jsDelivr and unpkg do), and a page with a Content Security Policy needs `worker-src blob:`. In Node, and with `{ workers: 0 }`, chunks decode on the calling thread.
+The `chronozarr` import also exports the helpers `chunkKey`, `defaultTotalBytes`, `FetchError`, `samplePixelFrom`, `scrubCost` and `windowOrder`. `import.meta.resolve('chronozarr/decode-worker')` returns the URL of the worker, for example for the `spawnWorker` option.
+
+`openStore` finds the decode worker relative to `decoder.js`, with `new URL('./decode-worker.js', import.meta.url)`. The worker therefore loads from wherever the package files are served: `node_modules`, a static host or a CDN.
+
+A script from a CDN is cross-origin. The reader starts it through a same-origin `blob:` URL that imports it. The CDN must send CORS headers, and jsDelivr and unpkg do. A page with a Content Security Policy needs `worker-src blob:`.
+
+In Node, and with `{ workers: 0 }`, chunks decode on the calling thread.
 
 ## Read a store
 
@@ -68,7 +76,24 @@ console.log(stored(2, 100, 100) * scale + offset); // reflectance
 store.close(); // aborts in-flight requests and releases the decode workers
 ```
 
-`getCell` returns exact stored values at every timestep. `store.levels[lod]` describes each pyramid level (`gridRows`, `gridCols`, `width`, `height`, `resolution`, `transform`), `store.prefetch({ lod, cells, t })` fills the caches around a timestep, and `store.stats()` reports requests, bytes and cache hits. `openStore` options include `fetch`, `workers`, `totalBytes` (the joint cap for the decoded and compressed tiers, 1.5 GiB on machines reporting 8 GB or more, else 768 MiB), `horizonSteps`, `idleBytes` and `idleMs` (how far and how much idle prefetch reaches: 12 timesteps either side and 64 MiB per view by default), `maxRequests` and `retryDelaysMs`; they are documented in `chronozarr/decoder.js`. `prefetch` takes `playing: true` to extend to the whole loop and `masks: true` to fetch masks alongside chunks. The host must serve the store with byte ranges and CORS; `chronozarr doctor <url>` from the Python package checks that.
+`getCell` returns the exact stored values at every timestep. `store.levels[lod]` describes each pyramid level with `gridRows`, `gridCols`, `width`, `height`, `resolution` and `transform`. `store.prefetch({ lod, cells, t })` fills the caches around a timestep. `store.stats()` reports requests, bytes and cache hits.
+
+`prefetch` takes `playing: true` to extend the window to the whole loop. It takes `masks: true` to fetch the masks alongside the chunks.
+
+`openStore` takes these options. `chronozarr/decoder.js` documents all of them.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `fetch` | `globalThis.fetch` | The fetch implementation. |
+| `workers` | cores minus 1, at most 8 | The number of decode workers. With 0 the calling thread decodes. |
+| `totalBytes` | 1.5 GiB on machines that report 8 GB or more, else 768 MiB | The joint cap for the decoded and compressed tiers. |
+| `horizonSteps` | 12 | The timesteps on either side of `t` that idle prefetch covers. |
+| `idleBytes` | 64 MiB | The bytes that idle prefetch may start per idle episode. |
+| `idleMs` | 3000 | The quiet time after the last scrub or playback before the viewer counts as idle. |
+| `maxRequests` | 12 | The cap on concurrent requests to the store. |
+| `retryDelaysMs` | `[200, 600, 1500]` | The delay before each retry of a failed request. |
+
+The host must send CORS headers. A sharded store also needs byte-range requests, and an unsharded store needs only `GET`. `chronozarr doctor <url>` from the Python package checks the host. The [hosting guide](https://github.com/chronozarr/chronozarr/blob/main/docs/hosting.md) has the details.
 
 ## Draw a store on a MapLibre map
 
@@ -92,16 +117,23 @@ button.onclick = () => layer.setProduct('ndvi');
 map.on('click', async (event) => console.log(await layer.getValueAt(event.lngLat))); // stored values of the pixel
 ```
 
-The layer needs MapLibre GL JS 5 or later (tested with 6.10.0), which is the host page's to load; it is not a dependency of this package. It draws on the Web Mercator projection and supports stores in UTM, EPSG:3857 and EPSG:4326. Options, events, limits and the level-of-detail rule are in [js/maplibre/README.md](https://github.com/chronozarr/chronozarr/blob/main/js/maplibre/README.md).
+The layer needs MapLibre GL JS 5 or later. The host page loads MapLibre, which is not a dependency of this package. The tested version is in [evidence.md](https://github.com/chronozarr/chronozarr/blob/main/docs/evidence.md#javascript-dependencies).
+
+The layer draws on the Web Mercator projection. It supports stores in UTM, EPSG:3857 and EPSG:4326. Options, events, limits and the level-of-detail rule are in [js/maplibre/README.md](https://github.com/chronozarr/chronozarr/blob/main/js/maplibre/README.md).
 
 ## Licenses
 
-chronozarr is Apache-2.0 (`LICENSE`). Three MIT-licensed packages by Trevor Manz are vendored unmodified apart from a header comment, with their licenses beside them; each file's header records the package version and the SHA-256 of the published file.
+chronozarr is Apache-2.0 (`LICENSE`). The package vendors four MIT-licensed packages.
+
+Trevor Manz wrote three of them: zarrita, @zarrita/storage and numcodecs. They are vendored unmodified apart from a header comment, and their licenses sit beside them. The header of each file records the package version and the SHA-256 of the published file.
 
 | Path | Package | Version | License |
 |---|---|---|---|
 | `vendor/zarrita/` | [zarrita](https://github.com/manzt/zarrita.js) | 0.7.5 | MIT |
 | `vendor/zarrita-storage/` | [@zarrita/storage](https://github.com/manzt/zarrita.js) | 0.2.0 | MIT |
 | `vendor/numcodecs/` | [numcodecs](https://github.com/manzt/numcodecs.js) | 0.3.2 | MIT |
+| `vendor/gifenc.esm.js` | [gifenc](https://github.com/mattdesl/gifenc) | 1.0.3 | MIT |
 
-`vendor/numcodecs/blosc.js`, `lz4.js` and `zstd.js` embed WebAssembly builds of Blosc (with its bundled zlib and snappy), LZ4 and Zstandard. Those C libraries carry their own permissive upstream licenses (BSD-style, zlib), and numcodecs ships no separate notice for them.
+The viewer export uses gifenc, written by Matt DesLauriers. It ships as one file, and its license text is in the header of that file.
+
+`vendor/numcodecs/blosc.js`, `lz4.js` and `zstd.js` embed WebAssembly builds of Blosc (with its bundled zlib and snappy), LZ4 and Zstandard. Those C libraries carry their own permissive upstream licenses, BSD-style and zlib. numcodecs ships no separate notice for them.
