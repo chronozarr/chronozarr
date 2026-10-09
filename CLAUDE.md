@@ -11,13 +11,14 @@ Read `.napkin.md` first every session.
 
 ```
 spec/CHRONOZARR.md        normative format spec (v0.3.0)
-src/chronozarr/           Python package; CLI `chronozarr` (commands: append | encode | validate | info | doctor | export-cog | stac | convert)
+src/chronozarr/           Python package; CLI `chronozarr` (commands: append | encode | validate | info | doctor | export-cog | stac | convert | bands | link)
   schema.py               attribute dataclasses, layout helpers, validate()
   encode.py               encode(): pyramid, true values, optional volatility, optional sharding (default off), shard_bytes, mask/coverage
   decode.py               open_store() / ChronoStore: lazy reads, to_xarray(); HttpStore (stdlib HTTP range store)
   backend.py              xarray backend: xr.open_dataset(path_or_url, engine="chronozarr")
   convert.py              streaming conversion of COG manifests, Zarr variables and NetCDF into a store
   stac.py                 static STAC Collection and Item JSON for a store (datacube extension)
+  bands.py                band roles: which bands answer to red, green, blue, nir, the products that follow, `set_band_roles` (CLI `bands`, `--band-role`); mirrors js/shared/products.js
   export.py               export_cog(): true-value Cloud Optimized GeoTIFFs for GDAL and QGIS
   doctor.py               `chronozarr doctor`: CORS, byte range, caching and decode checks against a URL or path
   view.py                 serve_store(), view(): local range server and notebook viewer iframe

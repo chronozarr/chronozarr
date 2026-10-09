@@ -290,6 +290,7 @@ class Viewer {
     if (view.t !== undefined) this.t = view.t;
     if (view.productId !== undefined) this.productIndex = this.products.findIndex((p) => p.id === view.productId);
     if (view.bandName !== undefined) this.bandChoice = bandNames.indexOf(view.bandName);
+    if (view.range !== undefined && this.#usesLinearRange()) this.#linear = { range: view.range, manual: true };
     if (options.camera) this.camera = { ...options.camera };
     else if (view.zoom !== undefined || view.center !== undefined) this.#restoreCamera(view);
     else this.fit();
@@ -491,6 +492,7 @@ class Viewer {
         t: this.t === 0 ? null : this.t,
         productId: this.productIndex === this.products.findIndex((p) => p.available) ? null : product.id,
         bandName: product.id === 'band' && this.bandChoice !== 0 ? this.bands[this.bandChoice].name : null,
+        range: this.#usesLinearRange() ? this.stretchRange : null,
         zoom: atFit ? null : scale / (window.devicePixelRatio || 1),
         center: atFit ? null : { col: cx, row: cy },
       },
@@ -1380,6 +1382,7 @@ class Viewer {
     this.#linear = { range: [lo, hi], manual: true };
     this.#dirty = true;
     this.requestRender();
+    this.#scheduleUrlSync();
   }
 
   /** Back to the range measured from the data on screen. */
@@ -1387,6 +1390,7 @@ class Viewer {
     this.#linear = { range: null, manual: false };
     this.#dirty = true;
     this.requestRender();
+    this.#scheduleUrlSync();
   }
 
   /** 2nd percentile of tone-mapped true-color samples (physical reflectance), kept fixed while scrubbing. 0 without red, green and blue bands. */

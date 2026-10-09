@@ -146,6 +146,8 @@ Run `chronozarr <command> --help` for every option.
 | `append STORE INPUT` | Adds timesteps at the end of a store. See [docs/append.md](docs/append.md) |
 | `validate STORE` | Checks a store against the spec. Exits with status 1 on failure |
 | `info STORE` | Prints the times, bands and levels of a store |
+| `bands STORE` | Lists the bands, the role each plays and the viewer products they allow. `--band-role B04=red` sets a band's `common_name`. `encode` and `convert` take the same flag. See [docs/python.md](docs/python.md#band-roles-and-the-first-view) |
+| `link STORE_URL` | Prints a viewer URL with an initial product, band, display limits and timestep, checked against the hosted store |
 | `doctor TARGET` | Checks a hosted URL or a local store. See [docs/hosting.md](docs/hosting.md) |
 | `publish STORE --destination s3://BUCKET/PREFIX` | Uploads a store to S3 or R2, checks the hosted store and prints a viewer link. `--update` publishes appended timesteps to the same prefix and link. Needs the `publish` extra. See [docs/hosting.md](docs/hosting.md#chronozarr-publish) |
 | `export-cog STORE OUT_DIR` | Writes true-value COGs for GDAL and QGIS. Needs the `geo` extra |

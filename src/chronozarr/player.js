@@ -88,6 +88,10 @@ export default {
       url.searchParams.set('origin', location.origin); url.searchParams.set('theme', model.get('theme'));
       url.searchParams.set('store', model.get('store_url')); url.searchParams.set('t', String(model.get('t')));
       if (model.get('product')) url.searchParams.set('p', model.get('product')); else url.searchParams.delete('p');
+      // The same initial view as a shared link: the first frame is drawn with these, not repainted after ready.
+      const limits = model.get('range');
+      if (model.get('band')) url.searchParams.set('b', model.get('band')); else url.searchParams.delete('b');
+      if (limits) url.searchParams.set('r', limits.join(',')); else url.searchParams.delete('r');
       frame.src = url.href; draw();
     }
     const receive = event => {
