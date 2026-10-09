@@ -23,9 +23,9 @@ src/chronozarr/           Python package; CLI `chronozarr` (commands: append | e
   view.py                 serve_store(), view(): local range server and notebook viewer iframe
   cli.py                  CLI entry point
 js/chronozarr/            DOM-free reader on zarrita (spec 0.3): decoder.js (openStore, getCell, prefetch), metadata.js,
-                          http.js, cache.js, bandwidth.js, limiter.js, pool.js + decode-worker.js, codec.js, shard.js
+                          http.js, cache.js, bandwidth.js, limiter.js, pool.js + decode-worker.js, codec.js, shard.js, redact.js (URLs without login or signed query, for messages)
 js/maplibre/              MapLibre custom layer on the reader: layer.js, mesh.js, projection.js, shader.js, slots.js, view.js; demo.js + index.html
-js/demo/                 viewer: index.html?store=<url>, viewer.js, renderer.js (WebGL2), products.js, playback.js, chart.js, export.js, permalink.js, bench.js
+js/demo/                 viewer: index.html?store=<url>, viewer.js, renderer.js (WebGL2), products.js, playback.js, chart.js, export.js, permalink.js, open-store.js (the "Open store URL" field), bench.js
 js/test/                  node --test suites (fixtures skip if data/spike is absent)
 js/support/               static-server.js (byte ranges), synthetic-store.js, test fixtures
 tests/                    pytest, marker `unit`
