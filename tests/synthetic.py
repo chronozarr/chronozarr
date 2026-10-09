@@ -86,11 +86,13 @@ def reference_downsample(level: np.ndarray) -> np.ndarray:
     return out
 
 
-def reference_anchor_schedule(n_time: int, interval: int) -> dict[int, int]:
-    """Brute force nearest anchor per non-anchor timestep; ties to the earlier anchor."""
-    anchors = list(range(0, n_time, interval))
+def reference_comparison_schedule(n_time: int, interval: int) -> dict[int, int]:
+    """Brute force nearest comparison timestep for every other timestep; ties go to the earlier."""
+    comparisons = list(range(0, n_time, interval))
     return {
-        t: min(anchors, key=lambda a: (abs(a - t), a)) for t in range(n_time) if t not in anchors
+        t: min(comparisons, key=lambda c: (abs(c - t), c))
+        for t in range(n_time)
+        if t not in comparisons
     }
 
 
