@@ -254,19 +254,25 @@ Provenance MUST describe the processing applied. It leaves validity and coverage
 
 Level 0 MUST retain native-resolution stored values. Each level `k>0` MUST be derived from level `k-1` by a factor-two block mean of true values, excluding invalid pixels under §4.1. A block with no valid pixels MUST produce the declared nodata value, or 0 if nodata is null.
 
-Before reduction, the source MUST be padded to an even height and width by edge replication, including the validity and coverage planes. Thus `H_k = ceil(H_{k-1}/2) = ceil(H_0/2^k)` and similarly for width. The origin MUST remain fixed and ground sample distance MUST double at each level (§3.3).
+Before reduction, the source MUST be padded to an even height and width by edge replication, including the validity and coverage planes. So `H_k = ceil(H_{k-1}/2) = ceil(H_0/2^k)`, and similarly for width. The origin MUST remain fixed and ground sample distance MUST double at each level (§3.3).
 
-For uint8, uint16 and int16, writers MUST compute the exact sum in a wider integer type (uint32 or int32 as appropriate), divide by the valid-pixel count using floor division, and store the result in the unchanged data dtype. Float32 means MUST accumulate in float64 and be stored as float32. Masks and coverage MUST reduce as in §§4.2–4.3. No other overview resampling method is part of this profile.
+For uint8, uint16 and int16, writers MUST:
 
-The spatial chunk size MUST stay constant; only array shape and cell grid shrink. Levels MUST be consecutive from 0. The default writer MUST stop at the first level whose cell grid is 1×1, including that level; a writer MAY explicitly choose fewer or more levels.
+- compute the exact sum in a wider integer type (uint32 or int32 as appropriate),
+- divide by the valid-pixel count using floor division, and
+- store the result in the unchanged data dtype.
 
-**Categorical and binary guidance.** Integer block means do not preserve categorical classes or binary shares: a 2×2 block with three integer 1s and one 0 becomes 0 under floor division. A binary quantity SHOULD be stored as a scaled fraction, e.g. 0/10000 with scale 1e-4 and units `"fraction"`, so the coarse stored value represents the flagged share. Class codes have no meaningful arithmetic mean. A writer requiring majority/nearest categorical overviews must prepare a separately described product; it MUST NOT advertise such a pyramid as this profile's average pyramid. The default mean and its limitations MUST NOT be silently replaced by a categorical rule.
+Float32 means MUST accumulate in float64 and be stored as float32. Masks and coverage MUST reduce as in §§4.2–4.3. No other overview resampling method is part of this profile.
+
+The spatial chunk size MUST stay constant. Only array shape and cell grid shrink. Levels MUST be consecutive from 0. The default writer MUST stop at the first level whose cell grid is 1×1, including that level. A writer MAY explicitly choose fewer or more levels.
+
+Integer block means do not preserve categorical classes or binary shares. A 2×2 block with three integer 1s and one 0 becomes 0 under floor division. A binary quantity SHOULD be stored as a scaled fraction, e.g. 0/10000 with scale 1e-4 and units `"fraction"`. The coarse stored value then represents the flagged share. Class codes have no meaningful arithmetic mean. A writer requiring majority or nearest categorical overviews must prepare a separately described product. It MUST NOT advertise such a pyramid as this profile's average pyramid. The default mean and its limitations MUST NOT be silently replaced by a categorical rule.
 
 ## 6. Volatility
 
-A store MAY include the root array `volatility`, declared only through `chronozarr.volatility_path`. Its absence is conforming and MUST NOT prevent decoding or scientific interpretation of data. When present, it MUST use true float32 values, shape `[grid_rows_0,grid_cols_0]`, dimensions `["row","col"]` with matching `_ARRAY_DIMENSIONS`, and one chunk covering that shape. It is a cell-ordering metric, not a georeferenced pixel array, and MUST NOT declare S.
+A store MAY include the root array `volatility`, declared only through `chronozarr.volatility_path`. Its absence is conforming. Its absence MUST NOT prevent decoding or scientific interpretation of data. When present, it MUST use true float32 values, shape `[grid_rows_0,grid_cols_0]`, dimensions `["row","col"]` with matching `_ARRAY_DIMENSIONS`, and one chunk covering that shape. It is a cell-ordering metric with no georeferenced pixels. It MUST NOT declare S.
 
-The existing nominal comparison policy is retained solely for this metric. The publisher chooses a positive integer comparison interval `s`, default 6. Let `C={0,s,2s,…}` restricted to indices below `n_time`; let `D` be the other timestep indices. For each `t` in D, `q(t)` is the closest index in C by absolute index distance, with ties toward the earlier index. The comparison policy is independent of storage, is not a decoding instruction, and need not be recorded. Readers MUST NOT require it to decode data or use the stored metric for ordering.
+The existing nominal comparison policy is kept for this metric alone. The publisher chooses a positive integer comparison interval `s`, default 6. Let `C={0,s,2s,…}` restricted to indices below `n_time`. Let `D` be the other timestep indices. For each `t` in D, `q(t)` is the closest index in C by absolute index distance, with ties toward the earlier index. The comparison policy is independent of storage and need not be recorded. It is not a decoding instruction. Readers MUST NOT require the comparison policy to decode data or use the stored metric for ordering.
 
 ```text
 volatility[r,c] = clip(
@@ -275,37 +281,37 @@ volatility[r,c] = clip(
     0, 1)
 ```
 
-When written, this value MUST be computed from exact differences: int32 for integer data and float64 for float32 data. The mean MUST include invalid source pixels, as in the existing publisher metric, and MUST use level 0 only. It MUST be 0 if D is empty, including `s=1` or `n_time=1`; an all-zero mean likewise yields 0. Results MUST be clipped to [0,1] and stored as float32. The divisor 10000 is fixed for every dtype; it reflects the original reflectance normalization and is not a physical unit. For other sources it remains a relative temporal-change metric, not a calibrated change magnitude.
+When written, this value MUST be computed from exact differences: int32 for integer data and float64 for float32 data. The mean MUST include invalid source pixels, as in the existing publisher metric. The mean MUST use level 0 only. The value MUST be 0 if D is empty, including `s=1` or `n_time=1`. An all-zero mean likewise yields 0. Results MUST be clipped to [0,1] and stored as float32. The divisor 10000 is fixed for every dtype. It reflects the original reflectance normalization. It is not a physical unit. For other sources it remains a relative temporal-change metric.
 
-Readers MAY use volatility to order prefetch or draw change overviews. They MUST distinguish optional metric availability from data decodability. A present array that violates this definition is a conformance error, whereas an absent array is not.
+Readers MAY use volatility to order prefetch or draw change overviews. They MUST distinguish optional metric availability from data decodability. A present array that violates this definition is a conformance error. An absent array is not a conformance error.
 
 ## 7. Storage interoperability restrictions
 
 ### 7.1 Unsharded default and optional time sharding
 
-Writers MUST default to unsharded data, mask and coverage arrays. A writer MAY explicitly choose indexed time sharding. Readers MUST support both forms and determine the form from the codecs, not a filename assumption. Unsharded objects and cells follow §§2.1 and 4; a timestep of a cell costs one object GET and no index read.
+Writers MUST default to unsharded data, mask and coverage arrays. A writer MAY explicitly choose indexed time sharding. Readers MUST support both forms and determine the form from the codecs, not a filename assumption. Unsharded objects and cells follow §§2.1 and 4. A timestep of a cell costs one object GET and no index read.
 
 A sharded data array MUST select `sharding_indexed` with shard shape `[shard_time,n_band,cs,cs]` and inner shape `[1,n_band,cs,cs]`. Mask and coverage shard shapes MUST be `[shard_time,cs,cs]`, inner shapes `[1,cs,cs]`, using the same positive integer `shard_time`. Sharding index and empty-chunk semantics are inherited from I (§0.2).
 
-`shard_time` MUST be an integer at least 1. When sharding is explicitly chosen, the default `shard_time` is `n_time` at creation. It MAY exceed `n_time`; partial time shards follow I. The number of time shards is `ceil(n_time/shard_time)`. Readers MUST handle multiple time shards. A writer MUST NOT accept a `shard_time` option without enabling sharding.
+`shard_time` MUST be an integer at least 1. When sharding is explicitly chosen, the default `shard_time` is `n_time` at creation. It MAY exceed `n_time`. Partial time shards follow I. The number of time shards is `ceil(n_time/shard_time)`. Readers MUST handle multiple time shards. A writer MUST NOT accept a `shard_time` option without enabling sharding.
 
-Timestep `t` belongs to time shard `ts=floor(t/shard_time)` at inner timestep `t mod shard_time`. The data shard key is `c/{ts}/0/{r}/{c}`, and the plane key is `c/{ts}/{r}/{c}`. There is one shard object per time shard and spatial cell per level and variable; the data band grid remains one. Readers MUST derive the shapes and mapping from the regular grid and I configuration.
+Timestep `t` belongs to time shard `ts=floor(t/shard_time)` at inner timestep `t mod shard_time`. The data shard key is `c/{ts}/0/{r}/{c}`. The plane key is `c/{ts}/{r}/{c}`. There is one shard object per time shard and spatial cell per level and variable. The data band grid remains one. Readers MUST derive the shapes and mapping from the regular grid and I configuration.
 
-A writer SHOULD choose `shard_time` so no object exceeds the intended host/CDN cache or range-serving limit, and a whole-object miss is tolerable. A CDN may retrieve a whole large shard for a small index range. For appendable stores, unsharded storage SHOULD be used; if object count justifies sharding, writers SHOULD choose a finite interval, e.g. 12 for monthly data, instead of automatically using an entire long archive. Whole-axis sharding is appropriate for archives that will not be appended. An append rewrites the shard receiving new timesteps (§8.3).
+A writer SHOULD choose `shard_time` so no object exceeds the intended host or CDN cache or range-serving limit, and a whole-object miss is tolerable. A CDN may retrieve a whole large shard for a small index range. [evidence.md](../docs/evidence.md#layout-choice) has the measurements. For appendable stores, unsharded storage SHOULD be used. If object count justifies sharding, writers SHOULD choose a finite interval, e.g. 12 for monthly data, instead of automatically using an entire long archive. Whole-axis sharding is appropriate for archives that will not be appended. An append rewrites the shard receiving new timesteps (§8.3).
 
 ### 7.2 Index access, cache and byte-length hints
 
-The index representation, checksum, placement semantics and missing/empty chunk rules are those of I, Index / Index location / Empty chunks (§0.2). Writers SHOULD use `index_location: "end"` for tested browser interoperability. Readers MUST support both upstream index locations, MUST cache indices per shard and MUST reuse one array handle per level rather than defeat an implementation's per-array index cache.
+The index representation, checksum, placement semantics and missing or empty chunk rules are those of I, Index / Index location / Empty chunks (§0.2). Writers SHOULD use `index_location: "end"` for tested browser interoperability. Readers MUST support both upstream index locations. They MUST cache indices per shard. They MUST reuse one array handle per level, so an implementation's per-array index cache stays effective.
 
-`chronozarr.shard_bytes` MAY inventory existing data-array shard objects (not mask/coverage), using:
+`chronozarr.shard_bytes` MAY inventory existing data-array shard objects (not mask or coverage), using:
 
 ```text
 { "<level group path>": { "<t_shard>/<row>/<col>": <exact object byte length> } }
 ```
 
-When supplied, the inventory MUST list exactly the data shards that exist at every level, with exact lengths for the published metadata snapshot. A reader MUST use a listed length for a bounded index range and MUST fall back to HEAD to learn the length of an unlisted shard. Given object length L and index length N determined under I, an end-index bounded request is `Range: bytes=(L-N)-(L-1)`. Without a listed length, suffix-range access or the HEAD fallback follows the host's capabilities; the required HEAD fallback MUST remain available. Missing objects follow I's empty-chunk rules, not an invented sentinel representation.
+When supplied, the inventory MUST list exactly the data shards that exist at every level, with exact lengths for the published metadata snapshot. A reader MUST use a listed length for a bounded index range. It MUST fall back to HEAD to learn the length of an unlisted shard. Given object length L and index length N determined under I, an end-index bounded request is `Range: bytes=(L-N)-(L-1)`. Without a listed length, suffix-range access or the HEAD fallback follows the host's capabilities. The required HEAD fallback MUST remain available. Missing objects follow I's empty-chunk rules.
 
-Lengths MUST be updated when append rewrites an object; they are not universally immutable. An unchanged shard retains its length. Snapshot recovery for a replaced trailing shard is specified in §8.4.
+Lengths MUST be updated when append rewrites an object. An unchanged shard retains its length. §8.4 specifies snapshot recovery for a replaced trailing shard.
 
 ### 7.3 Codec subset
 
@@ -314,12 +320,12 @@ Codec algorithms, configuration semantics and binary representations follow [byt
 | Compressor | Profile configuration |
 |---|---|
 | `zstd` | Default: level 5, checksum false. |
-| `blosc` | `cname` MUST be zstd or lz4; `shuffle` MUST be noshuffle or shuffle; `clevel` MUST be 0–9; `typesize` MUST equal the array element size in bytes; `blocksize` MUST be 0. |
+| `blosc` | `cname` MUST be zstd or lz4. `shuffle` MUST be noshuffle or shuffle. `clevel` MUST be 0–9. `typesize` MUST equal the array element size in bytes. `blocksize` MUST be 0. |
 | `gzip` | Level MUST be 1–9. |
 
-Readers MUST support all three compressors, including both allowed blosc compression and shuffle variants. Writers MUST use exactly one supported compressor preceded by the bytes codec with little-endian configuration for numeric arrays; byte-order exceptions for one-byte dtypes follow B (§0.2). For string band coordinates, the standard Zarr `vlen-utf8` array-to-bytes codec replaces numeric bytes serialization, followed by a supported compressor. This required string representation is not another permitted numeric compressor.
+Readers MUST support all three compressors, including both allowed blosc compression and shuffle variants. Writers MUST use exactly one supported compressor preceded by the bytes codec with little-endian configuration for numeric arrays. Byte-order exceptions for one-byte dtypes follow B (§0.2). For string band coordinates, the standard Zarr `vlen-utf8` array-to-bytes codec replaces numeric bytes serialization, followed by a supported compressor. This required string representation is not another permitted numeric compressor.
 
-Other compression codecs, other blosc `cname` values, and `shuffle: "bitshuffle"` MUST NOT be used. The data, mask and coverage arrays MUST use the same codec chain, apart from element-size/byte-order differences required by their dtypes and the surrounding sharding configuration. Coordinates and optional volatility MAY independently choose any of the three supported compressors. Readers MUST report unsupported data types or codecs by name (§9.2).
+Other compression codecs, other blosc `cname` values, and `shuffle: "bitshuffle"` MUST NOT be used. The data, mask and coverage arrays MUST use the same codec chain, apart from element-size and byte-order differences required by their dtypes and the surrounding sharding configuration. Coordinates and optional volatility MAY independently choose any of the three supported compressors. Readers MUST report unsupported data types or codecs by name (§9.2).
 
 ## 8. Static publishing and append
 
