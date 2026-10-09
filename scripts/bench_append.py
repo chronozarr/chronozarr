@@ -25,6 +25,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import TypedDict
 
 import numpy as np
 
@@ -35,7 +36,16 @@ import chronozarr
 from chronozarr.append import append
 
 MOSAICS = live.DATA / "mosaics"
-LAYOUTS = {
+
+
+class Layout(TypedDict, total=False):
+    """The `chronozarr.encode` keywords that set a store's shard layout."""
+
+    shard: bool
+    shard_time: int
+
+
+LAYOUTS: dict[str, Layout] = {
     "whole-axis": {"shard": True},  # shard_time = months at creation
     "shard-time-12": {"shard": True, "shard_time": 12},
     "unsharded": {"shard": False},  # the encoder default
@@ -176,12 +186,19 @@ class CountingStore:
     """Counts the reads of data objects: shard index reads (suffix ranges) and chunk reads."""
 
     def __init__(self, path: Path) -> None:
+        from zarr.abc.store import ByteRequest
+        from zarr.core.buffer import Buffer, BufferPrototype
         from zarr.storage import LocalStore
 
         outer = self
 
         class Counting(LocalStore):
-            async def get(self, key, prototype, byte_range=None):  # type: ignore[override]
+            async def get(
+                self,
+                key: str,
+                prototype: BufferPrototype | None = None,
+                byte_range: ByteRequest | None = None,
+            ) -> Buffer | None:
                 outer.record(key, byte_range)
                 return await super().get(key, prototype, byte_range)
 

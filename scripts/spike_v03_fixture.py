@@ -204,7 +204,9 @@ def verify(path, node_project=None):
         np.testing.assert_array_equal(ds.y, 4500000 - (np.arange(ds.sizes["y"]) + 0.5) * res)
         for name, index, expected in CHECKS:
             if name.startswith(k + "/"):
-                assert int(root[name][index]) == expected
+                array = root[name]
+                assert isinstance(array, zarr.Array)
+                assert int(np.asarray(array[index])) == expected
                 assert int(ds[name.split("/")[1]].values[index]) == expected
         ds.close()
     print("zarr / xarray: all six samples and both coordinate grids match")
