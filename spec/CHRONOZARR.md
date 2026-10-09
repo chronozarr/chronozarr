@@ -448,40 +448,40 @@ Readers SHOULD cache decoded data chunks for the session. They SHOULD prefetch o
 
 ## 10. Changes from 0.2
 
-This table is informative. It lists the removals and changes; retained chronozarr requirements are normative in §§1–9. v0.2 stores require explicit conversion and are not baseline v0.3 reader inputs.
+This table is informative. It lists the removals and changes. Retained chronozarr requirements are normative in §§1–9. v0.2 stores require explicit conversion. They are not baseline v0.3 reader inputs.
 
 | v0.2 rule or surface | Removal / change in v0.3.0 | New section / authority |
 |---|---|---|
-| Version `0.2.x`, acceptance of `0.1.x` and `0.2.x` | Exact `0.3.0` draft version; every other or missing value rejected with `chronozarr convert` guidance. No automatic legacy fallback. | §§3.2, 9.1. |
-| Two temporal storage modes and required support for both | Removed; every array holds ordinary true values. No temporal mode declaration or mode-dependent dtype eligibility. | §§0.4, 1, 4.1. |
+| Version `0.2.x`, acceptance of `0.1.x` and `0.2.x` | Exact `0.3.0` draft version. Every other or missing value is rejected with `chronozarr convert` guidance. No automatic legacy fallback. | §§3.2, 9.1. |
+| Two temporal storage modes and required support for both | Removed. Every array holds ordinary true values. No temporal mode declaration or mode-dependent dtype eligibility. | §§0.4, 1, 4.1. |
 | Star-delta anchors, anchor interval/indices, reference map and reference-distance rules | Removed entirely from baseline storage and reader requirements. | §§0.4, 1, 9.3. |
-| Modular residual representation, reconstruction, clamp/overflow policy and residual-specific nodata handling | Removed; only standard Zarr codec decoding remains. | §§1, 4.1, 9.3; Z/I. |
-| Residual-zero edge padding versus anchor fill | Removed; ordinary fill padding applies, with edge geometry/bounds inherited. | §2.1; Z, Chunk grids / shape. |
-| Temporal auto/none/star-delta writer selection, sample ratio/threshold and selection metadata | Removed; no temporal selection API or metadata is specified. | §§0.4, 3.2. |
-| Cross-shard temporal dependencies and two-data-chunk bound | Removed; one data chunk per timestep/cell after metadata/index discovery. | §§1, 7, 9.3. |
-| Anchor-multiple shard sizing and anchor-first prefetch/caches | Removed; sizing is based on host/append limits and caches/prefetch use ordinary chunks. | §§7.1–7.2, 9.3. |
-| Append additions to temporal maps, fixed references and reuse of earlier anchors | Removed; append extends ordinary values and preserves old chunks/values. | §8.3. |
+| Modular residual representation, reconstruction, clamp/overflow policy and residual-specific nodata handling | Removed. Only standard Zarr codec decoding remains. | §§1, 4.1, 9.3; Z/I. |
+| Residual-zero edge padding versus anchor fill | Removed. Ordinary fill padding applies, with edge geometry and bounds inherited. | §2.1; Z, Chunk grids / shape. |
+| Temporal auto/none/star-delta writer selection, sample ratio/threshold and selection metadata | Removed. No temporal selection API or metadata is specified. | §§0.4, 3.2. |
+| Cross-shard temporal dependencies and two-data-chunk bound | Removed. One data chunk per timestep and cell after metadata and index discovery. | §§1, 7, 9.3. |
+| Anchor-multiple shard sizing and anchor-first prefetch/caches | Removed. Sizing is based on host and append limits. Caches and prefetch use ordinary chunks. | §§7.1–7.2, 9.3. |
+| Append additions to temporal maps, fixed references and reuse of earlier anchors | Removed. Append extends ordinary values and preserves old chunks and values. | §8.3. |
 | Zarr hierarchy and leaf-node restatement | Replaced by upstream reference. | §0.2; Z, Hierarchy / Metadata. |
-| Edge chunk extent and array-bound trimming restatement | Replaced by upstream reference; fill-padding policy retained. | §§0.2, 2.1; Z, Chunk grids / shape. |
-| One-byte bytes-codec endian exception restatement | Replaced by upstream reference; numeric little-endian profile retained. | §§0.2, 7.3; B. |
-| Local consolidated-metadata recommendation | Replaced by M reference; nonconsolidated reader fallback retained. | §§0.2, 9.2; M, Consolidated Metadata. |
-| Local six-coefficient affine definition and corner formula | Replaced by S reference; north-up/factor-two/same-origin restrictions retained. | §§0.2, 2.3, 3.3; S. |
-| Shard index uint64 pairs, CRC layout, sentinel values, index-location/empty-shard semantics | Replaced by I reference; both-location support, end-location advice, cache and length hints retained. | §§0.2, 7.2; I. |
+| Edge chunk extent and array-bound trimming restatement | Replaced by upstream reference. Fill-padding policy retained. | §§0.2, 2.1; Z, Chunk grids / shape. |
+| One-byte bytes-codec endian exception restatement | Replaced by upstream reference. Numeric little-endian profile retained. | §§0.2, 7.3; B. |
+| Local consolidated-metadata recommendation | Replaced by M reference. Nonconsolidated reader fallback retained. | §§0.2, 9.2; M, Consolidated Metadata. |
+| Local six-coefficient affine definition and corner formula | Replaced by S reference. North-up, factor-two and same-origin restrictions retained. | §§0.2, 2.3, 3.3; S. |
+| Shard index uint64 pairs, CRC layout, sentinel values, index-location/empty-shard semantics | Replaced by I reference. Both-location support, end-location advice, cache and length hints retained. | §§0.2, 7.2; I. |
 | Node metadata naming versus v2 dotfiles | Replaced by Z reference. | §§0.2, 8.1; Z, Metadata. |
-| Standard shard decoding and array bounds in the reader algorithm | Replaced by I/Z reference; profile access/validity rules retained. | §§0.2, 9.3; I/Z. |
+| Standard shard decoding and array bounds in the reader algorithm | Replaced by I/Z reference. Profile access and validity rules retained. | §§0.2, 9.3; I/Z. |
 | ndpyramid list, datasets, type and metadata.method/version/args fields | Replaced by M object layout, asset, derived_from, relative transforms and declared average resampling. | §3.3; M. |
-| `pixels_per_tile` emission/ignore/legacy acceptance rules | Removed; no legacy tile-size hint or parser. Cell size is derived from inner chunks. | §§2.1, 3.3, 9.1. |
+| `pixels_per_tile` emission/ignore/legacy acceptance rules | Removed. No legacy tile-size hint or parser. Cell size is derived from inner chunks. | §§2.1, 3.3, 9.1. |
 | Implicit convention composition | Explicit root chronozarr/M and spatial-array P/S registrations with literal v0.1 URLs. Snapshots recorded only as informative references. | §§0.3, 3.1. |
-| Optional proj/spatial aliases and nonrequirement | Canonical array P/S metadata and registrations required; EPSG `proj:code`, affine geometry and explicit pixel registration required. | §§2.3, 3.3. |
-| EPSG/native CRS mirrors interpreted as authorities | EPSG north-up scope fixed; P/S authoritative, mirrors validated against them; rotated/non-EPSG grids excluded. | §§2.3, 3.3–3.4. |
-| `_CRS` compatibility alias | Writers SHOULD emit it for GDAL below 3.13; not a v0.3 reader requirement. Reader observations distinguish CRS assignment from overview attachment. | §§0.3, 3.3. |
-| Levels mirrors tied to legacy datasets paths | Paths now match M layout assets; geometry equality uses canonical S and Z shape. | §3.4. |
-| String-only bands and implicit source-specific physical scaling | Removed; object-only bands, explicit scale/offset advice and consumer physical-value rules retained. | §§4.4, 9.1. |
-| Mandatory volatility, and its dependence on temporal encoding | Volatility MAY be absent; when present the existing exact-difference/normalization metric uses a nominal comparison policy independent of storage. | §6. |
-| Overview reduction followed by temporal encoding | Removed encoding stage; true-value block means, validity, edge replication and rounding retained. | §5. |
-| Claims that all shard lengths are immutable | Lengths describe a snapshot and MUST change with rewritten append objects; HEAD/recovery retained. | §§7.2, 8.4. |
-| Assumption that a writer keeps old shard chunk offsets | No universal offset guarantee; old encoded chunk bytes/decoded values preserved, cached index must be refreshed for changed shards. | §§8.3–8.4. |
+| Optional proj/spatial aliases and nonrequirement | Canonical array P/S metadata and registrations required. EPSG `proj:code`, affine geometry and explicit pixel registration required. | §§2.3, 3.3. |
+| EPSG/native CRS mirrors interpreted as authorities | EPSG north-up scope fixed. P/S authoritative, and mirrors validated against them. Rotated and non-EPSG grids excluded. | §§2.3, 3.3–3.4. |
+| `_CRS` compatibility alias | Writers SHOULD emit it for GDAL below 3.13. It is not a v0.3 reader requirement. Reader observations distinguish CRS assignment from overview attachment. | §§0.3, 3.3. |
+| Levels mirrors tied to legacy datasets paths | Paths now match M layout assets. Geometry equality uses canonical S and Z shape. | §3.4. |
+| String-only bands and implicit source-specific physical scaling | Removed. Object-only bands, explicit scale/offset advice and consumer physical-value rules retained. | §§4.4, 9.1. |
+| Mandatory volatility, and its dependence on temporal encoding | Volatility MAY be absent. When present, the existing exact-difference/normalization metric uses a nominal comparison policy independent of storage. | §6. |
+| Overview reduction followed by temporal encoding | Removed encoding stage. True-value block means, validity, edge replication and rounding retained. | §5. |
+| Claims that all shard lengths are immutable | Lengths describe a snapshot and MUST change with rewritten append objects. HEAD and recovery retained. | §§7.2, 8.4. |
+| Assumption that a writer keeps old shard chunk offsets | No universal offset guarantee. Old encoded chunk bytes and decoded values preserved. Cached index must be refreshed for changed shards. | §§8.3–8.4. |
 | Metadata-last publication described as sufficient to prevent missing-data views | Publication order retained with explicit non-atomicity and working-copy validation. | §§8.2–8.4. |
-| Append always updates volatility | Update only when volatility exists; absence remains conforming. | §§6, 8.3. |
-| Sections 0–14 and “Changes from 0.1” history | Reorganized as sections 0–9 plus this table; old change file is a pointer to this section. Historical implementation/prior-art prose is not a baseline conformance rule. | §10. |
-| Reference implementations described as current spec implementations | This is a draft; observed generic-reader capabilities are informative, not a claim that existing chronozarr code implements v0.3.0. | §§0, 0.3, 9.2. |
+| Append always updates volatility | Update only when volatility exists. Absence remains conforming. | §§6, 8.3. |
+| Sections 0–14 and "Changes from 0.1" history | Reorganized as sections 0–9 plus this table. The old change file is a pointer to this section. Historical implementation and prior-art prose is not a baseline conformance rule. | §10. |
+| Reference implementations described as current spec implementations | Removed. This is a draft. Observed generic-reader capabilities are informative. | §§0, 0.3, 9.2. |
