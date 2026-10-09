@@ -1,9 +1,9 @@
 name: Documentation site
 on:
   push:
-    paths: ['site/**', 'docs/**', 'spec/**', 'js/README.md', 'js/maplibre/README.md', '.github/workflows/site.yml']
+    paths: ['site/**', 'README.md', 'docs/**', 'spec/**', 'examples/bring_your_data/README.md', 'js/README.md', 'js/maplibre/README.md', '.github/workflows/site.yml']
   pull_request:
-    paths: ['site/**', 'docs/**', 'spec/**', 'js/README.md', 'js/maplibre/README.md', '.github/workflows/site.yml']
+    paths: ['site/**', 'README.md', 'docs/**', 'spec/**', 'examples/bring_your_data/README.md', 'js/README.md', 'js/maplibre/README.md', '.github/workflows/site.yml']
 permissions:
   contents: read
 jobs:
