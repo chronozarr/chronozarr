@@ -78,16 +78,15 @@ def _band_objects(store: ChronoStore) -> list[dict[str, Any]]:
     nodata = store.attrs.nodata
     out = []
     for band in store.attrs.bands:
-        entry: dict[str, Any] = {"name": band if isinstance(band, str) else str(band.name)}
-        if not isinstance(band, str):
-            if getattr(band, "common_name", None):
-                entry["eo:common_name"] = band.common_name
-            if getattr(band, "scale", None) is not None:
-                entry["raster:scale"] = band.scale
-            if getattr(band, "offset", None) is not None:
-                entry["raster:offset"] = band.offset
-            if getattr(band, "units", None):
-                entry["unit"] = band.units
+        entry: dict[str, Any] = {"name": band.name}
+        if band.common_name:
+            entry["eo:common_name"] = band.common_name
+        if band.scale is not None:
+            entry["raster:scale"] = band.scale
+        if band.offset is not None:
+            entry["raster:offset"] = band.offset
+        if band.units:
+            entry["unit"] = band.units
         entry["data_type"] = data_type
         if nodata is not None:
             entry["nodata"] = nodata
@@ -165,7 +164,7 @@ def build_stac(
     times = list(store.attrs.times)
     dimensions, variables = _cube(store, bounds)
     bands = _band_objects(store)
-    provenance = getattr(store.attrs, "provenance", None)
+    provenance = store.attrs.provenance
     provenance = provenance if isinstance(provenance, dict) else None
     text = description or (
         f"chronozarr time series: {len(times)} timesteps, {len(bands)} bands, "

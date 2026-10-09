@@ -102,22 +102,16 @@ def _file_stem(iso: str) -> str:
 
 
 def _band_metadata(store: ChronoStore) -> list[tuple[str, float, float, str | None]]:
-    """(name, scale, offset, units) per band, for v0.1 string bands and v0.2 band objects."""
-    out = []
-    for band in store.attrs.bands:
-        if isinstance(band, str):
-            out.append((band, 1.0, 0.0, None))
-        else:
-            scale = getattr(band, "scale", None)
-            out.append(
-                (
-                    str(band.name),
-                    float(1.0 if scale is None else scale),
-                    float(getattr(band, "offset", None) or 0.0),
-                    getattr(band, "units", None),
-                )
-            )
-    return out
+    """(name, scale, offset, units) per band; a missing scale is 1 and a missing offset is 0."""
+    return [
+        (
+            band.name,
+            1.0 if band.scale is None else band.scale,
+            0.0 if band.offset is None else band.offset,
+            band.units,
+        )
+        for band in store.attrs.bands
+    ]
 
 
 def _nodata_tag(
