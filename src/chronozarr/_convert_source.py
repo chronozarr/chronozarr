@@ -257,6 +257,23 @@ def _value_valid(data: np.ndarray, sentinels: Sequence[float | int]) -> np.ndarr
     return valid
 
 
+class UndeclaredNaNError(ValueError):
+    """A float source holds NaN, but declares no NaN nodata and the store has no mask for it.
+
+    The message is the `convert` one, which can pass `--nodata nan`; `encode` and `append` read
+    `where` and `count` to say what they can do instead.
+    """
+
+    def __init__(self, where: str, count: int) -> None:
+        self.where = where
+        self.count = count
+        super().__init__(
+            f"{where} holds {count} NaN values, but the source declares no NaN nodata "
+            "and the store has no mask. Declare NaN as the source's nodata, or pass --nodata "
+            "nan to mark NaN pixels invalid with a mask"
+        )
+
+
 def _settle_nan(
     data: np.ndarray, valid: np.ndarray | None, nodata: float | int | None, where: str
 ) -> None:
@@ -268,11 +285,7 @@ def _settle_nan(
     if not nan.any():
         return
     if valid is None:
-        raise ValueError(
-            f"{where} holds {int(nan.sum())} NaN values, but the source declares no NaN nodata "
-            "and the store has no mask. Declare NaN as the source's nodata, or pass --nodata "
-            "nan to mark NaN pixels invalid with a mask"
-        )
+        raise UndeclaredNaNError(where, int(nan.sum()))
     data[nan] = 0 if nodata is None else nodata
 
 

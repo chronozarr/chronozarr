@@ -1,5 +1,6 @@
 """Build from existing geocoded SWOT amplitudes; never modify source rasters."""
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -11,7 +12,7 @@ import xarray as xr
 import chronozarr
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = (
+DEFAULT_SOURCE = (
     Path.home() / "projects/swot-slc-geocode/output/site_scouting/wax_lake_atchafalaya/geocoded"
 )
 OUT = ROOT / "data/stores/swot_intensity/local-20261002"
@@ -19,10 +20,18 @@ DATES = ["2024-12-11", "2025-05-06"]
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE)
+    source_root = parser.parse_args().source_root
     frames, masks, records = [], [], []
     reference = None
     for date, condition in zip(DATES, ["low", "high"], strict=True):
-        path = SOURCE / f"wax_lake_{condition}_{date.replace('-', '')}_60m_amplitude_crop.tif"
+        path = source_root / f"wax_lake_{condition}_{date.replace('-', '')}_60m_amplitude_crop.tif"
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"{path} not found. Pass --source-root with the directory that holds the "
+                "geocoded GeoTIFFs. examples/swot_intensity/README.md says where they come from."
+            )
         with rasterio.open(path) as src:
             assert src.tags()["product"] == "amplitude"
             grid = (src.shape, src.crs, src.transform)
@@ -41,7 +50,7 @@ def main():
             frame = np.stack([db, intensity, amplitude])
             frames.append(frame)
             masks.append(valid.astype("uint8"))
-            with rasterio.open(SOURCE / path.name.replace("60m", "5m")) as companion:
+            with rasterio.open(source_root / path.name.replace("60m", "5m")) as companion:
                 source_product = companion.tags()["source"]
             records.append(
                 {
@@ -108,7 +117,9 @@ def main():
         ],
         "bytes": sum(p.stat().st_size for p in OUT.rglob("*") if p.is_file()),
     }
-    (ROOT / "data/reports/swot-intensity-20261002.json").write_text(json.dumps(report, indent=2))
+    target = ROOT / "data/reports/swot-intensity-20261002.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
 
 

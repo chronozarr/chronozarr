@@ -39,9 +39,13 @@ def main():
         "good": "finite and not source fill; wse_qual == 0 (good only)",
         "usable": "finite and not source fill; wse_qual <= 1 (good or suspect)",
     }[args.quality]
-    paths = sorted(args.source_root.glob("roanoke*/*.nc"))
+    pattern = "roanoke*/*.nc"
+    paths = sorted(args.source_root.glob(pattern))
     if len(paths) != 2:
-        raise ValueError(f"Expected the two Roanoke raster NetCDFs, found {len(paths)}")
+        raise ValueError(
+            f"Expected two Roanoke raster NetCDFs matching {args.source_root / pattern}, "
+            f"found {len(paths)}. examples/swot_raster/README.md says where to get them."
+        )
     staging = ROOT / f"data/examples/swot_roanoke_20261002_{args.quality}"
     staging.mkdir(parents=True, exist_ok=True)
     sources = [rasterio.open(f"netcdf:{path}:wse") for path in paths]
@@ -221,6 +225,7 @@ def main():
         }
         suffix = "" if args.quality == "all" else f"-{args.quality}"
         report_path = ROOT / f"data/reports/swot-roanoke-20261002{suffix}.json"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps(report, indent=2))
         print(json.dumps(report, indent=2))
     finally:
