@@ -88,7 +88,6 @@ class XarraySource(Source):
     ) -> None:
         self.kind = "NetCDF file" if source.lower().endswith(NETCDF_SUFFIXES) else "Zarr store"
         self.source = source
-        self.variable_name = variable
         dataset = _open_dataset(source)
         names = [n for n in dataset.data_vars if n != mask_var]
         if variable is None:
