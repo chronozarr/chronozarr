@@ -226,7 +226,7 @@ While the pointer is over the iframe, the map takes the mouse wheel for zoom and
 
 The iframe runs on `chronozarr.org`, in its own origin. It does not inherit your page's login, cookies or headers. Its requests for the store carry no credentials. The store must therefore be readable by anyone who can open the page. It must send `Access-Control-Allow-Origin: *` (or `https://chronozarr.org`). A sharded store also needs byte ranges. The other requirements are in [hosting.md](hosting.md). `chronozarr doctor <store-url>` checks them.
 
-For a private store, the host page can put a prefix-wide signed URL in `store=`. The viewer appends the query string of `store` to every request. The token must therefore authorize every object under the prefix. These work:
+For a private store, read [private.md](private.md) first. The host page can put a prefix-wide signed URL in `store=`. The viewer appends the query string of `store` to every request. The token must therefore authorize every object under the prefix. These work:
 
 - a CloudFront signed URL with a custom policy and a wildcard resource
 - an Azure Blob container or prefix SAS

@@ -30,7 +30,7 @@ js/test/                  node --test suites (fixtures skip if data/spike is abs
 js/support/               static-server.js (byte ranges), synthetic-store.js, test fixtures
 tests/                    pytest, marker `unit`
 docs/                     user guides: hosting.md (S3 + CloudFront, R2, GCS, Source Cooperative; doctor checklist), append.md,
-                          embedding.md, viewer-distribution.md, png-frames.md, format-comparison.md, python.md (API reference);
+                          embedding.md, private.md, viewer-distribution.md, png-frames.md, format-comparison.md, python.md (API reference);
                           evidence.md holds measurements and dated observations. site/scripts/sync-content.mjs publishes these on chronozarr.org
 deploy/                   README.md (R2 bucket + Worker publishing), r2-cors.json
 scripts/reencode_aoi.py   monthly mosaics in data/mosaics/<aoi> -> chronozarr store
