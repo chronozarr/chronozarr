@@ -285,6 +285,10 @@ Add a Transform Rule of type Modify Response Header. Use the same hostname expre
 
 A cache miss on a range read pulls the whole object from R2, so the cost grows with object size. An unsharded store has chunks of about 2 MB, and a miss is cheap. In a sharded store, a smaller `shard_time` makes a miss cheaper. Cloudflare limits the size of a cacheable object by plan. Measurements are in [evidence.md](evidence.md#layout-choice).
 
+#### One cached copy per requesting site
+
+With a CORS policy, R2 sends `Vary: Origin`, so Cloudflare caches a separate copy of each object for each site that requests it. Visitors of one site share a cache. Each other site that embeds the viewer, and each client that sends no `Origin` header (Python, GDAL, curl), starts with a cache miss on every object. A Transform Rule that removes `Vary` does not merge the copies. Measurements are in [evidence.md](evidence.md#cache-copies-per-requesting-site).
+
 #### `r2.dev`
 
 The public development URL (`wrangler r2 bucket dev-url enable`) is rate limited. Use it for a first check, and use a custom domain for anything public.

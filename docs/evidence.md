@@ -15,8 +15,6 @@ This file holds measurements, tested versions, dates and caveats. User docs link
 - [Comparison notes](#comparison-notes)
 - [Live store and publishing](#live-store-and-publishing)
 - [Hosting observations](#hosting-observations)
-- [Development checks](#development-checks)
-- [Stale text found in the old README](#stale-text-found-in-the-old-readme)
 
 ## Reader checks
 
@@ -346,6 +344,19 @@ Publishing through wrangler starts in about 2 seconds per object. At 4 parallel 
 ### Doctor
 
 The `doctor` checklist in [hosting.md](hosting.md#1-checklist) was read from `src/chronozarr/doctor.py` on 2026-10-01. If that file changes, the file is the authority.
+
+### Cache copies per requesting site
+
+R2 adds `Vary: Origin` to responses on a bucket with a CORS policy, and Cloudflare keeps a separate cached copy for each `Origin`. Checked on `data.chronozarr.org` on 2026-10-08 with one chunk (`ucayali_santa_maria_v03/2/data/c/46/0/1/1`):
+
+| Request | First | Second |
+|---|---|---|
+| `Origin: https://site-a.example` | MISS | HIT |
+| `Origin: https://site-b.example` | MISS | HIT |
+| No `Origin` header | MISS | HIT |
+| `Origin: https://chronozarr.org` | MISS | |
+
+A Transform Rule that removed `Vary` from responses did not change this: on 2026-10-08 a second origin still missed after the first had cached the chunk. The rule was deleted, because without `Vary` a browser could reuse a response that has no CORS header.
 
 ### Cloudflare cache rule
 
