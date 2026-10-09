@@ -657,3 +657,14 @@ def test_cli_date_pattern_and_help(tmp_path, series):
         "--write-manifest",
     ):
         assert fragment in " ".join(help_text.split())
+
+
+def test_cli_encode_points_files_at_convert(tmp_path, series):
+    manifest = tmp_path / "m.csv"
+    write_manifest(discover(str(series)).entries, manifest)
+    for source in (str(manifest), str(series), "s3://bkt/ndvi/"):
+        result = run("encode", source, str(tmp_path / "o"))
+        assert result.exit_code == 1
+        assert f"Use `chronozarr convert {source} " in result.output
+    assert not (tmp_path / "o").exists()
+    assert "chronozarr convert" in run("encode", "--help").output

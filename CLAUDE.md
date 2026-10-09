@@ -16,7 +16,8 @@ src/chronozarr/           Python package; CLI `chronozarr` (commands: append | e
   encode.py               encode(): pyramid, true values, optional volatility, optional sharding (default off), shard_bytes, mask/coverage
   decode.py               open_store() / ChronoStore: lazy reads, to_xarray(); HttpStore (stdlib HTTP range store)
   backend.py              xarray backend: xr.open_dataset(path_or_url, engine="chronozarr")
-  convert.py              streaming conversion of COG manifests, Zarr variables and NetCDF into a store
+  convert.py              streaming conversion of dated GeoTIFFs (directory, glob, s3:// prefix), COG manifests, Zarr variables and NetCDF into a store;
+                          _convert_discover.py lists and dates the files, _convert_preflight.py collects every incompatibility per file
   stac.py                 static STAC Collection and Item JSON for a store (datacube extension)
   export.py               export_cog(): true-value Cloud Optimized GeoTIFFs for GDAL and QGIS
   doctor.py               `chronozarr doctor`: CORS, byte range, caching and decode checks against a URL or path

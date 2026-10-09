@@ -18,6 +18,7 @@ import numpy as np
 import xarray as xr
 
 from chronozarr import schema
+from chronozarr._convert_discover import is_discovery_source
 from chronozarr.append import append, is_store
 from chronozarr.convert import (
     FIDELITY_HELP,
@@ -117,6 +118,24 @@ def _read_geotiffs(pattern: str, crs: str | None) -> _GeotiffStack:
         mask=None if valid is None else xr.DataArray(valid, dims=schema.PLANE_DIMENSIONS),
         nodata=info.nodata,
         bands=info.bands,
+    )
+
+
+def _refuse_files_for_convert(input: str, out: Path) -> None:
+    """Point a manifest, directory or S3 prefix at `convert`, the entry point for files on disk."""
+    lowered = input.lower()
+    if lowered.endswith((".csv", ".json")):
+        kind = "a manifest"
+    elif lowered.startswith("s3://") or (
+        not any(ch in input for ch in _GLOB_CHARS) and is_discovery_source(input)
+    ):
+        kind = "a directory, S3 prefix or file of GeoTIFFs"
+    else:
+        return
+    raise click.ClickException(
+        f"'{input}' is {kind}, which `chronozarr encode` does not read. Use "
+        f"`chronozarr convert {input} {out}`: it lists, checks and streams the files one "
+        "timestep at a time"
     )
 
 
@@ -264,10 +283,14 @@ def encode_command(
     variable: str | None,
     **options: Any,
 ) -> None:
-    """Encode INPUT into a chronozarr store at OUT.
+    """Encode INPUT into a chronozarr store at OUT, holding the whole stack in memory.
 
     INPUT is a Zarr store or NetCDF file with dims (time, band, y, x), or a quoted glob of
     GeoTIFFs, one per timestep, with the date in the file name.
+
+    For raster files on disk or in S3 use `chronozarr convert` instead: it takes directories,
+    globs, S3 prefixes, manifests, Zarr and NetCDF, reads one timestep at a time and reports
+    every incompatible file before writing.
 
     GeoTIFFs of uint8, uint16, int16 or float32 are read as `convert` reads COGs: band names,
     scale, offset, units, nodata and masks come from the files (see `convert --help`). The files
@@ -275,6 +298,7 @@ def encode_command(
     files one timestep at a time, use `convert`.
     """
     file_options: dict[str, Any] = {}
+    _refuse_files_for_convert(input, out)
     if any(ch in input for ch in _GLOB_CHARS):
         with _command_errors():
             stack = _read_geotiffs(input, crs)
