@@ -91,6 +91,8 @@ pip install "chronozarr[geo]"
 
    `encode` reads uint16 GeoTIFFs only. Use `chronozarr convert` for other data types.
 
+   The store takes each band's description (its name), scale, offset and units from the files, so a Sentinel-2 file with a scale of 0.0001 gives reflectance. These must be identical in every file, or the command fails and names the file and band. It also takes the nodata value that the files declare, and uses 0 when they declare none.
+
 2. Check the store against the spec.
 
    ```bash

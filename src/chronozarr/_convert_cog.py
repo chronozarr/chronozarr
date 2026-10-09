@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import wraps
@@ -111,6 +111,35 @@ class _CogHeader:
         return len(self.data_indexes)
 
 
+@dataclass(frozen=True)
+class BandMetadata:
+    """What a file declares for each of a chosen set of bands, in that order."""
+
+    nodata: tuple[float | int | str | None, ...]  # declared token per band
+    descriptions: tuple[str | None, ...]
+    scales: tuple[float, ...]
+    offsets: tuple[float, ...]
+    units: tuple[str | None, ...]
+
+
+def read_band_metadata(src: Any, indexes: Sequence[int], dtype: np.dtype) -> BandMetadata:
+    """The nodata, description, scale, offset and units that the open rasterio dataset `src`
+    declares for its 1-based band `indexes`; scale and offset are 1 and 0 where it sets none.
+
+    Raises ValueError for a scale that is zero or not finite, or an offset that is not finite.
+    """
+    scaling = [
+        _scaling(float(src.scales[i - 1]), float(src.offsets[i - 1]), f"band {i}") for i in indexes
+    ]
+    return BandMetadata(
+        nodata=tuple(_declared_nodata(src.nodatavals[i - 1], dtype) for i in indexes),
+        descriptions=tuple(src.descriptions[i - 1] or None for i in indexes),
+        scales=tuple(s for s, _ in scaling),
+        offsets=tuple(o for _, o in scaling),
+        units=tuple(src.units[i - 1] or None for i in indexes),
+    )
+
+
 def _gdal_env(uri: str) -> dict[str, str]:
     """GDAL options for opening `uri`: no directory listing or sidecar probes, which cost a
     request each over HTTP, except for formats that keep their georeferencing in sidecar files."""
@@ -168,11 +197,8 @@ def _read_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader
             internal_mask = alpha is None and any(
                 MaskFlags.per_dataset in src.mask_flag_enums[i - 1] for i in indexes
             )
-            tokens = tuple(_declared_nodata(src.nodatavals[i - 1], dtype) for i in indexes)
-            scaling = [
-                _scaling(float(src.scales[i - 1]), float(src.offsets[i - 1]), f"band {i}")
-                for i in indexes
-            ]
+            declared = read_band_metadata(src, indexes, dtype)
+            first_nodata = declared.nodata[0]
             return _CogHeader(
                 driver=src.driver,
                 grid=grid,
@@ -181,16 +207,16 @@ def _read_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader
                 alpha=alpha,
                 internal_mask=internal_mask,
                 dtype=dtype,
-                nodata=tokens,
-                warp_nodata=math.nan if isinstance(tokens[0], str) else tokens[0],
-                descriptions=tuple(src.descriptions[i - 1] or None for i in indexes),
+                nodata=declared.nodata,
+                warp_nodata=math.nan if isinstance(first_nodata, str) else first_nodata,
+                descriptions=declared.descriptions,
                 colors=tuple(
                     c if (c := src.colorinterp[i - 1].name) in _COLOR_NAMES else None
                     for i in indexes
                 ),
-                scales=tuple(s for s, _ in scaling),
-                offsets=tuple(o for _, o in scaling),
-                units=tuple(src.units[i - 1] or None for i in indexes),
+                scales=declared.scales,
+                offsets=declared.offsets,
+                units=declared.units,
             )
     except (rasterio.errors.RasterioIOError, ValueError) as exc:
         raise ValueError(f"cannot open source {uri}: {exc}") from exc

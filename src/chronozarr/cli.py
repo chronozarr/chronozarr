@@ -8,6 +8,7 @@ import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,13 +17,14 @@ import numpy as np
 import xarray as xr
 
 from chronozarr import schema
+from chronozarr._convert_cog import BandMetadata, read_band_metadata
 from chronozarr.append import append, is_store
 from chronozarr.convert import FIDELITY_HELP, RESAMPLING_METHODS, Plan, convert
 from chronozarr.decode import open_store
 from chronozarr.doctor import DEFAULT_ORIGIN, diagnose
 from chronozarr.encode import EncodeReport, encode
 from chronozarr.export import export_cog, select_times
-from chronozarr.schema import SchemaError, validate
+from chronozarr.schema import Band, SchemaError, validate
 from chronozarr.stac import write_stac
 
 _DATE_IN_NAME = re.compile(r"(?<!\d)(\d{4})-?(\d{2})(?:-?(\d{2}))?(?!\d)")
@@ -42,8 +44,54 @@ def _time_from_name(path: str) -> np.datetime64:
         raise click.ClickException(f"invalid date in file name '{path}': {exc}") from exc
 
 
-def _read_geotiffs(pattern: str) -> xr.DataArray:
-    """One GeoTIFF per timestep (date parsed from the file name), bands stacked."""
+@dataclass(frozen=True)
+class _GeotiffStack:
+    """The timesteps of a GeoTIFF glob and what its files declare about their bands."""
+
+    data: xr.DataArray
+    bands: tuple[Band, ...]  # name, scale, offset and units, the same in every file
+    nodata: int | None  # what every file declares; None when none does
+
+
+# (label, `BandMetadata` field) of what every file must declare identically, band by band
+_BAND_FIELDS = (
+    ("description", "descriptions"),
+    ("scale", "scales"),
+    ("offset", "offsets"),
+    ("units", "units"),
+)
+
+
+def _nodata_text(token: float | int | str | None) -> str:
+    return "no nodata" if token is None else f"nodata {token}"
+
+
+def _check_band_metadata(
+    path: str, found: BandMetadata, first_path: str, first: BandMetadata, names: list[str]
+) -> None:
+    """Fail naming `path`, the band and both values when `found` differs from `first`.
+
+    A store holds one description, scale, offset and units per band for every timestep.
+    """
+    for label, field in _BAND_FIELDS:
+        for name, got, wanted in zip(
+            names, getattr(found, field), getattr(first, field), strict=True
+        ):
+            if got != wanted:
+                raise click.ClickException(
+                    f"'{path}' band '{name}' has {label} {got!r}; '{first_path}' has {wanted!r}. "
+                    "A store keeps one description, scale, offset and units per band for every "
+                    "timestep, so all files must agree: rescale or relabel the odd file first"
+                )
+
+
+def _read_geotiffs(pattern: str) -> _GeotiffStack:
+    """One GeoTIFF per timestep (date parsed from the file name), bands stacked.
+
+    Each band's description (its name), scale, offset and units come from the files and must be
+    identical in all of them, as must the nodata the files declare; `convert` has the same rule
+    for COGs.
+    """
     try:
         import rasterio
     except ImportError as exc:
@@ -57,7 +105,9 @@ def _read_geotiffs(pattern: str) -> xr.DataArray:
 
     frames = []
     reference: tuple | None = None
+    first: BandMetadata | None = None
     band_names: list[str] = []
+    nodata_from: tuple[float | int | str | None, str, str] | None = None  # token, file, band
     for _, path in entries:
         with rasterio.open(path) as src:
             signature = (src.crs, src.transform, src.shape, src.count)
@@ -65,7 +115,6 @@ def _read_geotiffs(pattern: str) -> xr.DataArray:
                 reference = signature
                 if src.crs is None:
                     raise click.ClickException(f"'{path}' has no CRS")
-                band_names = [d or str(i + 1) for i, d in enumerate(src.descriptions)]
             elif signature != reference:
                 raise click.ClickException(
                     f"'{path}' differs from '{entries[0][1]}' in CRS, transform, shape or bands"
@@ -74,15 +123,61 @@ def _read_geotiffs(pattern: str) -> xr.DataArray:
                 raise click.ClickException(
                     f"'{path}' is {src.dtypes[0]}; only uint16 is supported"
                 )
+            try:
+                declared = read_band_metadata(src, range(1, src.count + 1), np.dtype("uint16"))
+            except ValueError as exc:
+                raise click.ClickException(f"'{path}': {exc}") from exc
+            if first is None:
+                first = declared
+                band_names = [d or str(i + 1) for i, d in enumerate(declared.descriptions)]
+            else:
+                _check_band_metadata(path, declared, entries[0][1], first, band_names)
+            for name, token in zip(band_names, declared.nodata, strict=True):
+                if nodata_from is None:
+                    nodata_from = (token, path, name)
+                elif token != nodata_from[0]:
+                    raise click.ClickException(
+                        f"'{path}' band '{name}' declares {_nodata_text(token)}; "
+                        f"'{nodata_from[1]}' band '{nodata_from[2]}' declares "
+                        f"{_nodata_text(nodata_from[0])}. A store has one nodata value, so every "
+                        "band of every file must declare the same one (or none)"
+                    )
             frames.append(src.read())
-    assert reference is not None
+    assert reference is not None and first is not None and nodata_from is not None
     crs, affine, _, _ = reference
-    return xr.DataArray(
-        np.stack(frames),
-        dims=schema.DIMENSIONS,
-        coords={"time": np.array([t for t, _ in entries]), "band": band_names},
-        attrs={"crs": crs.to_string(), "transform": list(affine)[:6]},
+    declared_nodata = nodata_from[0]
+    assert not isinstance(declared_nodata, str | float)  # uint16: an int or unset
+    return _GeotiffStack(
+        data=xr.DataArray(
+            np.stack(frames),
+            dims=schema.DIMENSIONS,
+            coords={"time": np.array([t for t, _ in entries]), "band": band_names},
+            attrs={"crs": crs.to_string(), "transform": list(affine)[:6]},
+        ),
+        bands=tuple(
+            Band(name=name, scale=scale, offset=offset, units=units)
+            for name, scale, offset, units in zip(
+                band_names, first.scales, first.offsets, first.units, strict=True
+            )
+        ),
+        nodata=declared_nodata,
     )
+
+
+def _check_nodata_matches_store(store: Path, nodata: int | None) -> None:
+    """Fail when the files declare a nodata that is not the store's.
+
+    Files that declare none (`nodata` is None) are not checked, as before.
+    """
+    if nodata is None:
+        return
+    stored = open_store(store).nodata
+    if stored != nodata:
+        raise click.ClickException(
+            f"cannot append to {store}: the files declare {_nodata_text(nodata)}; the store has "
+            f"{_nodata_text(stored)}. Pixels equal to the nodata are invalid, so the two must "
+            "agree"
+        )
 
 
 def _read_xarray(path: str, variable: str | None) -> xr.DataArray:
@@ -233,13 +328,22 @@ def encode_command(
 
     INPUT is a Zarr store or NetCDF file with dims (time, band, y, x), or a quoted glob of
     GeoTIFFs, one per timestep, with the date in the file name.
+
+    GeoTIFFs give the store each band's name (its description, else its position), scale, offset
+    and units, which must be identical in every file, and the nodata value their files declare,
+    which must be the same too (0 when none declares one).
     """
+    source_options: dict[str, Any] = {}
     if any(ch in input for ch in _GLOB_CHARS):
-        da = _read_geotiffs(input)
+        stack = _read_geotiffs(input)
+        da = stack.data
+        source_options["bands"] = stack.bands
+        if stack.nodata is not None:  # else encode()'s default for uint16, 0
+            source_options["nodata"] = stack.nodata
     else:
         da = _read_xarray(input, variable)
     with _command_errors():
-        report = encode(da, out, crs=crs, **_encode_kwargs(options))
+        report = encode(da, out, crs=crs, **source_options, **_encode_kwargs(options))
     click.echo(_encode_summary(out, report))
 
 
@@ -257,7 +361,9 @@ def append_command(
     INPUT is a chronozarr store (for example one month written by `convert`), a Zarr store or
     NetCDF file with dims (time, band, y, x), or a quoted glob of GeoTIFFs, one per timestep with
     the date in the file name. Its grid, bands, dtype, CRS and nodata must match STORE, and its
-    times must come after the store's last one.
+    times must come after the store's last one. For GeoTIFFs a band matches when its name, scale,
+    offset and units do (a GeoTIFF that sets no scale or offset has 1 and 0), and a nodata the
+    files declare must be the store's.
 
     Only the shards (or chunks, for an unsharded store) that gain a timestep are written, plus
     the metadata; every other object keeps its bytes. An unsharded store (the encoder default)
@@ -269,11 +375,12 @@ def append_command(
             if crs is not None or variable is not None:
                 raise click.UsageError("--crs and --variable do not apply to a chronozarr store")
             report = append(store, Path(input), workers=workers)
+        elif any(ch in input for ch in _GLOB_CHARS):
+            stack = _read_geotiffs(input)
+            _check_nodata_matches_store(store, stack.nodata)
+            report = append(store, stack.data, crs=crs, workers=workers, bands=stack.bands)
         else:
-            da = _read_geotiffs(input) if any(ch in input for ch in _GLOB_CHARS) else None
-            if da is None:
-                da = _read_xarray(input, variable)
-            report = append(store, da, crs=crs, workers=workers)
+            report = append(store, _read_xarray(input, variable), crs=crs, workers=workers)
     click.echo(
         f"appended {report.n_appended} timestep(s) to {store}: {report.n_time} in total, "
         f"wrote {report.objects_written} objects ({report.bytes_written / 1e6:.1f} MB) "
