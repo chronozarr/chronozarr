@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from collections.abc import AsyncIterator, Iterable
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from zarr.abc.store import (
     ByteRequest,
@@ -27,6 +27,32 @@ from zarr.storage import LocalStore, WrapperStore
 _RETRY_DELAYS_S = (0.2, 0.6, 1.5)
 # Some CDNs reject urllib's default "Python-urllib" agent with a 403.
 _USER_AGENT = "chronozarr (+https://github.com/chronozarr/chronozarr)"
+
+
+def _base_url(url: str) -> str:
+    """`url` minus trailing slashes on the path and any fragment; the query stays."""
+    parts = urlsplit(url)
+    return urlunsplit(parts._replace(path=parts.path.rstrip("/"), fragment=""))
+
+
+def object_url(url: str, key: str) -> str:
+    """URL of object `key` under store URL `url`: the key joins the path and the query is copied.
+
+    A signed or token prefix (`https://host/store?token=abc`) keeps its query on every object,
+    as the JS reader does: `https://host/store/zarr.json?token=abc`.
+    """
+    parts = urlsplit(_base_url(url))
+    return urlunsplit(parts._replace(path=f"{parts.path}/{quote(key, safe='/')}"))
+
+
+def redact_url(url: str) -> str:
+    """`url` with its query replaced by `?<redacted>`, for messages. Local paths pass through."""
+    if not url.startswith(("http://", "https://")):
+        return url
+    parts = urlsplit(url)
+    if not parts.query:
+        return url
+    return urlunsplit(parts._replace(query="", fragment="")) + "?<redacted>"
 
 
 def _range_header(byte_range: ByteRequest) -> str:
@@ -58,7 +84,7 @@ class HttpStore(Store):
 
     def __init__(self, url: str, *, timeout: float = 30.0) -> None:
         super().__init__(read_only=True)
-        self.url = url.rstrip("/")
+        self.url = _base_url(url)
         self.timeout = timeout
 
     @property
@@ -80,13 +106,14 @@ class HttpStore(Store):
         return hash(self.url)
 
     def __repr__(self) -> str:
-        return f"HttpStore({self.url!r})"
+        return f"HttpStore({redact_url(self.url)!r})"
 
     def _fetch(
         self, key: str, method: str, byte_range: ByteRequest | None = None
     ) -> tuple[bytes, Any] | None:
         """(body, headers) of one request, or None on 404. Retries transient failures."""
-        url = f"{self.url}/{quote(key, safe='/')}"
+        url = object_url(self.url, key)
+        shown = redact_url(url)
         headers = {"User-Agent": _USER_AGENT}
         if byte_range is not None:
             headers["Range"] = _range_header(byte_range)
@@ -105,10 +132,10 @@ class HttpStore(Store):
                     return None
                 transient = code == 429 or code >= 500
                 if not transient or attempt == len(_RETRY_DELAYS_S):
-                    raise OSError(f"{method} {url}: HTTP {code} {reason}") from None
+                    raise OSError(f"{method} {shown}: HTTP {code} {reason}") from None
             except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
                 if attempt == len(_RETRY_DELAYS_S):
-                    raise OSError(f"{method} {url}: {error}") from error
+                    raise OSError(f"{method} {shown}: {error}") from error
             time.sleep(_RETRY_DELAYS_S[attempt])
         raise AssertionError("unreachable")  # the loop returns or raises on its last attempt
 
@@ -134,7 +161,9 @@ class HttpStore(Store):
             raise FileNotFoundError(key)
         length = fetched[1].get("Content-Length")
         if length is None:
-            raise OSError(f"HEAD {self.url}/{key}: no Content-Length header")
+            raise OSError(
+                f"HEAD {redact_url(object_url(self.url, key))}: no Content-Length header"
+            )
         return int(length)
 
     async def set(self, key: str, value: Buffer) -> None:

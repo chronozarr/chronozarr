@@ -24,6 +24,7 @@ import zarr
 
 from chronozarr.decode import ChronoStore, as_store, open_store
 from chronozarr.schema import parse_root_attrs, validate
+from chronozarr.store import object_url, redact_url
 
 DEFAULT_ORIGIN = "https://chronozarr.org"
 USER_AGENT = "chronozarr-doctor"
@@ -124,7 +125,7 @@ def _request_failed(name: str, url: str, probe: Probe) -> Check:
     return Check(
         name,
         "fail",
-        f"request to {url} failed: {probe.error}",
+        f"request to {redact_url(url)} failed: {probe.error}",
         "Check the URL, DNS and TLS certificate, and that the host is reachable.",
     )
 
@@ -134,15 +135,16 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
     checks: list[Check] = []
     browser = {"Origin": origin}
 
-    root = _probe(f"{base}/zarr.json", headers=browser, read_limit=16_000_000)
+    root_url = object_url(base, "zarr.json")
+    root = _probe(root_url, headers=browser, read_limit=16_000_000)
     if root.status == 0:
-        return [_request_failed("root zarr.json", f"{base}/zarr.json", root)], None
+        return [_request_failed("root zarr.json", root_url, root)], None
     if root.status != 200:
         return [
             Check(
                 "root zarr.json",
                 "fail",
-                f"GET {base}/zarr.json returned HTTP {root.status}",
+                f"GET {redact_url(root_url)} returned HTTP {root.status}",
                 "The store URL must be the directory that contains the root zarr.json, without "
                 "a trailing file name. Check the prefix and that objects are publicly readable.",
             )
@@ -188,17 +190,19 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
             )
         )
 
-    array_meta = _probe(f"{base}/{first_level}/{variable}/zarr.json", read_limit=1_000_000)
+    array_meta = _probe(
+        object_url(base, f"{first_level}/{variable}/zarr.json"), read_limit=1_000_000
+    )
     sharded = b"sharding_indexed" in array_meta.body
     has_shard_bytes = "shard_bytes" in meta
 
     key = f"{first_level}/{variable}/c/0/0/0/0"
-    target = f"{base}/{key}"
+    target = object_url(base, key)
     ranged = _probe(target, headers={**browser, "Range": "bytes=0-99"}, read_limit=100)
     used = key
     if ranged.status == 404:  # an unsharded store may omit an all-fill chunk
         used = f"{first_level}/{variable}/zarr.json"
-        target = f"{base}/{used}"
+        target = object_url(base, used)
         ranged = _probe(target, headers={**browser, "Range": "bytes=0-9"}, read_limit=10)
     layout = "sharded" if sharded else "unsharded"
     ranged_label = f"byte range on {used}"
@@ -358,7 +362,8 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
 
 def _looks_versioned(base: str) -> bool:
     """True when the last path segment ends in a version or date, e.g. `chronozarr-2`."""
-    return re.search(r"(^|[-_.])v?\d+(\.\d+)*$", base.rstrip("/").rsplit("/", 1)[-1]) is not None
+    last = urllib.parse.urlsplit(base).path.rstrip("/").rsplit("/", 1)[-1]
+    return re.search(r"(^|[-_.])v?\d+(\.\d+)*$", last) is not None
 
 
 def _cache_checks(
@@ -542,11 +547,10 @@ def diagnose(
     """Run every applicable check against `target` (https URL or local path)."""
     limit = int(full_read_limit_mb * 1e6)
     if is_url(target):
-        base = target.rstrip("/")
-        checks, document = _http_checks(base, origin)
+        checks, document = _http_checks(target, origin)
         if document is None:
             return checks
-        checks.extend(_decode_checks(as_store(base), limit))
+        checks.extend(_decode_checks(as_store(target), limit))
         return checks
     path = Path(target)
     if not path.is_dir():
