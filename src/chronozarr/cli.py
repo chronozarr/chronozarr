@@ -33,6 +33,7 @@ from chronozarr.encode import EncodeReport, encode
 from chronozarr.export import export_cog, select_times
 from chronozarr.schema import Band, SchemaError, validate
 from chronozarr.stac import write_stac
+from chronozarr.store import redact_url
 
 _DATE_IN_NAME = re.compile(r"(?<!\d)(\d{4})-?(\d{2})(?:-?(\d{2}))?(?!\d)")
 _GLOB_CHARS = "*?["
@@ -408,7 +409,7 @@ def info_command(store: str) -> None:
     with _command_errors():
         opened = open_store(store)
     attrs = opened.attrs
-    click.echo(f"store:     {store}")
+    click.echo(f"store:     {redact_url(store)}")
     click.echo(f"version:   chronozarr {attrs.spec_version}")
     click.echo(f"crs:       {attrs.crs}")
     click.echo(f"times:     {len(opened.times)} ({attrs.times[0]} .. {attrs.times[-1]})")
@@ -462,7 +463,7 @@ def doctor_command(target: str, origin: str, full_read_limit_mb: float) -> None:
     """
     checks = diagnose(target, origin=origin, full_read_limit_mb=full_read_limit_mb)
     width = max(len(c.name) for c in checks)
-    click.echo(f"chronozarr doctor {target}")
+    click.echo(f"chronozarr doctor {redact_url(target)}")
     for check in checks:
         click.echo(f"{_STATUS_LABEL[check.status]} {check.name.ljust(width)}  {check.detail}")
         if check.hint and check.status in ("warn", "fail"):
