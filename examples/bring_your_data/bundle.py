@@ -22,7 +22,7 @@ def build_bundle(store: Path, output: Path) -> None:
     if errors:
         raise ValueError("Invalid store:\n" + "\n".join(errors))
     # Validate assets before copying potentially large data. No build or npm install is needed.
-    modules = ("demo", "chronozarr", "maplibre", "vendor")
+    modules = ("demo", "shared", "chronozarr", "maplibre", "vendor")
     for name in modules:
         if not (REPO / "js" / name).is_dir():
             raise FileNotFoundError(
