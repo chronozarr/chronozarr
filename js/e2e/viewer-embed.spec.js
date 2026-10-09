@@ -110,9 +110,13 @@ async function clickPixel(page, frame, X, Y) {
   await page.mouse.click(box.x + point.x, box.y + point.y);
 }
 
-/** The physical values of the store at a pixel and timestep, by band name (the bands of this store scale by 1e-4). */
-function expectedValues(t, X, Y) {
-  return Object.fromEntries(STORES[STORE].spec.bands.map((name, band) => [name, storedValue(STORE, t, band, Y, X) / 10000]));
+/**
+ * The physical values of a store at a level-0 pixel and timestep, by band name, as `lod` stores them (the pixel of that
+ * level that covers it). The bands of these stores scale by 1e-4.
+ */
+function expectedValues(t, X, Y, { store = STORE, lod = 0 } = {}) {
+  const [x, y] = [Math.floor(X / 2 ** lod), Math.floor(Y / 2 ** lod)];
+  return Object.fromEntries(STORES[store].spec.bands.map((name, band) => [name, storedValue(store, t, band, y, x, lod) / 10000]));
 }
 
 // ---- layout ----
@@ -404,6 +408,49 @@ test.describe('postMessage', () => {
     const empty = await waitForMessage(page, 'chronozarr:click', { pixel: { x: 2, y: 100 } });
     expect(empty.valid).toBe(false);
     expect(empty.values).toEqual({ B02: null, B03: null, B04: null, B08: null });
+  });
+
+  test('a click on the coarser frame of a fast scrub reports that level and its stored values; paintedT waits for level 0', async ({ page, servers, stores, storeUrl }) => {
+    // One object per chunk, so the URL of a level-0 read names its timestep: level 0 of timesteps 2 and 3 is held back.
+    const plain = 'u16_plain';
+    let release;
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    await page.route(new RegExp(`/${plain}/0/data/c/[23]/`), async (route) => {
+      await held;
+      await route.continue();
+    });
+    const frame = await openHost(page, servers, stores, viewerUrl(servers, await storeUrl(plain), { origin: hostOf(servers) }));
+    await frame.waitForFunction(() => window.chronozarr.viewer.paintedT === 0);
+    await frame.waitForFunction(() => Boolean(window.chronozarr.viewer.store.peekRaw(1, 0, 0, 2)));
+
+    // Two sets a moment apart are a scrub (a host slider dragged fast). Level 0 of the next timestep, t=3, is not in memory, so the scrub draws t=2 at level 1.
+    await page.evaluate(() => {
+      window.send({ type: 'chronozarr:set', t: 1 });
+      window.send({ type: 'chronozarr:set', t: 2 });
+    });
+    await frame.waitForFunction(() => {
+      const shown = window.chronozarr.viewer.shownFrame;
+      return shown?.t === 2 && shown.lod === 1;
+    });
+    expect(await frame.evaluate(() => window.chronozarr.viewer.paintedT), 'the level-1 frame of t=2 does not count as painted').not.toBe(2);
+
+    await clickPixel(page, frame, 50, 40);
+    const coarse = await waitForMessage(page, 'chronozarr:click', { level: 1 });
+    expect([coarse.t, coarse.pixel]).toEqual([2, { x: 50, y: 40 }]);
+    const level1 = expectedValues(2, 50, 40, { store: plain, lod: 1 });
+    for (const [band, value] of Object.entries(level1)) expect(coarse.values[band], band).toBeCloseTo(value, 6);
+
+    release();
+    await frame.waitForFunction(() => window.chronozarr.viewer.paintedT === 2);
+    expect(await frame.evaluate(() => window.chronozarr.viewer.shownFrame)).toMatchObject({ lod: 0, t: 2 });
+    await clickPixel(page, frame, 50, 40);
+    const sharp = await waitForMessage(page, 'chronozarr:click', { level: 0 });
+    expect([sharp.t, sharp.pixel]).toEqual([2, { x: 50, y: 40 }]);
+    const level0 = expectedValues(2, 50, 40, { store: plain });
+    expect(level0.B02, 'the fixture tells the two levels apart at this pixel').not.toBeCloseTo(level1.B02, 6);
+    for (const [band, value] of Object.entries(level0)) expect(sharp.values[band], band).toBeCloseTo(value, 6);
   });
 
   test('a message from another origin is ignored without side effects', async ({ page, servers, stores, storeUrl }) => {
