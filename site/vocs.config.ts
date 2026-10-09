@@ -8,7 +8,8 @@ export default defineConfig({
   topNav: [
     { text: 'Docs', link: '/getting-started' },
     { text: 'Specification', link: '/specification' },
-    { text: 'Demo', link: '/demo/' },
+    // Absolute so Vocs does not route it client-side: /demo/ is a static page, not a Vocs route.
+    { text: 'Demo', link: 'https://chronozarr.org/demo/' },
   ],
   socials: [{ icon: 'github', link: 'https://github.com/chronozarr/chronozarr' }],
   sidebar: [

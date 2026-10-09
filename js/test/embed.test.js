@@ -328,7 +328,7 @@ test('the embed layout has the drawer rules of the narrow layout at every width,
 
 test('the embed layout drops the catalog selector and the export controls, and has a wordmark that opens in a new tab', () => {
   const hidden = css.slice(css.indexOf('html[data-embed] .brand'), css.indexOf('html[data-embed] .embed-wordmark {'));
-  for (const selector of ['.brand', '.nav-sep', '#catalog-select', '#export-btn', '#export-panel']) assert.ok(hidden.includes(`html[data-embed] ${selector}`), selector);
+  for (const selector of ['.brand', '.nav-sep', '#catalog-select', '.docs-link', '#export-btn', '#export-panel']) assert.ok(hidden.includes(`html[data-embed] ${selector}`), selector);
   assert.match(hidden, /display: none/);
   assert.match(html, /<a id="embed-wordmark"[^>]*target="_blank"[^>]*rel="noopener"[^>]*>chrono<span>zarr<\/span><\/a>/);
   assert.match(css, /\.embed-wordmark \{ display: none; \}/, 'the wordmark is for the embed only');
