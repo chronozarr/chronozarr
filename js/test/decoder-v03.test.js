@@ -37,7 +37,7 @@ const base = { nTime: 5, nBand: 2, height: 40, width: 33, chunk: 32,  sharded: t
 
 // ---- dtypes ----
 
-test('uint16 full-range values remain exact without reconstruction', async () => {
+test('uint16 full-range values remain exact', async () => {
   // Adjacent timesteps span nearly the full uint16 range.
   const values = (t, b, y, x) => (t % 2 === 0 ? 100 + b + x : 60000 + b + x + y);
   const spec = { ...base, nTime: 5, values };
