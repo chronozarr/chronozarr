@@ -119,6 +119,55 @@ def _read_geotiffs(pattern: str, crs: str | None) -> _GeotiffStack:
     )
 
 
+def _nodata_text(nodata: float | int | None) -> str:
+    return "no nodata" if nodata is None else f"nodata {nodata}"
+
+
+def _check_validity_matches_store(store: Path, stack: _GeotiffStack) -> None:
+    """Fail when the files mark invalid pixels differently from `store`, before anything is copied.
+
+    A store has one validity rule for every timestep (a nodata sentinel, a mask, or neither) and
+    append can change neither the rule nor the presence of a mask (spec 8.3). The files' rule is
+    what `CogManifestSource` made of what they declare. `append()` checks the mask itself, but only
+    after copying the whole store, and in terms of arrays, not files.
+    """
+    attrs = open_store(store).attrs
+    store_has_mask = attrs.mask_variable is not None
+    files_have_mask = stack.mask is not None
+    problems = []
+    if store_has_mask and not files_have_mask:
+        problems.append(
+            "mask: the store has a mask and the files give none. A masked store needs a validity "
+            "plane for every timestep, and a mask comes from an alpha band, an internal mask, or "
+            "NaN declared as nodata (float data)"
+        )
+    elif files_have_mask and not store_has_mask:
+        problems.append(
+            "mask: the files give a mask and the store has none, which append cannot add. A mask "
+            "comes from an alpha band, an internal mask or a nodata of NaN, so the new files must "
+            "have none of these"
+        )
+    if stack.nodata != attrs.nodata:
+        stored = _nodata_text(attrs.nodata)
+        fix = (
+            f"Rewrite the new files so their invalid pixels hold {attrs.nodata} and declare it "
+            f"(for example `gdal_edit.py -a_nodata {attrs.nodata} FILE`)"
+            if attrs.nodata is not None
+            else "The store treats every pixel as valid, so remove the nodata from the new files "
+            "(for example `gdal_edit.py -unsetnodata FILE`) if their pixels of that value are data"
+        )
+        problems.append(
+            f"nodata: the files have {_nodata_text(stack.nodata)}, the store has {stored}. {fix}"
+        )
+    if problems:
+        listed = "\n  - ".join(problems)
+        raise click.ClickException(
+            f"cannot append to {store}: the files do not mark invalid pixels the way the store "
+            f"does, so nothing was written:\n  - {listed}\n"
+            "To change the store's rule instead, encode it again from all its files."
+        )
+
+
 def _read_xarray(path: str, variable: str | None) -> xr.DataArray:
     source = Path(path)
     if not source.exists():
@@ -301,7 +350,9 @@ def append_command(
     INPUT is a chronozarr store (for example one month written by `convert`), a Zarr store or
     NetCDF file with dims (time, band, y, x), or a quoted glob of GeoTIFFs, one per timestep with
     the date in the file name. Its grid, bands, dtype, CRS and nodata must match STORE, and its
-    times must come after the store's last one.
+    times must come after the store's last one. GeoTIFFs must also mark invalid pixels as the
+    store does: the nodata they declare (or none) is the store's, and they give a mask (an alpha
+    band, an internal mask or a nodata of NaN) only if the store has one.
 
     Only the shards (or chunks, for an unsharded store) that gain a timestep are written, plus
     the metadata; every other object keeps its bytes. An unsharded store (the encoder default)
@@ -315,6 +366,7 @@ def append_command(
             report = append(store, Path(input), workers=workers)
         elif any(ch in input for ch in _GLOB_CHARS):
             stack = _read_geotiffs(input, crs)
+            _check_validity_matches_store(store, stack)
             report = append(store, stack.data, workers=workers, bands=stack.bands, mask=stack.mask)
         else:
             report = append(store, _read_xarray(input, variable), crs=crs, workers=workers)

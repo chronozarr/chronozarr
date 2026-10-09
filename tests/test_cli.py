@@ -310,6 +310,120 @@ def test_append_float32_geotiffs_with_nan_nodata_continues_the_mask(tmp_path):
     assert _run("validate", str(out)).exit_code == 0
 
 
+def _tree(path):
+    """Every file under `path` with its bytes."""
+    return {p.relative_to(path): p.read_bytes() for p in sorted(path.rglob("*")) if p.is_file()}
+
+
+def _encode_first_two(tmp_path, frames, **declared):
+    """A store of the first two timesteps, whose files declare `declared` (see _write_geotiffs)."""
+    pattern = _write_geotiffs(tmp_path / "first", _DATES[:2], frames[:2], **declared)
+    out = tmp_path / "out"
+    assert _run("encode", pattern, str(out), "--chunk-size", "16").exit_code == 0
+    return out
+
+
+def _later_files(tmp_path, frames, **declared):
+    return _write_geotiffs(tmp_path / "later", _DATES[2:], frames[2:], **declared)
+
+
+@pytest.fixture
+def no_append(monkeypatch):
+    """`append()` copies the whole store before it compares anything, so a refusal that is meant
+    to cost nothing has to come before the call."""
+
+    def refuse_to_run(*args, **kwargs):
+        raise AssertionError("append() was called, so the store was copied before the refusal")
+
+    monkeypatch.setattr("chronozarr.cli.append", refuse_to_run)
+
+
+def _assert_append_refused(out, later, *fragments):
+    before = _tree(out)
+    result = CliRunner().invoke(main, ["append", str(out), later], catch_exceptions=False)
+    assert result.exit_code == 1, result.output
+    for fragment in fragments:
+        assert fragment in result.output, result.output
+    assert _tree(out) == before, "a refused append must leave the store untouched"
+
+
+def test_append_geotiffs_declaring_another_nodata_is_refused(tmp_path, no_append):
+    frames = _random_frames("uint16")
+    out = _encode_first_two(tmp_path, frames, nodata=0)
+    later = _later_files(tmp_path, frames, nodata=1)
+    _assert_append_refused(
+        out,
+        later,
+        "the files have nodata 1, the store has nodata 0",
+        "gdal_edit.py -a_nodata 0",
+        "encode it again from all its files",
+    )
+
+
+def test_append_geotiffs_declaring_no_nodata_to_a_store_with_one_is_refused(tmp_path, no_append):
+    frames = _random_frames("uint16")
+    out = _encode_first_two(tmp_path, frames, nodata=0)
+    later = _later_files(tmp_path, frames)
+    _assert_append_refused(
+        out,
+        later,
+        "the files have no nodata, the store has nodata 0",
+        "gdal_edit.py -a_nodata 0",
+    )
+
+
+def test_append_geotiffs_declaring_nodata_to_a_store_with_none_is_refused(tmp_path, no_append):
+    frames = _random_frames("uint16")
+    out = _encode_first_two(tmp_path, frames)
+    later = _later_files(tmp_path, frames, nodata=0)
+    _assert_append_refused(
+        out,
+        later,
+        "the files have nodata 0, the store has no nodata",
+        "gdal_edit.py -unsetnodata",
+    )
+
+
+def test_append_geotiffs_without_a_mask_to_a_masked_store_is_refused(tmp_path, no_append):
+    out = _encode_first_two(tmp_path, _nan_frames(), nodata=float("nan"))
+    assert chronozarr.open_store(out).attrs.mask_variable is not None
+    later = _later_files(tmp_path, _random_frames("float32"))  # no NaN, no nodata: no mask
+    _assert_append_refused(
+        out,
+        later,
+        "the store has a mask and the files give none",
+        "alpha band, an internal mask, or NaN declared as nodata",
+    )
+
+
+def test_append_geotiffs_with_a_mask_to_a_store_without_one_is_refused(tmp_path, no_append):
+    out = _encode_first_two(tmp_path, _random_frames("float32"), nodata=-9999.0)
+    assert chronozarr.open_store(out).attrs.mask_variable is None
+    later = _later_files(tmp_path, _nan_frames(), nodata=float("nan"))
+    _assert_append_refused(
+        out,
+        later,
+        "the files give a mask",
+        "the store has none, which append cannot add",
+        "the files have no nodata, the store has nodata -9999.0",
+    )
+
+
+@pytest.mark.parametrize("declared", [{"nodata": 0}, {}], ids=["nodata-0", "no-nodata"])
+def test_append_geotiffs_with_the_stores_validity_rule_is_accepted(tmp_path, declared):
+    frames = _random_frames("uint16")
+    out = _encode_first_two(tmp_path, frames, **declared)
+    later = _later_files(tmp_path, frames, **declared)
+    result = _run("append", str(out), later)
+    assert result.exit_code == 0, result.output
+
+    store = chronozarr.open_store(out)
+    assert len(store.times) == 3
+    assert store.nodata == declared.get("nodata")
+    assert np.array_equal(store.to_xarray().values, frames)
+    assert _run("validate", str(out)).exit_code == 0
+
+
 def test_encode_geotiff_glob_rejects_files_of_different_dtypes(tmp_path):
     frames = [
         _random_frames("uint16")[0],
