@@ -1,4 +1,5 @@
 // Pointer, timeline, keyboard and control bindings for the browser viewer.
+import { bindSpeedText, bindTimelineSlider } from './a11y.js';
 import { SPEEDS } from './playback.js';
 
 const $ = (id) => document.getElementById(id);
@@ -11,6 +12,8 @@ export function bindViewerInput(viewer, callbacks) {
   bindMapInput(viewer, callbacks);
   bindControls(viewer);
   bindTimelineInput(viewer);
+  bindTimelineSlider(viewer);
+  bindSpeedText();
   bindKeyboardInput(viewer);
 }
 
@@ -105,7 +108,7 @@ function bindTimelineInput(viewer) {
   window.addEventListener('pointercancel', endScrub);
 }
 
-/** Keyboard shortcuts respect form focus and suppress duplicate button Space clicks. */
+/** Keyboard shortcuts respect form focus: a focused select, field or button keeps its own Space (a button clicks on it). */
 function bindKeyboardInput(viewer) {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && viewer.inspectorOpen) {
@@ -115,17 +118,13 @@ function bindKeyboardInput(viewer) {
     if (!viewer.store) return;
     const typing = e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT';
     if (e.key === ' ') {
-      if (e.target.tagName === 'SELECT' || (typing && e.target.type !== 'range')) return;
+      if (e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON' || (typing && e.target.type !== 'range')) return;
       e.preventDefault();
       if (!e.repeat) viewer.togglePlay();
       return;
     }
     if (typing) return;
     dispatchNavigationShortcut(viewer, e);
-  });
-  // A focused button would also click on Space; the keydown above has already toggled playback.
-  document.addEventListener('keyup', (e) => {
-    if (e.key === ' ' && e.target.tagName === 'BUTTON') e.preventDefault();
   });
 }
 
