@@ -22,7 +22,7 @@ export function requireStore(condition, baseUrl, message) {
   if (!condition) throw new Error(`${baseUrl}: not a valid chronozarr store: ${message}`);
 }
 
-export function checkExtensions(meta, baseUrl) {
+function checkExtensions(meta, baseUrl) {
   const known = new Set(['zarr_format', 'node_type', 'attributes', 'consolidated_metadata', 'shape', 'data_type', 'chunk_grid', 'chunk_key_encoding', 'fill_value', 'codecs', 'dimension_names', 'storage_transformers']);
   for (const [key, value] of Object.entries(meta)) {
     requireStore(known.has(key) || value?.must_understand === false, baseUrl, `unsupported required Zarr extension ${key}`);
@@ -125,11 +125,10 @@ export function parseStorage(meta, { path, rank, baseUrl }) {
   requireStore(JSON.stringify(meta.dimension_names) === JSON.stringify(dims) && JSON.stringify(meta.attributes?._ARRAY_DIMENSIONS) === JSON.stringify(dims), baseUrl, `${where} dimension names must be ${dims}`);
   const encoding = meta.chunk_key_encoding ?? { name: 'default' };
   requireStore(encoding.name === 'default' && (encoding.configuration?.separator ?? '/') === '/', baseUrl, `${where} chunk_key_encoding ${encoding.name} is not supported`);
-  const separator = encoding.configuration?.separator ?? (encoding.name === 'v2' ? '.' : '/');
   const storage = {
     dtype: meta.data_type,
     fillValue: parseFillValue(meta.fill_value, meta.data_type),
-    keyOf: (coords) => (encoding.name === 'default' ? ['c', ...coords] : coords).join(separator),
+    keyOf: (coords) => ['c', ...coords].join('/'),
   };
   const gridShape = meta.chunk_grid.configuration.chunk_shape;
   requireStore(Array.isArray(gridShape) && gridShape.length === rank && gridShape.every((n) => Number.isInteger(n) && n > 0), baseUrl, `${where} has invalid chunk shape`);
