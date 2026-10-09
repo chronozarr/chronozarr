@@ -204,7 +204,9 @@ def verify(path, node_project=None):
         np.testing.assert_array_equal(ds.y, 4500000 - (np.arange(ds.sizes["y"]) + 0.5) * res)
         for name, index, expected in CHECKS:
             if name.startswith(k + "/"):
-                assert int(root[name][index]) == expected
+                array = root[name]
+                assert isinstance(array, zarr.Array)
+                assert int(np.asarray(array[index])) == expected
                 assert int(ds[name.split("/")[1]].values[index]) == expected
         ds.close()
     print("zarr / xarray: all six samples and both coordinate grids match")
@@ -231,9 +233,11 @@ def verify(path, node_project=None):
             )
             assert float(got.split()[-1]) == expected
         for k in (0, 1):
+            # The unsliced array: GDAL attaches multiscales levels as overviews here, never on
+            # a single-slice subdataset such as `/k/data:0:0`.
             info = json.loads(
                 subprocess.check_output(
-                    ["gdalinfo", "-json", f'ZARR:"{path}":/{k}/data:0:0'], text=True
+                    ["gdalinfo", "-json", f'ZARR:"{path}":/{k}/data'], text=True
                 )
             )
             assert info["geoTransform"] == [500000, 10 * 2**k, 0, 4500000, 0, -10 * 2**k]
@@ -243,7 +247,7 @@ def verify(path, node_project=None):
                 "CRS",
                 info.get("coordinateSystem"),
                 "overviews",
-                info["bands"][0].get("overviews"),
+                len(info["bands"][0].get("overviews", [])),
             )
     if node_project:
         # Place the temporary harness beside its external npm dependencies.

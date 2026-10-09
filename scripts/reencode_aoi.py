@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from numpy.lib.npyio import NpzFile
 
 import chronozarr
 from chronozarr.schema import Band
@@ -72,14 +73,19 @@ def mosaic_paths(mosaic_dir: Path, months: int | None = None) -> list[Path]:
     return paths[:months] if months else paths
 
 
+def grid_of(npz: NpzFile) -> Grid:
+    n_bands, height, width = npz["bands"].shape
+    return Grid(
+        shape=(int(n_bands), int(height), int(width)),
+        transform=tuple(float(v) for v in npz["transform"]),
+        epsg=int(npz["epsg"]),
+        band_names=tuple(str(b) for b in npz["band_names"]),
+    )
+
+
 def read_grid(path: Path) -> Grid:
     with np.load(path, allow_pickle=False) as npz:
-        return Grid(
-            shape=tuple(int(n) for n in npz["bands"].shape),
-            transform=tuple(float(v) for v in npz["transform"]),
-            epsg=int(npz["epsg"]),
-            band_names=tuple(str(b) for b in npz["band_names"]),
-        )
+        return grid_of(npz)
 
 
 def mosaic_times(paths: list[Path]) -> np.ndarray:
@@ -104,13 +110,7 @@ def iter_mosaics(paths: list[Path], grid: Grid, lookahead: int = 4) -> Iterator[
 
     def load(path: Path) -> np.ndarray:
         with np.load(path, allow_pickle=False) as npz:
-            here = Grid(
-                shape=tuple(int(n) for n in npz["bands"].shape),
-                transform=tuple(float(v) for v in npz["transform"]),
-                epsg=int(npz["epsg"]),
-                band_names=tuple(str(b) for b in npz["band_names"]),
-            )
-            if here != grid:
+            if grid_of(npz) != grid:
                 raise SystemExit(f"{path} has a different grid, CRS or bands than {paths[0]}")
             return npz["bands"]
 

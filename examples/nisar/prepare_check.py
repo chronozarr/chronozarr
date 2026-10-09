@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 band = 1 if "--hv" in sys.argv else 0
 m = leafmap.Map(
-    style={"version": 8, "sources": {}, "layers": []},
+    style={"version": 8, "sources": {}, "layers": []},  # ty: ignore[invalid-argument-type]  # leafmap annotates str but passes a style dict through
     controls={},
     height="600px",
     add_sidebar=False,
@@ -30,7 +30,8 @@ add_chronozarr(
 )
 out = ROOT / "data/reports/nisar"
 out.mkdir(parents=True, exist_ok=True)
-(out / "widget.js").write_text(m._esm)
+# anywidget replaces the class-level `_esm` Path with a str trait holding the JS source.
+(out / "widget.js").write_text(str(m._esm))
 (out / "model.json").write_text(
     json.dumps({"map_options": m.map_options, "calls": m.calls, "height": m.height})
 )

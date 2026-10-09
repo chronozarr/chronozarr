@@ -21,18 +21,22 @@ import numpy as np
 from reencode_aoi import DATA, iter_mosaics, mosaic_paths, mosaic_times, read_grid, s2_bands
 
 import chronozarr
+from chronozarr.encode import Codec
+
+CODECS: tuple[Codec, ...] = ("zstd", "blosc-zstd-shuffle")
 
 
-def parse_codecs(text: str) -> list[tuple[str, int]]:
+def parse_codecs(text: str) -> list[tuple[Codec, int]]:
     """'zstd:5,blosc-zstd-shuffle:1' -> [('zstd', 5), ('blosc-zstd-shuffle', 1)]."""
     settings = []
     for item in text.split(","):
         name, _, level = item.partition(":")
-        if name not in ("zstd", "blosc-zstd-shuffle") or not level.isdigit():
+        codec = next((known for known in CODECS if known == name), None)
+        if codec is None or not level.isdigit():
             raise SystemExit(
                 f"bad codec setting {item!r}; expected zstd:5 or blosc-zstd-shuffle:1"
             )
-        settings.append((name, int(level)))
+        settings.append((codec, int(level)))
     return settings
 
 

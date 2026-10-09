@@ -83,8 +83,9 @@ def main():
         if args.quality != "all":
             limit = 0 if args.quality == "good" else 1
             masks = [mask & (q <= limit) for mask, q in zip(masks, quality_crops, strict=True)]
+        row0, col0 = windows[0].row_off + row, windows[0].col_off + col
         transform = sources[0].window_transform(
-            Window(windows[0].col_off + col, windows[0].row_off + row, size, size)
+            Window.from_slices((row0, row0 + size), (col0, col0 + size))
         )
         items, records = [], []
         for path, source, crop, mask, raw_mask, q in zip(
@@ -162,7 +163,9 @@ def main():
         checks = {}
         for i, (crop, mask) in enumerate(zip(crops, masks, strict=True)):
             assert np.array_equal(store.read(i)[0].view("uint32"), crop.view("uint32"))
-            assert np.array_equal(store.read_mask(i).astype(bool), mask)
+            stored_mask = store.read_mask(i)
+            assert stored_mask is not None, f"store has no mask plane at t={i}"
+            assert np.array_equal(stored_mask.astype(bool), mask)
         checks["level0_data_and_masks_bit_exact"] = True
         ds = store.to_xarray()
         assert ds.dtype == np.float32

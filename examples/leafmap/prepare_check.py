@@ -11,7 +11,11 @@ import leafmap.maplibregl as leafmap
 
 from chronozarr import add_chronozarr
 
-m = leafmap.Map(style={"version": 8, "sources": {}, "layers": []}, controls={}, height="600px")
+m = leafmap.Map(
+    style={"version": 8, "sources": {}, "layers": []},  # ty: ignore[invalid-argument-type]  # leafmap annotates str but passes a style dict through
+    controls={},
+    height="600px",
+)
 m.use_message_queue(False)
 add_chronozarr(
     m,
@@ -20,7 +24,8 @@ add_chronozarr(
 )
 output = Path(__file__).resolve().parents[2] / "data/reports/leafmap"
 output.mkdir(parents=True, exist_ok=True)
-(output / "widget.js").write_text(m._esm)
+# anywidget replaces the class-level `_esm` Path with a str trait holding the JS source.
+(output / "widget.js").write_text(str(m._esm))
 (output / "model.json").write_text(
     json.dumps({"map_options": m.map_options, "calls": m.calls, "height": m.height})
 )

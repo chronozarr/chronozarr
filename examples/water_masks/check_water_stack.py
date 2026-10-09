@@ -64,7 +64,7 @@ def main() -> None:
     parser.add_argument("--store-name", default="water-1")
     parser.add_argument("--boa-offset-from", metavar="YYYY-MM")
     parser.add_argument(
-        "--month", help="month to recompute (default: wettest with 90 % valid pixels)"
+        "--month", help="month to recompute (default: wettest with 90 %% valid pixels)"
     )
     args = parser.parse_args()
     store = DATA / "stores" / args.aoi / args.store_name
