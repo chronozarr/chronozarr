@@ -2,7 +2,7 @@ import { defineConfig } from 'vocs'
 
 export default defineConfig({
   title: 'chronozarr',
-  description: 'An open Zarr v3 layout for raster time series.',
+  description: 'chronozarr turns a raster time series into static files that you can put in a storage bucket.',
   iconUrl: '/favicon.svg',
   theme: { accentColor: { light: '#1767a6', dark: '#7dc3f5' } },
   topNav: [
