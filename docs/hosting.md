@@ -4,6 +4,8 @@ A chronozarr store is a directory of static files. A host serves it with no serv
 
 The prefix of a store is its path in the bucket, for example `my_aoi/chronozarr-2`.
 
+The recipes below publish a store that anyone with its URL can read. For data that must stay private, see [private.md](private.md).
+
 This page has a checklist, an upload procedure, recipes for four hosts and a procedure for appending. The requirements come from [spec/CHRONOZARR.md](../spec/CHRONOZARR.md) section 8. Measurements and dates are in [evidence.md](evidence.md).
 
 ## 1. Checklist
@@ -130,7 +132,7 @@ It sets `Cache-Control` for each object:
 
 ### 3.1 Amazon S3 with CloudFront
 
-Keep the bucket private. CloudFront reads it through an origin access control (OAC). CloudFront gives HTTPS on your own domain and caching. It is also the only way to add `Timing-Allow-Origin` in front of S3.
+Keep the bucket private. CloudFront reads it through an origin access control (OAC). The distribution in this recipe is public: anyone with its URL reads the store ([private.md](private.md)). CloudFront gives HTTPS on your own domain and caching. It is also the only way to add `Timing-Allow-Origin` in front of S3.
 
 1. Create the bucket and block public access.
 

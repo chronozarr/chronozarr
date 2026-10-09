@@ -21,6 +21,7 @@ export default defineConfig({
       { text: 'Hosting recipes', link: '/guides/hosting' },
       { text: 'Append timesteps', link: '/guides/append' },
       { text: 'Embed the viewer', link: '/guides/embedding' },
+      { text: 'Private stores', link: '/guides/private' },
       { text: 'Self-host the packaged viewer', link: '/guides/viewer-distribution' },
       { text: 'PNG frames', link: '/guides/png-frames' },
     ] },
