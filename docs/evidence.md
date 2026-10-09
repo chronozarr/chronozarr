@@ -26,7 +26,13 @@ Separate-mask handling and framebuffer color calibration were not established.
 
 xarray needs an explicit level group. `xarray.open_zarr(store, group="0")` opens a selected level with ordinary stored values. `open_zarr` on the store root may return an empty dataset.
 
-GDAL 3.12.4 needs `_CRS` to assign the CRS. GDAL 3.13.3 assigns the CRS without that alias. It exposes the tested pyramid as subdatasets and does not attach the levels as overviews. Subdataset enumeration does not show that GDAL attaches overview levels or applies a separate mask.
+GDAL 3.12.4 needs `_CRS` to assign the CRS. GDAL 3.13.3 assigns the CRS without that alias. In the sliced form of the first check, GDAL 3.13.3 exposes the tested pyramid as subdatasets and does not attach the levels as overviews. Subdataset enumeration does not show that GDAL applies a separate mask. The check of 2026-10-09 below opens the whole data array and finds the overviews.
+
+On 2026-10-09 another check used GDAL 3.13.3 (`ghcr.io/osgeo/gdal:ubuntu-small-3.13.3`, digest `sha256:64250faf833c06d4b21afce4c27190039ba7ab58d70f0eebc87cf77d929c0b40`, arm64) on the fixture from `scripts/spike_v03_fixture.py`. GDAL 3.13 maps the zarr-conventions multiscales to overviews (GDAL pull request 13736, merged 2026-01-26, milestone 3.13.0).
+
+- `gdalmdiminfo -array /0/data` lists `"overviews": ["/1/data"]`.
+- `gdalinfo 'ZARR:"<store>":/0/data'` prints `Overviews: 4x4` on all 6 bands (3 dates by 2 bands). `/0/mask` has overviews too.
+- `gdalinfo 'ZARR:"<store>":/0/data:1:1'`, a single slice, shows no overviews. The sliced view drops them.
 
 zarr-layer returned the known value of the true-value fixture at the correct map location.
 
@@ -128,7 +134,7 @@ Movie playback, two loops. Holds are counted separately at the wrap. 2026-09-30:
 
 A 9-cell overview of the 117-month store is about 11.7 MB per timestep. A cold loop is bound by the link (about 55 MB/s here).
 
-The cache holds roughly half of the 117 timesteps at that size. The cache is 1.5 GiB, shared by the decoded and compressed tiers, on an 8 GB machine. Idle prefetch stops after 64 MiB and expands only during playback. A 4-cell view fits entirely and plays at the display rate.
+The cache held roughly half of the 117 timesteps at that size. That count dates from 2026-09-30, before the cache budgets changed on 2026-10-01 (commit `33c4444`). Since then the cap is 1.5 GiB for the decoded and compressed tiers together. A machine that reports less than 8 GB of memory gets 768 MiB. Idle prefetch stops after 64 MiB and expands only during playback. A 4-cell view fits entirely and plays at the display rate.
 
 ### Coarse-first loading
 
@@ -285,7 +291,7 @@ The layer and `js/maplibre/verify/` were added on 2026-09-30 (commit `bdc5938`).
 
 ### Loading order and prefetch
 
-These numbers carry no date. The first view fetches the coarsest level first. On a 3 MB/s link with 120 ms latency, for 4 cells at level 0 of the Ucayali store (12 MB), the first pixels appeared after 2.5 s instead of 5.5 s. The full-detail view was ready after 7.6 s instead of 5.8 s. On a fast link neither differed.
+These numbers were recorded with the layer on 2026-09-30 (commit `bdc5938`). They were not repeated after 2026-10-01 (commit `33c4444`), when the reader began to cap idle prefetch at 64 MiB per idle episode. The 260 MB figure below predates that cap. The first view fetches the coarsest level first. On a 3 MB/s link with 120 ms latency, for 4 cells at level 0 of the Ucayali store (12 MB), the first pixels appeared after 2.5 s instead of 5.5 s. The full-detail view was ready after 7.6 s instead of 5.8 s. On a fast link neither differed.
 
 With `prefetch: true` the demo moved 260 MB in 40 s for a 4-cell view of the Ucayali store.
 
@@ -399,7 +405,7 @@ Whether the proxy stores and serves the `--cache-control` value is untested.
 
 ### Timing-Allow-Origin
 
-Without `Timing-Allow-Origin`, `PerformanceResourceTiming.transferSize` is 0 for cross-origin requests. In-page benchmarks then under-report bytes. The viewer counts bytes only from `Content-Length` in that case.
+Without `Timing-Allow-Origin`, `PerformanceResourceTiming.transferSize` is 0 for cross-origin requests. A benchmark that reads resource timing then under-reports bytes. The reader counts the body bytes of each response it receives, so the viewer's own byte counters do not depend on the header.
 
 ### Preflight
 
