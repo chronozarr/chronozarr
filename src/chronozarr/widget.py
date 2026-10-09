@@ -6,6 +6,8 @@ from urllib.parse import urlsplit
 import anywidget
 import traitlets as T
 
+from chronozarr.view import LocalAccess
+
 
 class Player(anywidget.AnyWidget):
     _esm = Path(__file__).with_name("player.js")
@@ -27,13 +29,28 @@ class Player(anywidget.AnyWidget):
     state = T.Dict().tag(sync=True)
     click = T.Dict().tag(sync=True)
     error = T.Dict().tag(sync=True)
+    hint = T.Unicode("").tag(sync=True)
+    # Set by player() for a store served from this kernel; read to explain an error.
+    access: LocalAccess | None = None
 
     @T.validate("store_url", "viewer_url")
     def _validate_url(self, proposal):
-        url = urlsplit(proposal["value"])
-        if url.scheme not in {"http", "https"} or not url.netloc:
-            raise T.TraitError("store and viewer URLs must be absolute HTTP(S) URLs")
-        return proposal["value"]
+        value = proposal["value"]
+        url = urlsplit(value)
+        absolute = url.scheme in {"http", "https"} and bool(url.netloc)
+        # A path such as /user/ada/proxy/8765/store is on the notebook's own origin; the
+        # frontend resolves it against the page.
+        rooted = value.startswith("/") and not value.startswith("//") and not url.scheme
+        if not (absolute or rooted):
+            raise T.TraitError(
+                "store and viewer URLs must be absolute HTTP(S) URLs or paths starting with '/'"
+            )
+        return value
+
+    @T.observe("error")
+    def _explain_error(self, change):
+        error = change["new"]
+        self.hint = self.access.diagnose() if error and self.access is not None else ""
 
     @T.validate("range")
     def _validate_range(self, proposal):

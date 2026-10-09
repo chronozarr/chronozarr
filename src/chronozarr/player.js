@@ -20,11 +20,13 @@ export default {
       speed.add(new Option(`${value}/s`, String(value)));
     }
     const status = document.createElement('div'); status.setAttribute('role', 'status');
+    const hint = document.createElement('pre'); hint.hidden = true;
+    hint.style.cssText = 'margin:0;white-space:pre-wrap;font:12px ui-monospace,monospace;opacity:.75';
     const frame = document.createElement('iframe'); frame.title = 'chronozarr player';
     frame.style.cssText = 'width:100%;border:0;min-height:320px';
     frame.allow = 'fullscreen; local-network-access';
-    controls.append(play, time, date, product, band, low, high, auto, legend, speed); box.append(controls, frame, status); el.append(box);
-    let origin, connected = false, disposed = false, suppress = false, saveTimer = 0, commandTimer = 0;
+    controls.append(play, time, date, product, band, low, high, auto, legend, speed); box.append(controls, frame, status, hint); el.append(box);
+    let origin, connected = false, disposed = false, suppress = false, saveTimer = 0, commandTimer = 0, openTimer = 0;
     let pending = {};
     let activeBand = '';
     const bandRanges = new Map();
@@ -76,19 +78,25 @@ export default {
       frame.style.height = `${model.get('height')}px`;
     }
     function start() {
-      connected = false; pending = {}; activeBand = ''; bandRanges.clear(); clearTimeout(commandTimer);
+      connected = false; pending = {}; activeBand = ''; bandRanges.clear(); clearTimeout(commandTimer); clearTimeout(openTimer);
       update({ ready: false, error: {}, times: [], products: [], bands: [], state: {}, click: {} });
       status.textContent = 'Opening store…'; product.replaceChildren();
-      const url = new URL(model.get('viewer_url'));
+      // A path on the notebook's own origin (a jupyter-server-proxy route) resolves against this page.
+      const url = new URL(model.get('viewer_url'), location.href);
       origin = url.origin;
       if (!['http:', 'https:'].includes(location.protocol)) {
         status.textContent = 'This player needs a notebook served over HTTP or HTTPS.'; return;
       }
       url.searchParams.set('embed', '1'); url.searchParams.set('controls', '0');
       url.searchParams.set('origin', location.origin); url.searchParams.set('theme', model.get('theme'));
-      url.searchParams.set('store', model.get('store_url')); url.searchParams.set('t', String(model.get('t')));
+      url.searchParams.set('store', new URL(model.get('store_url'), location.href).href); url.searchParams.set('t', String(model.get('t')));
       if (model.get('product')) url.searchParams.set('p', model.get('product')); else url.searchParams.delete('p');
       frame.src = url.href; draw();
+      // A browser that cannot reach the viewer or the store often shows nothing and sends nothing.
+      openTimer = setTimeout(() => {
+        if (!connected && !disposed && !model.get('error').message) update({ error: { type: 'chronozarr:error', code: 'no_response', message: 'The viewer did not answer within 15 s: this browser may not reach the viewer or the store URL.' } });
+        if (!connected) status.textContent = model.get('error').message ?? '';
+      }, 15000);
     }
     const receive = event => {
       if (disposed || event.origin !== origin || event.source !== frame.contentWindow) return;
@@ -96,7 +104,9 @@ export default {
       if (!message || message.v !== 1) return;
       if (message.type === 'chronozarr:ready') {
         const first = !connected;
-        connected = true; status.textContent = model.get('error').message ?? '';
+        connected = true; clearTimeout(openTimer);
+        if (model.get('error').code === 'no_response') update({ error: {} });
+        status.textContent = model.get('error').message ?? '';
         product.replaceChildren();
         for (const item of message.products.filter(item => item.available)) product.add(new Option(item.name, item.id));
         band.replaceChildren();
@@ -121,6 +131,7 @@ export default {
     const listen = (key, callback) => { model.on(`change:${key}`, callback); subscriptions.push([`change:${key}`, callback]); };
     for (const key of ['t', 'product', 'band', 'range', 'playing', 'speed']) listen(key, () => { if (!suppress) { queue(key, model.get(key)); draw(); } });
     for (const key of ['store_url', 'viewer_url', 'theme']) listen(key, start);
+    listen('hint', () => { hint.textContent = model.get('hint'); hint.hidden = !hint.textContent; });
     listen('height', draw);
     listen('controls', draw);
     const control = (key, value) => { model.set(key, value); save(); };
@@ -138,7 +149,7 @@ export default {
     const loaded = () => send({ type: 'chronozarr:get' });
     frame.addEventListener('load', loaded); window.addEventListener('message', receive); start();
     return () => {
-      disposed = true; clearTimeout(saveTimer); clearTimeout(commandTimer);
+      disposed = true; clearTimeout(saveTimer); clearTimeout(commandTimer); clearTimeout(openTimer);
       window.removeEventListener('message', receive); frame.removeEventListener('load', loaded);
       subscriptions.forEach(([event, callback]) => model.off(event, callback));
       frame.src = 'about:blank'; box.remove();
