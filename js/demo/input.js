@@ -81,10 +81,14 @@ function bindControls(viewer) {
   $('gap-toggle').addEventListener('click', () => viewer.toggleGaps());
 }
 
-/** A timeline gesture owns its scrub state until the pointer is released or cancelled. */
-function bindTimelineInput(viewer) {
+/**
+ * A timeline gesture owns its scrub state until its pointer is released or cancelled. The pointer that last pressed the
+ * track is the scrub's: the moves, release and cancel of any other pointer (a second finger panning the map while the
+ * first drags the timeline) are not, wherever that pointer is.
+ */
+export function bindTimelineInput(viewer) {
   const track = $('timeline-track');
-  let scrubbing = false;
+  let scrubPointer = null;
   const timeFromEvent = (e) => {
     const rect = track.getBoundingClientRect();
     const pad = 8;
@@ -96,14 +100,17 @@ function bindTimelineInput(viewer) {
     e.preventDefault();
     if (!viewer.store) return;
     track.setPointerCapture(e.pointerId);
-    scrubbing = true;
+    scrubPointer = e.pointerId;
     viewer.goToTime(timeFromEvent(e));
   });
-  const endScrub = () => {
-    if (scrubbing) viewer.endScrub();
-    scrubbing = false;
+  const endScrub = (e) => {
+    if (e.pointerId !== scrubPointer) return;
+    scrubPointer = null;
+    viewer.endScrub();
   };
-  window.addEventListener('pointermove', (e) => scrubbing && viewer.goToTime(timeFromEvent(e)));
+  window.addEventListener('pointermove', (e) => {
+    if (e.pointerId === scrubPointer) viewer.goToTime(timeFromEvent(e));
+  });
   window.addEventListener('pointerup', endScrub);
   window.addEventListener('pointercancel', endScrub);
 }
