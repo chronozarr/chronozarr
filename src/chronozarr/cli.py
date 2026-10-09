@@ -17,6 +17,7 @@ import numpy as np
 import xarray as xr
 
 from chronozarr import schema
+from chronozarr._convert_source import UndeclaredNaNError
 from chronozarr.append import append, is_store
 from chronozarr.convert import (
     FIDELITY_HELP,
@@ -101,7 +102,17 @@ def _read_geotiffs(pattern: str, crs: str | None) -> _GeotiffStack:
         np.empty((len(entries), grid.height, grid.width), dtype=np.uint8) if info.mask else None
     )
     for t in range(len(entries)):
-        step = source.read(t)
+        try:
+            step = source.read(t)
+        except UndeclaredNaNError as exc:
+            # The error's own hint says `--nodata nan`, an option of `convert` only
+            raise click.ClickException(
+                f"{exc.where} holds {exc.count} NaN values, and the file declares no NaN nodata, "
+                "so nothing marks them invalid. Declare NaN as the nodata of the files (for "
+                "example `gdal_edit.py -a_nodata nan FILE`), or list them in a manifest and run "
+                "`chronozarr convert --nodata nan MANIFEST OUT`, which marks NaN pixels invalid "
+                "with a mask. `--nodata` is an option of `convert` only"
+            ) from exc
         data[t] = step.data
         if valid is not None:
             assert step.valid is not None  # a source with a mask returns a plane per timestep

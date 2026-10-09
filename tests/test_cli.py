@@ -295,6 +295,27 @@ def test_encode_float32_geotiffs_with_undeclared_nan_fail_naming_the_file(tmp_pa
     assert not out.exists()
 
 
+@pytest.mark.parametrize("command", ["encode", "append"])
+def test_undeclared_nan_hint_points_to_what_the_command_can_do(tmp_path, command):
+    frames = _random_frames("float32")
+    if command == "encode":
+        frames[1, 0, 0, 0] = np.nan
+        args = ["encode", _write_geotiffs(tmp_path / "tifs", _DATES, frames), str(tmp_path / "o")]
+        bad_file = "S2_20240215.tif"
+    else:
+        out = _encode_first_two(tmp_path, frames)
+        frames[2, 0, 0, 0] = np.nan
+        args = ["append", str(out), _later_files(tmp_path, frames)]
+        bad_file = "S2_20240315.tif"
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 1
+    assert bad_file in result.output
+    # `--nodata` is an option of `convert` only; neither command accepts it
+    assert "pass --nodata nan" not in result.output
+    assert "chronozarr convert --nodata nan" in result.output
+    assert "gdal_edit.py -a_nodata nan" in result.output
+
+
 def test_append_float32_geotiffs_with_nan_nodata_continues_the_mask(tmp_path):
     frames = _nan_frames()
     first = _write_geotiffs(tmp_path / "first", _DATES[:2], frames[:2], nodata=float("nan"))
