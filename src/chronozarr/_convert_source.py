@@ -66,6 +66,8 @@ class Source:
     info: SourceInfo
     # Indices of timesteps that are not on the target grid and must be warped (COG only).
     warped: frozenset[int] = frozenset()
+    # Findings that do not stop the conversion but change what it writes, one plan line each.
+    notes: tuple[str, ...] = ()
 
     def read(self, t: int) -> Step:
         """Timestep `t` on `info.grid`: data in `info.dtype`, plus validity when `info.mask`."""

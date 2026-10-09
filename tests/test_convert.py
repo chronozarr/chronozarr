@@ -13,6 +13,7 @@ import xarray as xr
 import chronozarr
 from chronozarr.convert import (
     CogManifestSource,
+    PreflightError,
     _gdal_env,
     convert,
     plan_conversion,
@@ -242,7 +243,7 @@ def test_grid_mismatch_needs_explicit_resampling_and_then_warps(tmp_path, tifs, 
     write_tif(tifs[2], truth[2], transform=tuple(shifted))
     manifest = write_csv(tmp_path / "m.csv", tifs)
 
-    with pytest.raises(ValueError, match=r"1 of 5 sources are not on the target grid") as error:
+    with pytest.raises(ValueError, match="is not on the target grid") as error:
         convert(manifest, tmp_path / "refused", **OPTIONS)
     assert tifs[2].name in str(error.value)
     assert "--resampling" in str(error.value)
@@ -337,8 +338,50 @@ def test_inconsistent_or_unsupported_sources_are_rejected_up_front(
 def test_missing_source_file_is_named(tmp_path, tifs):
     manifest = write_csv(tmp_path / "m.csv", tifs)
     tifs[1].rename(tmp_path / "moved.tif")
-    with pytest.raises(ValueError, match=f"cannot open source .*{tifs[1].name}"):
+    with pytest.raises(PreflightError, match=rf"{tifs[1].name}\n  - cannot open source") as error:
         plan_conversion(manifest, sample=False)
+    assert "check that the file exists" in str(error.value)
+
+
+def test_every_incompatible_source_is_reported_at_once_grouped_per_file(tmp_path, tifs, truth):
+    write_tif(tifs[1], truth[1], scales=[0.5, 1.0])
+    write_tif(tifs[2], truth[2][:1])
+    write_tif(tifs[3], truth[3], scales=[2.0, 1.0], units=["K", ""])
+    tifs[4].write_text("not a raster")
+    out = tmp_path / "store"
+    with pytest.raises(PreflightError) as error:
+        convert(write_csv(tmp_path / "m.csv", tifs), out, **OPTIONS)
+    assert not out.exists()
+    assert not (tmp_path / "store.convert-work").exists()
+
+    found: dict[str, list[str]] = {}
+    for problem in error.value.problems:
+        found.setdefault(Path(problem.uri).name, []).append(problem.detail)
+        assert problem.fix
+    assert sorted(found) == [tifs[i].name for i in (1, 2, 3, 4)]
+    assert "scales [0.5, 1.0]" in found[tifs[1].name][0]
+    assert "has 1 bands; " in found[tifs[2].name][0]
+    assert len(found[tifs[3].name]) == 2  # scales and units, one file
+    assert "cannot open source" in found[tifs[4].name][0]
+    message = str(error.value)
+    assert message.startswith("5 problem(s) in 4 of 5 source file(s); nothing was written:")
+    assert message.index(tifs[1].name) < message.index(tifs[4].name)
+
+
+def test_declared_nodata_that_differs_between_sources_is_a_plan_note(tmp_path, truth):
+    files = [
+        write_tif(tmp_path / f"n{t}.tif", truth[t], nodata=0 if t < 2 else 65535) for t in range(3)
+    ]
+    plan = plan_conversion(write_csv(tmp_path / "m.csv", files, DATES[:3]), sample=False)
+    note = next(line for line in plan.lines() if line.startswith("nodata:"))
+    assert "[0, 0]" in note
+    assert "[65535, 65535]" in note
+    assert "n2.tif" in note
+    assert "mask" in plan.source.info.validity
+    explicit = plan_conversion(
+        write_csv(tmp_path / "e.csv", files, DATES[:3]), nodata=0, sample=False
+    )
+    assert not any(line.startswith("nodata:") for line in explicit.lines())
 
 
 # --- PNG frames -----------------------------------------------------------------------------
@@ -465,7 +508,7 @@ def test_bounds_with_non_square_pixels_derive_each_axis_from_the_image_size(tmp_
     ("case", "message"),
     [
         ("bad bounds", "west < east"),
-        ("size", r"frame_2.png is 12 x 32 px; .*frame_0.png is 24 x 32 px.*same size"),
+        ("size", r"frame_2.png\n  - is 12 x 32 px; .*frame_0.png is 24 x 32 px.*same size"),
         ("own transform", "carries its own geotransform"),
         ("other crs", "declares EPSG:32632 but --crs is EPSG:32631"),
     ],
@@ -492,7 +535,7 @@ def test_png_frames_on_another_grid_are_warped_like_cogs(tmp_path):
     shifted[2] += 5 * 10.0  # five pixels east: same size, different extent
     pf.write_world_file(frames.paths[2], tuple(shifted))
     manifest = pf.write_manifest(tmp_path / "m.csv", frames)
-    with pytest.raises(ValueError, match=r"1 of 4 sources are not on the target grid") as error:
+    with pytest.raises(ValueError, match="is not on the target grid") as error:
         plan_conversion(manifest, crs=CRS, sample=False)
     assert "frame_2.png" in str(error.value)
 

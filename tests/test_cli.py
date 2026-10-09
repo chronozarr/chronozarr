@@ -319,8 +319,8 @@ def test_encode_geotiff_glob_rejects_files_of_different_dtypes(tmp_path):
     pattern = _write_geotiffs(tmp_path / "tifs", _DATES, frames)
     result = CliRunner().invoke(main, ["encode", pattern, str(tmp_path / "out")])
     assert result.exit_code == 1
-    assert "S2_20240215.tif is float32" in result.output
-    assert "S2_20240115.tif is uint16" in result.output
+    assert "S2_20240215.tif\n  - is float32; " in result.output
+    assert "S2_20240115.tif is uint16" in result.output  # named as the reference
 
 
 @pytest.mark.parametrize("dtype", ["float64", "int32"])

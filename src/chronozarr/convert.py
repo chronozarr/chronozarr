@@ -135,6 +135,12 @@ from chronozarr._convert_manifest import (
 from chronozarr._convert_manifest import (
     read_manifest as read_manifest,
 )
+from chronozarr._convert_preflight import (
+    PreflightError as PreflightError,
+)
+from chronozarr._convert_preflight import (
+    Problem as Problem,
+)
 from chronozarr._convert_source import (
     Bounds as Bounds,
 )
@@ -249,6 +255,7 @@ class Plan:
                 for b in info.bands
             ),
             f"validity:   {info.validity}",
+            *self.source.notes,
         ]
         if self.warped:
             out.append(
@@ -311,6 +318,8 @@ def plan_conversion(
     """Open the source, check it is consistent and estimate the conversion.
 
     Reads `SAMPLE_TIMESTEPS` timesteps (when `sample`) to measure read time and compression.
+    Raises `PreflightError` with every problem found in the files when the sources of a manifest
+    cannot be one series.
     """
     text = str(source_path)
     suffix = Path(text).suffix.lower()
