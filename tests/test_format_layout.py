@@ -13,6 +13,7 @@ from zarr.storage import LocalStore
 
 import chronozarr
 from chronozarr import schema
+from tests.narrow import array_at, attrs_block, required
 from tests.synthetic import make_da, make_truth, reference_reduce
 from tests.test_reads import CountingStore
 
@@ -49,6 +50,7 @@ def test_coverage_is_stored_and_mean_reduced_with_rounding(tmp_path):
     for lod in range(len(store.levels)):
         if lod:
             level, _, level_cov = reference_reduce(level, nodata=0, coverage=level_cov)
+            assert level_cov is not None
         for t in range(3):
             assert np.array_equal(store.read_coverage(t, lod), level_cov[t]), f"{lod} t={t}"
     assert chronozarr.validate(tmp_path / "s") == []
@@ -59,11 +61,11 @@ def test_coverage_rounds_half_up():
     from chronozarr.encode import _downsample_plane_pair
 
     plane = np.array([[1, 1], [0, 0]], dtype=np.uint8)  # mean 0.5 -> 1
-    assert _downsample_plane_pair(None, plane)[1].tolist() == [[1]]
+    assert required(_downsample_plane_pair(None, plane)[1]).tolist() == [[1]]
     plane = np.array([[1, 0], [0, 0]], dtype=np.uint8)  # mean 0.25 -> 0
-    assert _downsample_plane_pair(None, plane)[1].tolist() == [[0]]
+    assert required(_downsample_plane_pair(None, plane)[1]).tolist() == [[0]]
     plane = np.array([[255, 255], [255, 255]], dtype=np.uint8)
-    assert _downsample_plane_pair(None, plane)[1].tolist() == [[255]]
+    assert required(_downsample_plane_pair(None, plane)[1]).tolist() == [[255]]
 
 
 def test_mask_and_coverage_together(tmp_path):
@@ -94,7 +96,7 @@ def test_bad_coverage_is_rejected(tmp_path):
 def test_provenance_roundtrips_through_the_root_attrs(tmp_path):
     store = _encode(tmp_path, make_truth(2, 1, 13, 11), provenance=PROVENANCE)
     assert dict(store.attrs.provenance or {}) == PROVENANCE
-    block = zarr.open_group(str(tmp_path / "s"), mode="r").attrs["chronozarr"]
+    block = attrs_block(zarr.open_group(str(tmp_path / "s"), mode="r"), "chronozarr")
     assert block["provenance"] == PROVENANCE
     assert chronozarr.validate(tmp_path / "s") == []
 
@@ -148,7 +150,7 @@ def test_spec_chunk_sizes_write_a_conforming_store(tmp_path, chunk_size):
     assert np.array_equal(store.to_xarray().values, truth)
     assert chronozarr.validate(tmp_path / "s") == []
     assert {level.chunk_size for level in store.levels} == {chunk_size}
-    multiscale = zarr.open_group(str(tmp_path / "s"), mode="r").attrs["multiscales"]
+    multiscale = attrs_block(zarr.open_group(str(tmp_path / "s"), mode="r"), "multiscales")
     assert all("pixels_per_tile" not in d for d in multiscale["layout"])
 
 
@@ -164,7 +166,7 @@ def test_chunk_size_must_be_even(tmp_path, chunk_size):
 def test_shard_time_splits_the_time_axis_into_several_shards(tmp_path):
     truth = make_truth(7, 2, 13, 11)
     store = _encode(tmp_path, truth, shard=True, shard_time=3)
-    data = zarr.open_group(str(tmp_path / "s"), mode="r")["0"]["data"]
+    data = array_at(zarr.open_group(str(tmp_path / "s"), mode="r"), "0/data")
     assert data.shards == (3, 2, CS, CS)
     assert data.chunks == (1, 2, CS, CS)
     assert store.levels[0].shard_time == 3
@@ -217,7 +219,7 @@ def test_shard_index_has_shard_time_entries_even_in_a_partial_last_shard(tmp_pat
 def test_default_writes_plain_chunk_keys(tmp_path):
     truth = make_truth(3, 2, 13, 11)
     store = _encode(tmp_path, truth)  # shard is not passed: the default
-    data = zarr.open_group(str(tmp_path / "s"), mode="r")["0"]["data"]
+    data = array_at(zarr.open_group(str(tmp_path / "s"), mode="r"), "0/data")
     assert data.shards is None
     assert store.levels[0].shard_time is None
     assert store.attrs.shard_bytes is None
@@ -276,7 +278,7 @@ def test_shard_bytes_match_the_shard_objects(tmp_path):
         shard_time=2,
         mask=np.ones((5, 13, 11), np.uint8),
     )
-    block = zarr.open_group(str(tmp_path / "s"), mode="r").attrs["chronozarr"]
+    block = attrs_block(zarr.open_group(str(tmp_path / "s"), mode="r"), "chronozarr")
     sizes = block["shard_bytes"]
     assert set(sizes) == {"0", "1"}
     assert {k.split("/")[0] for k in sizes["0"]} == {"0", "1", "2"}
@@ -294,14 +296,15 @@ def test_shard_bytes_match_the_shard_objects(tmp_path):
 def test_shard_bytes_absent_when_unsharded(tmp_path):
     store = _encode(tmp_path, make_truth(3, 1, 13, 11))
     assert store.attrs.shard_bytes is None
-    assert "shard_bytes" not in zarr.open_group(str(tmp_path / "s"), mode="r").attrs["chronozarr"]
+    block = attrs_block(zarr.open_group(str(tmp_path / "s"), mode="r"), "chronozarr")
+    assert "shard_bytes" not in block
     assert chronozarr.validate(tmp_path / "s") == []
 
 
 def test_validator_flags_wrong_and_missing_shard_bytes(tmp_path):
     _encode(tmp_path, make_truth(3, 1, 13, 11), shard=True)
     root = zarr.open_group(str(tmp_path / "s"), mode="r+", zarr_format=3)
-    block = json.loads(json.dumps(dict(root.attrs["chronozarr"])))
+    block = attrs_block(root, "chronozarr")
     block["shard_bytes"]["0"]["0/0/0"] += 1
     block["shard_bytes"]["0"]["0/9/9"] = 100
     root.attrs["chronozarr"] = block
@@ -332,7 +335,7 @@ def test_levels_attr_mirrors_the_level_groups(tmp_path):
 def test_validator_flags_a_levels_attr_that_disagrees(tmp_path):
     _encode(tmp_path, make_truth(3, 1, 13, 11))
     root = zarr.open_group(str(tmp_path / "s"), mode="r+", zarr_format=3)
-    block = json.loads(json.dumps(dict(root.attrs["chronozarr"])))
+    block = attrs_block(root, "chronozarr")
     block["levels"][0]["shape"] = [3, 1, 99, 11]
     block["levels"][1]["resolution"] = 7.0
     root.attrs["chronozarr"] = block
@@ -445,9 +448,9 @@ def _fake_pyproj(monkeypatch, *, known: bool = True):
             return f'PROJCRS["fake EPSG:{self.code}"]'
 
     pyproj = types.ModuleType("pyproj")
-    pyproj.CRS = CRS  # ty: ignore[unresolved-attribute]
+    pyproj.CRS = CRS  # ty: ignore[unresolved-attribute]  # ModuleType declares no CRS
     exceptions = types.ModuleType("pyproj.exceptions")
-    exceptions.CRSError = CRSError  # ty: ignore[unresolved-attribute]
+    exceptions.CRSError = CRSError  # ty: ignore[unresolved-attribute]  # ModuleType: no CRSError
     monkeypatch.setitem(sys.modules, "pyproj", pyproj)
     monkeypatch.setitem(sys.modules, "pyproj.exceptions", exceptions)
 
@@ -466,7 +469,7 @@ def test_every_array_carries_the_gdal_crs_url(tmp_path, monkeypatch):
     root = zarr.open_group(str(tmp_path / "s"), mode="r")
     for level in ("0", "1"):
         for name in ("data", "mask", "coverage"):
-            attrs = root[level][name].attrs.asdict()
+            attrs = array_at(root, f"{level}/{name}").attrs.asdict()
             assert attrs["_CRS"] == {"url": EPSG_URL}, f"{level}/{name}"
             assert attrs["proj:code"] == "EPSG:32631"  # the other CRS attributes are unchanged
             assert attrs["crs"] == "EPSG:32631"
@@ -476,7 +479,7 @@ def test_every_array_carries_the_gdal_crs_url(tmp_path, monkeypatch):
 def test_gdal_crs_adds_wkt_when_pyproj_is_available(tmp_path, monkeypatch):
     _fake_pyproj(monkeypatch)
     _encode(tmp_path, make_truth(2, 1, 13, 11))
-    crs = zarr.open_group(str(tmp_path / "s"), mode="r")["1"]["data"].attrs["_CRS"]
+    crs = array_at(zarr.open_group(str(tmp_path / "s"), mode="r"), "1/data").attrs["_CRS"]
     assert crs == {"url": EPSG_URL, "wkt": 'PROJCRS["fake EPSG:32631"]'}
     assert chronozarr.validate(tmp_path / "s") == []
 
@@ -484,7 +487,7 @@ def test_gdal_crs_adds_wkt_when_pyproj_is_available(tmp_path, monkeypatch):
 def test_gdal_crs_is_url_only_for_an_epsg_code_pyproj_does_not_know(tmp_path, monkeypatch):
     _fake_pyproj(monkeypatch, known=False)
     _encode(tmp_path, make_truth(2, 1, 13, 11))
-    crs = zarr.open_group(str(tmp_path / "s"), mode="r")["0"]["data"].attrs["_CRS"]
+    crs = array_at(zarr.open_group(str(tmp_path / "s"), mode="r"), "0/data").attrs["_CRS"]
     assert crs == {"url": EPSG_URL}
 
 
@@ -492,7 +495,7 @@ def test_validator_flags_a_gdal_crs_that_names_another_crs(tmp_path, monkeypatch
     _no_pyproj(monkeypatch)
     _encode(tmp_path, make_truth(2, 1, 13, 11))
     root = zarr.open_group(str(tmp_path / "s"), mode="r+", zarr_format=3)
-    root["0"]["data"].attrs["_CRS"] = {"url": "http://www.opengis.net/def/crs/EPSG/0/4326"}
+    array_at(root, "0/data").attrs["_CRS"] = {"url": "http://www.opengis.net/def/crs/EPSG/0/4326"}
     problems = chronozarr.validate(tmp_path / "s")
     assert any("level 0/data: attribute _CRS url must be" in p for p in problems)
 

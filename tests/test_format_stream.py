@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import tracemalloc
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
 import xarray as xr
 
 import chronozarr
+from tests.narrow import required
 from tests.synthetic import CRS, TRANSFORM, make_da, make_times, make_truth
 
 pytestmark = pytest.mark.unit
@@ -23,7 +25,7 @@ def _tree(path: Path) -> dict[str, bytes]:
     }
 
 
-def _stream_kwargs(truth: np.ndarray) -> dict:
+def _stream_kwargs(truth: np.ndarray) -> dict[str, Any]:
     return {
         "times": make_times(truth.shape[0]),
         "bands": [f"b{i}" for i in range(truth.shape[1])],
@@ -41,7 +43,7 @@ def test_iterable_input_writes_the_same_store_as_a_dataarray(tmp_path, shard):
     truth = make_truth(5, 2, 29, 21)
     mask = (truth[:, 0] > 0).astype(np.uint8)
     coverage = (mask * 4).astype(np.uint8)
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "chunk_size": CS,
         "shard": shard,
         "shard_time": 2 if shard else None,
@@ -61,7 +63,7 @@ def test_iterable_input_writes_the_same_store_as_a_dataarray(tmp_path, shard):
     assert chronozarr.validate(tmp_path / "iter") == []
     store = chronozarr.open_store(tmp_path / "iter")
     assert np.array_equal(store.to_xarray().values, truth)
-    assert np.array_equal(store.read_mask(3), mask[3])
+    assert np.array_equal(required(store.read_mask(3)), mask[3])
 
 
 def test_generator_timesteps_are_consumed_once_in_order(tmp_path):
@@ -205,15 +207,13 @@ def test_peak_memory_is_a_fraction_of_the_raster(tmp_path):
         for t in range(n_time):
             yield (base + t * 7).astype(np.uint16)
 
+    stream_kwargs: dict[str, Any] = {
+        **_stream_kwargs(np.empty((n_time, n_band))),
+        "bands": ["a", "b"],
+    }
     tracemalloc.start()
     try:
-        chronozarr.encode(
-            steps(),
-            tmp_path / "s",
-            chunk_size=cs,
-            workers=2,
-            **{**_stream_kwargs(np.empty((n_time, n_band))), "bands": ["a", "b"]},
-        )
+        chronozarr.encode(steps(), tmp_path / "s", chunk_size=cs, workers=2, **stream_kwargs)
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()

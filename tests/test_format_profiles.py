@@ -6,10 +6,12 @@ import numpy as np
 import pytest
 import xarray as xr
 import zarr
+from zarr.core.metadata import ArrayV3Metadata
 
 import chronozarr
 from chronozarr import schema
 from chronozarr.schema import Band
+from tests.narrow import array_at, attrs_block
 from tests.synthetic import CRS, TRANSFORM, make_da, make_truth, reference_reduce
 
 pytestmark = pytest.mark.unit
@@ -61,7 +63,7 @@ def test_explicit_nodata_is_fill_value_attr_and_excluded_from_means(tmp_path):
     truth[:, :, 0, 0] = 65535
     truth[:, :, 2:, 2:] = 65535  # a fully nodata block
     _, store = _encode(tmp_path, truth, chunk_size=4, nodata=65535, n_lods=2)
-    data = zarr.open_group(str(tmp_path / "s"), mode="r")["0"]["data"]
+    data = array_at(zarr.open_group(str(tmp_path / "s"), mode="r"), "0/data")
     assert data.fill_value == 65535
     assert data.attrs["nodata"] == 65535
     assert store.attrs.nodata == 65535
@@ -75,7 +77,7 @@ def test_nodata_null_treats_zero_as_a_value(tmp_path):
     truth[0, 0, 0, 0] = 8
     _, store = _encode(tmp_path, truth, chunk_size=2, nodata=None, n_lods=2)
     assert store.read(0, lod=1)[0, 0, 0] == 2  # (8 + 0 + 0 + 0) // 4: zeros count
-    assert zarr.open_group(str(tmp_path / "s"), mode="r")["0"]["data"].fill_value == 0
+    assert array_at(zarr.open_group(str(tmp_path / "s"), mode="r"), "0/data").fill_value == 0
 
 
 def test_star_delta_with_a_nonzero_nodata_roundtrips(tmp_path):
@@ -160,6 +162,7 @@ def test_mask_is_stored_reduced_and_drives_the_data_means(tmp_path, shard):
     for lod in range(len(store.levels)):
         if lod:
             level, level_mask, _ = reference_reduce(level, nodata=0, mask=level_mask)
+            assert level_mask is not None
         assert np.array_equal(store.to_xarray(lod=lod).values, level), f"data level {lod}"
         for t in range(3):
             assert np.array_equal(store.read_mask(t, lod), level_mask[t]), f"mask {lod} t={t}"
@@ -172,14 +175,15 @@ def test_mask_layout_matches_the_data_array(tmp_path):
     _encode(tmp_path, truth, mask=mask, shard=True, shard_time=2)
     root = zarr.open_group(str(tmp_path / "s"), mode="r")
     for lod in ("0", "1"):
-        data, plane = root[lod]["data"], root[lod]["mask"]
+        data, plane = array_at(root, f"{lod}/data"), array_at(root, f"{lod}/mask")
         assert plane.dtype == np.uint8
+        assert isinstance(plane.metadata, ArrayV3Metadata)
         assert plane.metadata.dimension_names == ("time", "y", "x")
         assert plane.attrs["_ARRAY_DIMENSIONS"] == ["time", "y", "x"]
         assert plane.chunks == (1, CS, CS)
         assert plane.shards == (2, CS, CS)
         assert plane.shape == (3, *data.shape[2:])
-    attrs = root.attrs["chronozarr"]
+    attrs = attrs_block(root, "chronozarr")
     assert attrs["mask_variable"] == "mask"
     assert "coverage_variable" not in attrs
 
@@ -219,7 +223,8 @@ def test_bands_are_objects_with_a_names_mirror(tmp_path):
         Band("B08", common_name="nir"),
     ]
     _, store = _encode(tmp_path, make_truth(2, 2, 13, 11), bands=bands)
-    block = zarr.open_group(str(tmp_path / "s"), mode="r").attrs["chronozarr"]
+    root = zarr.open_group(str(tmp_path / "s"), mode="r")
+    block = attrs_block(root, "chronozarr")
     assert block["bands"] == [
         {
             "name": "B04",
@@ -233,7 +238,7 @@ def test_bands_are_objects_with_a_names_mirror(tmp_path):
     assert block["band_names"] == ["B04", "B08"]
     assert store.bands == ("B04", "B08")
     assert store.attrs.bands == (bands[0], Band("B08", common_name="nir", scale=1.0, offset=0.0))
-    assert list(zarr.open_group(str(tmp_path / "s"), mode="r")["0"]["band"][:]) == ["B04", "B08"]
+    assert list(np.asarray(array_at(root, "0/band")[:])) == ["B04", "B08"]
 
 
 def test_band_names_come_from_the_coordinate_by_default(tmp_path):
@@ -261,7 +266,7 @@ def test_bad_bands_are_rejected(tmp_path, bands, message):
 def test_band_mismatch_between_attrs_and_band_names_is_flagged(tmp_path):
     _encode(tmp_path, make_truth(2, 2, 13, 11))
     root = zarr.open_group(str(tmp_path / "s"), mode="r+", use_consolidated=False)
-    block = dict(root.attrs["chronozarr"])
+    block = attrs_block(root, "chronozarr")
     block["band_names"] = ["wrong", "names"]
     root.attrs["chronozarr"] = block
     assert any("band_names" in p for p in chronozarr.validate(tmp_path / "s"))
@@ -303,7 +308,7 @@ def test_a_mask_makes_the_default_nodata_null(tmp_path):
     truth, mask = _zeros_that_are_valid()
     _, store = _encode(tmp_path, truth, mask=mask)
     assert store.attrs.nodata is None
-    data = zarr.open_group(str(tmp_path / "s"), mode="r")["0"]["data"]
+    data = array_at(zarr.open_group(str(tmp_path / "s"), mode="r"), "0/data")
     assert "nodata" not in data.attrs
     assert data.fill_value == 0
     assert chronozarr.validate(tmp_path / "s") == []
@@ -312,6 +317,7 @@ def test_a_mask_makes_the_default_nodata_null(tmp_path):
     assert np.isnan(physical[0, 5:7, 5:7]).all()
     level, level_mask, _ = reference_reduce(truth, nodata=None, mask=mask)
     assert np.array_equal(store.to_xarray(lod=1).values, level)
+    assert level_mask is not None
     assert np.array_equal(store.read_mask(0, lod=1), level_mask[0])
 
 
@@ -334,7 +340,7 @@ def test_an_explicit_nodata_is_kept_with_a_mask(tmp_path):
     truth, mask = _zeros_that_are_valid()
     _, store = _encode(tmp_path, truth, mask=mask, nodata=0)
     assert store.attrs.nodata == 0
-    assert zarr.open_group(str(tmp_path / "s"), mode="r")["0"]["data"].attrs["nodata"] == 0
+    assert array_at(zarr.open_group(str(tmp_path / "s"), mode="r"), "0/data").attrs["nodata"] == 0
     assert chronozarr.validate(tmp_path / "s") == []
 
 

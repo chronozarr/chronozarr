@@ -8,9 +8,12 @@ import shutil
 import numpy as np
 import pytest
 import zarr
+from zarr.core.metadata import ArrayV3Metadata
+from zarr.storage import MemoryStore
 
 import chronozarr
 from chronozarr import schema
+from tests.narrow import array_at, group_at
 from tests.synthetic import build_store, make_truth
 
 pytestmark = pytest.mark.unit
@@ -54,12 +57,14 @@ def test_every_array_declares_dimension_names(good_store):
         "1/data": ("time", "band", "y", "x"),
     }
     for path, names in expected.items():
-        assert root[path].metadata.dimension_names == names, path
+        metadata = array_at(root, path).metadata
+        assert isinstance(metadata, ArrayV3Metadata), path
+        assert metadata.dimension_names == names, path
 
 
 def test_storage_layout(good_store):
     root = zarr.open_group(str(good_store), mode="r", zarr_format=3)
-    data = root["0"]["data"]
+    data = array_at(root, "0/data")
     assert data.dtype == np.uint16
     assert data.fill_value == 0
     assert data.chunks == (1, 2, 512, 512)
@@ -87,7 +92,7 @@ def test_storage_layout(good_store):
         "name": "default",
         "configuration": {"separator": "/"},
     }
-    assert list(root["0"]["band"][:]) == ["B04", "B08"]
+    assert list(np.asarray(array_at(root, "0/band")[:])) == ["B04", "B08"]
 
 
 def test_consolidated_metadata_is_written_and_readable(good_store):
@@ -145,7 +150,7 @@ def test_writer_never_emits_pixels_per_tile(good_store):
 
 
 def test_cell_size_is_the_chunk_size_of_the_data_array():
-    memory = zarr.storage.MemoryStore()
+    memory = MemoryStore()
     plain = zarr.create_array(
         memory, name="a", shape=(3, 2, 20, 20), chunks=(1, 2, 8, 8), dtype="u2"
     )
@@ -171,9 +176,7 @@ def test_cell_size_is_the_chunk_size_of_the_data_array():
     ],
 )
 def test_cell_size_rejects_a_layout_that_is_not_one_cell_per_chunk(shape, chunks, message):
-    array = zarr.create_array(
-        zarr.storage.MemoryStore(), name="a", shape=shape, chunks=chunks, dtype="u2"
-    )
+    array = zarr.create_array(MemoryStore(), name="a", shape=shape, chunks=chunks, dtype="u2")
     with pytest.raises(schema.SchemaError, match=message):
         schema.cell_size(array, "level 0/data")
 
@@ -192,8 +195,8 @@ def test_validator_reports_levels_with_a_different_cell_size(tmp_path):
 
 def test_validator_reports_structural_problems(store_copy):
     root = zarr.open_group(str(store_copy), mode="r+", zarr_format=3, use_consolidated=False)
-    root["1"]["data"].attrs["spatial:shape"] = [1, 1]
-    root["1"].attrs["transform"] = [30.0, 0.0, 746090.0, 0.0, -30.0, 2540440.0]
+    array_at(root, "1/data").attrs["spatial:shape"] = [1, 1]
+    group_at(root, "1").attrs["transform"] = [30.0, 0.0, 746090.0, 0.0, -30.0, 2540440.0]
     problems = chronozarr.validate(store_copy)
     assert any("not the level-0 transform scaled by 2^1" in p for p in problems)
     assert any("spatial:shape differs from geometry" in p for p in problems)
@@ -203,7 +206,7 @@ def test_validator_reports_structural_problems(store_copy):
 def test_validator_flags_missing_arrays_and_wrong_coordinates(store_copy):
     shutil.rmtree(store_copy / "0" / "x")
     root = zarr.open_group(str(store_copy), mode="r+", zarr_format=3, use_consolidated=False)
-    root["1"]["time"][:] = np.array([0, 1, 2], dtype="int64")
+    array_at(root, "1/time")[:] = np.array([0, 1, 2], dtype="int64")
     problems = chronozarr.validate(store_copy)
     assert any("0/x: listed in consolidated metadata but missing on disk" in p for p in problems)
     assert any("level 0: array 'x' is missing" in p for p in problems)
@@ -236,7 +239,7 @@ def test_variable_name_comes_from_attrs_not_a_hardcoded_default(store_copy):
 
 def test_geometry_aliases_are_optional_and_must_match_when_present(store_copy):
     root = zarr.open_group(str(store_copy), mode="r+", zarr_format=3, use_consolidated=False)
-    data = root["0"]["data"]
+    data = array_at(root, "0/data")
     for key in ("spatial:bbox", "spatial:shape", "crs", "transform", "_CRS"):
         del data.attrs[key]
     problems = chronozarr.validate(store_copy)

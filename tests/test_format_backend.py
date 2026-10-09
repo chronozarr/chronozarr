@@ -55,6 +55,7 @@ def store_path(request, tmp_path_factory):
 def test_open_reads_metadata_only(store_path, tmp_path):
     path, *_ = store_path
     counting = CountingStore(LocalStore(path, read_only=True))
+    # xarray's stub for filename_or_obj omits zarr stores, which the chronozarr backend accepts.
     ds = xr.open_dataset(counting, engine=ChronozarrBackendEntrypoint)  # ty: ignore[invalid-argument-type]
     assert not [k for k, _ in counting.reads if "/data/c/" in k or "/mask/c/" in k]
     assert ds["data"].shape == (5, 2, 40, 50)
@@ -140,6 +141,7 @@ def test_selection_reads_only_the_chunks_it_needs(store_path):
     path, *_ = store_path
     sharded = chronozarr.open_store(path).levels[0].data.shards is not None
     counting = CountingStore(LocalStore(path, read_only=True))
+    # xarray's stub for filename_or_obj omits zarr stores, which the chronozarr backend accepts.
     ds = xr.open_dataset(counting, engine=ChronozarrBackendEntrypoint)  # ty: ignore[invalid-argument-type]
     counting.reads.clear()
     value = ds["data"].isel(time=1, y=slice(0, 10), x=slice(0, 10)).values
@@ -334,6 +336,7 @@ def test_http_store_is_read_only_and_unlistable():
     assert store.read_only
     assert store == HttpStore("http://example.invalid/store")
     with pytest.raises(PermissionError, match="read-only"):
+        # The read-only error path never looks at the value, so None stands in for a Buffer.
         asyncio.run(store.set("k", None))  # ty: ignore[invalid-argument-type]
     with pytest.raises(NotImplementedError, match="cannot list"):
         asyncio.run(_drain(store.list()))

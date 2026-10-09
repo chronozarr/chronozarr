@@ -17,6 +17,7 @@ from chronozarr.cli import main
 from chronozarr.convert import convert
 from chronozarr.doctor import diagnose
 from chronozarr.encode import VOLATILITY_SCALE
+from tests.narrow import array_at, required
 from tests.synthetic import (
     BANDS,
     CRS,
@@ -258,7 +259,7 @@ def read_volatility(path: Path) -> np.ndarray:
     import zarr
 
     root = zarr.open_group(str(path), mode="r", zarr_format=3, use_consolidated=False)
-    return np.asarray(root["volatility"][:])
+    return np.asarray(array_at(root, "volatility")[:])
 
 
 def test_plain_store_volatility_uses_the_nominal_schedule_for_new_steps(tmp_path, truth):
@@ -319,10 +320,14 @@ def test_mask_and_coverage_are_appended_at_every_level(tmp_path, truth):
     for lod in range(len(expected.levels)):
         assert np.array_equal(appended.to_xarray(lod=lod).values, decoded(fresh, lod))
         for t in range(12):
-            assert np.array_equal(appended.read_mask(t, lod), expected.read_mask(t, lod))
-            assert np.array_equal(appended.read_coverage(t, lod), expected.read_coverage(t, lod))
-    assert np.array_equal(appended.read_mask(9), mask[9])
-    assert np.array_equal(appended.read_coverage(11), coverage[11])
+            assert np.array_equal(
+                required(appended.read_mask(t, lod)), required(expected.read_mask(t, lod))
+            )
+            assert np.array_equal(
+                required(appended.read_coverage(t, lod)), required(expected.read_coverage(t, lod))
+            )
+    assert np.array_equal(required(appended.read_mask(9)), mask[9])
+    assert np.array_equal(required(appended.read_coverage(11)), coverage[11])
 
 
 def test_mask_and_coverage_must_match_what_the_store_has(tmp_path, truth):
@@ -372,8 +377,8 @@ def test_a_store_input_carries_mask_and_coverage(tmp_path, truth):
     )
     append(store, month)
     opened = chronozarr.open_store(store)
-    assert np.array_equal(opened.read_mask(8), mask[8])
-    assert np.array_equal(opened.read_coverage(8), coverage[8])
+    assert np.array_equal(required(opened.read_mask(8)), mask[8])
+    assert np.array_equal(required(opened.read_coverage(8)), coverage[8])
     assert np.array_equal(opened.read(8), truth[8])
 
 

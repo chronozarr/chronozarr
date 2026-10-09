@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 from numcodecs import Zstd
@@ -38,7 +40,10 @@ class CountingStore(WrapperStore):
         # forwards to the inner store, bypassing get(). Record one read per requested range
         # (coalescing below this layer does not change what a reader logically asked for).
         self.reads.extend((key, byte_range) for byte_range in byte_ranges)
-        async for batch in super().get_ranges(key, byte_ranges, prototype=prototype, **options):
+        # zarr < 3.4 (the lock resolves 3.1.6 on Python 3.11) has no WrapperStore.get_ranges and
+        # nothing calls this override there; Any keeps the check valid on both versions.
+        wrapper: Any = super()
+        async for batch in wrapper.get_ranges(key, byte_ranges, prototype=prototype, **options):
             yield batch
 
     def data_reads(self) -> list[tuple[str, ByteRequest | None]]:
