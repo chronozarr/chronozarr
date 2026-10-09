@@ -95,7 +95,7 @@ import json
 import shutil
 import time
 from collections import deque
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -168,6 +168,7 @@ from chronozarr._convert_xarray import (
 from chronozarr._convert_xarray import (
     _parse_dims,
 )
+from chronozarr.bands import assign_roles
 from chronozarr.encode import EncodeReport, encode
 
 # Raw input bytes per second through `encode()` (spill, pyramid, zstd level 5, write). Measured
@@ -556,6 +557,7 @@ def convert(
     nodata: float | int | str | None = "auto",
     mask_var: str | None = None,
     bounds: Sequence[float] | None = None,
+    band_roles: Mapping[str, str | None] | None = None,
     work_dir: str | Path | None = None,
     resume: bool = False,
     dry_run: bool = False,
@@ -582,6 +584,10 @@ def convert(
     number that replaces the declared nodata, None (no nodata) or NaN (float data: NaN pixels are
     invalid, through a mask). `mask_var` names a boolean or integer (time, y, x) variable of a
     Zarr or NetCDF source whose nonzero values are valid; the store then gets a mask.
+
+    `band_roles` maps band names of the source to a STAC common name (`{"B04": "red"}`; "none"
+    clears one) and writes it as the band's `common_name` (see `chronozarr.bands`). An unknown
+    band or role fails before any pixel is read. A v0.2 migration keeps its bands and refuses it.
 
     `on_plan` receives the `Plan` (sizes, estimates) before any data is staged; `dry_run` stops
     there. Timesteps are staged under `work_dir` (default `<out>.convert-work` beside `out`):
@@ -611,6 +617,9 @@ def convert(
         chunk_size=encode_options.get("chunk_size", 512),
         n_lods=encode_options.get("n_lods"),
     )
+    bands = list(plan.source.info.bands)
+    if band_roles:
+        bands = list(assign_roles(bands, band_roles))
     if on_plan is not None:
         on_plan(plan)
     if dry_run:
@@ -619,6 +628,11 @@ def convert(
     from chronozarr._convert_legacy import LegacySource, migrate
 
     if isinstance(plan.source, LegacySource):
+        if band_roles:
+            raise ValueError(
+                "legacy migration keeps the source's bands; migrate first, then set roles "
+                "with `chronozarr bands STORE --band-role NAME=ROLE`"
+            )
         if encode_options:
             # CLI passes writer defaults; migrations preserve the source layout and codecs.
             defaults = {
@@ -656,7 +670,7 @@ def convert(
             _staged_timesteps(plan, work),
             out_path,
             times=np.array(plan.source.times, dtype="datetime64[ms]"),
-            bands=list(info.bands),
+            bands=bands,
             crs=info.grid.crs,
             transform=info.grid.transform,
             nodata=info.nodata,

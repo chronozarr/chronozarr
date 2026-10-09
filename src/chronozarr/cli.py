@@ -18,6 +18,14 @@ import xarray as xr
 
 from chronozarr import schema
 from chronozarr.append import append, is_store
+from chronozarr.bands import (
+    assign_roles,
+    display_limits_apply,
+    parse_roles,
+    product_status,
+    resolve_roles,
+    set_band_roles,
+)
 from chronozarr.convert import (
     FIDELITY_HELP,
     RESAMPLING_METHODS,
@@ -27,11 +35,12 @@ from chronozarr.convert import (
     convert,
 )
 from chronozarr.decode import open_store
-from chronozarr.doctor import DEFAULT_ORIGIN, diagnose
+from chronozarr.doctor import DEFAULT_ORIGIN, diagnose, is_url
 from chronozarr.encode import EncodeReport, encode
 from chronozarr.export import export_cog, select_times
 from chronozarr.schema import Band, SchemaError, validate
 from chronozarr.stac import write_stac
+from chronozarr.view import VIEWER_URL, viewer_url
 
 _DATE_IN_NAME = re.compile(r"(?<!\d)(\d{4})-?(\d{2})(?:-?(\d{2}))?(?!\d)")
 _GLOB_CHARS = "*?["
@@ -166,6 +175,25 @@ def _command_errors() -> Iterator[None]:
         raise click.ClickException("\n".join([str(exc), *notes])) from exc
 
 
+_band_role_option = click.option(
+    "--band-role",
+    "band_roles",
+    multiple=True,
+    metavar="NAME=ROLE",
+    help="Give band NAME the STAC common name ROLE (red, green, blue, nir, ...), so the "
+    "viewer's products find it; 'none' removes one. Repeatable or comma-separated: "
+    "--band-role B04=red,B08=nir. Only unambiguous names are detected without it.",
+)
+
+
+def _band_roles(texts: tuple[str, ...]) -> dict[str, str]:
+    """Parsed `--band-role` values; a malformed one is a usage error."""
+    try:
+        return parse_roles(texts)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--band-role") from exc
+
+
 def _encode_options(command: Any) -> Any:
     """Options shared by `encode` and `convert`; they map one-to-one onto `encode()` keywords."""
     options = [
@@ -256,11 +284,13 @@ def main() -> None:
 @_encode_options
 @click.option("--crs", default=None, help="CRS such as EPSG:32631 (default: from the input).")
 @click.option("--variable", default=None, help="Variable to encode from a Zarr/NetCDF input.")
+@_band_role_option
 def encode_command(
     input: str,
     out: Path,
     crs: str | None,
     variable: str | None,
+    band_roles: tuple[str, ...],
     **options: Any,
 ) -> None:
     """Encode INPUT into a chronozarr store at OUT.
@@ -272,7 +302,11 @@ def encode_command(
     scale, offset, units, nodata and masks come from the files (see `convert --help`). The files
     must share one grid, and the whole stack is read into memory. To resample or to stream the
     files one timestep at a time, use `convert`.
+
+    Band names are free. Run `chronozarr bands OUT` to see which viewer products the bands
+    allow; --band-role B04=red,B08=nir sets the common names that select them.
     """
+    roles = _band_roles(band_roles)
     file_options: dict[str, Any] = {}
     if any(ch in input for ch in _GLOB_CHARS):
         with _command_errors():
@@ -283,6 +317,9 @@ def encode_command(
     else:
         da = _read_xarray(input, variable)
     with _command_errors():
+        if roles:
+            named = file_options.get("bands") or [Band(str(n)) for n in da.coords["band"].values]
+            file_options["bands"] = assign_roles(named, roles)
         report = encode(da, out, crs=crs, **file_options, **_encode_kwargs(options))
     click.echo(_encode_summary(out, report))
 
@@ -603,6 +640,7 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     show_default=True,
     help="Timesteps read concurrently while staging; memory is about this many timesteps.",
 )
+@_band_role_option
 def convert_command(
     source: str,
     out: Path,
@@ -619,6 +657,7 @@ def convert_command(
     resume: bool,
     dry_run: bool,
     read_ahead: int,
+    band_roles: tuple[str, ...],
     **options: Any,
 ) -> None:
     """Convert SOURCE into a chronozarr store at OUT without loading the whole stack.
@@ -627,6 +666,9 @@ def convert_command(
     URIs, a Zarr store (path or URL) or a NetCDF file, the last two with --variable. Each
     timestep is read, resampled if needed, staged under the work directory and then encoded
     cell by cell. The size and time estimate is printed first; --dry-run stops there.
+
+    --band-role NAME=ROLE sets a band's common name, e.g. for a manifest that names its bands
+    (those get none) or sources whose band names the viewer does not know.
     """
     last_report = 0.0
     migration = False
@@ -658,6 +700,7 @@ def convert_command(
             resampling=resampling,
             nodata=_parse_nodata(nodata),
             mask_var=mask_var,
+            band_roles=_band_roles(band_roles),
             work_dir=work_dir,
             resume=resume,
             dry_run=dry_run,
@@ -683,3 +726,149 @@ def convert_command(
 
 
 convert_command.help = f"{convert_command.help}\n\n{FIDELITY_HELP}"
+
+
+def _band_rows(bands: tuple[Band, ...]) -> list[tuple[str, ...]]:
+    """Header and one row per band: name, common name, the roles it plays and why, scaling."""
+    plays: dict[str, list[str]] = {band.name: [] for band in bands}
+    for resolution in resolve_roles(bands).values():
+        for name in resolution.bands:
+            plays[name].append(f"{resolution.role} ({resolution.source})")
+    rows = [("name", "common_name", "role", "scale", "offset", "units")]
+    for band in bands:
+        rows.append(
+            (
+                band.name,
+                band.common_name or "-",
+                ", ".join(plays[band.name]) or "-",
+                f"{1.0 if band.scale is None else band.scale:g}",
+                f"{0.0 if band.offset is None else band.offset:g}",
+                band.units or "-",
+            )
+        )
+    return rows
+
+
+def _print_bands(bands: tuple[Band, ...]) -> None:
+    rows = _band_rows(bands)
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+    click.echo("bands:")
+    for row in rows:
+        click.echo(
+            "  "
+            + "  ".join(
+                cell.ljust(width) for cell, width in zip(row, widths, strict=True)
+            ).rstrip()
+        )
+    for resolution in resolve_roles(bands).values():
+        if resolution.ambiguous:
+            names = ", ".join(resolution.bands)
+            click.echo(
+                f"warning: {names} all answer to {resolution.role} (by {resolution.source}); the "
+                f"viewer uses the first. Give {resolution.role} to one with --band-role "
+                "NAME=ROLE and clear or reassign the others",
+                err=True,
+            )
+    click.echo("products:")
+    for status in product_status(bands):
+        detail = "available" if status.available else f"needs {', '.join(status.missing)}"
+        click.echo(f"  {status.name.ljust(12)}  {detail}")
+
+
+@main.command("bands")
+@click.argument("store")
+@_band_role_option
+@click.option("--dry-run", is_flag=True, help="Show the result of --band-role without writing it.")
+def bands_command(store: str, band_roles: tuple[str, ...], dry_run: bool) -> None:
+    """List the bands of STORE, the role each plays, and the viewer products they allow.
+
+    The viewer picks the bands of True color, False color, NDVI, NDWI and Water by role: a
+    band's common_name, else (when it has none) its name if that is red, green, blue or nir,
+    else its Sentinel-2 name (B04, B03, B02, B08). Nothing else is guessed. For other names,
+    --band-role NAME=ROLE sets the common_name in the local STORE, in place: only the root
+    zarr.json (and consolidated metadata) changes, never data, scale, offset or units. A hosted
+    copy needs its root zarr.json uploaded again and any CDN copy purged.
+    """
+    roles = _band_roles(band_roles)
+    with _command_errors():
+        opened = open_store(store)
+        bands = opened.attrs.bands
+        if roles:
+            bands = set_band_roles(store, roles) if not dry_run else assign_roles(bands, roles)
+    click.echo(f"store:     {store}")
+    if roles:
+        click.echo("dry run: nothing was written" if dry_run else "common names written")
+    _print_bands(bands)
+
+
+@main.command("link")
+@click.argument("store_url")
+@click.option("--product", default=None, help="Initial product id (see `chronozarr bands`).")
+@click.option("--band", default=None, help="Band of the single-band product.")
+@click.option(
+    "--range",
+    "limits",
+    default=None,
+    metavar="LOW,HIGH",
+    help="Display limits of the single-band product, in physical units (the band's scale and "
+    "offset applied). Needs --product band.",
+)
+@click.option("--time", "t", type=int, default=None, help="Initial timestep index.")
+@click.option("--viewer", default=VIEWER_URL, show_default=True, help="Viewer URL.")
+def link_command(
+    store_url: str,
+    product: str | None,
+    band: str | None,
+    limits: str | None,
+    t: int | None,
+    viewer: str,
+) -> None:
+    """Print a viewer URL that opens the hosted store STORE_URL at a chosen initial view.
+
+    The product, band, display limits and timestep live in the URL, not in the store, so the
+    store stays readable by every client and anyone with the URL sees the same first view. Each
+    value is checked against the store (read over HTTP), because the viewer silently ignores one
+    the store cannot honor. To set the bands a product uses, see `chronozarr bands`.
+    """
+    if not is_url(store_url):
+        raise click.ClickException(
+            f"{store_url} is not an http(s) URL. A link needs the hosted store; to look at a "
+            "local one, use chronozarr.view() or chronozarr.player() in a notebook"
+        )
+    low_high = _parse_numbers(limits, 2, "--range", float)
+    with _command_errors():
+        opened = open_store(store_url)
+        bands = opened.attrs.bands
+        statuses = {s.id: s for s in product_status(bands)}
+        if product is not None:
+            if product not in statuses:
+                raise click.BadParameter(
+                    f"{product!r} is not a product; products are {', '.join(statuses)}",
+                    param_hint="--product",
+                )
+            if not statuses[product].available:
+                available = ", ".join(i for i, s in statuses.items() if s.available)
+                raise click.BadParameter(
+                    f"{product} needs {', '.join(statuses[product].missing)}, which no band "
+                    f"is; available: {available}. See `chronozarr bands {store_url}`",
+                    param_hint="--product",
+                )
+        if band is not None and band not in opened.bands:
+            raise click.BadParameter(
+                f"{band!r} is not a band; bands are {', '.join(opened.bands)}",
+                param_hint="--band",
+            )
+        if t is not None and not 0 <= t < len(opened.times):
+            raise click.BadParameter(
+                f"{t} is outside 0..{len(opened.times) - 1}", param_hint="--time"
+            )
+        if low_high is not None:
+            chosen = next(b for b in bands if b.name == (band or bands[0].name))
+            if product != "band":
+                raise click.UsageError("--range sets the single-band product: add --product band")
+            if not display_limits_apply(opened.dtype.name, chosen):
+                raise click.UsageError(
+                    f"band {chosen.name} is shown as reflectance with fixed limits, so --range "
+                    "would be ignored; choose a band whose values are not reflectance-like"
+                )
+        click.echo(viewer_url(store_url, viewer, t=t, product=product, band=band, range=low_high))

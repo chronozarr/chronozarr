@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import html
 import importlib
+import math
 import posixpath
 import re
 import threading
 import urllib.parse
+from collections.abc import Sequence
 from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -182,17 +184,57 @@ def serve_store(store: str | Path, *, port: int = 0) -> StoreServer:
         return running
 
 
-def viewer_url(store_url: str, viewer: str = VIEWER_URL) -> str:
-    """URL that opens `store_url` in the viewer."""
-    return f"{viewer}?store={urllib.parse.quote(store_url, safe='')}"
+def viewer_url(
+    store_url: str,
+    viewer: str = VIEWER_URL,
+    *,
+    t: int | None = None,
+    product: str | None = None,
+    band: str | None = None,
+    range: Sequence[float] | None = None,
+) -> str:
+    """URL that opens `store_url` in the viewer, optionally at a timestep, product and display.
+
+    `t` is a timestep index, `product` a viewer product id (`true_color`, `false_color`, `ndvi`,
+    `ndwi`, `water`, `band`), `band` the band of the single-band product, and `range` its display
+    limits (low, high) in physical units. They are presentation only: the store is not touched,
+    and anyone who opens the URL sees the same initial view. The viewer ignores a value the
+    store cannot honour, so check them first with `chronozarr link`.
+    """
+    query = [f"store={urllib.parse.quote(store_url, safe='')}"]
+    if t is not None:
+        if t < 0:
+            raise ValueError(f"t must be a timestep index of 0 or more, got {t}")
+        query.append(f"t={t}")
+    if product is not None:
+        query.append(f"p={urllib.parse.quote(product, safe='')}")
+    if band is not None:
+        query.append(f"b={urllib.parse.quote(band, safe='')}")
+    if range is not None:
+        low, high = range
+        if not (math.isfinite(low) and math.isfinite(high) and low < high):
+            raise ValueError(f"range must be two finite increasing limits, got {tuple(range)}")
+        query.append(f"r={low:.12g},{high:.12g}")
+    return f"{viewer}?{'&'.join(query)}"
 
 
-def view(store: str | Path, *, height: int = 640, viewer: str = VIEWER_URL, port: int = 0) -> Any:
+def view(
+    store: str | Path,
+    *,
+    height: int = 640,
+    viewer: str = VIEWER_URL,
+    port: int = 0,
+    t: int | None = None,
+    product: str | None = None,
+    band: str | None = None,
+    range: Sequence[float] | None = None,
+) -> Any:
     """Show a store in the chronozarr viewer as a notebook iframe.
 
     `store` is a local directory (served from 127.0.0.1, see the module docstring for when that
     works) or an http(s) URL of a store that is already hosted. Returns an
     `IPython.display.HTML`; leave it as a cell's last expression or pass it to `display`.
+    `t`, `product`, `band` and `range` set the initial view, as in `viewer_url`.
     """
     try:
         ipython_display = importlib.import_module("IPython.display")  # optional extra
@@ -204,7 +246,7 @@ def view(store: str | Path, *, height: int = 640, viewer: str = VIEWER_URL, port
     store_url = (
         text if text.startswith(("http://", "https://")) else serve_store(text, port=port).url
     )
-    target = viewer_url(store_url, viewer)
+    target = viewer_url(store_url, viewer, t=t, product=product, band=band, range=range)
     frame = (
         f'<iframe src="{html.escape(target, quote=True)}" width="100%" height="{int(height)}" '
         'style="border:0" allow="fullscreen; local-network-access" loading="lazy"></iframe>'
