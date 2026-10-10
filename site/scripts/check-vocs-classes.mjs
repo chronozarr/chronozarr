@@ -23,3 +23,11 @@ if (missing.length > 0) {
   process.exit(1);
 }
 console.log(`styles.css: all ${wanted.size} Vocs class names present in the built CSS.`);
+
+// The font link comes from the `head` option in vocs.config.tsx; make sure it reached the prerendered HTML.
+const index = await readFile(resolve(site, 'docs/dist/index.html'), 'utf8');
+if (!index.includes('https://fonts.googleapis.com/css2')) {
+  console.error('docs/dist/index.html has no Google Fonts stylesheet link; the `head` option in vocs.config.tsx was not rendered.');
+  process.exit(1);
+}
+console.log('index.html: Google Fonts link present.');
