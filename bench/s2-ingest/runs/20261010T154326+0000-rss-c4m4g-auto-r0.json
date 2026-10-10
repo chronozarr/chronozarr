@@ -1,0 +1,252 @@
+{
+ "tag": "rss-c4m4g-auto-r0",
+ "timestamp": "2026-10-10T15:43:26+00:00",
+ "bench_args": [
+  "--workload",
+  "lab-ucayali-x2",
+  "--config",
+  "auto",
+  "--rep",
+  "0"
+ ],
+ "workload": "lab-ucayali-x2",
+ "config": "auto",
+ "rep": 0,
+ "lab": null,
+ "warm": false,
+ "container": {
+  "cpus": "4",
+  "memory": "4g",
+  "memory_swap": "4g",
+  "nofile": null,
+  "exit_code": 0,
+  "oom_killed": false,
+  "cgroup": {
+   "memory.peak": "3486519296",
+   "memory.max": "4294967296",
+   "memory.events": {
+    "low": "0",
+    "high": "0",
+    "max": "0",
+    "oom": "0",
+    "oom_kill": "0",
+    "oom_group_kill": "0"
+   },
+   "cpu.max": {
+    "400000": "100000"
+   },
+   "cpu.stat": {
+    "usage_usec": "16764879",
+    "user_usec": "13877784",
+    "system_usec": "2887094",
+    "nice_usec": "0",
+    "nr_periods": "74",
+    "nr_throttled": "25",
+    "throttled_usec": "12101551",
+    "nr_bursts": "0",
+    "burst_usec": "0"
+   }
+  }
+ },
+ "ok": true,
+ "stderr_tail": "",
+ "bench_record": {
+  "ok": true,
+  "workload": "lab-ucayali-x2",
+  "config": "auto",
+  "rep": 0,
+  "git_sha": "01185cd",
+  "git_dirty": true,
+  "baseline_ref": null,
+  "timestamp": "2026-10-10T15:43:26+00:00",
+  "machine": {
+   "platform": "Linux-6.12.76-linuxkit-aarch64-with-glibc2.41",
+   "machine": "aarch64",
+   "processor": "",
+   "python": "3.13.16",
+   "resources": {
+    "cpus": 4,
+    "cpu_source": "cgroup CPU quota",
+    "memory_total": 8216215552,
+    "memory_available": 7650639872,
+    "memory_limit": 4210364416,
+    "memory_source": "cgroup memory limit",
+    "open_files": 1048576
+   }
+  },
+  "lab": null,
+  "warm": false,
+  "wall_seconds": 5.307,
+  "first_month_seconds": 5.283,
+  "cpu_seconds": 11.99,
+  "peak_rss_bytes": 3200446464,
+  "gdal_network": {
+   "get_requests": 480,
+   "head_requests": 100,
+   "downloaded_bytes": 870001902
+  },
+  "lab_server": {
+   "requests": {
+    "HEAD": 100,
+    "GET": 868
+   },
+   "status": {
+    "200": 100,
+    "206": 868
+   },
+   "bytes_sent": 870001902,
+   "bursts": 0,
+   "config": {
+    "latency_ms": 0.0,
+    "bandwidth_mbps": 0.0,
+    "fail_rate": 0.0,
+    "fail_after": 0,
+    "fail_for": 5.0,
+    "max_inflight": 0,
+    "fail_first": 0,
+    "seed": 0
+   }
+  },
+  "nic_rx_bytes": 482,
+  "month_sha256": {
+   "2024-07": "495d6657e2921b5beace3f3c856883c82d0d07e05fdb762492cb7885ba2e75dd"
+  },
+  "output_pixels": 30514540,
+  "output_bytes": 61029080,
+  "useful_MBps": 11.5,
+  "Mpx_per_s": 5.75,
+  "settings": {
+   "adaptive": true,
+   "requests": 16,
+   "max_requests": 16,
+   "cpu_workers": 3,
+   "memory_budget": 2105182208,
+   "gdal_cache": 131573888,
+   "reasons": [
+    "4 usable CPUs (cgroup CPU quota)",
+    "cpu_workers=3: usable CPUs less one for the scheduler",
+    "max_requests=16: default ceiling 16; raise it to let auto mode climb higher",
+    "requests=16: start value; lowered only if the host fails or throttles reads",
+    "memory_budget=2.0 GiB: 50% of 3.9 GiB (cgroup memory limit)",
+    "gdal_cache=125 MiB: 1/16 of the budget, 64-512 MiB"
+   ]
+  },
+  "run_summary": {
+   "wall_seconds": 5.285,
+   "first_month_seconds": 5.283,
+   "months": 1,
+   "months_skipped": 0,
+   "scenes": 20,
+   "scenes_no_valid": 0,
+   "scenes_failed": 0,
+   "reads": 100,
+   "reads_native": 100,
+   "read_retries": 0,
+   "http_throttled": 0,
+   "pixel_fraction_read": 0.6236,
+   "stage_thread_seconds": {
+    "read": 48.22,
+    "mask": 3.99,
+    "median": 0.57,
+    "write": 0.84
+   },
+   "cpu_seconds": 11.99,
+   "cpu_utilisation": 0.567,
+   "request_slot_occupancy": 0.57,
+   "mean_request_limit": 16.0,
+   "final_request_limit": 16,
+   "limiter_events": [
+    {
+     "t": 0.0,
+     "limit": 16,
+     "rate_MBps": null,
+     "reason": "start"
+    },
+    {
+     "t": 3.01,
+     "limit": 16,
+     "rate_MBps": 256.91,
+     "reason": "at ceiling"
+    }
+   ],
+   "months_over_budget": [],
+   "months_all_failed": [],
+   "bottleneck": "neither saturated (request slots busy 57%, CPU 57%): latency, few scenes per month, or a small AOI"
+  },
+  "peak_open_fds": 108,
+  "rss_timeline": [
+   [
+    0.29,
+    48025600
+   ],
+   [
+    0.64,
+    64663552
+   ],
+   [
+    1.01,
+    89255936
+   ],
+   [
+    1.47,
+    293183488
+   ],
+   [
+    1.75,
+    1051959296
+   ],
+   [
+    2.03,
+    1587404800
+   ],
+   [
+    2.53,
+    1714196480
+   ],
+   [
+    2.95,
+    1771773952
+   ],
+   [
+    3.52,
+    2359885824
+   ],
+   [
+    3.92,
+    2666364928
+   ],
+   [
+    4.26,
+    2644971520
+   ],
+   [
+    4.57,
+    2644971520
+   ],
+   [
+    4.87,
+    2686476288
+   ],
+   [
+    5.19,
+    2936954880
+   ],
+   [
+    5.5,
+    2872918016
+   ],
+   [
+    5.82,
+    1660088320
+   ],
+   [
+    6.14,
+    1660960768
+   ],
+   [
+    6.45,
+    1606049792
+   ]
+  ]
+ }
+}

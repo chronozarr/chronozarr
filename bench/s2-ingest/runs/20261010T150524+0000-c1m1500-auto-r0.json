@@ -1,0 +1,54 @@
+{
+ "tag": "c1m1500-auto-r0",
+ "timestamp": "2026-10-10T15:05:24+00:00",
+ "bench_args": [
+  "--workload",
+  "lab-ucayali-x2",
+  "--config",
+  "auto",
+  "--rep",
+  "0"
+ ],
+ "workload": "lab-ucayali-x2",
+ "config": "auto",
+ "rep": 0,
+ "lab": null,
+ "warm": false,
+ "container": {
+  "cpus": "1",
+  "memory": "1500m",
+  "memory_swap": "1500m",
+  "nofile": null,
+  "exit_code": 137,
+  "oom_killed": true,
+  "cgroup": {
+   "memory.peak": "1572990976",
+   "memory.max": "1572864000",
+   "memory.events": {
+    "low": "0",
+    "high": "0",
+    "max": "995",
+    "oom": "8",
+    "oom_kill": "1",
+    "oom_group_kill": "0"
+   },
+   "cpu.max": {
+    "100000": "100000"
+   },
+   "cpu.stat": {
+    "usage_usec": "8767431",
+    "user_usec": "6769747",
+    "system_usec": "1997683",
+    "nice_usec": "0",
+    "nr_periods": "88",
+    "nr_throttled": "82",
+    "throttled_usec": "71954730",
+    "nr_bursts": "0",
+    "burst_usec": "0"
+   }
+  }
+ },
+ "ok": false,
+ "stderr_tail": "2024-07 needs 1.53 GB, over the 0.76 GB budget; reading it alone\nKilled",
+ "bench_record": null
+}
