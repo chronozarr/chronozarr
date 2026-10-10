@@ -22,8 +22,18 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** The viewer's chrome (header, timeline, inspector) hidden so that its canvas is the whole window, like the map of the other two. */
 const VIEWER_FULL_WINDOW_CSS = 'nav, .timeline-bar, .sidebar, .click-hint, .perf-overlay { display: none !important; }';
 
-const withTimeout = (promise, ms, label) =>
-  Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} did not return within ${ms} ms`)), ms))]);
+/** Resolve or reject with `promise`, rejecting after `ms`; clear the losing timer so an accepted session can exit promptly. */
+export async function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} did not return within ${ms} ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const rafGaps = (page, ms) =>
   page.evaluate(
