@@ -7,10 +7,10 @@ budget. Months that already exist (.tif, or .npz from before 2026-10-11) are ski
 
 Phase 2 (encode) reads those files as one lazy (time, band, y, x) uint16 array, one cell of
 every month at a time, and writes it with chronozarr.encode to
-<out-dir>/stores/<aoi>/chronozarr/, with band metadata, a coverage plane (1 where at least one
-scene was valid, 0 where the value is carried forward or missing) and provenance recorded in
-the store. With --stac it also writes a static STAC Collection and Item to
-<out-dir>/stores/<aoi>/stac/.
+<out-dir>/stores/<aoi>/chronozarr/, with band metadata, a coverage plane (the number of valid
+scenes behind each pixel, saturated at 255; 0 where the value is carried forward or missing)
+and provenance recorded in the store. With --stac it also writes a static STAC Collection and
+Item to <out-dir>/stores/<aoi>/stac/.
 
 Usage:
     uv run python examples/sentinel2_pc/ingest.py --aoi nile_delta
@@ -93,9 +93,8 @@ PROVENANCE = {
         "pixel and month, the median of scenes whose SCL class is 4, 5, 6, 7 or 11 and whose "
         "bands are non-zero; the +1000 offset of processing baseline 04.00 and later is removed. "
         "A pixel with no valid scene takes the previous month's composite, and stays 0 if there "
-        "is none. coverage is 1 where at least one scene was valid that month and 0 where the "
-        "value is carried forward or missing (the monthly files store the valid fraction, not a "
-        "scene count)."
+        "is none. coverage is the number of valid scenes behind the pixel that month (saturated "
+        "at 255), and 0 where the value is carried forward or missing."
     ),
 }
 STAC_LICENSE = "proprietary"
@@ -223,7 +222,7 @@ class MosaicStack:
     """The monthly files of an AOI as lazy arrays, ready for chronozarr.encode."""
 
     data: xr.DataArray  # (time, band, y, x) uint16
-    coverage: xr.DataArray  # (time, y, x) uint8: 1 where any scene was valid that month
+    coverage: xr.DataArray | None  # (time, y, x) uint8 valid scenes per pixel, max 255
     incomplete: dict[str, list[str]]  # months written without some scenes -> scene IDs
 
 
@@ -243,7 +242,7 @@ def month_files(mosaic_dir: Path) -> list[Path]:
 def open_mosaic_stack(
     mosaic_dir: Path, keep_going: bool = False, scratch_dir: Path | None = None
 ) -> Iterator[MosaicStack]:
-    """Every month in `mosaic_dir` as lazy (time, band, y, x) data and a coverage flag.
+    """Every month in `mosaic_dir` as lazy (time, band, y, x) data and coverage counts.
 
     Nothing but the months' records is read here; encoding reads one cell of every month at a
     time. Months saved as .npz (before 2026-10-11) are first copied to GeoTIFFs, one at a time,
@@ -253,6 +252,11 @@ def open_mosaic_stack(
     Refuses months that list failed scenes unless `keep_going`, and any month whose gaps were
     filled from something other than the month before it in the stack (a month re-run or
     removed after its successor was built).
+
+    Coverage is the number of valid scenes per pixel, as chronozarr's coverage variable
+    requires, saturated at 255. Months saved as .npz before `scenes_searched` was recorded hold
+    only the valid fraction k / n without n, so the count cannot be recovered; a flag would be
+    a wrong count, so then the store gets no coverage variable and a warning names the months.
     """
     paths = month_files(mosaic_dir)
     with tempfile.TemporaryDirectory(prefix=".npz-months-", dir=scratch_dir) as scratch:
@@ -308,8 +312,13 @@ def open_mosaic_stack(
         n_bands, height, width = reference["shape"]
         times = np.array([np.datetime64(f"{p.stem}-01", "s") for p in paths])
         stack = _MonthStack(tifs, list(range(1, n_bands + 1)), height, width)
-        flags = _MonthStack(
-            tifs, [n_bands + 1], height, width, plane=True, transform=lambda c: c > 0
+        counts = _MonthStack(
+            tifs,
+            [n_bands + 1],
+            height,
+            width,
+            plane=True,
+            transform=lambda c: np.minimum(c, 255).astype(np.uint8),
         )
         data = xr.DataArray(
             xr.Variable(("time", "band", "y", "x"), indexing.LazilyIndexedArray(stack)),
@@ -319,10 +328,23 @@ def open_mosaic_stack(
                 "transform": tuple(reference["transform"])[:6],
             },
         )
-        coverage = xr.DataArray(
-            xr.Variable(("time", "y", "x"), indexing.LazilyIndexedArray(flags)),
-            coords={"time": times},
-        )
+        no_count = [
+            p.stem for p, r in zip(paths, records, strict=True) if r["scenes_searched"] is None
+        ]
+        coverage = None
+        if no_count:
+            logger.warning(
+                "%d months were saved without scenes_searched, so their valid fraction cannot "
+                "become a scene count (%s); the store will have no coverage variable. Re-run "
+                "the download of those months to get one.",
+                len(no_count),
+                ", ".join(no_count[:5]) + (", ..." if len(no_count) > 5 else ""),
+            )
+        else:
+            coverage = xr.DataArray(
+                xr.Variable(("time", "y", "x"), indexing.LazilyIndexedArray(counts)),
+                coords={"time": times},
+            )
         yield MosaicStack(data, coverage, incomplete)
 
 
@@ -330,8 +352,8 @@ def _npz_as_tif(path: Path, directory: Path) -> Path:
     """A month saved as .npz, rewritten as a GeoTIFF in `directory` with the same record."""
     month = load_mosaic(path)
     count = month["valid_count"]
-    if count is None:  # before scenes_searched was saved: only "any valid scene" is known
-        count = (month["coverage"] > 0).astype(np.uint16)
+    if count is None:  # before scenes_searched was saved: no count; the stack drops coverage
+        count = np.zeros(month["coverage"].shape, dtype=np.uint16)
     _, height, width = month["bands"].shape
     grid = Grid(month["transform"], CRS.from_epsg(month["epsg"]), height, width)
     out = directory / f"{path.stem}.tif"
