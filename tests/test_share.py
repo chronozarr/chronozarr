@@ -204,6 +204,26 @@ def test_share_explicit_port_is_the_port_given_to_cloudflared(store, monkeypatch
     assert not view_module._servers
 
 
+def test_public_tunnel_readiness_allows_delayed_dns_propagation(monkeypatch):
+    now = [0.0]
+    expected = b"synthetic root"
+
+    def direct_get(*args, **kwargs):
+        if now[0] < 31:
+            raise OSError("temporary DNS lookup failure")
+        return expected
+
+    monkeypatch.setattr(share_module, "_direct_get", direct_get)
+    monkeypatch.setattr(share_module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        share_module.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
+    )
+
+    share_module._wait_for_public_store("https://delayed.trycloudflare.com/store", expected)
+
+    assert now[0] >= 31
+
+
 def test_first_chunk_measurement_uses_an_isolated_synthetic_store(tmp_path):
     path = tmp_path / "synthetic"
     build_store(path, make_truth(2, 1, 20, 24), shard=False, chunk_size=16)

@@ -30,7 +30,10 @@ from chronozarr.view import StoreServer, local_access, viewer_url
 # Keep the scheme split across source tokens: tests scan source text for shipped data-store URLs.
 _QUICK_TUNNEL = re.compile("https" + r"://[a-z0-9-]+\.trycloudflare\.com\b", re.IGNORECASE)
 _START_TIMEOUT_SECONDS = 30.0
-_READY_TIMEOUT_SECONDS = 30.0
+# Cloudflare's quick-tunnel banner explicitly notes that a new hostname can take time to become
+# reachable. Keep polling long enough for its public DNS record to propagate before rejecting a
+# tunnel that cloudflared has already connected.
+_READY_TIMEOUT_SECONDS = 90.0
 _POLL_SECONDS = 0.2
 _TUNNEL_LOG_LINES = 32
 
