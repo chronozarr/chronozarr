@@ -37,8 +37,8 @@ or at a CDN:
 ```html
 <script type="importmap">
 { "imports": {
-  "chronozarr": "https://cdn.jsdelivr.net/npm/chronozarr@0.3.1/chronozarr/decoder.js",
-  "chronozarr/maplibre": "https://cdn.jsdelivr.net/npm/chronozarr@0.3.1/maplibre/layer.js"
+  "chronozarr": "https://cdn.jsdelivr.net/npm/chronozarr@0.4.0/chronozarr/decoder.js",
+  "chronozarr/maplibre": "https://cdn.jsdelivr.net/npm/chronozarr@0.4.0/maplibre/layer.js"
 } }
 </script>
 ```

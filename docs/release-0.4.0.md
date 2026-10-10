@@ -1,4 +1,4 @@
-# chronozarr 0.4.0 release candidate
+# chronozarr 0.4.0
 
 This release makes it easier to turn an existing raster series into an interactive
 viewer and share it with a colleague. Python and npm package versions advance to
@@ -36,16 +36,21 @@ Ask the recipient to open the copied link, confirm the intended dataset and view
 scrub to another date, and inspect a pixel. Record any confusing step and the time
 until the first useful view. This independent colleague trial remains to be done.
 
-## Release checks
+## Release status
 
-- Confirm the release PR's Python, JavaScript, browser and notebook checks pass.
-- Build the Python wheel/sdist and npm tarball; verify the installed packages expose
-  the new CLI and viewer features.
-- Merge the reviewed release commit before tagging it `v0.4.0`.
-- The tag triggers the existing PyPI and npm publishing workflows. Verify both
-  registries report 0.4.0 after those workflows finish.
-- Verify the hosted viewer includes Copy link and matches the walkthrough before
-  announcing the release. Package publication and the hosted viewer are separate.
+The release commit is `e982518b39edef5447e70e641a441f633b498686`, tagged
+`v0.4.0`. The Python package on PyPI and the JavaScript package on npm both
+report version 0.4.0. The package versions advance independently of the store
+format: this release reads and writes chronozarr v0.3 stores.
+
+The release checks covered the Python, JavaScript, browser and notebook suites,
+the Python wheel and sdist, and the npm tarball. The installed packages expose
+the new CLI and viewer features.
+
+The independent colleague trial remains to be done. Live behavior of the cloud
+publishing adapters still needs validation in the user's cloud accounts. The
+hosted viewer's deployed Copy link flow also needs a fresh production
+verification; package publication and the hosted viewer are separate.
 
 The synthetic live tunnel test passed during review, including public byte ranges,
 CORS, exact decoded values and shutdown. It does not replace the colleague trial

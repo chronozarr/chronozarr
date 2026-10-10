@@ -1,6 +1,6 @@
 # Notebook player
 
-`chronozarr.player` shows a chronozarr store in a notebook widget with a time slider and a play button. You can set the timestep, the product and the speed from Python, and you can read the pixel that you clicked. The `chronozarr` 0.3.1 release on PyPI includes the player. You need a trusted local Jupyter notebook, VS Code notebook or compatible anywidget host. The host must allow an iframe and serve the notebook over HTTP or HTTPS.
+`chronozarr.player` shows a chronozarr store in a notebook widget with a time slider and a play button. You can set the timestep, the product and the speed from Python, and you can read the pixel that you clicked. The `chronozarr` 0.4.0 release on PyPI includes the player. You need a trusted local Jupyter notebook, VS Code notebook or compatible anywidget host. The host must allow an iframe and serve the notebook over HTTP or HTTPS.
 
 ## Run it
 

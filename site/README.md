@@ -54,7 +54,10 @@ Verified 2026-10-02 (America/New_York):
 - Synthetic quickstart roundtrip, validator, xarray backend, and plain Zarr read pass.
 - Live homepage and docs load; search returns specification results (historical v0.2 deployment check).
 - Unknown live paths return 404; www returns 301 to the apex while preserving path.
-- PyPI and npm both report chronozarr 0.2.1.
+- The package versions recorded by this historical deployment check were PyPI and npm chronozarr 0.2.1.
+
+The current Python and npm package release is 0.4.0; see
+[`docs/release-0.4.0.md`](../docs/release-0.4.0.md) for its release status.
 
 Live: https://chronozarr.org
 Fallback: https://chronozarr-docs.jake-gearon.workers.dev
