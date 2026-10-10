@@ -111,6 +111,24 @@ def test_share_prints_only_a_verified_public_viewer_link_and_cleans_up(store, mo
     assert not view_module._servers
 
 
+def test_share_reports_concise_startup_stages_in_order(store, monkeypatch):
+    process = FakeProcess()
+    _ready_share(monkeypatch, process)
+    monkeypatch.setattr(share_module, "_wait_for_tunnel", _interrupt)
+    lines: list[str] = []
+
+    share_module.share(store, open_browser=False, echo=lines.append)
+
+    stages = [
+        "starting local server and quick tunnel...",
+        "waiting for Cloudflare to assign a public address...",
+        "waiting for public access (new tunnel DNS can take up to 90 seconds)...",
+        "checking browser access...",
+        "measuring first transfer...",
+    ]
+    assert [line for line in lines if line in stages] == stages
+
+
 def test_share_missing_cloudflared_never_starts_a_server(store, monkeypatch):
     monkeypatch.setattr(share_module.shutil, "which", lambda _: None)
 
@@ -145,6 +163,9 @@ def test_share_does_not_print_a_link_when_doctor_fails(store, monkeypatch):
         share_module.share(store, open_browser=False, echo=lines.append)
 
     assert not any(line.startswith("open: ") for line in lines)
+    assert "checking browser access..." in lines
+    assert "measuring first transfer..." not in lines
+    assert not any("chronozarr.org/demo/?store=" in line for line in lines)
     assert process.terminated
     assert not view_module._servers
 
