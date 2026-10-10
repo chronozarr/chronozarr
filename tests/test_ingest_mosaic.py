@@ -20,7 +20,7 @@ rasterio = pytest.importorskip("rasterio")
 pytest.importorskip("planetary_computer")
 pytest.importorskip("pystac_client")
 
-from rasterio.crs import CRS  # noqa: E402  (after importorskip)
+from rasterio.crs import CRS  # noqa: E402  # ty: ignore[unresolved-import]
 from rasterio.transform import Affine  # noqa: E402
 from rasterio.warp import Resampling, reproject  # noqa: E402
 
