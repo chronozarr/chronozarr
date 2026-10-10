@@ -240,19 +240,22 @@ def month_files(mosaic_dir: Path) -> list[Path]:
 
 
 @contextmanager
-def open_mosaic_stack(mosaic_dir: Path, keep_going: bool = False) -> Iterator[MosaicStack]:
+def open_mosaic_stack(
+    mosaic_dir: Path, keep_going: bool = False, scratch_dir: Path | None = None
+) -> Iterator[MosaicStack]:
     """Every month in `mosaic_dir` as lazy (time, band, y, x) data and a coverage flag.
 
     Nothing but the months' records is read here; encoding reads one cell of every month at a
-    time. Months saved as .npz (before 2026-10-11) are first copied to GeoTIFFs in a temporary
-    directory, one at a time.
+    time. Months saved as .npz (before 2026-10-11) are first copied to GeoTIFFs, one at a time,
+    in a temporary directory under `scratch_dir` (default: the system's), never in
+    `mosaic_dir`.
 
     Refuses months that list failed scenes unless `keep_going`, and any month whose gaps were
     filled from something other than the month before it in the stack (a month re-run or
     removed after its successor was built).
     """
     paths = month_files(mosaic_dir)
-    with tempfile.TemporaryDirectory(prefix=".npz-months-", dir=mosaic_dir) as scratch:
+    with tempfile.TemporaryDirectory(prefix=".npz-months-", dir=scratch_dir) as scratch:
         tifs: list[Path] = []
         records: list[dict] = []
         for path in paths:
@@ -366,7 +369,8 @@ def provenance_for(incomplete: dict[str, list[str]]) -> dict:
 
 def encode(mosaic_dir: Path, store_dir: Path, keep_going: bool = False) -> None:
     t0 = time.perf_counter()
-    with open_mosaic_stack(mosaic_dir, keep_going=keep_going) as stack:
+    store_dir.parent.mkdir(parents=True, exist_ok=True)
+    with open_mosaic_stack(mosaic_dir, keep_going, scratch_dir=store_dir.parent) as stack:
         da = stack.data
         logger.info(
             "Found %d monthly mosaics %s (%.2f GB uncompressed), %.1fs",

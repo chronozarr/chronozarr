@@ -126,7 +126,7 @@ def test_files_from_before_the_chain_record_are_accepted(tmp_path):
         assert stack.data.shape == (2, 4, 3, 3) and stack.incomplete == {}
         np.testing.assert_array_equal(stack.data.values, np.ones((2, 4, 3, 3)))
         np.testing.assert_array_equal(stack.coverage.values, np.ones((2, 3, 3)))
-    assert sorted(p.name for p in out.iterdir()) == ["2024-01.npz", "2024-02.npz"]
+    assert sorted(p.name for p in out.iterdir()) == ["2024-01.npz", "2024-02.npz"]  # untouched
 
 
 def test_the_store_holds_every_month_read_lazily(tmp_path, monkeypatch):
