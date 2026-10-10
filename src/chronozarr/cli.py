@@ -42,6 +42,7 @@ from chronozarr.doctor import DEFAULT_ORIGIN, diagnose, is_url
 from chronozarr.encode import EncodeReport, encode
 from chronozarr.export import export_cog, select_times
 from chronozarr.schema import Band, SchemaError, validate
+from chronozarr.share import share
 from chronozarr.stac import write_stac
 from chronozarr.store import redact_url
 from chronozarr.view import VIEWER_URL, preview, preview_command, viewer_url
@@ -588,6 +589,49 @@ def preview_command_(
             viewer=viewer,
             viewer_dir=viewer_dir,
             base_url=base_url,
+            open_browser=not no_open,
+            echo=click.echo,
+        )
+
+
+@main.command("share")
+@click.argument("store", type=click.Path(path_type=Path))
+@click.option(
+    "--port",
+    type=click.IntRange(0, 65535),
+    default=0,
+    help="Port on 127.0.0.1 (default: a free one). An occupied port is an error.",
+)
+@click.option(
+    "--viewer-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Self-hosted viewer folder (output of `chronozarr-viewer`), served through the tunnel.",
+)
+@click.option(
+    "--viewer",
+    default=None,
+    help="URL of another viewer deployment (default: https://chronozarr.org/demo/).",
+)
+@click.option("--no-open", is_flag=True, help="Print the verified viewer URL without opening it.")
+def share_command_(
+    store: Path,
+    port: int,
+    viewer_dir: Path | None,
+    viewer: str | None,
+    no_open: bool,
+) -> None:
+    """Share the local store STORE through a disposable Cloudflare quick tunnel.
+
+    The command checks the public URL with `chronozarr doctor` before printing a link. Ctrl-C
+    stops both the tunnel and the loopback server. Anyone who has the link can read the store.
+    """
+    with _command_errors():
+        share(
+            store,
+            port=port,
+            viewer=viewer,
+            viewer_dir=viewer_dir,
             open_browser=not no_open,
             echo=click.echo,
         )
