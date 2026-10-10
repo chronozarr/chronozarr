@@ -69,34 +69,88 @@ The server answers byte ranges and CORS. It sends `Cache-Control: no-cache` and 
 
 ### Share a store through a tunnel
 
-`chronozarr share` makes a disposable Cloudflare quick tunnel, verifies the public store with
-`chronozarr doctor`, and then prints one viewer link. It needs a local
-[cloudflared install](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/),
-but no Cloudflare account or configuration.
+This workflow takes a folder of dated GeoTIFFs to a viewer link for a colleague.
+
+Install these prerequisites once:
+
+- Python 3.11 or later.
+- `chronozarr[geo]`, which adds GeoTIFF support.
+- [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+  on your `PATH`. A quick tunnel needs no Cloudflare account or configuration.
+
+Install the Python package with:
 
 ```sh
-chronozarr share my_store
+python -m pip install "chronozarr[geo]"
 ```
 
-The command starts its loopback server first and confirms that the selected port serves this
-store before it starts cloudflared. It waits until the public route returns the same `zarr.json`,
-runs doctor against that route, and prints the link only if doctor has no failures. It also times
-the first level-0 cell read through the tunnel and gives an estimated overview-step time. For a
-sharded store, that bounded read includes its shard-index range and inner chunk. A new quick
-tunnel hostname can take up to 90 seconds to become reachable. `Ctrl-C`
-stops both the tunnel and the server; if cloudflared stops on its own, the server stops too.
+The input files must have one date in each name. Accepted forms include `YYYYMMDD`, `YYYY-MM-DD`
+and `YYYY-MM`. Every file must use the same north-up grid, CRS, dimensions, bands, dtype and
+band metadata. A directory is not recursive. Quote a glob, such as `"rasters/**/*.tif"`, to
+include subdirectories. `convert` checks every file before it writes the store.
+
+1. Check the files without writing anything.
+
+   ```sh
+   chronozarr convert "rasters/*.tif" my_store --dry-run
+   ```
+
+2. Convert the series.
+
+   ```sh
+   chronozarr convert "rasters/*.tif" my_store
+   ```
+
+3. Validate the store.
+
+   ```sh
+   chronozarr validate my_store
+   ```
+
+4. Preview the store on your laptop.
+
+   ```sh
+   chronozarr preview my_store
+   ```
+
+   Keep this terminal open while you inspect the map. Press `Ctrl-C` when the local check is
+   complete.
+
+5. Start sharing from the laptop.
+
+   ```sh
+   chronozarr share my_store
+   ```
+
+   Keep this terminal open while your colleague uses the link. The command starts its own local
+   server and quick tunnel, checks the public route, and opens the verified viewer link. A new
+   hostname can take up to 90 seconds to become reachable. The command waits up to 90 seconds;
+   that wait does not guarantee that public DNS propagates within 90 seconds.
+
+6. Choose the view in the browser.
+
+   Select a product or band, move to a timestep, zoom or pan, and click the map to inspect values.
+   Click `Copy link` to copy the current view. The link does not store playback or loop settings.
+
+7. Send the copied link to your colleague.
+
+   The colleague needs only a modern browser. They do not need Python or a chronozarr install.
+   They can watch, scrub the timeline, zoom, pan and inspect pixels while the command runs.
+
+8. Stop sharing when you finish.
+
+   Press `Ctrl-C` in the `chronozarr share` terminal. This stops the tunnel and the local server.
+   Anyone with the link can read the store while the command runs. Each read uses your laptop's
+   upload bandwidth, so more viewers or faster scrubbing increases that cost. The address is
+   temporary and stops working with the command. For a durable or access-controlled route, upload
+   the store instead; see [hosting.md](hosting.md).
 
 `--port`, `--viewer`, `--viewer-dir`, and `--no-open` have the same meanings as for `preview`.
-For example, use a self-hosted viewer or keep the browser closed while you copy the verified link:
+Use `--no-open` when you want to open the link yourself:
 
 ```sh
-chronozarr share my_store --viewer-dir published --no-open
+chronozarr share my_store --no-open
 ```
-
-Anyone who has the link can read the store while the command runs. Every read reaches your
-machine, so the measured tunnel rate is limited by your upload connection. The address stops
-working when the command or cloudflared stops. For a durable or access-controlled route, upload
-the store instead; see [hosting.md](hosting.md).
 
 ## Show a store in a notebook
 
