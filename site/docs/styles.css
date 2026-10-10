@@ -1,29 +1,115 @@
-/* Homepage styles are scoped; Vocs owns the documentation layout. */
-.cz-home { max-width: 1060px; margin: 0 auto; padding: 56px 32px 72px; }
-.cz-home h1 { font-size: clamp(38px, 5.5vw, 68px); font-weight: 650; letter-spacing: -0.045em; line-height: 1.08; max-width: 750px; margin: 0 0 24px; }
-.cz-intro { max-width: 680px; font-size: 20px; line-height: 1.65; color: var(--vocs-color_textSecondary); }
-.cz-actions { display: flex; flex-wrap: wrap; gap: 14px; margin: 28px 0 36px; align-items: center; }
-.cz-actions a { padding: 11px 18px; border: 1px solid var(--vocs-color_border); border-radius: 6px; font-weight: 550; text-decoration: none; }
-.cz-actions a:first-child { background: #1767a6; color: white; border-color: #1767a6; }
-.cz-actions a:hover { outline: 2px solid var(--vocs-color_textAccent); outline-offset: 2px; }
-.cz-home a:focus-visible { outline: 3px solid #429bd7; outline-offset: 4px; }
-.cz-strip { margin: 0; }
-.cz-frames { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-.cz-frame { margin: 0; }
-.cz-frame img { width: 100%; height: auto; aspect-ratio: 345 / 346; object-fit: cover; display: block; border-radius: 4px; }
-.cz-frame figcaption { margin-top: 8px; font-size: 14px; color: var(--vocs-color_textSecondary); }
-.cz-caption { font-size: 14px; line-height: 1.6; color: var(--vocs-color_textSecondary); margin-top: 14px; max-width: 720px; }
-.cz-paths { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; padding: 36px 0; margin-top: 26px; border-top: 1px solid var(--vocs-color_border); }
-.cz-paths h2 { font-size: 20px; margin-bottom: 12px; font-weight: 600; }
-.cz-paths p { line-height: 1.65; color: var(--vocs-color_textSecondary); margin-bottom: 14px; }
-.cz-paths a, .cz-compat a { color: var(--vocs-color_textAccent); text-decoration: underline; text-underline-offset: 3px; }
-.cz-compat { padding: 20px 24px; background: var(--vocs-color_background2); border-radius: 6px; font-size: 15px; line-height: 1.75; }
-.cz-compat strong { display: block; margin-bottom: 5px; }
-@media (max-width: 650px) { .cz-home { padding: 32px 20px 48px; } .cz-intro { font-size: 18px; } .cz-frames { gap: 6px; } .cz-frame figcaption { font-size: 12px; } .cz-paths { grid-template-columns: 1fr; gap: 24px; } }
+/* chronozarr.org. Colours, type and radii are Vocs theme variables set in vocs.config.tsx.
+   This file carries the landing page and the few Vocs rules the variables cannot express.
+   Vocs class names are its 1.4.1 production names; check them when Vocs is upgraded. */
 
-/* Accessibility fixes to Vocs 1.4.1 (the class names below are its production names; check them when Vocs is upgraded). */
-/* Secondary text of the light theme: #838383 on the search field's #f6f6f6 is 3.5:1. */
-:root:not(.dark) { --vocs-color_text3: #6e6e6e; }
+/* ---------- documentation pages ---------- */
+
+/* Letter-spaced caps for small labels: sidebar groups, outline heading, table headers. */
+:root .vocs_Sidebar_sectionTitle,
+:root .vocs_Outline_heading,
+:root .vocs_DocsLayout_content th {
+  font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--vocs-color_text3);
+}
+:root .vocs_Sidebar_sectionTitle { color: var(--vocs-color_text); }
+:root .vocs_Sidebar_item { font-size: 0.9375rem; }
+:root .vocs_DesktopTopNav_item { font-size: 0.75rem; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; }
+:root .vocs_NavLogo_title { font-weight: 600; letter-spacing: -0.01em; }
+
+/* Headings: tighter, heavier, larger. */
+:root .vocs_Content:not(:has(.cz-home)) h1 { font-size: 2.75rem; font-weight: 600; letter-spacing: -0.03em; line-height: 1.05; text-wrap: balance; }
+:root .vocs_Content:not(:has(.cz-home)) h2 { font-size: 1.625rem; font-weight: 600; letter-spacing: -0.02em; text-wrap: balance; }
+:root .vocs_Content:not(:has(.cz-home)) h3 { font-size: 1.1875rem; font-weight: 600; letter-spacing: -0.01em; }
+:root .vocs_Content:not(:has(.cz-home)) h2 { border-top: 1px solid var(--vocs-color_border); padding-top: 1.25rem; }
+
+/* Rules, not boxes: code blocks, callouts and tables keep a hairline and little or no fill. */
+:root .vocs_DocsLayout_content pre { border: 1px solid var(--vocs-color_border); }
+:root .vocs_Callout_note, :root .vocs_Callout_info, :root .vocs_Callout_tip,
+:root .vocs_Callout_warning, :root .vocs_Callout_danger, :root .vocs_Callout_success {
+  background: transparent; border: 0; border-left: 2px solid currentColor; padding-left: 1rem;
+}
+:root .vocs_DocsLayout_content table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+:root .vocs_DocsLayout_content th, :root .vocs_DocsLayout_content td { border-left: 0; border-right: 0; }
+:root .vocs_DocsLayout_content th { border-top: 1px solid var(--vocs-color_text); }
+:root .vocs_DocsLayout_content tr:last-child td { border-bottom: 1px solid var(--vocs-color_text); }
+:root .vocs_Footer_navigationText { font-size: 0.6875rem; letter-spacing: 0.12em; text-transform: uppercase; }
+
+/* ---------- landing page ---------- */
+
+/* The landing page uses the full width; Vocs sizes the content column for 70ch of prose. */
+:root .vocs_DocsLayout_content:has(.cz-home) { --vocs-content_width: 1296px; }
+
+.cz-home {
+  --cz-gutter: clamp(20px, 4vw, 48px);
+  max-width: 1200px; margin: 0 auto; padding: 24px var(--cz-gutter) 96px;
+  display: grid; row-gap: 88px;
+  font-variant-numeric: tabular-nums;
+}
+.cz-home :is(h1, h2, p, figure, figcaption) { margin: 0; }
+.cz-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: 24px; row-gap: 16px; }
+.cz-label {
+  font-family: var(--vocs-fontFamily_mono); font-size: 0.6875rem; font-weight: 500;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--vocs-color_text3);
+}
+.cz-label-ink { color: var(--vocs-color_text); }
+.cz-rule { border-top: 1px solid var(--vocs-color_border); padding-top: 20px; }
+
+/* hero */
+.cz-hero { row-gap: 32px; padding-top: 64px; }
+.cz-hero .cz-label { grid-column: 1 / -1; }
+.cz-home h1 {
+  grid-column: 1 / -1; font-size: clamp(44px, 7.4vw, 108px); font-weight: 600;
+  letter-spacing: -0.045em; line-height: 0.96; text-wrap: balance;
+}
+.cz-intro { grid-column: 1 / -1; font-size: 1.125rem; line-height: 1.55; max-width: 62ch; color: var(--vocs-color_text2); }
+@media (min-width: 900px) { .cz-intro { grid-column: 4 / span 7; } }
+
+/* figure: plate and filmstrip */
+.cz-plate { position: relative; background: var(--vocs-color_border); }
+.cz-plate img { display: block; width: 100%; height: auto; aspect-ratio: 5 / 3; object-fit: cover; }
+.cz-plate .cz-date, .cz-thumb .cz-year {
+  position: absolute; font-family: var(--vocs-fontFamily_mono); font-size: 0.6875rem; font-weight: 500;
+  letter-spacing: 0.12em; text-transform: uppercase; color: #fff; text-shadow: 0 0 6px rgba(0, 0, 0, 0.55);
+}
+.cz-plate .cz-date { top: 12px; left: 14px; }
+.cz-strip { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 1px; background: var(--vocs-color_border); border-top: 1px solid var(--vocs-color_background); }
+.cz-thumb { position: relative; background: var(--vocs-color_background); }
+.cz-thumb img { display: block; width: 100%; height: auto; aspect-ratio: 1; object-fit: cover; }
+.cz-thumb .cz-year { top: 6px; left: 7px; font-size: 0.625rem; }
+.cz-caption { padding-top: 16px; }
+.cz-caption .cz-label { grid-column: 1 / -1; }
+.cz-caption p { grid-column: 1 / -1; font-size: 0.875rem; line-height: 1.55; color: var(--vocs-color_text2); max-width: 60ch; }
+@media (min-width: 900px) { .cz-caption .cz-label { grid-column: 1 / span 2; } .cz-caption p { grid-column: 3 / span 6; } }
+@media (max-width: 900px) { .cz-strip { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+@media (max-width: 500px) { .cz-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cz-thumb .cz-year { font-size: 0.6875rem; } }
+
+/* measured figures */
+.cz-section { row-gap: 28px; }
+.cz-section > .cz-label { grid-column: 1 / -1; }
+.cz-specs { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-left: 1px solid var(--vocs-color_border); }
+.cz-spec { padding: 8px 24px 28px; border-right: 1px solid var(--vocs-color_border); display: grid; row-gap: 10px; align-content: start; }
+.cz-num { font-size: clamp(56px, 6vw, 84px); font-weight: 500; font-stretch: 75%; letter-spacing: -0.03em; line-height: 1; }
+.cz-num small { font-size: 0.4em; font-weight: 500; font-stretch: 100%; letter-spacing: 0; color: var(--vocs-color_textAccent); margin-left: 0.12em; }
+.cz-what { font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; }
+.cz-note { font-size: 0.875rem; line-height: 1.5; color: var(--vocs-color_text2); }
+@media (max-width: 900px) { .cz-specs { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cz-spec { border-bottom: 1px solid var(--vocs-color_border); } }
+@media (max-width: 500px) { .cz-specs { grid-template-columns: minmax(0, 1fr); } }
+
+/* three routes */
+.cz-routes { row-gap: 28px; }
+.cz-routes > .cz-label { grid-column: 1 / -1; }
+.cz-route { grid-column: span 12; display: grid; row-gap: 12px; align-content: start; }
+@media (min-width: 700px) { .cz-route { grid-column: span 4; } }
+.cz-route h2 { font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; }
+.cz-route p { font-size: 0.9375rem; line-height: 1.55; color: var(--vocs-color_text2); max-width: 36ch; }
+.cz-route a { color: var(--vocs-color_textAccent); text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; font-size: 0.9375rem; }
+.cz-route a:hover { color: var(--vocs-color_textAccentHover); }
+.cz-home a:focus-visible { outline: 2px solid var(--vocs-color_textAccent); outline-offset: 4px; }
+
+/* colophon */
+.cz-colophon { font-family: var(--vocs-fontFamily_mono); font-size: 0.75rem; line-height: 1.7; color: var(--vocs-color_text3); max-width: 70ch; }
+
+/* ---------- accessibility fixes to Vocs 1.4.1 ---------- */
 /* Code tokens of the light theme under 4.5:1 on the code background (the github-light colours Vocs ships). */
 :root:not(.dark) pre.shiki span[style*="color:#D73A49" i] { color: #cb2431 !important; }
 :root:not(.dark) pre.shiki span[style*="color:#E36209" i] { color: #b94d00 !important; }
