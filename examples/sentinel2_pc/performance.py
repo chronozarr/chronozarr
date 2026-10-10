@@ -35,6 +35,12 @@ DEFAULT_START_REQUESTS = 16
 REQUESTS_PER_CPU = 4
 # Fraction of available memory that auto mode budgets for month buffers and the GDAL cache.
 MEMORY_FRACTION = 0.5
+# Fraction of a cgroup or SLURM memory limit, when that is less than the available memory. The
+# limit is memory set aside for this job, not shared with other programs, and the pipeline's
+# estimate exceeded the measured peak RSS in every Docker run (by 7 to 45 %, 2026-10-10), so a
+# quarter of it is left as headroom instead of half.
+LIMIT_FRACTION = 0.75
+DEDICATED_LIMITS = ("cgroup memory limit", "SLURM_MEM_PER_NODE", "SLURM_MEM_PER_CPU")
 
 
 @dataclass(frozen=True)
@@ -282,15 +288,19 @@ def plan_settings(
             v for v in (resources.memory_available, resources.memory_limit) if v is not None
         ]
         base = min(candidates) if candidates else resources.memory_total
+        dedicated = (
+            resources.memory_limit is not None
+            and base == resources.memory_limit
+            and resources.memory_source in DEDICATED_LIMITS
+        )
+        fraction = LIMIT_FRACTION if dedicated else MEMORY_FRACTION
         if base is None:
             memory_budget = 2 * GIB
             budget_source = "memory size unknown, conservative default"
             reasons.append(f"memory_budget=2.0 GiB: {budget_source}")
         else:
-            memory_budget = max(256 * MIB, int(base * MEMORY_FRACTION))
-            budget_source = (
-                f"{int(MEMORY_FRACTION * 100)}% of {_gib(base)} ({resources.memory_source})"
-            )
+            memory_budget = max(256 * MIB, int(base * fraction))
+            budget_source = f"{int(fraction * 100)}% of {_gib(base)} ({resources.memory_source})"
             reasons.append(f"memory_budget={_gib(memory_budget)}: {budget_source}")
     else:
         budget_source = "set by user"

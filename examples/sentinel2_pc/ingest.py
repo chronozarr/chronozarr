@@ -2,13 +2,15 @@ r"""Ingest one AOI from aois.yaml: Sentinel-2 monthly mosaics -> chronozarr stor
 
 Phase 1 (download) searches Planetary Computer for Sentinel-2 L2A scenes, masks clouds with
 the SCL band, and writes one monthly median composite per month to
-<out-dir>/mosaics/<aoi>/YYYY-MM.npz. Months that already exist are skipped.
+<out-dir>/mosaics/<aoi>/YYYY-MM.tif, in strips of the AOI when a month does not fit the memory
+budget. Months that already exist (.tif, or .npz from before 2026-10-11) are skipped.
 
-Phase 2 (encode) stacks those .npz files into a (time, band, y, x) uint16 array and writes it
-with chronozarr.encode to <out-dir>/stores/<aoi>/chronozarr/, with band metadata, a coverage
-plane (1 where at least one scene was valid, 0 where the value is carried forward or missing)
-and provenance recorded in the store. With --stac it also writes a static STAC Collection and
-Item to <out-dir>/stores/<aoi>/stac/.
+Phase 2 (encode) reads those files as one lazy (time, band, y, x) uint16 array, one cell of
+every month at a time, and writes it with chronozarr.encode to
+<out-dir>/stores/<aoi>/chronozarr/, with band metadata, a coverage plane (1 where at least one
+scene was valid, 0 where the value is carried forward or missing) and provenance recorded in
+the store. With --stac it also writes a static STAC Collection and Item to
+<out-dir>/stores/<aoi>/stac/.
 
 Usage:
     uv run python examples/sentinel2_pc/ingest.py --aoi nile_delta
