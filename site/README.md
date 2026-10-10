@@ -28,7 +28,10 @@ with IBM Plex Mono for labels and code, cool neutrals, one steel-blue accent, ha
 rules, no rounded corners. Every colour, face and radius is a Vocs theme variable in
 `vocs.config.tsx`; `docs/styles.css` carries the landing page and the few Vocs rules the
 variables cannot express (letter-spaced caps for sidebar groups, table rules, callouts
-without fills). The fonts load from Google Fonts with system fallbacks.
+without fills). Those rules target Vocs's generated class names, which a Vocs release can
+rename; `scripts/check-vocs-classes.mjs` runs after every build and fails it when a name
+in `styles.css` is absent from the built CSS. The fonts load from Google Fonts with system
+fallbacks.
 
 The homepage opens with a false-color plate of the Ucayali River (August 2025, pyramid
 level 0) over a filmstrip of every August from 2016 to 2025, then four measured figures
