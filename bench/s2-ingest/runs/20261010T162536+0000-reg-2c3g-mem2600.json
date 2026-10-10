@@ -1,0 +1,194 @@
+{
+ "tag": "reg-2c3g-mem2600",
+ "timestamp": "2026-10-10T16:25:36+00:00",
+ "bench_args": [
+  "--workload",
+  "lab-ucayali-x2",
+  "--config",
+  "auto-mem2600",
+  "--lab",
+  "0,0,0",
+  "--rep",
+  "0"
+ ],
+ "workload": "lab-ucayali-x2",
+ "config": "auto-mem2600",
+ "rep": 0,
+ "lab": {
+  "latency_ms": 0.0,
+  "bandwidth_mbps": 0.0,
+  "fail_rate": 0.0
+ },
+ "warm": false,
+ "container": {
+  "cpus": "2",
+  "memory": "3g",
+  "memory_swap": "3g",
+  "nofile": null,
+  "exit_code": 0,
+  "oom_killed": false,
+  "cgroup": {
+   "memory.peak": "2730065920",
+   "memory.max": "3221225472",
+   "memory.events": {
+    "low": "0",
+    "high": "0",
+    "max": "0",
+    "oom": "0",
+    "oom_kill": "0",
+    "oom_group_kill": "0"
+   },
+   "cpu.max": {
+    "200000": "100000"
+   },
+   "cpu.stat": {
+    "usage_usec": "16645470",
+    "user_usec": "14134575",
+    "system_usec": "2510895",
+    "nice_usec": "0",
+    "nr_periods": "95",
+    "nr_throttled": "64",
+    "throttled_usec": "36816962",
+    "nr_bursts": "0",
+    "burst_usec": "0"
+   }
+  }
+ },
+ "ok": true,
+ "stderr_tail": "",
+ "bench_record": {
+  "ok": true,
+  "workload": "lab-ucayali-x2",
+  "config": "auto-mem2600",
+  "rep": 0,
+  "git_sha": "81d985f",
+  "git_dirty": true,
+  "baseline_ref": null,
+  "timestamp": "2026-10-10T16:25:36+00:00",
+  "machine": {
+   "platform": "Linux-6.12.76-linuxkit-aarch64-with-glibc2.41",
+   "machine": "aarch64",
+   "processor": "",
+   "python": "3.13.16",
+   "resources": {
+    "cpus": 2,
+    "cpu_source": "cgroup CPU quota",
+    "memory_total": 8216215552,
+    "memory_available": 7563599872,
+    "memory_limit": 3169013760,
+    "memory_source": "cgroup memory limit",
+    "open_files": 1048576
+   }
+  },
+  "lab": {
+   "latency_ms": 0.0,
+   "bandwidth_mbps": 0.0,
+   "fail_rate": 0.0
+  },
+  "warm": false,
+  "wall_seconds": 7.841,
+  "first_month_seconds": 7.835,
+  "cpu_seconds": 12.08,
+  "peak_rss_bytes": 2554482688,
+  "gdal_network": {
+   "get_requests": 480,
+   "head_requests": 100,
+   "downloaded_bytes": 870001902
+  },
+  "lab_server": {
+   "requests": {
+    "HEAD": 100,
+    "GET": 868
+   },
+   "status": {
+    "200": 100,
+    "206": 868
+   },
+   "bytes_sent": 870001902,
+   "bursts": 0,
+   "config": {
+    "latency_ms": 0.0,
+    "bandwidth_mbps": 0.0,
+    "fail_rate": 0.0,
+    "fail_after": 0,
+    "fail_for": 5.0,
+    "max_inflight": 0,
+    "fail_first": 0,
+    "seed": 0
+   }
+  },
+  "nic_rx_bytes": 482,
+  "month_sha256": {
+   "2024-07": "495d6657e2921b5beace3f3c856883c82d0d07e05fdb762492cb7885ba2e75dd"
+  },
+  "output_pixels": 30514540,
+  "output_bytes": 61029080,
+  "useful_MBps": 7.783,
+  "Mpx_per_s": 3.891,
+  "settings": {
+   "adaptive": true,
+   "requests": 8,
+   "max_requests": 16,
+   "cpu_workers": 2,
+   "memory_budget": 2726297600,
+   "memory_budget_source": "set by user",
+   "gdal_cache": 170393600,
+   "reasons": [
+    "2 usable CPUs (cgroup CPU quota)",
+    "cpu_workers=2: all 2 usable CPUs",
+    "max_requests=16: default ceiling 16; raise it to let auto mode climb higher",
+    "requests=8: start value; climbs toward 16 while throughput rises",
+    "memory_budget=2.5 GiB: set by user",
+    "gdal_cache=162 MiB: 1/16 of the budget, 64-512 MiB"
+   ]
+  },
+  "run_summary": {
+   "wall_seconds": 7.837,
+   "first_month_seconds": 7.835,
+   "months": 1,
+   "months_skipped": 0,
+   "scenes": 20,
+   "scenes_no_valid": 0,
+   "scenes_failed": 0,
+   "reads": 100,
+   "reads_native": 100,
+   "read_retries": 0,
+   "http_throttled": 0,
+   "pixel_fraction_read": 0.6236,
+   "stage_thread_seconds": {
+    "read": 85.32,
+    "mask": 8.31,
+    "median": 0.87,
+    "write": 0.83
+   },
+   "cpu_seconds": 12.08,
+   "cpu_utilisation": 0.771,
+   "request_slot_occupancy": 0.74,
+   "mean_request_limit": 9.54,
+   "final_request_limit": 8,
+   "limiter_events": [
+    {
+     "t": 0.0,
+     "limit": 8,
+     "rate_MBps": null,
+     "reason": "start"
+    },
+    {
+     "t": 3.03,
+     "limit": 12,
+     "rate_MBps": 165.5,
+     "reason": "throughput rose; probe up"
+    },
+    {
+     "t": 6.04,
+     "limit": 8,
+     "rate_MBps": 115.31,
+     "reason": "no gain above 8; settle"
+    }
+   ],
+   "months_not_written": [],
+   "months_incomplete": [],
+   "bottleneck": "CPU: the process used 77% of 2 CPUs"
+  }
+ }
+}

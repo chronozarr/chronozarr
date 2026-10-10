@@ -1,3 +1,16 @@
+### lab-ucayali-4mo (lab latency_ms=0)
+
+| config | n | failed | wall s median [IQR] | speed-up vs baseline | useful MB/s | GET+HEAD | downloaded MB | peak RSS MB | CPU s | first month s | correctness |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| baseline | 1 | 0 | 43.6 [43.6-43.6] | 1.00x | 5.60 | 1244 | 1994.7 | 10844 | 62.9 | 11.5 | reference |
+
+### lab-ucayali-4mo (lab latency_ms=0,bandwidth_mbps=0,fail_rate=0)
+
+| config | n | failed | wall s median [IQR] | speed-up vs baseline | useful MB/s | GET+HEAD | downloaded MB | peak RSS MB | CPU s | first month s | correctness |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| auto | 1 | 1 | 9.2 [9.2-9.2] | n/a | 26.64 | 1160 | 1740.0 | 2928 | 25.2 | 4.0 | bit-exact |
+| auto-mem2600 | 1 | 0 | 18.5 [18.5-18.5] | n/a | 13.22 | 1160 | 1740.0 | 2237 | 28.8 | 4.4 | bit-exact |
+
 ### lab-ucayali-x2
 
 | config | n | failed | wall s median [IQR] | speed-up vs baseline | useful MB/s | GET+HEAD | downloaded MB | peak RSS MB | CPU s | first month s | correctness |
@@ -21,7 +34,9 @@
 
 | config | n | failed | wall s median [IQR] | speed-up vs baseline | useful MB/s | GET+HEAD | downloaded MB | peak RSS MB | CPU s | first month s | correctness |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| auto | 1 | 1 | 14.0 [14.0-14.0] | n/a | 4.37 | 580 | 870.0 | 2420 | 12.0 | 14.0 | bit-exact |
+| auto | 1 | 2 | 14.0 [14.0-14.0] | n/a | 4.37 | 580 | 870.0 | 2420 | 12.0 | 14.0 | bit-exact |
+| auto-mem2600 | 2 | 0 | 11.9 [9.9-13.9] | n/a | 5.80 | 580 | 870.0 | 2496 | 12.9 | 11.9 | bit-exact |
+| auto-mem3000 | 1 | 0 | 5.7 [5.7-5.7] | n/a | 10.76 | 580 | 870.0 | 2071 | 10.1 | 5.7 | bit-exact |
 
 ### lab-ucayali-x2 (lab latency_ms=0,bandwidth_mbps=0,fail_rate=0,max_inflight=2)
 
@@ -92,7 +107,7 @@
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | baseline | 2 | 0 | 1.7 [1.7-1.8] | 1.00x | 1.16 | 347 | 102.0 | 741 | 1.8 | 1.7 | reference |
 | fixed-16 | 2 | 0 | 4.0 [3.7-4.2] | 0.43x | 0.51 | 318 | 89.2 | 292 | 1.2 | 4.0 | bit-exact |
-| auto | 2 | 0 | 4.4 [3.9-5.0] | 0.39x | 0.48 | 314 | 87.2 | 292 | 1.3 | 4.4 | bit-exact |
+| auto | 3 | 0 | 4.5 [3.9-5.0] | 0.38x | 0.44 | 311 | 87.8 | 292 | 1.2 | 4.5 | bit-exact |
 
 ### lab-ucayali-x2-5km (lab latency_ms=0,bandwidth_mbps=0,fail_rate=0.05)
 
@@ -100,7 +115,7 @@
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | baseline | 2 | 0 | 8.9 [8.4-9.4] | 1.00x | 0.23 | 382 | 104.9 | 735 | 1.8 | 8.9 | reference |
 | fixed-16 | 2 | 0 | 3.0 [2.6-3.4] | 2.98x | 0.71 | 299 | 88.7 | 312 | 1.2 | 3.0 | bit-exact |
-| auto | 2 | 0 | 3.5 [2.9-4.0] | 2.59x | 0.65 | 303 | 91.3 | 309 | 1.2 | 3.4 | bit-exact |
+| auto | 3 | 0 | 3.6 [2.9-4.1] | 2.50x | 0.56 | 302 | 90.8 | 304 | 1.2 | 3.6 | bit-exact |
 
 ### lab-ucayali-x2-5km (lab latency_ms=0,bandwidth_mbps=2,fail_rate=0)
 
@@ -116,7 +131,7 @@
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | baseline | 2 | 0 | 27.6 [27.6-27.6] | 1.00x | 0.07 | 340 | 99.5 | 742 | 2.4 | 27.6 | reference |
 | fixed-16 | 2 | 0 | 5.8 [5.8-5.8] | 4.79x | 0.34 | 276 | 86.2 | 309 | 1.4 | 5.8 | bit-exact |
-| auto | 2 | 0 | 5.8 [5.8-5.8] | 4.76x | 0.34 | 276 | 86.2 | 323 | 1.5 | 5.8 | bit-exact |
+| auto | 4 | 0 | 5.8 [5.8-5.8] | 4.76x | 0.34 | 276 | 86.2 | 305 | 1.5 | 5.8 | bit-exact |
 
 ### lakemead-1m
 

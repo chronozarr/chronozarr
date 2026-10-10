@@ -32,6 +32,7 @@ Configs:
     fixed-N       new pipeline, N concurrent reads, no adaptation
     auto          new pipeline, adaptive defaults
     auto-capped   new pipeline, adaptive, max_requests=8, cpu_workers=4, memory_budget=2 GiB
+    auto-memN     new pipeline, adaptive, memory_budget=N MiB (the --memory override)
 
 Lab workloads (`lab-workload`) read from a labserver.py process that `run` starts on
 data/bench/mirror, with optional shaping `--lab latency_ms,bandwidth_mbps,fail_rate`. The server
@@ -610,12 +611,18 @@ def settings_for(config: str, resources, performance):
         return performance.plan_settings(
             resources, adaptive=True, max_requests=8, cpu_workers=4, memory_budget=2 * gib
         )
+    if config.startswith("auto-mem") and config[8:].isdigit():
+        mib = 1024**2
+        return performance.plan_settings(
+            resources, adaptive=True, memory_budget=int(config[8:]) * mib
+        )
     if config.startswith("auto-max") and config[8:].isdigit():
         return performance.plan_settings(resources, adaptive=True, max_requests=int(config[8:]))
     if config.startswith("fixed-") and config[6:].isdigit():
         return performance.plan_settings(resources, adaptive=False, requests=int(config[6:]))
     raise SystemExit(
-        f"unknown config {config!r}; use baseline, fixed-N, auto, auto-maxN or auto-capped"
+        f"unknown config {config!r}; use baseline, fixed-N, auto, auto-maxN, auto-memN, "
+        "or auto-capped"
     )
 
 
@@ -922,7 +929,7 @@ def build_tables(workloads: list[str] | None) -> list[dict]:
         groups.setdefault(key, {}).setdefault(r["config"], []).append(r)
 
     tables = []
-    for (workload, condition), by_config in sorted(groups.items()):
+    for (workload, condition), by_config in sorted(groups.items(), key=lambda g: str(g[0])):
         base_wall = median([r["wall_seconds"] for r in by_config.get("baseline", []) if r["ok"]])
         rows = []
         for config in sorted(by_config, key=config_sort_key):

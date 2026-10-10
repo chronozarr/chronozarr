@@ -214,3 +214,32 @@ Findings 1, 2, 3, 4, 5, 6 and 7 led to code changes; finding 8 and 10 did not.
 - **Fixed mode (7).** The docstring and README now say that fixed mode holds the request concurrency constant, and that the memory budget follows available memory unless `--memory` is given.
 
 After the changes, all 261 completed records in `data/bench/results/` (copied to `results/`) are bit-exact against the baseline.
+
+## Memory preflight, failure semantics and a multi-month run (2026-10-10, later)
+
+Two behaviour changes followed. Auto mode estimates the largest month's memory before any download and stops with a breakdown when it exceeds the budget; `--memory` is the explicit override. A scene that fails after every attempt now stops the run at its month by default (see the example README, "Read failures").
+
+Regression runs on the final code, `lab-ucayali-x2` (20 scenes, one month), 1 run each:
+
+| Case | Result | Peak RSS | Budget |
+|---|---|---|---|
+| Docker 2 CPUs, 3g, auto | stopped before any download: needs about 2.4 GiB, budget 1.46 GiB | | 1.46 GiB |
+| Docker 2 CPUs, 3g, `--memory 2600MB` | completed, bit-exact, 8 reads | 2.38 GiB | 2.54 GiB |
+| Docker 1 CPU, 3g, `--memory 2600MB` | completed, bit-exact, 4 reads | 2.27 GiB | 2.54 GiB |
+| Docker 4 CPUs, 4g, nofile 64, `--memory 3000MB` | completed, bit-exact, ceiling 4 reads | 1.93 GiB | 2.93 GiB |
+| Host, 5 km box, 300 ms | 5.7 s, no failed scenes | | |
+| Host, 5 km box, 503 above 4 in flight | 4.5 s, 24 retried 503s, no failed scenes | | |
+| Host, 5 km box, 5 % random 503 | 3.6 s, 12 retried 503s, no failed scenes | | |
+
+Multi-month run, `lab-ucayali-4mo` (`make_multimonth.py`: 4 months of 10 scenes on the full Ucayali grid, served from the mirror under aliases), 1 run each:
+
+| Case | Result | Peak RSS | Budget |
+|---|---|---|---|
+| Host, baseline (old code) | 43.6 s | 10.1 GiB | |
+| Docker 2 CPUs, 3g, auto | stopped before any download: needs 1.74 GiB, budget 1.46 GiB | | 1.46 GiB |
+| Docker 2 CPUs, 3g, `--memory 2600MB` | 18.5 s, bit-exact, up to 2 months at once | 2.08 GiB | 2.54 GiB |
+| Docker 4 CPUs, 6g, auto | 9.2 s, bit-exact, up to 2 months at once | 2.73 GiB | 2.98 GiB |
+
+The estimate for two overlapping 10-scene months is 2.49 GiB; the measured peak was 2.08 and 2.73 GiB, so the estimate is within about 10 % and every run stayed under its budget. Half of the available memory is conservative: in a 3 GB container auto mode refuses work that fits, and `--memory` is needed.
+
+`constrained.sh` failures with exit code 2 from my own mistyped invocations (4 records without a workload) were removed from the results; they never reached the pipeline.

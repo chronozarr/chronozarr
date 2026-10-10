@@ -1,0 +1,188 @@
+{
+ "tag": "reg-4c4g-nofile64",
+ "timestamp": "2026-10-10T16:25:04+00:00",
+ "bench_args": [
+  "--workload",
+  "lab-ucayali-x2",
+  "--config",
+  "auto-mem3000",
+  "--lab",
+  "0,0,0",
+  "--rep",
+  "0"
+ ],
+ "workload": "lab-ucayali-x2",
+ "config": "auto-mem3000",
+ "rep": 0,
+ "lab": {
+  "latency_ms": 0.0,
+  "bandwidth_mbps": 0.0,
+  "fail_rate": 0.0
+ },
+ "warm": false,
+ "container": {
+  "cpus": "4",
+  "memory": "4g",
+  "memory_swap": "4g",
+  "nofile": "64",
+  "exit_code": 0,
+  "oom_killed": false,
+  "cgroup": {
+   "memory.peak": "2248892416",
+   "memory.max": "4294967296",
+   "memory.events": {
+    "low": "0",
+    "high": "0",
+    "max": "0",
+    "oom": "0",
+    "oom_kill": "0",
+    "oom_group_kill": "0"
+   },
+   "cpu.max": {
+    "400000": "100000"
+   },
+   "cpu.stat": {
+    "usage_usec": "13316641",
+    "user_usec": "11938597",
+    "system_usec": "1378043",
+    "nice_usec": "0",
+    "nr_periods": "73",
+    "nr_throttled": "1",
+    "throttled_usec": "1176682",
+    "nr_bursts": "0",
+    "burst_usec": "0"
+   }
+  }
+ },
+ "ok": true,
+ "stderr_tail": "",
+ "bench_record": {
+  "ok": true,
+  "workload": "lab-ucayali-x2",
+  "config": "auto-mem3000",
+  "rep": 0,
+  "git_sha": "81d985f",
+  "git_dirty": true,
+  "baseline_ref": null,
+  "timestamp": "2026-10-10T16:25:03+00:00",
+  "machine": {
+   "platform": "Linux-6.12.76-linuxkit-aarch64-with-glibc2.41",
+   "machine": "aarch64",
+   "processor": "",
+   "python": "3.13.16",
+   "resources": {
+    "cpus": 4,
+    "cpu_source": "cgroup CPU quota",
+    "memory_total": 8216215552,
+    "memory_available": 7643136000,
+    "memory_limit": 4243017728,
+    "memory_source": "cgroup memory limit",
+    "open_files": 64
+   }
+  },
+  "lab": {
+   "latency_ms": 0.0,
+   "bandwidth_mbps": 0.0,
+   "fail_rate": 0.0
+  },
+  "warm": false,
+  "wall_seconds": 5.674,
+  "first_month_seconds": 5.668,
+  "cpu_seconds": 10.06,
+  "peak_rss_bytes": 2070888448,
+  "gdal_network": {
+   "get_requests": 480,
+   "head_requests": 100,
+   "downloaded_bytes": 870001902
+  },
+  "lab_server": {
+   "requests": {
+    "HEAD": 100,
+    "GET": 868
+   },
+   "status": {
+    "200": 100,
+    "206": 868
+   },
+   "bytes_sent": 870001902,
+   "bursts": 0,
+   "config": {
+    "latency_ms": 0.0,
+    "bandwidth_mbps": 0.0,
+    "fail_rate": 0.0,
+    "fail_after": 0,
+    "fail_for": 5.0,
+    "max_inflight": 0,
+    "fail_first": 0,
+    "seed": 0
+   }
+  },
+  "nic_rx_bytes": 482,
+  "month_sha256": {
+   "2024-07": "495d6657e2921b5beace3f3c856883c82d0d07e05fdb762492cb7885ba2e75dd"
+  },
+  "output_pixels": 30514540,
+  "output_bytes": 61029080,
+  "useful_MBps": 10.757,
+  "Mpx_per_s": 5.378,
+  "settings": {
+   "adaptive": true,
+   "requests": 4,
+   "max_requests": 4,
+   "cpu_workers": 3,
+   "memory_budget": 3145728000,
+   "memory_budget_source": "set by user",
+   "gdal_cache": 196608000,
+   "reasons": [
+    "4 usable CPUs (cgroup CPU quota)",
+    "cpu_workers=3: usable CPUs less one for the scheduler",
+    "max_requests=4: open-file limit 64: about 8 descriptors per read after 32 for everything else",
+    "requests=4: start value; lowered only if the host fails or throttles reads",
+    "memory_budget=2.9 GiB: set by user",
+    "gdal_cache=187 MiB: 1/16 of the budget, 64-512 MiB"
+   ]
+  },
+  "run_summary": {
+   "wall_seconds": 5.67,
+   "first_month_seconds": 5.668,
+   "months": 1,
+   "months_skipped": 0,
+   "scenes": 20,
+   "scenes_no_valid": 0,
+   "scenes_failed": 0,
+   "reads": 100,
+   "reads_native": 100,
+   "read_retries": 0,
+   "http_throttled": 0,
+   "pixel_fraction_read": 0.6236,
+   "stage_thread_seconds": {
+    "read": 16.0,
+    "mask": 1.91,
+    "median": 0.61,
+    "write": 0.85
+   },
+   "cpu_seconds": 10.06,
+   "cpu_utilisation": 0.444,
+   "request_slot_occupancy": 0.705,
+   "mean_request_limit": 4.0,
+   "final_request_limit": 4,
+   "limiter_events": [
+    {
+     "t": 0.0,
+     "limit": 4,
+     "rate_MBps": null,
+     "reason": "start"
+    },
+    {
+     "t": 3.0,
+     "limit": 4,
+     "rate_MBps": 199.38,
+     "reason": "at ceiling"
+    }
+   ],
+   "months_not_written": [],
+   "months_incomplete": [],
+   "bottleneck": "remote reads: request slots were busy 71% of the run while CPU use was 44%, so the network or the host limits throughput"
+  }
+ }
+}
