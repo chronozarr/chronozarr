@@ -5,7 +5,10 @@
   "description": "Measured comparisons: chronozarr against CarbonPlan zarr-layer, and against one COG per date",
   "type": "module",
   "scripts": {
-    "test": "node --test cog/model.test.mjs",
+    "test": "node --test cog/model.test.mjs v03/*.test.mjs",
+    "v03": "node v03/run.mjs",
+    "v03:values": "node v03/values.mjs",
+    "v03:summary": "node v03/summarize.mjs",
     "zarr-layer:build": "node zarr-layer/build.mjs",
     "zarr-layer:probe": "node zarr-layer/probe.mjs",
     "zarr-layer:values": "node zarr-layer/values.mjs",

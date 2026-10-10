@@ -16,15 +16,19 @@ export const PROFILES = {
 
 export const startServer = () => startStaticServer(REPO_ROOT);
 
-/** Headless Chromium on the Metal ANGLE backend (the GPU of this machine), as js/support/reader-bench does. */
-export const launchBrowser = () => chromium.launch({ headless: true, args: ['--ignore-gpu-blocklist', '--use-angle=metal'] });
+/**
+ * Headless Chromium on the Metal ANGLE backend (the GPU of this machine), as js/support/reader-bench does. `channel`
+ * selects a Playwright browser channel ('chromium' is the full Chromium build in new headless mode); without it the
+ * default headless shell is used, as the earlier benchmarks did.
+ */
+export const launchBrowser = ({ channel } = {}) => chromium.launch({ headless: true, ...(channel ? { channel } : {}), args: ['--ignore-gpu-blocklist', '--use-angle=metal'] });
 
 /**
  * A fresh context (empty HTTP cache, no service workers) with one page. The viewer's catalog is made to 404 so that
  * the page opens nothing by itself and the driver decides what is opened, when, and at which level and camera.
  */
-export async function newPage(browser, { width = 1500, height = 1500, blockCatalog = false } = {}) {
-  const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1, serviceWorkers: 'block' });
+export async function newPage(browser, { width = 1500, height = 1500, deviceScaleFactor = 1, blockCatalog = false } = {}) {
+  const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor, serviceWorkers: 'block' });
   const page = await context.newPage();
   if (blockCatalog) {
     await page.addInitScript(() => {
