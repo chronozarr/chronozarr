@@ -1,21 +1,47 @@
 """Monthly median composite mosaics from Sentinel-2 L2A scenes.
 
-Reads COGs from Planetary Computer via HTTPS, applies SCL cloud masking,
-and produces monthly median composites in native UTM CRS.
+Reads COGs over HTTPS, applies SCL cloud masking, and writes monthly median composites in the
+native UTM CRS of the AOI.
+
+Per scene the SCL band is read first. A scene with no valid pixel in the AOI reads no bands. When
+a scene shares the AOI's CRS and its pixel grid lines up with the AOI grid (the usual case for
+Sentinel-2 in its own UTM zone), bands are read as windows on the native grid, and only the
+source blocks that hold a valid pixel are fetched. That read is the same pixel for pixel as the
+bilinear `reproject` used for every other scene (bilinear on an aligned grid returns the source
+pixel, nearest 20 m -> 10 m returns the covering source pixel; tests/test_ingest_mosaic.py checks
+both against `reproject`).
+
+Months overlap: the reads of later months start while earlier months are composited and saved,
+within a memory budget, and months are finished in calendar order because a month's gaps are
+filled from the month before it.
 """
 
 from __future__ import annotations
 
+import ctypes
+import itertools
 import logging
+import os
+import random
+import re
+import tempfile
+import threading
+import time
+import zipfile
+from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
-import planetary_computer as pc
 import rasterio
 from catalog import REQUIRED_BANDS, SceneRef
+from performance import AdaptiveLimiter, Settings
 from rasterio.crs import CRS  # ty: ignore[unresolved-import]  (compiled module, no stubs)
-from rasterio.transform import from_bounds
+from rasterio.transform import Affine, from_bounds
 from rasterio.warp import Resampling, reproject
+from rasterio.windows import Window
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +49,11 @@ logger = logging.getLogger(__name__)
 # 4=vegetation, 5=bare_soil, 6=water, 7=unclassified (low prob cloud)
 # 11=snow/ice (kept: snow cover is a real surface state)
 SCL_VALID = {4, 5, 6, 7, 11}
+_SCL_LUT = np.zeros(256, dtype=bool)
+_SCL_LUT[list(SCL_VALID)] = True
 
-# GDAL environment for efficient COG reads over HTTPS
+# GDAL environment for efficient COG reads over HTTPS. The first two settings remove the
+# directory listing and sidecar probes that otherwise cost ~10 extra requests per file.
 GDAL_ENV = {
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
     "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": "YES",
@@ -34,14 +63,98 @@ GDAL_ENV = {
     "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.TIF",
     "VSI_CACHE": "TRUE",
     "VSI_CACHE_SIZE": "5000000",
+    # Fail a stalled transfer instead of waiting forever; the read is then retried.
+    "GDAL_HTTP_CONNECTTIMEOUT": "30",
+    "GDAL_HTTP_LOW_SPEED_TIME": "60",
+    "GDAL_HTTP_LOW_SPEED_LIMIT": "1024",
 }
+
+# Attempts per asset read after GDAL's own HTTP retries. Failed attempts back off exponentially
+# (2, 4, 8, 16, 30 s with jitter, about a minute in all), so a scene is dropped from its month
+# only when its host keeps failing; under throttling the request limit drops meanwhile.
+READ_ATTEMPTS = 6
+READ_BACKOFF_SECONDS = 2.0
+READ_BACKOFF_MAX_SECONDS = 30.0
+
+
+_clear_cache_function: Callable[[bytes], None] | None = None
+_clear_cache_searched = False
+
+
+def _gdal_clear_cache_function() -> Callable[[bytes], None] | None:
+    """GDAL's VSICurlPartialClearCache from the libgdal that rasterio loaded, or None."""
+    global _clear_cache_function, _clear_cache_searched
+    if _clear_cache_searched:
+        return _clear_cache_function
+    _clear_cache_searched = True
+    package = Path(rasterio.__file__).parent
+    candidates: list[str | None] = [None]  # None: symbols already visible in this process
+    for directory in (package.parent / "rasterio.libs", package / ".dylibs", package / ".libs"):
+        candidates += sorted(str(p) for p in directory.glob("*gdal*") if p.is_file())
+    for candidate in candidates:
+        try:
+            function = ctypes.CDLL(candidate).VSICurlPartialClearCache
+        except (OSError, AttributeError, TypeError):
+            continue
+        function.argtypes = [ctypes.c_char_p]
+        function.restype = None
+        _clear_cache_function = function
+        return function
+    logger.warning(
+        "GDAL's VSICurlPartialClearCache is not reachable from this rasterio build; a retry of "
+        "a URL whose open failed may fail again without contacting the host"
+    )
+    return None
+
+
+def forget_url(url: str) -> None:
+    """Drop GDAL's cached state for `url`, including the record of a failed open.
+
+    GDAL remembers a failed open of a URL for the life of the process, so a retry of the same
+    URL (a signed URL is the same until its token is refreshed) fails at once without a request
+    (checked against a local server, GDAL 3.12, 2026-10-10). Clearing the entry lets the retry
+    reach the host.
+    """
+    function = _gdal_clear_cache_function()
+    if function is not None:
+        function(f"/vsicurl/{url}".encode())
+
+
+class HttpThrottleCounter(logging.Filter):
+    """Counts GDAL's warnings about HTTP 429 and 5xx responses that it retries by itself.
+
+    Attached to rasterio's `rasterio._env` logger, where GDAL warnings arrive. It never blocks:
+    a logging hook that takes a lock can deadlock against GDAL's worker threads.
+    """
+
+    PATTERN = re.compile(r"HTTP error code: (429|5\d\d)")
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._count = itertools.count(1)
+        self.events = 0
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if self.PATTERN.search(record.getMessage()):
+            self.events = next(self._count)
+        return True
+
+
+@dataclass(frozen=True)
+class Grid:
+    """The AOI's output grid."""
+
+    transform: Affine
+    crs: CRS
+    height: int
+    width: int
 
 
 def compute_target_grid(
     bbox_wgs84: tuple[float, float, float, float],
     target_epsg: int,
     resolution: float = 10.0,
-) -> tuple[rasterio.transform.Affine, int, int]:
+) -> tuple[Affine, int, int]:
     """Compute a pixel-aligned target grid for the AOI.
 
     Args:
@@ -76,199 +189,356 @@ def compute_target_grid(
     return transform, height, width
 
 
-def read_band_window(
-    href: str,
-    dst_transform: rasterio.transform.Affine,
-    dst_crs: CRS,
-    dst_height: int,
-    dst_width: int,
-    resampling: Resampling = Resampling.bilinear,
-) -> np.ndarray:
-    """Read a single band COG and reproject/window into the target grid.
+# --- reading one asset -------------------------------------------------------------------------
 
-    Returns:
-        2D uint16 array of shape (dst_height, dst_width). Nodata = 0.
+
+def native_offset(src_transform: Affine, src_crs: CRS, grid: Grid) -> tuple[int, int, int] | None:
+    """(row, col, factor) when the source grid lines up with `grid`, else None.
+
+    `factor` is the source pixel size in grid pixels; grid pixel (r, c) then lies in source pixel
+    ((row + r) // factor, (col + c) // factor).
     """
-    dst = np.zeros((dst_height, dst_width), dtype=np.uint16)
+    s, g = src_transform, grid.transform
+    if src_crs != grid.crs or s.b or s.d or g.b or g.d or s.e != -s.a or g.e != -g.a:
+        return None
+    factor = s.a / g.a
+    col = (g.c - s.c) / g.a
+    row = (s.f - g.f) / g.a
+    if not all(abs(v - round(v)) < 1e-9 for v in (factor, col, row)) or round(factor) < 1:
+        return None
+    return round(row), round(col), round(factor)
 
-    with rasterio.Env(**GDAL_ENV), rasterio.open(pc.sign(href)) as src:
+
+def _clip_range(start: int, size: int, factor: int, src_size: int) -> tuple[int, int]:
+    """Grid index range [a, b) of the `size` grid pixels from `start` inside the source."""
+    a = max(0, -start)
+    b = min(size, factor * src_size - start)
+    return a, max(a, b)
+
+
+def _block_rects(
+    needed: np.ndarray, row: int, col: int, rows: tuple[int, int], cols: tuple[int, int], block
+) -> list[tuple[int, int, int, int]]:
+    """Grid rectangles (r0, r1, c0, c1) covering every source block that holds a needed pixel.
+
+    Factor-1 grids only. Adjacent needed blocks in a block row form one rectangle, and block rows
+    with the same column runs are merged, so a fully needed window is one rectangle.
+    """
+    bh, bw = block
+    r_edges = sorted({rows[0], *(e for e in range((-row) % bh, rows[1], bh) if e > rows[0])})
+    c_edges = sorted({cols[0], *(e for e in range((-col) % bw, cols[1], bw) if e > cols[0])})
+    sub = needed[rows[0] : rows[1], cols[0] : cols[1]]
+    hit = np.logical_or.reduceat(
+        np.logical_or.reduceat(sub, [e - rows[0] for e in r_edges], axis=0),
+        [e - cols[0] for e in c_edges],
+        axis=1,
+    )
+    r_bounds = [*r_edges, rows[1]]
+    c_bounds = [*c_edges, cols[1]]
+    rects: list[tuple[int, int, int, int]] = []
+    previous: list[tuple[int, int]] = []
+    open_rects: list[int] = []
+    for i, line in enumerate(hit):
+        runs: list[tuple[int, int]] = []
+        j = 0
+        while j < len(line):
+            if line[j]:
+                k = j
+                while k + 1 < len(line) and line[k + 1]:
+                    k += 1
+                runs.append((c_bounds[j], c_bounds[k + 1]))
+                j = k + 1
+            else:
+                j += 1
+        if runs and runs == previous:
+            for idx in open_rects:
+                r0, _, c0, c1 = rects[idx]
+                rects[idx] = (r0, r_bounds[i + 1], c0, c1)
+        else:
+            open_rects = []
+            for c0, c1 in runs:
+                open_rects.append(len(rects))
+                rects.append((r_bounds[i], r_bounds[i + 1], c0, c1))
+        previous = runs
+    return rects
+
+
+def read_native(
+    src, grid: Grid, offset: tuple[int, int, int], out: np.ndarray, needed: np.ndarray | None
+) -> int:
+    """Read band 1 of `src` into `out` on the grid; returns the number of grid pixels read.
+
+    With `needed`, only source blocks that hold a needed pixel are read (factor 1 only).
+    """
+    row, col, factor = offset
+    rows = _clip_range(row, grid.height, factor, src.height)
+    cols = _clip_range(col, grid.width, factor, src.width)
+    if rows[0] == rows[1] or cols[0] == cols[1]:
+        return 0
+    if needed is not None and factor == 1:
+        rects = _block_rects(needed, row, col, rows, cols, src.block_shapes[0])
+    else:
+        rects = [(rows[0], rows[1], cols[0], cols[1])]
+    pixels = 0
+    for r0, r1, c0, c1 in rects:
+        s_r0, s_r1 = (row + r0) // factor, (row + r1 - 1) // factor + 1
+        s_c0, s_c1 = (col + c0) // factor, (col + c1 - 1) // factor + 1
+        window = Window.from_slices((s_r0, s_r1), (s_c0, s_c1))
+        data = src.read(1, window=window)
+        if factor == 1:
+            out[r0:r1, c0:c1] = data
+        else:
+            ri = (row + np.arange(r0, r1)) // factor - s_r0
+            ci = (col + np.arange(c0, c1)) // factor - s_c0
+            out[r0:r1, c0:c1] = data[np.ix_(ri, ci)]
+        pixels += (r1 - r0) * (c1 - c0)
+    return pixels
+
+
+def read_asset(
+    href: str,
+    grid: Grid,
+    out: np.ndarray,
+    resampling: Resampling,
+    env: dict,
+    needed: np.ndarray | None = None,
+) -> tuple[int, bool]:
+    """Read one single-band asset into `out` (grid shape). Returns (pixels read, native path)."""
+    with rasterio.Env(**env), rasterio.open(href) as src:
+        offset = native_offset(src.transform, src.crs, grid)
+        exact = offset is not None and (offset[2] == 1 or resampling == Resampling.nearest)
+        if exact:
+            assert offset is not None
+            return read_native(src, grid, offset, out, needed), True
         reproject(
             source=rasterio.band(src, 1),
-            destination=dst,
+            destination=out,
             src_transform=src.transform,
             src_crs=src.crs,
-            dst_transform=dst_transform,
-            dst_crs=dst_crs,
+            dst_transform=grid.transform,
+            dst_crs=grid.crs,
             resampling=resampling,
         )
-    return dst
+        return out.size, False
 
 
-def read_scl_mask(
-    scl_href: str,
-    dst_transform: rasterio.transform.Affine,
-    dst_crs: CRS,
-    dst_height: int,
-    dst_width: int,
-) -> np.ndarray:
-    """Read SCL band and produce a boolean valid-pixel mask at target resolution.
+# --- compositing -------------------------------------------------------------------------------
 
-    SCL is 20m; reprojected to 10m via nearest neighbor.
 
-    Returns:
-        2D bool array. True = valid pixel, False = masked.
+def apply_scene_mask(bands: np.ndarray, valid: np.ndarray, boa_offset: int) -> int:
+    """Apply the BOA offset and zero every band where the scene is not valid, in place.
+
+    `bands` is (n_bands, H, W) uint16 and `valid` the SCL mask; a pixel is also invalid where
+    any band is 0. Returns the number of valid pixels.
     """
-    scl = np.zeros((dst_height, dst_width), dtype=np.uint8)
-
-    with rasterio.Env(**GDAL_ENV), rasterio.open(pc.sign(scl_href)) as src:
-        reproject(
-            source=rasterio.band(src, 1),
-            destination=scl,
-            src_transform=src.transform,
-            src_crs=src.crs,
-            dst_transform=dst_transform,
-            dst_crs=dst_crs,
-            resampling=Resampling.nearest,
-        )
-
-    valid = np.isin(scl, list(SCL_VALID))
-    return valid
+    rows = 256  # row blocks keep temporaries to a few MB per call
+    for r0 in range(0, bands.shape[1], rows):
+        block = bands[:, r0 : r0 + rows]
+        if boa_offset:
+            shifted = block.astype(np.int32) + boa_offset
+            np.copyto(block, np.where(block > 0, np.clip(shifted, 1, 65535), 0).astype(np.uint16))
+        block_valid = valid[r0 : r0 + rows]
+        block_valid &= np.all(block > 0, axis=0)
+        block[:, ~block_valid] = 0
+    return int(valid.sum())
 
 
-def load_scene(
-    scene: SceneRef,
-    dst_transform: rasterio.transform.Affine,
-    dst_crs: CRS,
-    dst_height: int,
-    dst_width: int,
-    max_retries: int = 3,
+def median_rows(stack: np.ndarray, r0: int, r1: int) -> tuple[np.ndarray, np.ndarray]:
+    """Median over scenes for grid rows [r0, r1) of a (n_scenes, n_bands, H, W) uint16 stack.
+
+    Invalid observations are 0 and valid ones are >= 1, so after sorting along the scene axis
+    the k valid values are the last k. For even k the median is the mean of the two middle
+    values rounded down, which is what float32 nanmedian followed by a uint16 cast gives
+    (sums up to 131070 are exact in float32). Returns (composite rows, valid counts).
+    """
+    block = stack[:, :, r0:r1, :]
+    n = block.shape[0]
+    k = np.count_nonzero(block[:, 0], axis=0)
+    ordered = np.sort(block, axis=0)
+    lo = np.clip(n - k + (k - 1) // 2, 0, n - 1)
+    hi = np.clip(n - k + k // 2, 0, n - 1)
+    a = np.take_along_axis(ordered, lo[np.newaxis, np.newaxis], axis=0)[0]
+    b = np.take_along_axis(ordered, hi[np.newaxis, np.newaxis], axis=0)[0]
+    composite = ((a.astype(np.uint32) + b) // 2).astype(np.uint16)
+    composite[:, k == 0] = 0
+    return composite, k
+
+
+def median_composite(
+    stack: np.ndarray, n_scenes: int, pool: ThreadPoolExecutor | None = None, rows: int = 128
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Load all bands + SCL mask for one scene, reprojected to target grid.
+    """(composite uint16 (n_bands, H, W), coverage float32 (H, W)) from a masked stack."""
+    _, n_bands, height, width = stack.shape
+    composite = np.empty((n_bands, height, width), dtype=np.uint16)
+    count = np.empty((height, width), dtype=np.int32)
 
-    Retries on network/warp failures.
+    def run(r0: int) -> None:
+        r1 = min(height, r0 + rows)
+        composite[:, r0:r1], count[r0:r1] = median_rows(stack, r0, r1)
 
-    Returns:
-        bands: uint16 array of shape (n_bands, height, width)
-        valid: bool array of shape (height, width)
-    """
-    import time as _time
-
-    for attempt in range(max_retries):
-        try:
-            bands = np.zeros((len(REQUIRED_BANDS), dst_height, dst_width), dtype=np.uint16)
-            for i, band_name in enumerate(REQUIRED_BANDS):
-                href = scene.asset_hrefs[band_name]
-                bands[i] = read_band_window(href, dst_transform, dst_crs, dst_height, dst_width)
-
-            if scene.boa_offset:
-                shifted = bands.astype(np.int32) + scene.boa_offset
-                bands = np.where(bands > 0, np.clip(shifted, 1, 65535), 0).astype(np.uint16)
-
-            valid = read_scl_mask(scene.scl_href, dst_transform, dst_crs, dst_height, dst_width)
-
-            band_valid = np.all(bands > 0, axis=0)
-            valid = valid & band_valid
-
-            logger.info(
-                "Loaded %s: %.1f%% valid pixels",
-                scene.item_id[:40],
-                100.0 * valid.mean(),
-            )
-            return bands, valid
-
-        except Exception as e:
-            if attempt < max_retries - 1:
-                wait = 2 ** (attempt + 1)
-                logger.warning(
-                    "Retry %d/%d for %s after error: %s (waiting %ds)",
-                    attempt + 1,
-                    max_retries,
-                    scene.item_id[:30],
-                    e,
-                    wait,
-                )
-                _time.sleep(wait)
-            else:
-                logger.error("Failed after %d retries: %s", max_retries, scene.item_id)
-                raise
-    raise RuntimeError(f"load_scene({scene.item_id}): max_retries must be >= 1, got {max_retries}")
-
-
-def monthly_composite(
-    scenes: list[SceneRef],
-    dst_transform: rasterio.transform.Affine,
-    dst_crs: CRS,
-    dst_height: int,
-    dst_width: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Compute median composite for a set of scenes (typically one month).
-
-    Args:
-        scenes: List of SceneRef for this month
-        dst_transform: Target affine transform
-        dst_crs: Target CRS
-        dst_height: Target height in pixels
-        dst_width: Target width in pixels
-
-    Returns:
-        composite: uint16 array of shape (n_bands, height, width)
-        coverage: float32 array of shape (height, width), fraction of valid scenes per pixel
-    """
-    n_bands = len(REQUIRED_BANDS)
-    n_scenes = len(scenes)
-
-    if n_scenes == 0:
-        return (
-            np.zeros((n_bands, dst_height, dst_width), dtype=np.uint16),
-            np.zeros((dst_height, dst_width), dtype=np.float32),
-        )
-
-    # Stack all scenes: (n_scenes, n_bands, height, width) as float32 for masked median
-    stack = np.full((n_scenes, n_bands, dst_height, dst_width), np.nan, dtype=np.float32)
-
-    # Load scenes in parallel (network-bound, benefits from concurrency)
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    def _load(idx_scene):
-        idx, scene = idx_scene
-        return idx, load_scene(scene, dst_transform, dst_crs, dst_height, dst_width)
-
-    max_workers = min(4, n_scenes)
-    failed = 0
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_load, (i, s)): (i, s) for i, s in enumerate(scenes)}
-        for future in as_completed(futures):
-            i, scene = futures[future]
-            try:
-                _, (bands, valid) = future.result()
-            except Exception as e:
-                logger.warning("Skipping scene %s: %s", scene.item_id, e)
-                failed += 1
-                continue
-            mask_3d = np.broadcast_to(valid[np.newaxis, :, :], bands.shape)
-            scene_float = bands.astype(np.float32)
-            scene_float[~mask_3d] = np.nan
-            stack[i] = scene_float
-    if failed:
-        logger.warning("Dropped %d/%d scenes due to errors", failed, n_scenes)
-
-    # Median ignoring NaN
-    with np.errstate(all="ignore"):
-        composite_f = np.nanmedian(stack, axis=0)
-
-    # Coverage: fraction of valid scenes per pixel
-    valid_count = np.sum(~np.isnan(stack[:, 0, :, :]), axis=0)
-    coverage = valid_count.astype(np.float32) / n_scenes
-
-    # Convert back to uint16, NaN → 0
-    composite = np.nan_to_num(composite_f, nan=0.0).astype(np.uint16)
-
-    logger.info(
-        "Monthly composite: %d scenes, mean coverage %.1f%%",
-        n_scenes,
-        100.0 * coverage.mean(),
-    )
+    starts = range(0, height, rows)
+    if pool is None:
+        for r0 in starts:
+            run(r0)
+    else:
+        for future in [pool.submit(run, r0) for r0 in starts]:
+            future.result()
+    coverage = count.astype(np.float32) / n_scenes
     return composite, coverage
+
+
+# --- the pipeline ------------------------------------------------------------------------------
+
+
+@dataclass
+class RunReport:
+    """Counters and timings of one `build_monthly_mosaics` run (for diagnostics)."""
+
+    months: int = 0
+    months_skipped: int = 0
+    scenes: int = 0
+    scenes_no_valid: int = 0
+    scenes_failed: int = 0
+    reads: int = 0
+    reads_native: int = 0
+    read_retries: int = 0
+    http_throttled: int = 0  # 429/5xx responses GDAL retried by itself
+    pixels_read: int = 0
+    pixels_window: int = 0
+    seconds: dict[str, float] = field(default_factory=dict)
+    first_month_seconds: float | None = None
+    wall_seconds: float = 0.0
+    budget_exceeded: list[str] = field(default_factory=list)
+    months_all_failed: list[str] = field(default_factory=list)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def add(self, stage: str | None, seconds: float = 0.0, **counts: int) -> None:
+        with self._lock:
+            if stage is not None:
+                self.seconds[stage] = self.seconds.get(stage, 0.0) + seconds
+            for name, value in counts.items():
+                setattr(self, name, getattr(self, name) + value)
+
+
+def run_summary(
+    report: RunReport, limiter: AdaptiveLimiter, settings: Settings, cpus: int, cpu_seconds: float
+) -> dict:
+    """Numbers and a bottleneck verdict for one run (diagnostics and benchmark records)."""
+    wall = max(report.wall_seconds, 1e-9)
+    # Time-weighted mean of the request limit over the run.
+    points = [(e.t, e.limit) for e in limiter.events] + [(wall, limiter.limit)]
+    mean_limit = sum((t1 - t0) * lim for (t0, lim), (t1, _) in pairwise(points)) / wall
+    occupancy = limiter.busy_seconds / (wall * max(mean_limit, 1e-9))
+    cpu_util = cpu_seconds / (wall * cpus)
+    if cpu_util >= 0.75:
+        verdict = f"CPU: the process used {cpu_util:.0%} of {cpus} CPUs"
+    elif occupancy >= 0.7:
+        verdict = (
+            f"remote reads: request slots were busy {occupancy:.0%} of the run while CPU use was "
+            f"{cpu_util:.0%}, so the network or the host limits throughput"
+        )
+    else:
+        verdict = (
+            f"neither saturated (request slots busy {occupancy:.0%}, CPU {cpu_util:.0%}): "
+            "latency, few scenes per month, or a small AOI"
+        )
+    return {
+        "wall_seconds": round(report.wall_seconds, 3),
+        "first_month_seconds": None
+        if report.first_month_seconds is None
+        else round(report.first_month_seconds, 3),
+        "months": report.months,
+        "months_skipped": report.months_skipped,
+        "scenes": report.scenes,
+        "scenes_no_valid": report.scenes_no_valid,
+        "scenes_failed": report.scenes_failed,
+        "reads": report.reads,
+        "reads_native": report.reads_native,
+        "read_retries": report.read_retries,
+        "http_throttled": report.http_throttled,
+        "pixel_fraction_read": round(report.pixels_read / max(report.pixels_window, 1), 4),
+        "stage_thread_seconds": {k: round(v, 2) for k, v in report.seconds.items()},
+        "cpu_seconds": round(cpu_seconds, 2),
+        "cpu_utilisation": round(cpu_util, 3),
+        "request_slot_occupancy": round(occupancy, 3),
+        "mean_request_limit": round(mean_limit, 2),
+        "final_request_limit": limiter.limit,
+        "limiter_events": [
+            {
+                "t": round(e.t, 2),
+                "limit": e.limit,
+                "rate_MBps": None if e.rate is None else round(e.rate / 1e6, 2),
+                "reason": e.reason,
+            }
+            for e in limiter.events
+        ],
+        "months_over_budget": report.budget_exceeded,
+        "months_all_failed": report.months_all_failed,
+        "bottleneck": verdict,
+    }
+
+
+@dataclass
+class _Month:
+    key: str
+    scenes: list[SceneRef]
+    stack: np.ndarray
+    nbytes: int
+    pending: int  # scenes not yet finished
+    bands_left: dict[int, int] = field(default_factory=dict)
+    failed: set[int] = field(default_factory=set)
+    valid: dict[int, np.ndarray] = field(default_factory=dict)
+    result: tuple[np.ndarray, np.ndarray] | None = None
+
+
+# Interpreter, numpy, rasterio, GDAL and allocator slack. Set so that the estimate for a
+# 20-scene Ucayali month (2.41 GB) matches the peak RSS measured in Docker (2.39-2.43 GB,
+# 2026-10-10, 1 and 2 CPUs).
+PROCESS_BASE_BYTES = 512 * 1024**2
+
+
+def month_bytes(n_scenes: int, n_bands: int, height: int, width: int) -> int:
+    """Memory one month holds while it is read and composited."""
+    plane = height * width
+    stack = n_scenes * n_bands * plane * 2
+    masks = n_scenes * plane  # SCL masks held until each scene is masked
+    composite = n_bands * plane * 2 + plane * 8  # composite, coverage, valid counts
+    return stack + masks + composite
+
+
+def fixed_bytes(settings: Settings, n_bands: int, height: int, width: int) -> int:
+    """Memory used whatever the months: process, GDAL cache, read buffers, finished months.
+
+    Each read in flight holds at most one grid-sized buffer: the SCL read decodes into a uint8
+    plane and builds a bool mask, a band read copies windows of at most a uint16 plane. The
+    month before the one being finished is kept for carry-forward, and one finished month may
+    wait for the writer.
+    """
+    plane = height * width
+    reads = settings.max_requests * 2 * plane
+    finished = 2 * (n_bands * plane * 2 + plane * 4)
+    return PROCESS_BASE_BYTES + settings.gdal_cache + reads + finished
+
+
+def _save_npz(path: Path, arrays: dict[str, np.ndarray]) -> None:
+    """Write an .npz atomically so an interrupted run never leaves a half-written month.
+
+    The file is what `np.savez_compressed` writes (a deflated zip of .npy members), at zlib
+    level 1 instead of 6: 0.8 s instead of 2.6 s for a 2765 x 2759 month, 2 % larger.
+    """
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}.", suffix=".tmp")
+    try:
+        with (
+            os.fdopen(fd, "wb") as f,
+            zipfile.ZipFile(f, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as archive,
+        ):
+            for name, array in arrays.items():
+                with archive.open(f"{name}.npy", "w", force_zip64=True) as member:
+                    np.lib.format.write_array(member, np.asanyarray(array), allow_pickle=False)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def build_monthly_mosaics(
@@ -276,16 +546,30 @@ def build_monthly_mosaics(
     bbox_wgs84: tuple[float, float, float, float],
     target_epsg: int,
     output_dir: Path,
+    *,
+    settings: Settings,
+    sign: Callable[[str], str],
     carry_forward: bool = True,
+    report: RunReport | None = None,
+    limiter: AdaptiveLimiter | None = None,
+    stop_on_failed_month: bool = True,
 ) -> dict[str, Path]:
-    """Build monthly composites and save as numpy files.
+    """Build monthly composites and save them as .npz files.
 
     Args:
         scenes_by_month: Dict mapping "YYYY-MM" to scene lists
         bbox_wgs84: AOI bounding box in WGS84
         target_epsg: Target EPSG for output grid
         output_dir: Directory to write monthly .npz files
+        settings: Concurrency and memory settings (performance.plan_settings)
+        sign: Turns an asset href into a readable URL (e.g. adds a SAS token); called right
+            before each open so expiring tokens are refreshed
         carry_forward: If True, fill gaps with previous month's data
+        report: Filled with counters and timings when given
+        limiter: Concurrent read limiter; built from `settings` when omitted
+        stop_on_failed_month: Raise when every scene of a month fails to read. False writes
+            such a month anyway, all gaps filled from the month before (the behaviour before
+            2026-10), so a permanently broken asset cannot block an archive run.
 
     Returns:
         Dict mapping "YYYY-MM" to output file path.
@@ -298,56 +582,313 @@ def build_monthly_mosaics(
         - band_names: string array
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    dst_crs = CRS.from_epsg(target_epsg)
-    dst_transform, dst_height, dst_width = compute_target_grid(bbox_wgs84, target_epsg)
+    report = report if report is not None else RunReport()
+    limiter = limiter or AdaptiveLimiter(
+        settings.requests, settings.max_requests, adaptive=settings.adaptive
+    )
+    transform, height, width = compute_target_grid(bbox_wgs84, target_epsg)
+    grid = Grid(transform, CRS.from_epsg(target_epsg), height, width)
+    env = {
+        **GDAL_ENV,
+        "GDAL_CACHEMAX": settings.gdal_cache,
+    }
+    n_bands = len(REQUIRED_BANDS)
+    t_start = time.perf_counter()
 
-    months = sorted(scenes_by_month.keys())
-    outputs: dict[str, Path] = {}
+    months = sorted(scenes_by_month)
+    paths = {m: output_dir / f"{m}.npz" for m in months}
+    todo = [m for m in months if not paths[m].exists()]
+    outputs = {m: p for m, p in paths.items() if p.exists()}
+    report.months, report.months_skipped = len(months), len(months) - len(todo)
+    for m in months:
+        if m not in todo:
+            logger.info("Skipping %s (already exists)", m)
+    if not todo:
+        return dict(sorted(outputs.items()))
+
+    first_href = next(s.scl_href for m in todo for s in scenes_by_month[m])
+    sign(first_href)  # fetch the first token once, before threads race for it
+
+    stop = threading.Event()
+    throttle = HttpThrottleCounter()
+    gdal_logger = logging.getLogger("rasterio._env")
+    gdal_logger.addFilter(throttle)
+
+    def read(href: str, out: np.ndarray, resampling: Resampling, needed=None) -> None:
+        for attempt in range(READ_ATTEMPTS):
+            if stop.is_set():
+                raise RuntimeError("cancelled")
+            t0 = time.perf_counter()
+            if attempt:
+                out[...] = 0  # a failed attempt may have filled part of it
+            url = sign(href)
+            try:
+                with limiter.slot():
+                    pixels, native = read_asset(url, grid, out, resampling, env, needed=needed)
+            except Exception as e:  # network, auth expiry, throttling, truncated data
+                forget_url(url)
+                limiter.throttled(throttle.events)
+                limiter.record(False)
+                report.add("read", time.perf_counter() - t0, read_retries=1)
+                if attempt == READ_ATTEMPTS - 1:
+                    raise
+                wait_s = min(READ_BACKOFF_MAX_SECONDS, READ_BACKOFF_SECONDS * 2**attempt)
+                wait_s *= 0.5 + random.random()
+                logger.warning(
+                    "Read failed (%s), attempt %d/%d, retrying in %.1fs: %s",
+                    href.rsplit("/", 1)[-1],
+                    attempt + 1,
+                    READ_ATTEMPTS,
+                    wait_s,
+                    e,
+                )
+                time.sleep(wait_s)
+                continue
+            limiter.throttled(throttle.events)
+            limiter.record(True, pixels * out.itemsize)
+            report.add(
+                "read",
+                time.perf_counter() - t0,
+                reads=1,
+                reads_native=int(native),
+                pixels_read=pixels,
+                pixels_window=out.size,
+            )
+            return
+
+    def read_scl(scene: SceneRef) -> np.ndarray:
+        scl = np.zeros((height, width), dtype=np.uint8)
+        read(scene.scl_href, scl, Resampling.nearest)
+        return _SCL_LUT[scl]
+
+    def read_band(month: _Month, i: int, b: int, needed: np.ndarray) -> None:
+        # stack[i, b] is a contiguous zeroed plane; the read fills it in place.
+        read(
+            month.scenes[i].asset_hrefs[REQUIRED_BANDS[b]],
+            month.stack[i, b],
+            Resampling.bilinear,
+            needed,
+        )
+
+    def assemble(month: _Month, i: int) -> int:
+        t0 = time.perf_counter()
+        n_valid = apply_scene_mask(month.stack[i], month.valid.pop(i), month.scenes[i].boa_offset)
+        report.add("mask", time.perf_counter() - t0)
+        return n_valid
+
+    def composite(month: _Month) -> tuple[np.ndarray, np.ndarray]:
+        t0 = time.perf_counter()
+        result = median_composite(month.stack, len(month.scenes), cpu_pool)
+        report.add("median", time.perf_counter() - t0)
+        return result
+
+    def save(key: str, bands: np.ndarray, coverage: np.ndarray) -> Path:
+        t0 = time.perf_counter()
+        _save_npz(
+            paths[key],
+            {
+                "bands": bands,
+                "coverage": coverage,
+                "transform": np.array(list(transform)[:6]),
+                "epsg": np.array(target_epsg),
+                "band_names": np.array(list(REQUIRED_BANDS)),
+            },
+        )
+        report.add("write", time.perf_counter() - t0)
+        logger.info("Saved %s (%.2f MB)", paths[key], paths[key].stat().st_size / 1e6)
+        return paths[key]
+
+    fetch_pool = ThreadPoolExecutor(settings.max_requests, thread_name_prefix="fetch")
+    cpu_pool = ThreadPoolExecutor(settings.cpu_workers, thread_name_prefix="cpu")
+    finish_pool = ThreadPoolExecutor(1, thread_name_prefix="median")
+    write_pool = ThreadPoolExecutor(1, thread_name_prefix="write")
+    tasks: dict[Future, tuple] = {}
+    base_bytes = fixed_bytes(settings, n_bands, height, width)
+    active: dict[str, _Month] = {}
+    in_flight = 0
+    next_admit = 0
+    next_finish = 0
+    write_future: Future | None = None
     prev_composite: np.ndarray | None = None
 
-    for month_key in months:
-        out_path = output_dir / f"{month_key}.npz"
+    def admit() -> None:
+        nonlocal next_admit, in_flight
+        while next_admit < len(todo):
+            # Keep the read queue fed but bounded: about two reads waiting per slot.
+            queued = sum(1 for kind, _, _ in tasks.values() if kind in ("scl", "band"))
+            if active and queued >= 2 * settings.max_requests:
+                return
+            key = todo[next_admit]
+            scenes = scenes_by_month[key]
+            need = month_bytes(len(scenes), n_bands, height, width)
+            if active and base_bytes + in_flight + need > settings.memory_budget:
+                return
+            if not active and base_bytes + need > settings.memory_budget:
+                report.budget_exceeded.append(key)
+                logger.warning(
+                    "%s needs about %.2f GB (%d scenes) and the budget is %.2f GB. It is read "
+                    "alone; if less memory than that is actually free, the process may be killed. "
+                    "Raise --memory if the machine has it, or use a smaller AOI",
+                    key,
+                    (base_bytes + need) / 1e9,
+                    len(scenes),
+                    settings.memory_budget / 1e9,
+                )
+            stack = np.zeros((len(scenes), n_bands, height, width), dtype=np.uint16)
+            month = _Month(key, scenes, stack, need, pending=len(scenes))
+            active[key] = month
+            in_flight += need
+            next_admit += 1
+            logger.info("=== Processing %s (%d scenes) ===", key, len(scenes))
+            report.add(None, scenes=len(scenes))
+            if not scenes:  # nothing to read: an all-zero month, as before
+                month.result = (
+                    np.zeros((n_bands, height, width), dtype=np.uint16),
+                    np.zeros((height, width), dtype=np.float32),
+                )
+            for i, scene in enumerate(scenes):
+                tasks[fetch_pool.submit(read_scl, scene)] = ("scl", month, i)
 
-        # Skip already-completed months (resume support)
-        if out_path.exists():
-            logger.info("Skipping %s (already exists)", month_key)
-            data = load_mosaic(out_path)
-            prev_composite = data["bands"]
-            outputs[month_key] = out_path
-            continue
+    def scene_done(month: _Month, i: int) -> None:
+        month.pending -= 1
+        if month.pending == 0:
+            tasks[finish_pool.submit(composite, month)] = ("median", month, -1)
 
-        scenes = scenes_by_month[month_key]
-        logger.info("=== Processing %s (%d scenes) ===", month_key, len(scenes))
+    def previous_bands(key: str) -> np.ndarray | None:
+        idx = months.index(key)
+        if idx == 0:
+            return None
+        prev_key = months[idx - 1]
+        if prev_key in todo:
+            return prev_composite
+        return load_mosaic(paths[prev_key])["bands"]
 
-        composite, coverage = monthly_composite(
-            scenes, dst_transform, dst_crs, dst_height, dst_width
-        )
+    try:
+        admit()
+        while tasks:
+            done, _ = wait(list(tasks), return_when=FIRST_COMPLETED)
+            for future in done:
+                kind, month, i = tasks.pop(future)
+                if kind == "scl":
+                    try:
+                        valid = future.result()
+                    except Exception as e:
+                        logger.warning("Skipping scene %s: %s", month.scenes[i].item_id, e)
+                        month.failed.add(i)
+                        report.add(None, scenes_failed=1)
+                        scene_done(month, i)
+                        continue
+                    if not valid.any():
+                        report.add(None, scenes_no_valid=1)
+                        scene_done(month, i)
+                        continue
+                    month.valid[i] = valid
+                    month.bands_left[i] = n_bands
+                    for b in range(n_bands):
+                        tasks[fetch_pool.submit(read_band, month, i, b, valid)] = (
+                            "band",
+                            month,
+                            i,
+                        )
+                elif kind == "band":
+                    try:
+                        future.result()
+                    except Exception as e:
+                        if i not in month.failed:
+                            logger.warning("Skipping scene %s: %s", month.scenes[i].item_id, e)
+                            month.failed.add(i)
+                            report.add(None, scenes_failed=1)
+                    month.bands_left[i] -= 1
+                    if month.bands_left[i] > 0:
+                        continue
+                    if i in month.failed:
+                        month.stack[i] = 0
+                        month.valid.pop(i, None)
+                        scene_done(month, i)
+                    else:
+                        tasks[cpu_pool.submit(assemble, month, i)] = ("mask", month, i)
+                elif kind == "mask":
+                    n_valid = future.result()
+                    logger.info(
+                        "Loaded %s: %.1f%% valid pixels",
+                        month.scenes[i].item_id[:40],
+                        100.0 * n_valid / (height * width),
+                    )
+                    scene_done(month, i)
+                elif kind == "median":
+                    month.result = future.result()
+                    month.stack = np.empty(0, dtype=np.uint16)  # release the scene stack
+                    if month.failed:
+                        logger.warning(
+                            "Dropped %d/%d scenes due to errors",
+                            len(month.failed),
+                            len(month.scenes),
+                        )
 
-        # Carry-forward: fill zero pixels from previous month
-        if carry_forward and prev_composite is not None:
-            gap_mask = np.all(composite == 0, axis=0)
-            if gap_mask.any():
-                n_filled = gap_mask.sum()
-                logger.info("Carry-forward: filling %d pixels from previous month", n_filled)
-                composite[:, gap_mask] = prev_composite[:, gap_mask]
-
-        prev_composite = composite.copy()
-
-        # Save
-        out_path = output_dir / f"{month_key}.npz"
-        np.savez_compressed(
-            out_path,
-            bands=composite,
-            coverage=coverage,
-            transform=np.array(list(dst_transform)[:6]),
-            epsg=np.array(target_epsg),
-            band_names=np.array(list(REQUIRED_BANDS)),
-        )
-        file_size_mb = out_path.stat().st_size / (1024 * 1024)
-        logger.info("Saved %s (%.2f MB)", out_path, file_size_mb)
-        outputs[month_key] = out_path
-
-    return outputs
+            # Finish months in calendar order: carry-forward needs the month before.
+            while next_finish < len(todo) and active.get(todo[next_finish]) is not None:
+                month = active[todo[next_finish]]
+                if month.result is None:
+                    break
+                all_failed = month.scenes and len(month.failed) == len(month.scenes)
+                if all_failed and not stop_on_failed_month:
+                    report.months_all_failed.append(month.key)
+                    logger.warning(
+                        "Every scene of %s failed; writing it from carry-forward", month.key
+                    )
+                elif all_failed:
+                    raise RuntimeError(
+                        f"every scene of {month.key} failed to read; this is usually an outage, "
+                        "throttling or an expired token rather than bad scenes. Earlier months "
+                        "are saved; re-run to resume from this month, or pass --keep-going"
+                    )
+                bands, coverage = month.result
+                logger.info(
+                    "Monthly composite %s: %d scenes, mean coverage %.1f%%",
+                    month.key,
+                    len(month.scenes),
+                    100.0 * coverage.mean(),
+                )
+                if carry_forward:
+                    prev = previous_bands(month.key)
+                    if prev is not None:
+                        gap_mask = np.all(bands == 0, axis=0)
+                        if gap_mask.any():
+                            logger.info(
+                                "Carry-forward: filling %d pixels from previous month",
+                                int(gap_mask.sum()),
+                            )
+                            bands[:, gap_mask] = prev[:, gap_mask]
+                prev_composite = bands
+                if write_future is not None:
+                    write_future.result()  # at most one month waiting to be written
+                write_future = write_pool.submit(save, month.key, bands, coverage)
+                outputs[month.key] = paths[month.key]
+                if report.first_month_seconds is None:
+                    write_future.result()
+                    report.first_month_seconds = time.perf_counter() - t_start
+                del active[month.key]
+                in_flight -= month.nbytes
+                next_finish += 1
+            admit()
+        if next_finish < len(todo):
+            raise RuntimeError(
+                f"internal error: {todo[next_finish]} was never finished; no tasks are left"
+            )
+        if write_future is not None:
+            write_future.result()
+    except BaseException:
+        stop.set()
+        for future in tasks:
+            future.cancel()
+        raise
+    finally:
+        for pool in (fetch_pool, cpu_pool, finish_pool, write_pool):
+            pool.shutdown(wait=True, cancel_futures=True)
+        gdal_logger.removeFilter(throttle)
+        report.http_throttled = throttle.events
+        report.wall_seconds = time.perf_counter() - t_start
+    return dict(sorted(outputs.items()))
 
 
 def load_mosaic(path: Path) -> dict:
@@ -357,8 +898,6 @@ def load_mosaic(path: Path) -> dict:
         Dict with keys: bands, coverage, transform, epsg, band_names
     """
     data = np.load(path, allow_pickle=False)
-    from rasterio.transform import Affine
-
     coeffs = data["transform"]
     transform = Affine(*coeffs)
     return {

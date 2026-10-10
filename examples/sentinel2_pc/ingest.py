@@ -17,11 +17,22 @@ Usage:
         --start 2020-01-01 --end 2024-12-31
     uv run python examples/sentinel2_pc/ingest.py --aoi nile_delta --out-dir /path/to/scratch
     uv run python examples/sentinel2_pc/ingest.py --aoi nile_delta --skip-download --stac
+    uv run python examples/sentinel2_pc/ingest.py --aoi nile_delta --diagnostics
+    uv run python examples/sentinel2_pc/ingest.py --aoi nile_delta --performance fixed --requests 8
+    uv run python examples/sentinel2_pc/ingest.py --aoi nile_delta --max-requests 32
+
+Performance: by default (--performance auto) the download phase detects usable CPUs and memory
+(including container, SLURM and rlimit caps) and runs 16 concurrent reads. It lowers that number
+when the host fails or throttles reads and, with a --max-requests above 16, tries more while
+throughput keeps rising. --performance fixed uses the given or default values without
+adaptation, so runs are repeatable. --diagnostics prints the chosen
+settings with reasons, and after the download the bottleneck and per-stage timings.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import time
 from pathlib import Path
@@ -29,8 +40,9 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 import yaml
-from catalog import PC_STAC_URL, S2_COLLECTION, search_scenes_by_month
-from mosaic import build_monthly_mosaics
+from catalog import PC_STAC_URL, S2_COLLECTION, search_scenes_by_month, sign_href
+from mosaic import READ_ATTEMPTS, RunReport, build_monthly_mosaics, run_summary
+from performance import AdaptiveLimiter, Settings, detect_resources, parse_bytes, plan_settings
 
 import chronozarr
 from chronozarr.schema import Band
@@ -78,18 +90,52 @@ def load_aoi_config(aoi_name: str) -> dict:
     return aoi
 
 
-def download_mosaics(aoi: dict, start: str, end: str, mosaic_dir: Path) -> dict[str, Path]:
+def download_mosaics(
+    aoi: dict,
+    start: str,
+    end: str,
+    mosaic_dir: Path,
+    settings: Settings,
+    cpus: int,
+    diagnostics: bool = False,
+    keep_going: bool = False,
+) -> dict[str, Path]:
     bbox = tuple(aoi["bbox"])
 
     logger.info("Downloading monthly mosaics for %s (%s to %s)", aoi["name"], start, end)
     t0 = time.perf_counter()
 
     by_month = search_scenes_by_month(bbox, start, end, max_cloud_pct=80.0)
-    outputs = build_monthly_mosaics(by_month, bbox, target_epsg=aoi["epsg"], output_dir=mosaic_dir)
+    logger.info("Scene search: %.1fs", time.perf_counter() - t0)
+    report = RunReport()
+    limiter = AdaptiveLimiter(settings.requests, settings.max_requests, adaptive=settings.adaptive)
+    cpu0 = time.process_time()
+    outputs = build_monthly_mosaics(
+        by_month,
+        bbox,
+        target_epsg=aoi["epsg"],
+        output_dir=mosaic_dir,
+        settings=settings,
+        sign=sign_href,
+        report=report,
+        limiter=limiter,
+        stop_on_failed_month=not keep_going,
+    )
 
     elapsed = time.perf_counter() - t0
     total_mb = sum(p.stat().st_size for p in outputs.values()) / 1e6
     logger.info("Download done: %d months, %.1f MB, %.0fs", len(outputs), total_mb, elapsed)
+    summary = run_summary(report, limiter, settings, cpus, time.process_time() - cpu0)
+    if report.scenes_failed:
+        logger.warning(
+            "%d scenes failed after %d read attempts each and are missing from their months' "
+            "medians; delete those months' .npz files and re-run to retry them",
+            report.scenes_failed,
+            READ_ATTEMPTS,
+        )
+    if diagnostics:
+        logger.info("Bottleneck: %s", summary["bottleneck"])
+        logger.info("Run summary:\n%s", json.dumps(summary, indent=2))
     return outputs
 
 
@@ -215,6 +261,43 @@ def main() -> None:
     )
     parser.add_argument("--start", default="2015-07-01", help="Start date (default: 2015-07-01)")
     parser.add_argument("--end", default="2026-04-01", help="End date (default: 2026-04-01)")
+    perf = parser.add_argument_group("performance (download phase)")
+    perf.add_argument(
+        "--performance",
+        choices=("auto", "fixed"),
+        default="auto",
+        help="auto: detect resources and adapt request concurrency (default); "
+        "fixed: no adaptation, repeatable settings",
+    )
+    perf.add_argument(
+        "--requests",
+        type=int,
+        help="concurrent remote reads: the start value in auto mode, the fixed value otherwise "
+        "(default 16)",
+    )
+    perf.add_argument(
+        "--max-requests", type=int, help="ceiling on concurrent remote reads (default 16)"
+    )
+    perf.add_argument(
+        "--cpu-workers", type=int, help="threads for compositing (default: usable CPUs - 1)"
+    )
+    perf.add_argument(
+        "--memory",
+        type=parse_bytes,
+        help="memory budget for month buffers and the GDAL cache, e.g. 4GB "
+        "(default: half of available memory)",
+    )
+    perf.add_argument(
+        "--keep-going",
+        action="store_true",
+        help="when every scene of a month fails to read, write the month from carry-forward and "
+        "continue (the behaviour before 2026-10) instead of stopping",
+    )
+    perf.add_argument(
+        "--diagnostics",
+        action="store_true",
+        help="print the chosen settings with reasons, the bottleneck and per-stage timings",
+    )
     parser.add_argument(
         "--out-dir",
         type=Path,
@@ -233,7 +316,33 @@ def main() -> None:
         )
 
     if not args.skip_download:
-        download_mosaics(aoi, args.start, args.end, mosaic_dir)
+        resources = detect_resources()
+        for name in ("requests", "max_requests", "cpu_workers"):
+            value = getattr(args, name)
+            if value is not None and value < 1:
+                parser.error(f"--{name.replace('_', '-')} must be at least 1, got {value}")
+        settings = plan_settings(
+            resources,
+            adaptive=args.performance == "auto",
+            requests=args.requests,
+            max_requests=args.max_requests,
+            cpu_workers=args.cpu_workers,
+            memory_budget=args.memory,
+        )
+        log = logger.info if args.diagnostics else logger.debug
+        log("Resources: %s", resources)
+        for reason in settings.reasons:
+            log("Setting %s", reason)
+        download_mosaics(
+            aoi,
+            args.start,
+            args.end,
+            mosaic_dir,
+            settings,
+            resources.cpus,
+            diagnostics=args.diagnostics,
+            keep_going=args.keep_going,
+        )
 
     encode(mosaic_dir, store_dir)
     if args.stac:
