@@ -2,6 +2,7 @@ node_modules/
 .vocs/
 dist/
 docs/pages/getting-started.md
+docs/pages/how-it-works.md
 docs/pages/specification.md
 docs/pages/guides/
 docs/pages/reference/

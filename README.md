@@ -1,197 +1,67 @@
-# chronozarr
+# From rasters to an interactive map you can share
 
 [![CI](https://github.com/chronozarr/chronozarr/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chronozarr/chronozarr/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/chronozarr)](https://pypi.org/project/chronozarr/)
 [![npm](https://img.shields.io/npm/v/chronozarr)](https://www.npmjs.com/package/chronozarr)
 
-chronozarr turns a raster time series into static files that you can put in a storage bucket. Anyone with the link can then open the series in a web browser and play or scrub through it like a video. Clicking a pixel shows its values over time. The same files open in Python with the exact values you wrote.
-
-It is for data that is hard to share today: years of monthly satellite composites, model output, or any stack of georeferenced rasters on one grid. The usual choices are to send the files, which can run to many gigabytes, or to run a tile server. A tile server has to be kept running, and it usually sends the browser images. chronozarr needs no server, and the browser receives the values themselves.
+chronozarr turns dated GeoTIFFs into a time-series viewer. Explore it on your computer, send a temporary link from your laptop, or publish it to cloud storage. Anyone with the link plays or scrubs through the series in a web browser like a video. A click on a pixel shows its values over time. The same files open in Python with the exact values you wrote.
 
 [Live demo](https://chronozarr.org/demo/): 117 monthly Sentinel-2 composites (2015 to 2026) of the Ucayali River in Peru, read directly from a bucket.
 
-## How it works
-
-A chronozarr store is a Zarr v3 group arranged so that a browser can read it over plain HTTP.
-
-The map is divided into square cells, 512 by 512 pixels by default. Each chunk holds one cell at one timestep, with all of its bands. To show a view, the browser downloads only the chunks for the visible cells at the current timestep.
-
-The store also holds a pyramid. Level 0 holds your values unchanged. Each coarser level is the mean of 2 by 2 blocks of the level below it, at half the resolution. When you zoom out, the viewer switches to a coarser level, so a view of the whole area still needs only a few chunks.
-
-```text
-my_store/
-  zarr.json                root metadata
-  0/                       level 0, the original resolution
-    data/                  (time, band, y, x)
-    time/ band/ y/ x/      coordinates
-    mask/ coverage/        optional
-  1/ 2/ ...                coarser levels
-```
-
-The chunks hold the stored numbers in their original type: uint8, uint16, int16 or float32. A scale and offset per band give physical units. An optional mask marks invalid pixels. An optional coverage plane counts the valid observations behind each pixel. The viewer draws these numbers on the GPU and computes products such as true color or NDVI there. It also downloads the timesteps around the current one in the background, so stepping through time usually needs no new download.
-
-The layout follows the Zarr conventions for pyramids (`multiscales`), coordinate systems (`proj`) and georeferencing (`spatial`), all at v0.1. This is why other tools can read a store without chronozarr installed: xarray, GDAL 3.13, and CarbonPlan's zarr-layer for MapLibre.
-
-To publish a store, upload it to a static host that sends CORS headers. A sharded store also needs byte-range requests. The demo store is on Cloudflare R2, and there is no server code to run.
-
 ## Quickstart
 
-Install the released Python package with GeoTIFF support. It needs Python 3.11 or later.
+Four commands take a folder of dated GeoTIFFs to a link.
 
-```bash
-python -m pip install --upgrade "chronozarr[geo]==0.4.0"
-```
-
-`0.4.0` is the Python package release. It reads and writes the unchanged chronozarr v0.3 store format.
-
-### Without data
-
-1. Save this script as `quickstart.py`. It writes a store of three synthetic timesteps and reads one back. The pixels are 10 m in UTM zone 31N.
-
-   ```python
-   import numpy as np
-   import xarray as xr
-   import chronozarr
-
-   values = np.arange(3 * 64 * 64, dtype=np.uint16).reshape(3, 1, 64, 64)
-   da = xr.DataArray(
-       values,
-       dims=("time", "band", "y", "x"),
-       coords={
-           "time": np.array(["2024-01-01", "2024-02-01", "2024-03-01"], dtype="datetime64[ns]"),
-           "band": ["example"],
-           "y": 5000000 - (np.arange(64) + 0.5) * 10,
-           "x": 500000 + (np.arange(64) + 0.5) * 10,
-       },
-   )
-   chronozarr.encode(da, "synthetic_store", crs="EPSG:32631", nodata=None)
-
-   store = chronozarr.open_store("synthetic_store")
-   print((store.read(t=1) == values[1]).all())
-   ```
-
-2. Run the script. It prints `True`: level 0 returns the values that you wrote.
+1. Install. It needs Python 3.11 or later.
 
    ```bash
-   python quickstart.py
+   python -m pip install --upgrade "chronozarr[geo]==0.4.0"
    ```
 
-3. Check the store.
+2. Convert your rasters. Each file name holds one date: `20240131`, `2024-01-31` or `2024-01`.
 
    ```bash
-   chronozarr validate synthetic_store
-   chronozarr info synthetic_store
+   chronozarr convert "rasters/*.tif" my_store
    ```
 
-### With your data
-
-1. Write a store from your rasters. `convert` is the command for files on disk or in S3. Point it at a directory, a quoted glob or an `s3://` prefix of GeoTIFFs with the date in each file name (`20240131`, `2024-01-31` or `2024-01`):
-
-   ```bash
-   chronozarr convert "scenes/*.tif" my_store --dry-run   # list files and dates, check every file, write nothing
-   chronozarr convert "scenes/*.tif" my_store
-   ```
-
-   The dry run runs the same discovery and preflight checks as conversion, then prints each file with its date and the planned grid, bands, validity and size. It writes no store. A directory or `s3://` prefix is not searched recursively; use a glob such as `scenes/**/*.tif` for subdirectories. Listing an S3 prefix needs `pip install "chronozarr[s3]"` and uses your AWS credentials.
-
-   A date is read from a name only when the name holds exactly one. A name with no date, with several (`20240215_2024-03`), or two files with the same date are reported, never guessed. `--date-pattern` says where the date is, for example `--date-pattern "ndvi_%Y%m%d"`. `--write-manifest found.csv` saves discovered files and dates as a manifest that `convert` reads back; it is the one output allowed with `--dry-run`.
-
-   Before it reads any pixels in bulk, `convert` checks every file for its date, grid and CRS, bands, dtype, scale, offset, units and nodata. It reports all problems at once, grouped by file, each with a suggested fix, and writes nothing:
-
-   ```text
-   2 problem(s) in 2 of 24 source file(s); nothing was written:
-
-   scenes/ndvi_2024-03.tif
-     - has scales [0.5, 1.0]; scenes/ndvi_2024-01.tif has [1.0, 1.0]. A store holds one value per band for every timestep, so the sources must agree
-       fix: if the metadata is wrong, correct it (gdal_edit.py -scale -offset -units); ...
-
-   scenes/readme_copy.tif
-     - no date in the file name
-       fix: name the date YYYYMMDD, YYYY-MM-DD or YYYY-MM, or pass --date-pattern ...
-   ```
-
-   Nothing is resampled or rescaled unless you ask. Files on another grid fail with a suggestion to pass `--resampling`.
-
-   The store takes each band's description (its name), scale, offset and units from the files, so a Sentinel-2 file with a scale of 0.0001 gives reflectance. These must be identical in every file. It also takes the nodata value that the files declare; files that declare none give a store with no nodata, so a stored 0 is data. `chronozarr convert --help` lists the manifest, Zarr and NetCDF sources and the validity rules.
-
-   `chronozarr encode "scenes/*.tif" my_store` is the in-memory route for GeoTIFFs on one grid. It reads uint8, uint16, int16 and float32 files by the same rules, holds the whole stack in memory and never resamples. It points you to `convert` for directories, S3 prefixes and manifests.
-
-2. Check the store against the spec.
-
-   ```bash
-   chronozarr validate my_store
-   ```
-
-3. Read the values in Python.
-
-   ```python
-   import chronozarr
-
-   store = chronozarr.open_store("my_store")
-   store.read(t=42)              # (band, y, x), exact stored values
-   da = store.to_xarray(lod=0)   # xarray DataArray, loaded into memory
-   ```
-
-4. Look at the store on your machine before you upload it.
+3. Explore on your computer.
 
    ```bash
    chronozarr preview my_store
    ```
 
-   The command serves the store on `127.0.0.1`, opens the viewer in your browser and stops on Ctrl-C. The default viewer page is hosted, so it needs internet access; use `--viewer-dir` for an offline self-hosted viewer. See [docs/python.md](docs/python.md#preview-from-the-command-line).
-
-   To show a local store temporarily from your laptop, run `chronozarr share my_store`. It needs `cloudflared`; keep the terminal open while others use the link, choose the view and use `Copy link` to share it. The [sharing walkthrough](docs/python.md#share-a-store-through-a-tunnel) covers its checks and limits.
-
-5. Upload `my_store` to a static host. [docs/hosting.md](docs/hosting.md) has recipes for S3 with CloudFront, Cloudflare R2, Google Cloud Storage and Source Cooperative.
-
-6. Check the host.
+4. Share a link.
 
    ```bash
-   chronozarr doctor https://your-host/my_store
+   chronozarr share my_store
    ```
 
-7. Print a checked viewer link, then open it in your browser:
+`share` needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/). It needs no bucket and no Cloudflare account. Keep the terminal open while others use the link. Anyone with the link can read the store while it runs.
 
-   ```
-   chronozarr link https://your-host/my_store
-   ```
+To check the files first, add `--dry-run` to the `convert` command. It reports every problem per file and writes nothing. See [Convert your data](docs/convert.md).
 
-The input must be on an EPSG grid with north up. To write a store from an xarray `DataArray`, call `chronozarr.encode` as in the script above.
+## Choose how to share
 
-## Read a store without chronozarr
+| I want to | Use |
+|-----------|-----|
+| Look at a store on my computer | `chronozarr preview`. See [Preview a store](docs/preview.md) |
+| Send someone a temporary link | `chronozarr share`. See [Share a local store instantly](docs/share.md) |
+| Make a link that lasts | `chronozarr publish`. See [Hosting](docs/hosting.md#chronozarr-publish) |
+| Show a store in my own web page | [Embed the viewer](docs/embedding.md) |
+| Keep the data private | [Private stores](docs/private.md) |
+| Work in Jupyter or VS Code | [Explore a store in a notebook](docs/notebooks.md) |
 
-xarray reads each level as a plain Zarr group:
+## What you can do with a store
 
-```python
-import xarray as xr
-
-ds = xr.open_zarr("my_store", group="0", zarr_format=3, chunks=None)
-```
-
-GDAL 3.13 reads the CRS, the georeferencing and the values. It attaches the coarser levels as overviews when you open the data array as `ZARR:"my_store":/0/data`. A single time-slice subdataset shows no overviews. To get Cloud Optimized GeoTIFFs for older GDAL or QGIS, run `chronozarr export-cog my_store out_dir`.
-
-## Commands
-
-Run `chronozarr <command> --help` for every option.
-
-| Command | What it does |
-|---------|--------------|
-| `convert SOURCE OUT` | The command for existing raster files. Writes a store one timestep at a time from a directory, quoted glob or `s3://` prefix of dated GeoTIFFs, a manifest of COGs or PNG frames, a Zarr store or a NetCDF file. `--dry-run` checks every file and reports all problems per file. Also converts a v0.2 store to v0.3 |
-| `encode INPUT OUT` | Writes a store in memory from a Zarr store, a NetCDF file or a quoted glob of GeoTIFFs. Points to `convert` for anything else |
-| `append STORE INPUT` | Adds timesteps at the end of a store. See [docs/append.md](docs/append.md) |
-| `validate STORE` | Checks a store against the spec. Exits with status 1 on failure |
-| `info STORE` | Prints the times, bands and levels of a store |
-| `bands STORE` | Lists the bands, the role each plays and the viewer products they allow. `--band-role B04=red` sets a band's `common_name`. `encode` and `convert` take the same flag. See [docs/python.md](docs/python.md#band-roles-and-the-first-view) |
-| `link STORE_URL` | Prints a viewer URL with an initial product, band, display limits and timestep, checked against the hosted store |
-
-| `preview STORE` | Serves a local store on `127.0.0.1` and opens it in the viewer. Ctrl-C stops it |
-| `share STORE` | Starts a disposable Cloudflare quick tunnel for a local store, doctor-checks the public route, and prints a viewer link. Needs `cloudflared`; Ctrl-C stops both processes |
-| `doctor TARGET` | Checks a hosted URL or a local store. See [docs/hosting.md](docs/hosting.md) |
-| `publish STORE --destination s3://BUCKET/PREFIX` | Uploads a store to S3 or R2; `gs://` and `az://` destinations publish to Google Cloud Storage and Azure Blob Storage. It checks the hosted store and prints a viewer link. `--update` publishes eligible appended timesteps to the same prefix and link. Install the matching `publish` extra. See [docs/hosting.md](docs/hosting.md#chronozarr-publish) |
-| `export-cog STORE OUT_DIR` | Writes true-value COGs for GDAL and QGIS. Needs the `geo` extra |
-| `stac STORE --out DIR` | Writes a static STAC Collection and Item. Needs the `geo` extra |
-
-Other extras: `notebook` adds `chronozarr.view(store)`, which shows a local store in Jupyter. `netcdf` and `dask` add those inputs. `s3` adds listing of an `s3://` prefix for `convert`.
+| Task | How |
+|------|-----|
+| Convert a folder, glob or S3 prefix of dated GeoTIFFs | `chronozarr convert`, with date discovery and a dry run. See [Convert your data](docs/convert.md) |
+| Check a store, or a host | `chronozarr validate` and `chronozarr doctor` |
+| Add new timesteps | `chronozarr append`, then `chronozarr publish --update`. See [Append timesteps](docs/append.md) |
+| Inspect a pixel, switch to NDVI, NDWI or true color | The viewer computes products from the stored bands. See [Band roles](docs/python.md#band-roles-and-the-first-view) |
+| Send the exact view | `Copy link` in the viewer, or `chronozarr link`. The link holds time, product, zoom and centre |
+| Analyze in Python | `xr.open_dataset("my_store", engine="chronozarr")`. See [Python API](docs/python.md) |
+| Open in GDAL or QGIS | `chronozarr export-cog`. See [How it works](docs/how-it-works.md#read-a-store-without-chronozarr) |
 
 ## JavaScript
 
@@ -212,15 +82,16 @@ There is no build step and no runtime dependency. Examples are in [js/README.md]
 
 | Topic | Document |
 |-------|----------|
-| Format rules | [spec/CHRONOZARR.md](spec/CHRONOZARR.md) |
+| How a store is laid out, and the first store from Python | [How it works](docs/how-it-works.md) |
+| Every command | [Command line](docs/cli.md) |
 | Python functions | [docs/python.md](docs/python.md) |
 | Your own data, end to end | [examples/bring_your_data](examples/bring_your_data/README.md) |
 | Georeferenced PNG frames | [docs/png-frames.md](docs/png-frames.md) |
 | Hosting and the doctor checklist | [docs/hosting.md](docs/hosting.md) |
-| Adding timesteps | [docs/append.md](docs/append.md) |
 | Embedding the viewer in a page | [docs/embedding.md](docs/embedding.md) |
 | Drawing a store on a MapLibre map | [js/maplibre/README.md](js/maplibre/README.md) |
 | More examples: Sentinel-2 ingest, water masks, notebooks, SWOT, NISAR | [examples](examples/) |
+| Format rules | [spec/CHRONOZARR.md](spec/CHRONOZARR.md) |
 | Comparison with PMTiles, Mapbox raster-array and zarr-layer | [docs/format-comparison.md](docs/format-comparison.md) |
 | Measurements and tested reader versions | [docs/evidence.md](docs/evidence.md) |
 

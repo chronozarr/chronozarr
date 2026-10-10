@@ -41,7 +41,7 @@ uv run --with rangehttpserver python -m RangeHTTPServer 8000
 chronozarr preview my_store --viewer-dir published
 ```
 
-In a notebook, pass `viewer_dir="published"` to `chronozarr.view` or `chronozarr.player`. The folder needs `demo/index.html`, which the copy command writes. The same server serves the viewer and the store, so there is no CORS or mixed-content step. On JupyterHub the viewer and the store go through `jupyter-server-proxy`. See [python.md](python.md#remote-notebooks).
+In a notebook, pass `viewer_dir="published"` to `chronozarr.view` or `chronozarr.player`. The folder needs `demo/index.html`, which the copy command writes. The same server serves the viewer and the store, so there is no CORS or mixed-content step. On JupyterHub the viewer and the store go through `jupyter-server-proxy`. See [python.md](notebooks.md#remote-notebooks).
 
 ## Use a store on another host
 

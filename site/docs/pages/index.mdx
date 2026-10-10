@@ -22,9 +22,9 @@ title: Raster time series, ready to explore.
     <figcaption className="cz-caption">One place, through time. Sentinel-2 monthly composites of the Ucayali River, Peru, from the public demo store. These small RGB previews use pyramid level 3 and a display stretch; open the viewer to inspect values and coverage.</figcaption>
   </figure>
   <div className="cz-paths">
-    <section><h2>Create a store</h2><p>Start with xarray, a NetCDF file, or a manifest of rasters. Encode the time axis and pyramid once.</p><a href="/getting-started#quickstart">Make your first store</a></section>
-    <section><h2>Publish it</h2><p>Upload static objects to a bucket. Check CORS, byte ranges, and decoding with the doctor command.</p><a href="/guides/hosting">Set up hosting</a></section>
-    <section><h2>Use it anywhere</h2><p>Analyze in Python, fetch cells in JavaScript, add a MapLibre layer, or embed the chronozarr viewer.</p><a href="/getting-started#documentation">Browse the documentation</a></section>
+    <section><h2>Explore locally</h2><p>Convert dated GeoTIFFs, then open them in the viewer on your computer. Nothing is uploaded.</p><a href="/guides/preview">Preview a store</a></section>
+    <section><h2>Share instantly</h2><p>Send a temporary link from your laptop. The recipient needs only a browser. You need no bucket and no account.</p><a href="/guides/share">Share a local store</a></section>
+    <section><h2>Publish permanently</h2><p>Upload static objects to a bucket. No tile server runs. Check CORS, byte ranges and decoding with the doctor command.</p><a href="/guides/hosting">Set up hosting</a></section>
   </div>
-  <aside className="cz-compat"><strong>True-value Zarr v3.</strong>chronozarr v0.3 builds on zarr-conventions multiscales, proj and spatial v0.1. Compatible clients read true stored values directly. Level 0 preserves stored values; coarser levels are block means. <a href="/getting-started#how-it-works">See how it works</a>.</aside>
+  <aside className="cz-compat"><strong>True-value Zarr v3.</strong>chronozarr v0.3 builds on zarr-conventions multiscales, proj and spatial v0.1. Compatible clients read true stored values directly. Level 0 preserves stored values; coarser levels are block means. <a href="/how-it-works">See how it works</a>.</aside>
 </div>

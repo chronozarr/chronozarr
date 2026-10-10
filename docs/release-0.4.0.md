@@ -25,7 +25,7 @@ viewer and share it with a colleague. Python and npm package versions advance to
 
 ## Colleague trial
 
-Follow [the walkthrough](python.md#share-a-store-through-a-tunnel) with a small,
+Follow [the walkthrough](share.md) with a small,
 non-sensitive series first. The sender needs Python 3.11+, `chronozarr[geo]` and
 `cloudflared`; the recipient needs a modern browser. Inputs must be dated and share
 the same north-up grid and band metadata. Keep the sender's laptop awake and the

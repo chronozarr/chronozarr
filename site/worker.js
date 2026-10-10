@@ -1,10 +1,8 @@
 // Pages removed when the docs became single-source. Each old path goes to the page that now holds its content.
 const moved = {
-  '/how-it-works': '/getting-started#how-it-works',
   '/publishing': '/guides/hosting',
   '/integrate': '/getting-started#documentation',
   '/examples': '/getting-started#documentation',
-  '/reference/cli': '/getting-started#commands',
 };
 
 export default {

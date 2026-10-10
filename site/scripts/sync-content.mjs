@@ -15,6 +15,12 @@ const sources = {
   'docs/format-comparison.md': 'guides/format-comparison',
   'docs/png-frames.md': 'guides/png-frames',
   'docs/python.md': 'reference/python',
+  'docs/cli.md': 'reference/cli',
+  'docs/how-it-works.md': 'how-it-works',
+  'docs/share.md': 'guides/share',
+  'docs/preview.md': 'guides/preview',
+  'docs/notebooks.md': 'guides/notebooks',
+  'docs/convert.md': 'guides/convert',
   'js/README.md': 'reference/javascript',
   'js/maplibre/README.md': 'reference/maplibre',
 };
