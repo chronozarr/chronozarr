@@ -23,10 +23,17 @@ static assets. Unknown paths return 404.
 
 ## Content and visual direction
 
-The homepage introduces the format through a three-date Ucayali raster strip,
-then routes visitors to creating, publishing, or integrating a store. The docs
-use Vocs navigation, code blocks, search, light/dark themes, and mobile menus.
-The format specification is labeled v0.3 Draft.
+The look is a 1960s to 70s corporate annual report: Archivo (a Univers-like grotesk)
+with IBM Plex Mono for labels and code, cool neutrals, one steel-blue accent, hairline
+rules, no rounded corners. Every colour, face and radius is a Vocs theme variable in
+`vocs.config.tsx`; `docs/styles.css` carries the landing page and the few Vocs rules the
+variables cannot express (letter-spaced caps for sidebar groups, table rules, callouts
+without fills). The fonts load from Google Fonts with system fallbacks.
+
+The homepage opens with a false-color plate of the Ucayali River (August 2025, pyramid
+level 0) over a filmstrip of every August from 2016 to 2025, then four measured figures
+and three routes into the documentation. The docs use Vocs navigation, code blocks,
+search, light/dark themes, and mobile menus. The format specification is labeled v0.3 Draft.
 
 The repository Markdown is the source of the documentation. `npm run sync-content`
 copies the documents listed in `scripts/sync-content.mjs` into `docs/pages` before
@@ -37,11 +44,13 @@ adapts relative links, removes the README badges and escapes literal MDX prose
 syntax. It preserves code blocks. The landing page, `docs/pages/index.mdx`, is the
 only hand-written page. Keep its introduction equal to the opening of the README.
 
-The homepage loads three WebP previews totaling about 56 KiB. It does not load
-the viewer or fetch raster chunks. `scripts/make-previews.py` records their source,
-dates, band order, level, and fixed display stretch. Rebuild those images from the
-local demo store with `uv run python site/scripts/make-previews.py` at repo root.
-These are illustrative RGB images, not numeric exports.
+The homepage images are WebP: the plate at 2759 px (about 970 KiB, served to 2x screens
+through `srcset`) and at 1380 px (about 300 KiB), plus ten 260 px thumbnails of about
+10 KiB each. The page does not load the viewer or fetch raster chunks.
+`scripts/make-previews.py` records their source, dates, band order, levels and fixed
+display stretch. Rebuild them from the local demo store with
+`uv run --with pillow python site/scripts/make-previews.py` at repo root. They are
+false-color illustrations (near infrared, red, green), not numeric exports.
 
 ## Verification and live deployment
 

@@ -1,30 +1,56 @@
 ---
 layout: landing
-title: Raster time series, ready to explore.
+title: Raster time series, stored as static objects.
 ---
+
+export const years = [2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
 
 <div className="cz-home">
 
-# Raster time series, ready to explore.
+<header className="cz-grid cz-hero">
+  <p className="cz-label">Format revision 0.3 · October 2026</p>
+
+  <h1>Raster time series, stored as static objects.</h1>
 
   <p className="cz-intro">chronozarr turns a raster time series into static files that you can put in a storage bucket. Anyone with the link can then open the series in a web browser and play or scrub through it like a video. Clicking a pixel shows its values over time. The same files open in Python with the exact values you wrote.</p>
-  <div className="cz-actions">
-    <a href="/getting-started">Get started</a>
-    <a href="/demo/">Open the live viewer</a>
-    <a href="/specification">Read the specification</a>
+</header>
+
+<figure aria-label="Figure 1">
+  <div className="cz-plate">
+    <img src="/ucayali-plate-2025-1380.webp" srcSet="/ucayali-plate-2025-1380.webp 1380w, /ucayali-plate-2025.webp 2759w" sizes="(min-width: 1296px) 1200px, 92vw" width="2759" height="1655" alt="Ucayali River, Peru, August 2025. False-color composite: near infrared, red, green." fetchPriority="high" />
+    <span className="cz-date">2025-08 · B08 B04 B03</span>
   </div>
-  <figure className="cz-strip" aria-label="Ucayali River satellite images across three dates">
-    <div className="cz-frames">
-      <figure className="cz-frame"><img src="/ucayali-2016.webp" width="345" height="346" alt="Ucayali River and surrounding forest in August 2016" /><figcaption>August 2016</figcaption></figure>
-      <figure className="cz-frame"><img src="/ucayali-2020.webp" width="345" height="346" alt="The same Ucayali River window in August 2020" /><figcaption>August 2020</figcaption></figure>
-      <figure className="cz-frame"><img src="/ucayali-2025.webp" width="345" height="346" alt="The same Ucayali River window in August 2025" /><figcaption>August 2025</figcaption></figure>
-    </div>
-    <figcaption className="cz-caption">One place, through time. Sentinel-2 monthly composites of the Ucayali River, Peru, from the public demo store. These small RGB previews use pyramid level 3 and a display stretch; open the viewer to inspect values and coverage.</figcaption>
-  </figure>
-  <div className="cz-paths">
-    <section><h2>Create a store</h2><p>Start with xarray, a NetCDF file, or a manifest of rasters. Encode the time axis and pyramid once.</p><a href="/getting-started#quickstart">Make your first store</a></section>
-    <section><h2>Publish it</h2><p>Upload static objects to a bucket. Check CORS, byte ranges, and decoding with the doctor command.</p><a href="/guides/hosting">Set up hosting</a></section>
-    <section><h2>Use it anywhere</h2><p>Analyze in Python, fetch cells in JavaScript, add a MapLibre layer, or embed the chronozarr viewer.</p><a href="/getting-started#documentation">Browse the documentation</a></section>
+  <div className="cz-strip">
+    {years.map(year => (
+      <div className="cz-thumb" key={year}>
+        <img src={`/ucayali-${year}.webp`} width="259" height="260" loading="lazy" alt={`The same window in August ${year}`} />
+        <span className="cz-year">{year}</span>
+      </div>
+    ))}
   </div>
-  <aside className="cz-compat"><strong>True-value Zarr v3.</strong>chronozarr v0.3 builds on zarr-conventions multiscales, proj and spatial v0.1. Compatible clients read true stored values directly. Level 0 preserves stored values; coarser levels are block means. <a href="/getting-started#how-it-works">See how it works</a>.</aside>
+  <figcaption className="cz-grid cz-caption">
+    <span className="cz-label cz-label-ink">Figure 1</span>
+    <p>Ucayali River, Peru. Sentinel-2 monthly composite, August 2025, pyramid level 0, native 10 m. False color: near infrared, red, green. Vegetation red, water dark, bare sand white. Below, the same window every August, 2016 to 2025, level 3. Fixed display stretch. Public demo store.</p>
+  </figcaption>
+</figure>
+
+<section className="cz-grid cz-section cz-rule" aria-label="Measured">
+  <p className="cz-label">Measured</p>
+  <div className="cz-specs">
+    <div className="cz-spec"><p className="cz-num">390<small>ms</small></p><p className="cz-what">Cold open</p><p className="cz-note">First whole frame, live store, cold edge cache.</p></div>
+    <div className="cz-spec"><p className="cz-num">4.5<small>ms</small></p><p className="cz-what">Decode per 2 MB chunk</p><p className="cz-note">zstd level 5 in the browser.</p></div>
+    <div className="cz-spec"><p className="cz-num">117</p><p className="cz-what">Monthly composites</p><p className="cz-note">2015 to 2026, in the public demo.</p></div>
+    <div className="cz-spec"><p className="cz-num">60<small>/s</small></p><p className="cz-what">Playback, warm</p><p className="cz-note">Timesteps per second through a loaded series. Zero bytes over the wire.</p></div>
+  </div>
+</section>
+
+<section className="cz-grid cz-routes cz-rule" aria-label="Three routes">
+  <p className="cz-label">Three routes</p>
+  <div className="cz-route"><h2>Create a store</h2><p>Start with xarray, a NetCDF file, or a directory of dated GeoTIFFs. Encode the time axis and pyramid once.</p><a href="/getting-started#quickstart">Make your first store</a></div>
+  <div className="cz-route"><h2>Publish it</h2><p>Upload static objects to a bucket. Check CORS, byte ranges, and decoding with the doctor command.</p><a href="/guides/hosting">Set up hosting</a></div>
+  <div className="cz-route"><h2>Use it anywhere</h2><p>Analyze in Python, fetch cells in JavaScript, add a MapLibre layer, or embed the viewer.</p><a href="/getting-started#documentation">Browse the documentation</a></div>
+</section>
+
+<p className="cz-colophon cz-rule">chronozarr is an open format. Zarr v3. zarr-conventions multiscales, proj, spatial v0.1. True stored values at every level.</p>
+
 </div>
