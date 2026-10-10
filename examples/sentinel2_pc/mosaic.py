@@ -345,13 +345,22 @@ def read_asset(
 # --- compositing -------------------------------------------------------------------------------
 
 
+# Size of the arrays one compositing task works on (a row block of a scene or of the stack). Every
+# CPU worker holds a few times this in temporaries, whatever the AOI width or scene count.
+WORK_BYTES = 2 * 1024**2
+# Temporaries of one task as a multiple of WORK_BYTES: masking with an offset holds the int32
+# block, its clipped copy, the np.where result and the uint16 cast (3.6 x); the median a sorted
+# copy and its index arrays (1.5 x).
+WORK_TEMPORARIES = 4
+
+
 def apply_scene_mask(bands: np.ndarray, valid: np.ndarray, boa_offset: int) -> int:
     """Apply the BOA offset and zero every band where the scene is not valid, in place.
 
     `bands` is (n_bands, H, W) uint16 and `valid` the SCL mask; a pixel is also invalid where
     any band is 0. Returns the number of valid pixels.
     """
-    rows = 256  # row blocks keep temporaries to a few MB per call
+    rows = max(1, WORK_BYTES // (bands.shape[0] * bands.shape[2] * 4))  # int32 row blocks
     for r0 in range(0, bands.shape[1], rows):
         block = bands[:, r0 : r0 + rows]
         if boa_offset:
@@ -385,10 +394,15 @@ def median_rows(stack: np.ndarray, r0: int, r1: int) -> tuple[np.ndarray, np.nda
 
 
 def median_composite(
-    stack: np.ndarray, pool: ThreadPoolExecutor | None = None, rows: int = 128
+    stack: np.ndarray, pool: ThreadPoolExecutor | None = None, rows: int | None = None
 ) -> tuple[np.ndarray, np.ndarray]:
-    """(composite uint16 (n_bands, H, W), valid scenes per pixel uint16 (H, W))."""
-    _, n_bands, height, width = stack.shape
+    """(composite uint16 (n_bands, H, W), valid scenes per pixel uint16 (H, W)).
+
+    Row blocks of about WORK_BYTES of the stack run in parallel on `pool`.
+    """
+    n_scenes, n_bands, height, width = stack.shape
+    if rows is None:
+        rows = max(1, WORK_BYTES // max(1, n_scenes * n_bands * width * 2))
     composite = np.empty((n_bands, height, width), dtype=np.uint16)
     count = np.empty((height, width), dtype=np.uint16)
 
@@ -480,14 +494,17 @@ def fixed_bytes(
 ) -> int:
     """Memory used whatever the months, for strips of height x width.
 
-    The process and the GDAL cache, then per strip: the buffers of each read in flight
-    (`read_bytes`), the finished strip kept for the next month's carry-forward, and one
-    finished strip waiting for the writer.
+    The process, the GDAL block cache and the temporaries of the CPU workers, then per read in
+    flight GDAL's per-file cache (VSI_CACHE_SIZE) and the buffers of `read_bytes`, then the
+    finished strip kept for the next month's carry-forward and one finished strip waiting for
+    the writer.
     """
     plane = height * width
-    reads = settings.max_requests * read_bytes(height, width, warp)
+    workers = settings.cpu_workers * WORK_TEMPORARIES * WORK_BYTES
+    per_read = read_bytes(height, width, warp) + int(GDAL_ENV["VSI_CACHE_SIZE"])
+    reads = settings.max_requests * per_read
     finished = 2 * (n_bands * plane * 2 + plane * 4)
-    return PROCESS_BASE_BYTES + settings.gdal_cache + reads + finished
+    return PROCESS_BASE_BYTES + settings.gdal_cache + workers + reads + finished
 
 
 class MemoryBudgetError(RuntimeError):
@@ -513,22 +530,24 @@ def _budget_error(
     base = fixed_bytes(settings, n_bands, height, width, warp)
     need = base + month
     process = PROCESS_BASE_BYTES + settings.gdal_cache
-    per_read = read_bytes(height, width, warp)
+    workers = settings.cpu_workers * WORK_TEMPORARIES * WORK_BYTES
+    per_read = read_bytes(height, width, warp) + int(GDAL_ENV["VSI_CACHE_SIZE"])
     reads = settings.max_requests * per_read
-    finished = base - process - reads
+    finished = base - process - workers - reads
     return MemoryBudgetError(
         f"{key} has {n} scenes and {what} ({width} x {height} pixels) needs about "
         f"{need / gib:.2f} GiB, more than the memory budget of {settings.memory_budget / gib:.2f} "
         f"GiB ({settings.memory_budget_source}). Nothing was downloaded.\n"
         f"  strip buffers ({n} scenes x {n_bands} bands): {month / gib:.2f} GiB\n"
         f"  process and GDAL cache: {process / gib:.2f} GiB\n"
+        f"  {settings.cpu_workers} CPU workers' temporaries: {workers / gib:.2f} GiB\n"
         f"  {settings.max_requests} concurrent reads at {per_read / gib:.3f} GiB"
         f"{' (warped)' if warp else ''}: {reads / gib:.2f} GiB\n"
         f"  finished strips kept for carry-forward and writing: {finished / gib:.2f} GiB\n"
         "Options: if this much memory is free, pass --memory with at least "
         f"{math.ceil(need / gib * 10) / 10:.1f}GB (the default budget is half of the available "
-        "memory); lower --max-requests; or split the AOI into narrower ones (a strip spans "
-        "the AOI's full width)."
+        "memory); lower --max-requests or --cpu-workers; or split the AOI into narrower ones "
+        "(a strip spans the AOI's full width)."
     )
 
 
@@ -549,9 +568,11 @@ def plan_window(
 ) -> WindowPlan:
     """Rows per strip for a run: the whole grid when the largest month fits the budget.
 
-    Otherwise strips whose memory is about half of what the budget leaves after the fixed
-    costs, so the reads of one strip overlap the compositing and writing of the one before;
-    strip heights are multiples of CELL, as equal as that allows. Raises MemoryBudgetError,
+    Otherwise the tallest strips that fit, with heights in multiples of CELL and as equal as
+    that allows: a source block cut by a strip edge is read once for each strip, so taller
+    strips read fewer bytes (512-row strips read 55 % more than the whole grid on the
+    20-scene lab month, 1024-row strips 18 %). Reads of the next strip still start while one
+    is composited whenever the budget has room. Raises MemoryBudgetError,
     before any download, when a strip of CELL rows (or of `rows`) does not fit. `warp`: some
     scene is on another CRS and is warped.
     """
@@ -577,9 +598,8 @@ def plan_window(
     smallest = min(CELL, height)
     if need(smallest) > settings.memory_budget:
         raise error(smallest, "its smallest strip")
-    process = PROCESS_BASE_BYTES + settings.gdal_cache
-    per_row = need(1) - process  # every other term grows with the strip's rows
-    limit = max(CELL, (settings.memory_budget - process) // per_row // 2 // CELL * CELL)
+    per_row = need(2) - need(1)  # the need is linear in the strip's rows
+    limit = max(CELL, (settings.memory_budget - (need(1) - per_row)) // per_row // CELL * CELL)
     pieces = math.ceil(height / limit)
     rows = min(limit, math.ceil(math.ceil(height / pieces) / CELL) * CELL)
     gib = 1024**3
@@ -820,6 +840,7 @@ class RunReport:
     window: tuple[int, int] | None = None  # (rows, cols) of each unit of work
     windows: int = 0  # windows per month
     window_reason: str = ""
+    memory_estimate: int = 0  # bytes for one strip of the largest month with the fixed costs
     seconds: dict[str, float] = field(default_factory=dict)
     first_window_seconds: float | None = None
     first_month_seconds: float | None = None
@@ -871,6 +892,7 @@ def run_summary(
         "window": None if report.window is None else list(report.window),
         "windows_per_month": report.windows,
         "window_reason": report.window_reason,
+        "memory_estimate_bytes": report.memory_estimate,
         "scenes": report.scenes,
         "scenes_no_valid": report.scenes_no_valid,
         "scenes_failed": report.scenes_failed,
@@ -1018,6 +1040,7 @@ def build_monthly_mosaics(
     windows = split_grid(height, width, plan.rows)
     report.window, report.windows = (plan.rows, width), len(windows)
     report.window_reason = plan.reason
+    report.memory_estimate = plan.need
     if len(windows) > 1:
         logger.info(
             "Compositing each month in %d strips of %d rows: %s",

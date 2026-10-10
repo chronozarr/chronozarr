@@ -766,12 +766,16 @@ def test_strips_give_the_whole_grid_result(
     assert failed and all(w in strips for w in failed)
 
 
+def months_need(planned, rows: int) -> int:
+    return mosaic.fixed_bytes(planned, 4, rows, 2000) + mosaic.month_bytes(10, 4, rows, 2000)
+
+
 def test_plan_window_prefers_the_whole_grid_then_equal_strips(small_cells):
     months = {"2024-01": [object()] * 10}
     roomy = settings(memory_budget=8 * performance.GIB)
     whole = mosaic.plan_window(months, roomy, 3000, 2000)
     assert whole.rows == 3000
-    for fraction in (0.7, 0.5, 0.35):
+    for fraction in (0.8, 0.65, 0.5):
         # The GDAL cache shrinks with the budget, so compare with the whole grid's need at it.
         planned = settings(memory_budget=int(whole.need * fraction))
         need_whole = mosaic.fixed_bytes(planned, 4, 3000, 2000) + mosaic.month_bytes(
@@ -781,9 +785,10 @@ def test_plan_window_prefers_the_whole_grid_then_equal_strips(small_cells):
         plan = mosaic.plan_window(months, planned, 3000, 2000)
         assert plan.need <= planned.memory_budget, fraction
         assert plan.rows % 32 == 0 and plan.rows < 3000, fraction
-        # Two strips fit at once, so the reads of one overlap the compositing of the other.
-        strip = mosaic.month_bytes(10, 4, plan.rows, 2000)
-        assert plan.need + strip <= planned.memory_budget, fraction
+        # As few strips as the budget allows: the tallest fitting strip gives no fewer.
+        fits = [r for r in range(32, 3000, 32) if months_need(planned, r) <= planned.memory_budget]
+        strips = mosaic.split_grid(3000, 2000, plan.rows)
+        assert len(strips) == -(-3000 // max(fits)), fraction
         # Strips are as equal as the 32-row lattice allows: the last is not a sliver.
         strips = mosaic.split_grid(3000, 2000, plan.rows)
         assert strips[-1].height > plan.rows - 32 * len(strips), fraction
@@ -797,7 +802,7 @@ def test_plan_window_refuses_only_when_the_smallest_strip_does_not_fit():
     plan = mosaic.plan_window(months, tight, 20_000, 8000)
     assert plan.rows % 512 == 0 and plan.need <= tight.memory_budget
     with pytest.raises(mosaic.MemoryBudgetError, match="its smallest strip") as error:
-        mosaic.plan_window(months, tight, 20_000, 40_000)
+        mosaic.plan_window(months, tight, 20_000, 80_000)
     assert "narrower" in str(error.value)
     with pytest.raises(ValueError, match="multiple of 512"):
         mosaic.plan_window(months, tight, 20_000, 8000, rows=500)
