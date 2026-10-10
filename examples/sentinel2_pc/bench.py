@@ -54,6 +54,7 @@ import argparse
 import ctypes
 import hashlib
 import importlib
+import inspect
 import json
 import os
 import random
@@ -555,15 +556,32 @@ def git_info(ref: str = "HEAD") -> tuple[str, bool]:
     return sha, dirty
 
 
+def month_arrays(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """(bands, coverage k/n float32) of a month file of either pipeline.
+
+    Months of the old pipeline are .npz; GeoTIFF months hold the valid-scene count k as their
+    last band and n in their metadata, and k / n in float32 is the array the .npz stored.
+    """
+    if path.suffix == ".npz":
+        with np.load(path, allow_pickle=False) as data:
+            return data["bands"], data["coverage"]
+    import rasterio
+
+    with rasterio.open(path) as src:
+        stack = src.read()
+        n = json.loads(src.tags()["scenes_searched"])
+    count = stack[-1]
+    coverage = count.astype(np.float32) / n if n else np.zeros(count.shape, dtype=np.float32)
+    return stack[:-1], coverage
+
+
 def hash_outputs(out_dir: Path) -> tuple[dict[str, str], int, int]:
     """({month: sha256 of bands+coverage bytes}, total band pixels, total band bytes)."""
     shas: dict[str, str] = {}
     pixels = 0
     band_bytes = 0
-    for path in sorted(out_dir.glob("*.npz")):
-        with np.load(path, allow_pickle=False) as data:
-            bands = data["bands"]
-            coverage = data["coverage"]
+    for path in sorted([*out_dir.glob("*.npz"), *out_dir.glob("*.tif")]):
+        bands, coverage = month_arrays(path)
         shas[path.stem] = hashlib.sha256(bands.tobytes() + coverage.tobytes()).hexdigest()
         pixels += bands.size
         band_bytes += bands.nbytes
@@ -622,26 +640,62 @@ def settings_for(config: str, resources, performance):
         return performance.plan_settings(resources, adaptive=False, requests=int(config[6:]))
     raise SystemExit(
         f"unknown config {config!r}; use baseline, fixed-N, auto, auto-maxN, auto-memN, "
-        "or auto-capped"
+        "or auto-capped, optionally followed by -rowsN (rows per strip)"
     )
 
 
-def baseline_runner(ref: str, directory: Path, scenes_dicts: dict, bbox: tuple, epsg: int):
-    """A function that runs the old pipeline into a directory (one pipeline per process)."""
+def baseline_runner(
+    ref: str, directory: Path, scenes_dicts: dict, bbox: tuple, epsg: int, resources, performance
+):
+    """A function that runs the pipeline of git `ref` into a directory (one per process).
+
+    The original pipeline takes no settings. A later one (such as the first adaptive pipeline,
+    PR #90) runs with its default auto settings.
+    """
     catalog, mosaic = load_baseline_modules(ref, directory)
     scenes = {
         month: [scene_from_dict(catalog.SceneRef, s) for s in month_scenes]
         for month, month_scenes in scenes_dicts.items()
     }
+    takes_settings = "settings" in inspect.signature(mosaic.build_monthly_mosaics).parameters
 
     def run(out_dir: Path) -> Callable[[float], dict | None]:
-        mosaic.build_monthly_mosaics(scenes, bbox, epsg, out_dir, carry_forward=True)
-        return lambda cpu_seconds: None
+        if not takes_settings:
+            mosaic.build_monthly_mosaics(scenes, bbox, epsg, out_dir, carry_forward=True)
+            return lambda cpu_seconds: None
+        settings = performance.plan_settings(resources, adaptive=True)
+        report = mosaic.RunReport()
+        limiter = performance.AdaptiveLimiter(
+            settings.requests, settings.max_requests, adaptive=settings.adaptive
+        )
+        mosaic.build_monthly_mosaics(
+            scenes,
+            bbox,
+            epsg,
+            out_dir,
+            settings=settings,
+            sign=catalog.sign_href,
+            report=report,
+            limiter=limiter,
+        )
+        return lambda cpu_seconds: mosaic.run_summary(
+            report, limiter, settings, resources.cpus, cpu_seconds
+        )
 
     return run
 
 
-def new_runner(settings, resources, scenes_dicts: dict, bbox: tuple, epsg: int):
+def split_config(config: str) -> tuple[str, int | None]:
+    """'auto-mem2600-rows512' -> ('auto-mem2600', 512): a -rowsN suffix sets the strip rows."""
+    base, sep, rows = config.rpartition("-rows")
+    if sep and rows.isdigit():
+        return base, int(rows)
+    return config, None
+
+
+def new_runner(
+    settings, resources, scenes_dicts: dict, bbox: tuple, epsg: int, strip_rows: int | None
+):
     """A function that runs the new pipeline into a directory, with a fresh report per call."""
     import catalog
     import mosaic
@@ -667,6 +721,7 @@ def new_runner(settings, resources, scenes_dicts: dict, bbox: tuple, epsg: int):
             carry_forward=True,
             report=report,
             limiter=limiter,
+            strip_rows=strip_rows,
         )
         return lambda cpu_seconds: mosaic.run_summary(
             report, limiter, settings, resources.cpus, cpu_seconds
@@ -699,12 +754,19 @@ def run_once(args: argparse.Namespace) -> dict:
         if args.config == "baseline":
             settings = None
             runner = baseline_runner(
-                args.baseline_ref, baseline_dir, scenes_by_month_dicts, bbox, epsg
+                args.baseline_ref,
+                baseline_dir,
+                scenes_by_month_dicts,
+                bbox,
+                epsg,
+                resources,
+                performance,
             )
             sha, dirty = git_info(args.baseline_ref)[0], False
         else:
-            settings = settings_for(args.config, resources, performance)
-            runner = new_runner(settings, resources, scenes_by_month_dicts, bbox, epsg)
+            base, strip_rows = split_config(args.config)
+            settings = settings_for(base, resources, performance)
+            runner = new_runner(settings, resources, scenes_by_month_dicts, bbox, epsg, strip_rows)
             sha, dirty = git_info()
 
         def execute(out_dir: Path) -> dict:
@@ -723,7 +785,9 @@ def run_once(args: argparse.Namespace) -> dict:
             if summary is not None:
                 first_month = summary["first_month_seconds"]
             else:
-                mtimes = [p.stat().st_mtime for p in out_dir.glob("*.npz")]
+                mtimes = [
+                    p.stat().st_mtime for p in [*out_dir.glob("*.npz"), *out_dir.glob("*.tif")]
+                ]
                 first_month = round(min(mtimes) - wall0, 3) if mtimes else None
             return {
                 "wall": wall,

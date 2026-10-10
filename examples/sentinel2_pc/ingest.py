@@ -119,6 +119,7 @@ def download_mosaics(
     cpus: int,
     diagnostics: bool = False,
     keep_going: bool = False,
+    strip_rows: int | None = None,
 ) -> dict[str, Path]:
     bbox = tuple(aoi["bbox"])
 
@@ -140,6 +141,7 @@ def download_mosaics(
         report=report,
         limiter=limiter,
         keep_going=keep_going,
+        strip_rows=strip_rows,
     )
 
     elapsed = time.perf_counter() - t0
@@ -447,6 +449,13 @@ def main() -> None:
         "(default: half of available memory)",
     )
     perf.add_argument(
+        "--strip-rows",
+        type=int,
+        help="rows per strip of the AOI grid composited at a time, a multiple of 512 (default: "
+        "the whole grid when a month fits the memory budget, else the tallest strips of which "
+        "two fit)",
+    )
+    perf.add_argument(
         "--keep-going",
         action="store_true",
         help="continue when a scene cannot be read: write months with failed scenes (listed in "
@@ -504,8 +513,9 @@ def main() -> None:
                 resources.cpus,
                 diagnostics=args.diagnostics,
                 keep_going=args.keep_going,
+                strip_rows=args.strip_rows,
             )
-        except (MemoryBudgetError, SceneReadError) as e:
+        except (MemoryBudgetError, SceneReadError, ValueError) as e:
             raise SystemExit(f"error: {e}") from e
 
     encode(mosaic_dir, store_dir, keep_going=args.keep_going)
