@@ -71,7 +71,7 @@ The limits:
 
 - `serve_store` and `view` take a local directory or an `http(s)` URL. They reject `s3://` and other URIs. They do not read a bucket on demand.
 - The copy costs disk space and transfer charges from the bucket's host.
-- Only a browser on the same machine reaches 127.0.0.1. JupyterHub and remote kernels need port forwarding, which this repository does not set up.
+- Only a browser on the same machine reaches `127.0.0.1` directly. Remote kernels need a browser-reachable route. With `jupyter-server-proxy` and `viewer_dir`, JupyterHub uses a same-origin proxy; other environments can use port forwarding or `base_url`. See [remote notebooks](python.md#remote-notebooks).
 - The loopback server answers with `Access-Control-Allow-Origin: *` (`_CORS_HEADERS` in `src/chronozarr/view.py`). While it runs, a web page open in the same browser can read the store if it knows the port. Chrome asks permission before a public page reaches a local address. Close the server when you finish.
 - The viewer page still loads from chronozarr.org. To avoid that, serve the viewer yourself ([viewer-distribution.md](viewer-distribution.md)).
 
