@@ -60,6 +60,8 @@ test('every control has an accessible name and the timeline is a focusable slide
   assert.match(html, /<select id="catalog-select" aria-label="Dataset"/);
   assert.match(html, /<select id="product-select"[^>]*aria-label="Product"/);
   assert.match(html, /<select id="band-select" aria-label="Band"/);
+  assert.match(html, /<button id="copy-link"[^>]*type="button"[^>]*>Copy link<\/button>/);
+  assert.match(html, /<span id="copy-link-status"[^>]*role="status"[^>]*aria-live="polite"/);
   assert.match(html, /<button id="prev-btn"[^>]*aria-label="Previous timestep"/);
   assert.match(html, /<button id="next-btn"[^>]*aria-label="Next timestep"/);
   assert.match(html, /<div class="timeline-track" id="timeline-track" role="slider" tabindex="0" aria-label="Timestep"/);

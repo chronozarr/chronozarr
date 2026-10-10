@@ -119,6 +119,17 @@
     white-space: nowrap;
   }
   .docs-link:hover, .docs-link:focus-visible { color: var(--text); text-decoration: underline; }
+  .copy-link-status {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
   .nav-sep {
     width: 1px;
     height: 20px;
@@ -771,6 +782,7 @@
   html[data-embed] .nav-sep,
   html[data-embed] #catalog-select,
   html[data-embed] .docs-link,
+  html[data-embed] #copy-link,
   html[data-embed] #export-btn,
   html[data-embed] #export-panel { display: none; }
   html[data-embed] .embed-wordmark {
@@ -929,6 +941,8 @@
     <input id="stretch-max" type="number" step="any" title="Stretch maximum" aria-label="Stretch maximum">
     <button id="stretch-auto" title="Fit the stretch to the data on screen">Auto</button>
   </div>
+  <button id="copy-link" class="export-btn" type="button" disabled>Copy link</button>
+  <span id="copy-link-status" class="copy-link-status" role="status" aria-live="polite"></span>
   <a class="docs-link" href="https://chronozarr.org/getting-started" target="_blank" rel="noopener">Docs</a>
   <form id="open-store" class="open-store" novalidate>
     <label for="open-store-url">Open store URL</label>

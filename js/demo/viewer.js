@@ -11,6 +11,7 @@ import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrubLevel, planScrubLoads, readyRun
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
 import { bindOpenStoreForm, checkUniformChunks, explainOpenError } from './open-store.js';
+import { bindCopyLink } from './copy-link.js';
 import { redactText, redactUrl } from '../chronozarr/redact.js';
 import { toggleExportPanel } from './export.js';
 import { FrameMonitor, formatBytes, formatMs, formatRate, hitRate, readStats } from './perf.js';
@@ -499,6 +500,15 @@ class Viewer {
       { transform: this.store.transform },
     );
     return [store, view].filter(Boolean).join('&');
+  }
+
+  /** A shareable full-viewer URL for the current state. The query is built by #viewQuery(), including its redaction. */
+  get shareUrl() {
+    if (!this.store) return null;
+    const url = new URL(location.href);
+    url.search = this.#viewQuery();
+    url.hash = '';
+    return url.href;
   }
 
   /** The address bar keeps the store (when not from the catalog), whatever differs from the default view, and the embed parameters. */
@@ -2232,6 +2242,11 @@ async function main() {
   };
 
   $('export-btn').addEventListener('click', () => toggleExportPanel(viewer));
+  bindCopyLink({
+    button: $('copy-link'),
+    status: $('copy-link-status'),
+    getUrl: () => viewer.shareUrl,
+  });
 
   // An embed has no catalog selector and must never show another store than the one asked for, so it does not fetch the catalog.
   const catalog = embed.embed
@@ -2257,6 +2272,7 @@ async function main() {
     return (window.chronozarr.ready = viewer
       .loadStore(url, { viewSearch, store })
       .then((result) => {
+        $('copy-link').disabled = !viewer.shareUrl;
         if (!inCatalog(url) && catalog.length > 0 && !optionFor(url)) {
           select.add(new Option(redactUrl(url).replace(/^https?:\/\//, ''), url));
           select.value = url;
@@ -2264,6 +2280,7 @@ async function main() {
         return result;
       })
       .catch((error) => {
+        $('copy-link').disabled = !viewer.shareUrl;
         console.error(`loadStore(${redactUrl(url)}) failed:`, redactText(error?.message ?? error));
         optionFor(url)?.remove();
         if (fallback && catalog.length > 0 && catalog[0].url !== url) {
@@ -2303,6 +2320,7 @@ async function main() {
     $('error-overlay').classList.add('visible');
     bridge?.post('error', { code: 'no_store', message: 'No store selected: the iframe URL needs ?store=<base URL of a chronozarr store>.' });
   }
+
 }
 
 main();
