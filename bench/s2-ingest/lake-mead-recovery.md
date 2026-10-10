@@ -40,7 +40,7 @@ Timeline. The first pipeline commit in this repo (`4adef88`, 2026-09-29) had no 
 The audit (`audit-lake_mead.json`, 2,318 scenes) is reproduced by a fresh search with the exact `search_scenes_by_month` query: 2,599 items, 2,318 after dedup, and every month's count equals the audit's `n`.
 
 - 674 scenes with valid pixels are missing in 34 months from 2023-06.
-- Correction to the 24 + 10 split in `docs/evidence.md`: in all 33 months from 2023-07 to 2026-03 no scene contributed to the stored month. In the nine months the evidence section calls partial (2023-08, 2023-12, 2024-01, 2024-04, 2024-06, 2025-03, 2025-08, 2025-11, 2026-01) every scene that has a valid pixel is missing and the rest have none. `water-1.months.csv` agrees: all 33 are "skipped: no valid pixel".
+- The first audit write-up split these into 24 empty and 10 partial months (corrected in `docs/evidence.md`). In fact, in all 33 months from 2023-07 to 2026-03 no scene contributed to the stored month. In the nine months the evidence section calls partial (2023-08, 2023-12, 2024-01, 2024-04, 2024-06, 2025-03, 2025-08, 2025-11, 2026-01) every scene that has a valid pixel is missing and the rest have none. `water-1.months.csv` agrees: all 33 are "skipped: no valid pixel".
 - Only 2023-06 is a true partial month: 20 of 24 scenes missing, 4 contribute at most, and 2.28 million pixels of shortfall are unattributed.
 
 ### 3. Carry-forward chains
