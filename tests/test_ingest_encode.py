@@ -47,10 +47,11 @@ def test_incomplete_months_need_keep_going_and_are_named_in_provenance(tmp_path)
     out = tmp_path / "mosaics"
     run(by_month, out)
 
-    with pytest.raises(SystemExit, match=r"2024-02: e\b"):
-        ingest.load_mosaic_stack(out)
+    with pytest.raises(SystemExit, match=r"2024-02: e\b"), ingest.open_mosaic_stack(out):
+        pass
 
-    _, _, incomplete = ingest.load_mosaic_stack(out, keep_going=True)
+    with ingest.open_mosaic_stack(out, keep_going=True) as stack:
+        incomplete = stack.incomplete
     assert incomplete == {"2024-02": ["e"]}
     provenance = ingest.provenance_for(incomplete)
     assert (
@@ -69,7 +70,8 @@ def test_complete_months_keep_the_plain_provenance(tmp_path):
     _, by_month = build_case(tmp_path)
     out = tmp_path / "mosaics"
     run({"2024-01": by_month["2024-01"], "2024-03": by_month["2024-03"]}, out)
-    _, _, incomplete = ingest.load_mosaic_stack(out)
+    with ingest.open_mosaic_stack(out) as stack:
+        incomplete = stack.incomplete
     assert incomplete == {}
     assert ingest.provenance_for(incomplete) is ingest.PROVENANCE
 
@@ -82,8 +84,9 @@ def test_a_skipped_month_leaves_a_consistent_chain(tmp_path):
     ]
     out = tmp_path / "mosaics"
     run({"2024-01": by_month["2024-01"], "2024-02": broken, "2024-03": by_month["2024-03"]}, out)
-    data, _, _ = ingest.load_mosaic_stack(out)
-    assert [str(t)[:7] for t in data["time"].values] == ["2024-01", "2024-03"]
+    with ingest.open_mosaic_stack(out) as stack:
+        times = [str(t)[:7] for t in stack.data["time"].values]
+    assert times == ["2024-01", "2024-03"]
 
 
 def test_a_month_rebuilt_after_its_successor_is_refused(tmp_path):
@@ -92,10 +95,10 @@ def test_a_month_rebuilt_after_its_successor_is_refused(tmp_path):
     _, by_month = build_case(tmp_path)
     out = tmp_path / "mosaics"
     run({"2024-01": by_month["2024-01"], "2024-03": by_month["2024-03"]}, out)
-    (out / "2024-01.npz").unlink()
+    (out / "2024-01.tif").unlink()
     run({"2024-01": by_month["2024-01"][:2]}, out)  # a different January
     with pytest.raises(SystemExit, match=r"2024-03 \(filled from 2024-01"):
-        ingest.load_mosaic_stack(out)
+        ingest.open_mosaic_stack(out).__enter__()
 
 
 def test_a_month_inserted_before_its_successor_is_refused(tmp_path):
@@ -104,7 +107,7 @@ def test_a_month_inserted_before_its_successor_is_refused(tmp_path):
     run({"2024-01": by_month["2024-01"], "2024-03": by_month["2024-03"]}, out)
     run({"2024-02": by_month["2024-02"][1:]}, out)  # February arrives later
     with pytest.raises(SystemExit, match=r"2024-03 \(filled from 2024-01; the stack has 2024-02"):
-        ingest.load_mosaic_stack(out)
+        ingest.open_mosaic_stack(out).__enter__()
 
 
 def test_files_from_before_the_chain_record_are_accepted(tmp_path):
@@ -119,5 +122,36 @@ def test_files_from_before_the_chain_record_are_accepted(tmp_path):
             epsg=np.array(EPSG),
             band_names=np.array(["B02", "B03", "B04", "B08"]),
         )
-    data, _, incomplete = ingest.load_mosaic_stack(out)
-    assert data.shape == (2, 4, 3, 3) and incomplete == {}
+    with ingest.open_mosaic_stack(out) as stack:
+        assert stack.data.shape == (2, 4, 3, 3) and stack.incomplete == {}
+        np.testing.assert_array_equal(stack.data.values, np.ones((2, 4, 3, 3)))
+        np.testing.assert_array_equal(stack.coverage.values, np.ones((2, 3, 3)))
+    assert sorted(p.name for p in out.iterdir()) == ["2024-01.npz", "2024-02.npz"]
+
+
+def test_the_store_holds_every_month_read_lazily(tmp_path, monkeypatch):
+    """Encoding from the monthly files one cell at a time gives the months' values."""
+    import chronozarr
+
+    monkeypatch.setattr(mosaic, "CELL", 32)
+    _, by_month = build_case(tmp_path)
+    out = tmp_path / "mosaics"
+    outputs = mosaic.build_monthly_mosaics(
+        by_month,
+        BBOX,
+        EPSG,
+        out,
+        settings=settings(),
+        sign=str,
+        keep_going=True,
+        strip_rows=64,
+    )
+    store_dir = tmp_path / "store"
+    ingest.encode(out, store_dir, keep_going=True)
+    store = chronozarr.open_store(store_dir)
+    for t, key in enumerate(sorted(outputs)):
+        month = mosaic.load_mosaic(outputs[key])
+        np.testing.assert_array_equal(store.read(t), month["bands"], err_msg=key)
+        np.testing.assert_array_equal(
+            store.read_coverage(t), (month["valid_count"] > 0).astype(np.uint8), err_msg=key
+        )

@@ -2,8 +2,12 @@
 
 The original (examples/sentinel2_pc/mosaic.py before the pipeline rewrite) reprojected every
 band and SCL asset onto the AOI grid, masked, took a float32 nanmedian over scenes and filled
-gaps from the previous month. `reference_mosaics` below is that algorithm; the tests compare
-the pipeline's .npz output with it bit for bit on synthetic local GeoTIFFs.
+gaps from the previous month. Its warp let GDAL split the grid into chunks with a scale each;
+the pipeline warps in one chunk with a pinned scale, so that a strip of the grid gets the same
+pixels as the whole grid, and `reproject_ref` warps the same way. The difference from GDAL's
+own choices is bounded by the approximate transformer's error (test below).
+`reference_mosaics` below is that algorithm; the tests compare the pipeline's monthly files
+with it bit for bit on synthetic local GeoTIFFs.
 """
 
 from __future__ import annotations
@@ -62,9 +66,26 @@ def write_tif(path: Path, data: np.ndarray, transform: Affine, epsg: int, block:
     return str(path)
 
 
-def reproject_ref(href: str, grid: mosaic.Grid, dtype, resampling) -> np.ndarray:
+def reproject_ref(
+    href: str, grid: mosaic.Grid, dtype, resampling, gdal_default: bool = False
+) -> np.ndarray:
+    """GDAL's warp of one asset onto the grid in a single chunk, with the resampling scale
+    pinned to the pixel size ratio: the warp the pipeline defines (read_asset).
+
+    `gdal_default`: GDAL's own choices instead, which split the grid into chunks where the
+    source covers part of it and pick a scale per chunk (what the original pipeline used).
+    """
     out = np.zeros((grid.height, grid.width), dtype=dtype)
     with rasterio.open(href) as src:
+        options = {}
+        if not gdal_default:
+            scale = abs(src.transform.a) / grid.transform.a
+            options = {
+                "XSCALE": scale,
+                "YSCALE": scale,
+                "warp_mem_limit": 8192,
+                "SRC_FILL_RATIO_HEURISTICS": "NO",
+            }
         reproject(
             source=rasterio.band(src, 1),
             destination=out,
@@ -73,6 +94,7 @@ def reproject_ref(href: str, grid: mosaic.Grid, dtype, resampling) -> np.ndarray
             dst_transform=grid.transform,
             dst_crs=grid.crs,
             resampling=resampling,
+            **options,
         )
     return out
 
@@ -219,6 +241,26 @@ def test_unaligned_scene_falls_back_to_reproject(tmp_path):
     np.testing.assert_array_equal(out, ref)
 
 
+def test_warp_differs_from_gdal_default_only_within_the_transformer_error(tmp_path):
+    """Where GDAL would split the grid (a scene covering part of it), its approximate
+    transformer, with an error of up to 0.125 source pixels, is evaluated over other row
+    extents. A shift of 0.125 pixels moves a bilinear value by at most a quarter of the range
+    of the source pixels around it; the measured differences stay within that."""
+    grid = _grid()
+    rng = np.random.default_rng(5)
+    hrefs = scene_files(tmp_path, rng, "p", grid, 3, 4, epsg=32719)
+    ours = reproject_ref(hrefs["B04"], grid, np.uint16, Resampling.bilinear).astype(np.int32)
+    gdal = reproject_ref(
+        hrefs["B04"], grid, np.uint16, Resampling.bilinear, gdal_default=True
+    ).astype(np.int32)
+    both = (ours > 0) & (gdal > 0)
+    assert (ours[both] != gdal[both]).any()  # the case does split
+    window = np.lib.stride_tricks.sliding_window_view(np.pad(gdal, 1, mode="edge"), (3, 3))
+    local_range = window.max(axis=(2, 3)) - window.min(axis=(2, 3))
+    assert np.all(np.abs(ours - gdal)[both] <= local_range[both] // 4 + 1)
+    assert ((ours > 0) != (gdal > 0)).sum() <= 2 * (grid.height + grid.width)  # edges only
+
+
 def test_half_pixel_shift_is_not_native():
     grid = _grid()
     g = grid.transform
@@ -286,10 +328,9 @@ def test_median_matches_float32_nanmedian(n):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN pixels
         expected = np.nan_to_num(np.nanmedian(f, axis=0), nan=0.0).astype(np.uint16)
-    composite, coverage = mosaic.median_composite(stack, n, rows=7)
+    composite, count = mosaic.median_composite(stack, rows=7)
     np.testing.assert_array_equal(composite, expected)
-    expected_cov = np.sum(~np.isnan(f[:, 0]), axis=0).astype(np.float32) / n
-    np.testing.assert_array_equal(coverage, expected_cov)
+    np.testing.assert_array_equal(count, np.sum(~np.isnan(f[:, 0]), axis=0))
 
 
 def test_scene_mask_applies_offset_and_band_zeros():
@@ -337,8 +378,8 @@ def no_backoff(monkeypatch):
 
 
 def load(path: Path) -> tuple[np.ndarray, np.ndarray]:
-    with np.load(path) as data:
-        return data["bands"], data["coverage"]
+    month = mosaic.load_mosaic(path)
+    return month["bands"], month["coverage"]
 
 
 @pytest.mark.parametrize(
@@ -412,7 +453,7 @@ def test_error_outside_reads_stops_the_run(tmp_path, no_backoff):
         mosaic.build_monthly_mosaics(
             by_month, BBOX, EPSG, tmp_path / "out", settings=settings(), sign=sign
         )
-    assert not list((tmp_path / "out").glob("*.npz"))
+    assert not list((tmp_path / "out").glob("*.tif"))
 
 
 def test_a_failed_scene_stops_the_run_by_default(tmp_path, no_backoff):
@@ -424,7 +465,7 @@ def test_a_failed_scene_stops_the_run_by_default(tmp_path, no_backoff):
             by_month, BBOX, EPSG, tmp_path / "out", settings=settings(), sign=str
         )
     assert "--keep-going" in str(error.value)
-    assert sorted(p.name for p in (tmp_path / "out").glob("*.npz")) == ["2024-01.npz"]
+    assert sorted(p.name for p in (tmp_path / "out").glob("*.tif")) == ["2024-01.tif"]
 
 
 def test_month_with_every_scene_failing_stops_the_run(tmp_path, no_backoff):
@@ -444,8 +485,8 @@ def test_month_with_every_scene_failing_stops_the_run(tmp_path, no_backoff):
             settings=settings(),
             sign=str,
         )
-    assert (tmp_path / "out" / "2024-01.npz").exists()
-    assert not (tmp_path / "out" / "2024-02.npz").exists()
+    assert (tmp_path / "out" / "2024-01.tif").exists()
+    assert not (tmp_path / "out" / "2024-02.tif").exists()
 
 
 def test_memory_preflight_fails_before_any_download(tmp_path, no_backoff):
@@ -478,7 +519,7 @@ def test_memory_preflight_fails_before_any_download(tmp_path, no_backoff):
     suggested = message.split("--memory with at least ")[1].split("GB")[0]
     assert performance.parse_bytes(f"{suggested}GB") >= need
     assert signed == []
-    assert not list((tmp_path / "out").glob("*.npz"))
+    assert not list((tmp_path / "out").glob("*.tif"))
 
 
 def test_throttle_counter_counts_gdal_http_retry_warnings():
@@ -650,8 +691,213 @@ def test_suggested_memory_always_covers_the_need():
         months = {"2024-01": [object()] * 12}
         with pytest.raises(mosaic.MemoryBudgetError) as error:
             mosaic.check_memory(months, planned, height, 2000)  # ty: ignore[invalid-argument-type]
-        need = mosaic.fixed_bytes(planned, 4, height, 2000) + mosaic.month_bytes(
-            12, 4, height, 2000
-        )
+        need = mosaic.fixed_bytes(planned, 4, 512, 512) + mosaic.month_bytes(12, 4, 512, 512)
         suggested = str(error.value).split("--memory with at least ")[1].split("GB")[0]
         assert performance.parse_bytes(f"{suggested}GB") >= need, height
+
+
+# --- windows -----------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def small_cells(monkeypatch):
+    """Windows on a 32-pixel lattice, so the 167-pixel test grid splits into several."""
+    monkeypatch.setattr(mosaic, "CELL", 32)
+
+
+def month_files(outputs: dict) -> dict:
+    return {key: mosaic.load_mosaic(path) for key, path in outputs.items()}
+
+
+@pytest.mark.parametrize(
+    "strip_rows,overrides",
+    [
+        (32, {"adaptive": False, "requests": 1, "cpu_workers": 1}),
+        (64, {"adaptive": True, "requests": 3, "max_requests": 6}),
+        (96, {"adaptive": False, "requests": 8}),
+    ],
+)
+def test_strips_give_the_whole_grid_result(
+    tmp_path, no_backoff, small_cells, strip_rows, overrides
+):
+    """Every strip height and concurrency gives the same files as the whole grid at once and as
+    the original algorithm: native and warped scenes, partial overlap, a scene without valid
+    pixels, a failed scene and carry-forward."""
+    grid, by_month = build_case(tmp_path)
+    expected = reference_mosaics(by_month, grid)
+    whole = month_files(
+        mosaic.build_monthly_mosaics(
+            by_month,
+            BBOX,
+            EPSG,
+            tmp_path / "whole",
+            settings=settings(),
+            sign=str,
+            keep_going=True,
+        )
+    )
+    report = mosaic.RunReport()
+    parts = month_files(
+        mosaic.build_monthly_mosaics(
+            by_month,
+            BBOX,
+            EPSG,
+            tmp_path / "strips",
+            settings=settings(**overrides),
+            sign=str,
+            report=report,
+            keep_going=True,
+            strip_rows=strip_rows,
+        )
+    )
+    assert report.windows == -(-grid.height // strip_rows)
+    assert report.first_window_seconds is not None
+    assert report.first_month_seconds is not None
+    assert report.first_window_seconds <= report.first_month_seconds
+    for key, (bands, coverage) in expected.items():
+        np.testing.assert_array_equal(parts[key]["bands"], bands, err_msg=key)
+        np.testing.assert_array_equal(parts[key]["coverage"], coverage, err_msg=key)
+        for name in ("bands_sha256", "carried_from", "scenes_failed", "scenes_searched"):
+            assert parts[key][name] == whole[key][name], (key, name)
+    # The failed scene is listed for each strip where it has valid pixels, so its bands were
+    # read and failed.
+    failed = parts["2024-02"]["scenes_failed_windows"]["e"]
+    strips = [w.bounds() for w in mosaic.split_grid(grid.height, grid.width, strip_rows)]
+    assert failed and all(w in strips for w in failed)
+
+
+def test_plan_window_prefers_the_whole_grid_then_equal_strips(small_cells):
+    months = {"2024-01": [object()] * 10}
+    roomy = settings(memory_budget=8 * performance.GIB)
+    whole = mosaic.plan_window(months, roomy, 3000, 2000)
+    assert whole.rows == 3000
+    for fraction in (0.7, 0.5, 0.35):
+        # The GDAL cache shrinks with the budget, so compare with the whole grid's need at it.
+        planned = settings(memory_budget=int(whole.need * fraction))
+        need_whole = mosaic.fixed_bytes(planned, 4, 3000, 2000) + mosaic.month_bytes(
+            10, 4, 3000, 2000
+        )
+        assert need_whole > planned.memory_budget, fraction
+        plan = mosaic.plan_window(months, planned, 3000, 2000)
+        assert plan.need <= planned.memory_budget, fraction
+        assert plan.rows % 32 == 0 and plan.rows < 3000, fraction
+        # Two strips fit at once, so the reads of one overlap the compositing of the other.
+        strip = mosaic.month_bytes(10, 4, plan.rows, 2000)
+        assert plan.need + strip <= planned.memory_budget, fraction
+        # Strips are as equal as the 32-row lattice allows: the last is not a sliver.
+        strips = mosaic.split_grid(3000, 2000, plan.rows)
+        assert strips[-1].height > plan.rows - 32 * len(strips), fraction
+
+
+def test_plan_window_refuses_only_when_the_smallest_strip_does_not_fit():
+    months = {"2024-01": [object()] * 10}
+    probe = settings(memory_budget=2 * performance.GIB)
+    smallest = mosaic.fixed_bytes(probe, 4, 512, 8000) + mosaic.month_bytes(10, 4, 512, 8000)
+    tight = settings(memory_budget=3 * smallest)
+    plan = mosaic.plan_window(months, tight, 20_000, 8000)
+    assert plan.rows % 512 == 0 and plan.need <= tight.memory_budget
+    with pytest.raises(mosaic.MemoryBudgetError, match="its smallest strip") as error:
+        mosaic.plan_window(months, tight, 20_000, 40_000)
+    assert "narrower" in str(error.value)
+    with pytest.raises(ValueError, match="multiple of 512"):
+        mosaic.plan_window(months, tight, 20_000, 8000, rows=500)
+    with pytest.raises(mosaic.MemoryBudgetError, match="set size"):
+        mosaic.plan_window(months, tight, 20_000, 8000, rows=8192)
+    # Warped scenes hold GDAL's buffers per read, so the same budget gives shorter strips.
+    warped = mosaic.plan_window(months, tight, 20_000, 8000, warp=True)
+    assert warped.rows < plan.rows
+
+
+@pytest.mark.parametrize("rows", [7, 16, 50])
+def test_warped_read_in_strips_equals_the_whole_grid(tmp_path, rows):
+    """GDAL picks a bilinear scale per warp chunk and interpolates its approximate transform
+    along each chunk row; with the scale pinned and strips spanning the grid's width, any strip
+    gets the whole grid's values."""
+    grid = _grid()
+    rng = np.random.default_rng(rows)
+    hrefs = scene_files(tmp_path, rng, "w", grid, 3, 4, epsg=32719)
+    env = dict(mosaic.GDAL_ENV)
+    for band, dtype, resampling in (
+        ("B04", np.uint16, Resampling.bilinear),
+        ("SCL", np.uint8, Resampling.nearest),
+    ):
+        whole = np.zeros((grid.height, grid.width), dtype=dtype)
+        mosaic.read_asset(hrefs[band], grid, whole, resampling, env)
+        np.testing.assert_array_equal(whole, reproject_ref(hrefs[band], grid, dtype, resampling))
+        for window in mosaic.split_grid(grid.height, grid.width, rows):
+            part = np.zeros((window.height, window.width), dtype=dtype)
+            mosaic.read_asset(hrefs[band], window.subgrid(grid), part, resampling, env)
+            np.testing.assert_array_equal(part, whole[window.slices()], err_msg=str(window))
+
+
+def test_a_scene_failing_in_one_strip_is_recorded_for_that_strip(
+    tmp_path, no_backoff, small_cells, monkeypatch
+):
+    grid, by_month = build_case(tmp_path)
+    jan = {"2024-01": by_month["2024-01"]}
+    read_asset = mosaic.read_asset
+    second_row = grid.transform.f - 32 * 10.0
+
+    def flaky(href, target, *args, **kwargs):
+        if href.endswith("b_B03.tif") and target.transform.f == second_row:
+            raise rasterio.errors.RasterioIOError("simulated failure")
+        return read_asset(href, target, *args, **kwargs)
+
+    monkeypatch.setattr(mosaic, "read_asset", flaky)
+    with pytest.raises(mosaic.SceneReadError, match=r"window \[32, 64"):
+        mosaic.build_monthly_mosaics(
+            jan,
+            BBOX,
+            EPSG,
+            tmp_path / "strict",
+            settings=settings(),
+            sign=str,
+            strip_rows=32,
+        )
+    assert list((tmp_path / "strict").iterdir()) == []  # no month and no temporary file
+    report = mosaic.RunReport()
+    outputs = mosaic.build_monthly_mosaics(
+        jan,
+        BBOX,
+        EPSG,
+        tmp_path / "lenient",
+        settings=settings(),
+        sign=str,
+        report=report,
+        keep_going=True,
+        strip_rows=32,
+    )
+    month = mosaic.load_mosaic(outputs["2024-01"])
+    assert month["scenes_failed"] == ["b"]
+    assert month["scenes_failed_windows"] == {"b": [[32, 64, 0, grid.width]]}
+    assert report.months_incomplete == ["2024-01"]
+
+
+def test_resume_from_an_npz_month_carries_forward_from_it(tmp_path, no_backoff):
+    """Months saved as .npz before the GeoTIFF files are skipped and are the carry-forward
+    source of the next month, with their bands_sha256 recorded."""
+    grid, by_month = build_case(tmp_path)
+    expected = reference_mosaics(by_month, grid)
+    out = tmp_path / "out"
+    out.mkdir()
+    jan_bands, jan_coverage = expected["2024-01"]
+    np.savez_compressed(
+        out / "2024-01.npz",
+        bands=jan_bands,
+        coverage=jan_coverage,
+        transform=np.array(list(grid.transform)[:6]),
+        epsg=np.array(EPSG),
+        band_names=np.array(list(BANDS)),
+    )
+    outputs = mosaic.build_monthly_mosaics(
+        {"2024-01": by_month["2024-01"], "2024-03": by_month["2024-03"]},
+        BBOX,
+        EPSG,
+        out,
+        settings=settings(),
+        sign=str,
+    )
+    assert outputs["2024-01"].suffix == ".npz"
+    march = mosaic.load_mosaic(outputs["2024-03"])
+    assert march["carried_from"] == ["2024-01", mosaic.bands_sha256(jan_bands)]
+    assert march["scenes_searched"] == 1
