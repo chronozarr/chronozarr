@@ -346,13 +346,21 @@ def load(path: Path) -> tuple[np.ndarray, np.ndarray]:
     [
         {"adaptive": False, "requests": 1, "cpu_workers": 1},
         {"adaptive": True, "requests": 3, "max_requests": 6},
-        # A budget smaller than any month: months run one at a time and say so.
-        {"adaptive": False, "requests": 4, "memory_budget": 1024},
+        # A budget that fits the largest month but never two at once: months run in turn.
+        {"adaptive": False, "requests": 4, "memory_budget": "one month"},
     ],
 )
 def test_pipeline_matches_reference(tmp_path, no_backoff, overrides):
+    """With --keep-going, a failed scene is left out of its month's median exactly as the
+    original algorithm left it out, and the month lists it."""
     grid, by_month = build_case(tmp_path)
     expected = reference_mosaics(by_month, grid)
+    if overrides.get("memory_budget") == "one month":
+        planned = settings(**{**overrides, "memory_budget": None})
+        one = mosaic.fixed_bytes(planned, 4, grid.height, grid.width) + mosaic.month_bytes(
+            4, 4, grid.height, grid.width
+        )
+        overrides = {**overrides, "memory_budget": one}
     report = mosaic.RunReport()
     outputs = mosaic.build_monthly_mosaics(
         by_month,
@@ -362,6 +370,7 @@ def test_pipeline_matches_reference(tmp_path, no_backoff, overrides):
         settings=settings(**overrides),
         sign=str,
         report=report,
+        keep_going=True,
     )
     assert list(outputs) == ["2024-01", "2024-02", "2024-03"]
     for key, (bands, coverage) in expected.items():
@@ -371,8 +380,10 @@ def test_pipeline_matches_reference(tmp_path, no_backoff, overrides):
     assert report.scenes_failed == 1
     assert report.scenes_no_valid == 1
     assert report.reads_native > 0 and report.reads > report.reads_native
-    if overrides.get("memory_budget") == 1024:
-        assert report.budget_exceeded == ["2024-01", "2024-02", "2024-03"]
+    assert report.months_incomplete == ["2024-02"]
+    feb = mosaic.load_mosaic(outputs["2024-02"])
+    assert feb["scenes_failed"] == ["e"]
+    assert mosaic.load_mosaic(outputs["2024-01"])["scenes_failed"] == []
     assert not list((tmp_path / "out").glob(".*.tmp"))
 
 
@@ -384,7 +395,7 @@ def test_resume_carries_forward_from_existing_month(tmp_path, no_backoff):
     mosaic.build_monthly_mosaics(first, BBOX, EPSG, out, settings=settings(), sign=str)
     report = mosaic.RunReport()
     outputs = mosaic.build_monthly_mosaics(
-        by_month, BBOX, EPSG, out, settings=settings(), sign=str, report=report
+        by_month, BBOX, EPSG, out, settings=settings(), sign=str, report=report, keep_going=True
     )
     assert report.months_skipped == 1
     for key, (bands, _) in expected.items():
@@ -404,9 +415,19 @@ def test_error_outside_reads_stops_the_run(tmp_path, no_backoff):
     assert not list((tmp_path / "out").glob("*.npz"))
 
 
+def test_a_failed_scene_stops_the_run_by_default(tmp_path, no_backoff):
+    """A median without a scene that exists is not the month's composite: by default the run
+    stops at that month, keeps the months before it and starts none after it."""
+    _, by_month = build_case(tmp_path)
+    with pytest.raises(mosaic.SceneReadError, match="1 of 2 scenes of 2024-02") as error:
+        mosaic.build_monthly_mosaics(
+            by_month, BBOX, EPSG, tmp_path / "out", settings=settings(), sign=str
+        )
+    assert "--keep-going" in str(error.value)
+    assert sorted(p.name for p in (tmp_path / "out").glob("*.npz")) == ["2024-01.npz"]
+
+
 def test_month_with_every_scene_failing_stops_the_run(tmp_path, no_backoff):
-    """All reads failing is a systemic problem (expired token, outage); a month built from
-    carry-forward alone would look valid, so the run stops and writes nothing for it."""
     _, by_month = build_case(tmp_path)
     broken = {
         "2024-02": [
@@ -414,7 +435,7 @@ def test_month_with_every_scene_failing_stops_the_run(tmp_path, no_backoff):
             for s in by_month["2024-02"]
         ]
     }
-    with pytest.raises(RuntimeError, match="every scene of 2024-02 failed"):
+    with pytest.raises(mosaic.SceneReadError, match="2 of 2 scenes of 2024-02"):
         mosaic.build_monthly_mosaics(
             {"2024-01": by_month["2024-01"], **broken},
             BBOX,
@@ -425,6 +446,39 @@ def test_month_with_every_scene_failing_stops_the_run(tmp_path, no_backoff):
         )
     assert (tmp_path / "out" / "2024-01.npz").exists()
     assert not (tmp_path / "out" / "2024-02.npz").exists()
+
+
+def test_memory_preflight_fails_before_any_download(tmp_path, no_backoff):
+    _, by_month = build_case(tmp_path)
+    signed: list[str] = []
+
+    def sign(href: str) -> str:
+        signed.append(href)
+        return href
+
+    with pytest.raises(mosaic.MemoryBudgetError) as error:
+        mosaic.build_monthly_mosaics(
+            by_month,
+            BBOX,
+            EPSG,
+            tmp_path / "out",
+            settings=settings(memory_budget=1024),
+            sign=sign,
+        )
+    message = str(error.value)
+    assert "2024-01 has 4 scenes" in message
+    assert "Nothing was downloaded" in message and "--memory" in message
+    assert "set by user" in message
+    # The suggested --memory must cover the need, not round below it.
+    grid = _grid()
+    planned = settings(memory_budget=1024)
+    need = mosaic.fixed_bytes(planned, 4, grid.height, grid.width) + mosaic.month_bytes(
+        4, 4, grid.height, grid.width
+    )
+    suggested = message.split("--memory with at least ")[1].split("GB")[0]
+    assert performance.parse_bytes(f"{suggested}GB") >= need
+    assert signed == []
+    assert not list((tmp_path / "out").glob("*.npz"))
 
 
 def test_throttle_counter_counts_gdal_http_retry_warnings():
@@ -563,7 +617,9 @@ def test_month_without_scenes_is_all_zero_then_carried_forward(tmp_path, no_back
     assert not feb_coverage.any()
 
 
-def test_keep_going_writes_a_failed_month_from_carry_forward(tmp_path, no_backoff):
+def test_keep_going_skips_a_month_whose_scenes_all_failed(tmp_path, no_backoff):
+    """No imputed time step: the month is not written, and the next month records that it
+    filled its gaps from the month before the skipped one."""
     _, by_month = build_case(tmp_path)
     broken = [
         scene(s.item_id, s.datetime, {k: v + ".missing" for k, v in s.asset_hrefs.items()})
@@ -571,14 +627,31 @@ def test_keep_going_writes_a_failed_month_from_carry_forward(tmp_path, no_backof
     ]
     report = mosaic.RunReport()
     outputs = mosaic.build_monthly_mosaics(
-        {"2024-01": by_month["2024-01"], "2024-02": broken},
+        {"2024-01": by_month["2024-01"], "2024-02": broken, "2024-03": by_month["2024-03"]},
         BBOX,
         EPSG,
         tmp_path / "out",
         settings=settings(),
         sign=str,
         report=report,
-        stop_on_failed_month=False,
+        keep_going=True,
     )
-    assert report.months_all_failed == ["2024-02"]
-    np.testing.assert_array_equal(load(outputs["2024-02"])[0], load(outputs["2024-01"])[0])
+    assert report.months_not_written == ["2024-02"]
+    assert list(outputs) == ["2024-01", "2024-03"]
+    jan = mosaic.load_mosaic(outputs["2024-01"])
+    mar = mosaic.load_mosaic(outputs["2024-03"])
+    assert jan["carried_from"] == []
+    assert mar["carried_from"] == ["2024-01", mosaic.bands_sha256(jan["bands"])]
+
+
+def test_suggested_memory_always_covers_the_need():
+    planned = settings(memory_budget=1024)
+    for height in range(1000, 6000, 97):
+        months = {"2024-01": [object()] * 12}
+        with pytest.raises(mosaic.MemoryBudgetError) as error:
+            mosaic.check_memory(months, planned, height, 2000)  # ty: ignore[invalid-argument-type]
+        need = mosaic.fixed_bytes(planned, 4, height, 2000) + mosaic.month_bytes(
+            12, 4, height, 2000
+        )
+        suggested = str(error.value).split("--memory with at least ")[1].split("GB")[0]
+        assert performance.parse_bytes(f"{suggested}GB") >= need, height

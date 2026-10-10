@@ -41,7 +41,14 @@ import numpy as np
 import xarray as xr
 import yaml
 from catalog import PC_STAC_URL, S2_COLLECTION, search_scenes_by_month, sign_href
-from mosaic import READ_ATTEMPTS, RunReport, build_monthly_mosaics, run_summary
+from mosaic import (
+    MemoryBudgetError,
+    RunReport,
+    SceneReadError,
+    bands_sha256,
+    build_monthly_mosaics,
+    run_summary,
+)
 from performance import AdaptiveLimiter, Settings, detect_resources, parse_bytes, plan_settings
 
 import chronozarr
@@ -119,19 +126,22 @@ def download_mosaics(
         sign=sign_href,
         report=report,
         limiter=limiter,
-        stop_on_failed_month=not keep_going,
+        keep_going=keep_going,
     )
 
     elapsed = time.perf_counter() - t0
     total_mb = sum(p.stat().st_size for p in outputs.values()) / 1e6
     logger.info("Download done: %d months, %.1f MB, %.0fs", len(outputs), total_mb, elapsed)
     summary = run_summary(report, limiter, settings, cpus, time.process_time() - cpu0)
-    if report.scenes_failed:
+    if report.months_incomplete or report.months_not_written:
         logger.warning(
-            "%d scenes failed after %d read attempts each and are missing from their months' "
-            "medians; delete those months' .npz files and re-run to retry them",
-            report.scenes_failed,
-            READ_ATTEMPTS,
+            "--keep-going: %d months written without some scenes (%s) and %d months not "
+            "written because every scene failed (%s). Encoding refuses the incomplete months "
+            "unless --keep-going is given again; delete their .npz files and re-run to retry.",
+            len(report.months_incomplete),
+            ", ".join(report.months_incomplete) or "none",
+            len(report.months_not_written),
+            ", ".join(report.months_not_written) or "none",
         )
     if diagnostics:
         logger.info("Bottleneck: %s", summary["bottleneck"])
@@ -148,11 +158,18 @@ def _grid(npz: np.lib.npyio.NpzFile) -> tuple:
     )
 
 
-def load_mosaic_stack(mosaic_dir: Path) -> tuple[xr.DataArray, xr.DataArray | None]:
+def load_mosaic_stack(
+    mosaic_dir: Path, keep_going: bool = False
+) -> tuple[xr.DataArray, xr.DataArray | None, dict[str, list[str]]]:
     """Stack every YYYY-MM.npz in `mosaic_dir`.
 
-    Returns the (time, band, y, x) uint16 data and, when every file has a `coverage` plane, a
-    (time, y, x) uint8 coverage flag (1 where any scene was valid, 0 otherwise).
+    Returns the (time, band, y, x) uint16 data, when every file has a `coverage` plane a
+    (time, y, x) uint8 coverage flag (1 where any scene was valid, 0 otherwise), and the months
+    written without some scenes, with those scene IDs.
+
+    Refuses months that list failed scenes unless `keep_going`, and any month whose gaps were
+    filled from something other than the month before it in the stack (a month re-run or
+    removed after its successor was built).
     """
     paths = sorted(mosaic_dir.glob("*.npz"))
     if not paths:
@@ -166,6 +183,9 @@ def load_mosaic_stack(mosaic_dir: Path) -> tuple[xr.DataArray, xr.DataArray | No
     stack = np.empty((len(paths), *band_shape), dtype=np.uint16)
     coverage = np.empty((len(paths), *band_shape[1:]), dtype=np.uint8)
     has_coverage = True
+    incomplete: dict[str, list[str]] = {}
+    unchecked: list[str] = []
+    stale: list[str] = []
     for i, path in enumerate(paths):
         with np.load(path, allow_pickle=False) as npz:
             bands = npz["bands"]
@@ -176,8 +196,38 @@ def load_mosaic_stack(mosaic_dir: Path) -> tuple[xr.DataArray, xr.DataArray | No
                 coverage[i] = npz["coverage"] > 0
             else:
                 has_coverage = False
+            if "scenes_failed" in npz and npz["scenes_failed"].size:
+                incomplete[path.stem] = [str(v) for v in npz["scenes_failed"]]
+            if "carried_from" not in npz:
+                unchecked.append(path.stem)
+                continue
+            carried_from = [str(v) for v in npz["carried_from"]]
+        expected = [] if i == 0 else [paths[i - 1].stem, bands_sha256(stack[i - 1])]
+        if carried_from != expected:
+            source = carried_from[0] if carried_from else "nothing"
+            before = paths[i - 1].stem if i else "nothing"
+            stale.append(f"{path.stem} (filled from {source}; the stack has {before} before it)")
     if not has_coverage:
         logger.warning("Some mosaics have no coverage plane; the store will not have one")
+    if stale:
+        raise SystemExit(
+            "These months filled their gaps from a different month than the one before them "
+            f"in {mosaic_dir}: {'; '.join(stale)}. Delete them and the months after them, then "
+            "re-run the download."
+        )
+    if unchecked:
+        logger.info(
+            "%d months were written before carry-forward sources were recorded; their chain "
+            "is not checked",
+            len(unchecked),
+        )
+    if incomplete and not keep_going:
+        listing = "; ".join(f"{m}: {', '.join(ids)}" for m, ids in incomplete.items())
+        raise SystemExit(
+            f"{len(incomplete)} months were written without some scenes (--keep-going): "
+            f"{listing}. Delete those .npz files and re-run the download to retry them, or "
+            "pass --keep-going to encode them; the store's provenance notes then list them."
+        )
 
     times = np.array([np.datetime64(f"{p.stem}-01", "s") for p in paths])
     data = xr.DataArray(
@@ -191,7 +241,7 @@ def load_mosaic_stack(mosaic_dir: Path) -> tuple[xr.DataArray, xr.DataArray | No
         if has_coverage
         else None
     )
-    return data, plane
+    return data, plane, incomplete
 
 
 def band_metadata(names: list[str]) -> list[Band]:
@@ -201,9 +251,22 @@ def band_metadata(names: list[str]) -> list[Band]:
     ]
 
 
-def encode(mosaic_dir: Path, store_dir: Path) -> None:
+def provenance_for(incomplete: dict[str, list[str]]) -> dict:
+    """PROVENANCE, with the months encoded without some scenes named in the notes."""
+    if not incomplete:
+        return PROVENANCE
+    listing = "; ".join(f"{m} without {', '.join(ids)}" for m, ids in incomplete.items())
+    note = (
+        f" INCOMPLETE MONTHS: {len(incomplete)} monthly composites were built without scenes "
+        f"that could not be read (encoded with --keep-going): {listing}. Their medians are "
+        "not the full month's composite."
+    )
+    return {**PROVENANCE, "notes": str(PROVENANCE["notes"]) + note}
+
+
+def encode(mosaic_dir: Path, store_dir: Path, keep_going: bool = False) -> None:
     t0 = time.perf_counter()
-    da, coverage = load_mosaic_stack(mosaic_dir)
+    da, coverage, incomplete = load_mosaic_stack(mosaic_dir, keep_going=keep_going)
     logger.info(
         "Loaded %d monthly mosaics %s, %.2f GB, %.1fs",
         da.sizes["time"],
@@ -218,7 +281,7 @@ def encode(mosaic_dir: Path, store_dir: Path) -> None:
         store_dir,
         bands=band_metadata([str(b) for b in da["band"].values]),
         coverage=coverage,
-        provenance=PROVENANCE,
+        provenance=provenance_for(incomplete),
     )
     logger.info(
         "Encoded %d levels (true values): %.2f MB in %d files, %.1fs -> %s",
@@ -290,8 +353,10 @@ def main() -> None:
     perf.add_argument(
         "--keep-going",
         action="store_true",
-        help="when every scene of a month fails to read, write the month from carry-forward and "
-        "continue (the behaviour before 2026-10) instead of stopping",
+        help="continue when a scene cannot be read: write months with failed scenes (listed in "
+        "the .npz and, when encoded, in the store's provenance notes), skip months where every "
+        "scene failed (retried by the next run). Without it the run stops at the first such "
+        "month and encoding refuses incomplete months",
     )
     perf.add_argument(
         "--diagnostics",
@@ -333,18 +398,21 @@ def main() -> None:
         log("Resources: %s", resources)
         for reason in settings.reasons:
             log("Setting %s", reason)
-        download_mosaics(
-            aoi,
-            args.start,
-            args.end,
-            mosaic_dir,
-            settings,
-            resources.cpus,
-            diagnostics=args.diagnostics,
-            keep_going=args.keep_going,
-        )
+        try:
+            download_mosaics(
+                aoi,
+                args.start,
+                args.end,
+                mosaic_dir,
+                settings,
+                resources.cpus,
+                diagnostics=args.diagnostics,
+                keep_going=args.keep_going,
+            )
+        except (MemoryBudgetError, SceneReadError) as e:
+            raise SystemExit(f"error: {e}") from e
 
-    encode(mosaic_dir, store_dir)
+    encode(mosaic_dir, store_dir, keep_going=args.keep_going)
     if args.stac:
         emit_stac(store_dir, args.aoi)
     logger.info("Done: %s", args.aoi)

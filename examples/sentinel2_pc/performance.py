@@ -59,6 +59,7 @@ class Settings:
     max_requests: int
     cpu_workers: int  # threads for compositing and other CPU work
     memory_budget: int  # bytes for month buffers and the GDAL block cache
+    memory_budget_source: str  # "set by user" or how it was derived
     gdal_cache: int  # bytes, process-wide GDAL block cache
     reasons: tuple[str, ...] = field(default=())
 
@@ -283,14 +284,16 @@ def plan_settings(
         base = min(candidates) if candidates else resources.memory_total
         if base is None:
             memory_budget = 2 * GIB
-            reasons.append("memory_budget=2.0 GiB: memory size unknown, conservative default")
+            budget_source = "memory size unknown, conservative default"
+            reasons.append(f"memory_budget=2.0 GiB: {budget_source}")
         else:
             memory_budget = max(256 * MIB, int(base * MEMORY_FRACTION))
-            reasons.append(
-                f"memory_budget={_gib(memory_budget)}: {int(MEMORY_FRACTION * 100)}% of "
-                f"{_gib(base)} ({resources.memory_source})"
+            budget_source = (
+                f"{int(MEMORY_FRACTION * 100)}% of {_gib(base)} ({resources.memory_source})"
             )
+            reasons.append(f"memory_budget={_gib(memory_budget)}: {budget_source}")
     else:
+        budget_source = "set by user"
         reasons.append(f"memory_budget={_gib(memory_budget)}: set by user")
 
     # GDAL's default block cache is 5% of physical RAM (6.4 GiB on a 128 GiB machine), outside any
@@ -307,6 +310,7 @@ def plan_settings(
         max_requests=max_requests,
         cpu_workers=cpu_workers,
         memory_budget=memory_budget,
+        memory_budget_source=budget_source,
         gdal_cache=gdal_cache,
         reasons=tuple(reasons),
     )

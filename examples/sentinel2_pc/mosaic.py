@@ -19,8 +19,10 @@ filled from the month before it.
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import itertools
 import logging
+import math
 import os
 import random
 import re
@@ -408,8 +410,8 @@ class RunReport:
     seconds: dict[str, float] = field(default_factory=dict)
     first_month_seconds: float | None = None
     wall_seconds: float = 0.0
-    budget_exceeded: list[str] = field(default_factory=list)
-    months_all_failed: list[str] = field(default_factory=list)
+    months_not_written: list[str] = field(default_factory=list)  # --keep-going, all scenes failed
+    months_incomplete: list[str] = field(default_factory=list)  # --keep-going, some scenes failed
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def add(self, stage: str | None, seconds: float = 0.0, **counts: int) -> None:
@@ -472,8 +474,8 @@ def run_summary(
             }
             for e in limiter.events
         ],
-        "months_over_budget": report.budget_exceeded,
-        "months_all_failed": report.months_all_failed,
+        "months_not_written": report.months_not_written,
+        "months_incomplete": report.months_incomplete,
         "bottleneck": verdict,
     }
 
@@ -487,8 +489,17 @@ class _Month:
     pending: int  # scenes not yet finished
     bands_left: dict[int, int] = field(default_factory=dict)
     failed: set[int] = field(default_factory=set)
+    errors: dict[int, str] = field(default_factory=dict)
     valid: dict[int, np.ndarray] = field(default_factory=dict)
     result: tuple[np.ndarray, np.ndarray] | None = None
+
+
+class MemoryBudgetError(RuntimeError):
+    """The largest month cannot be composited within the memory budget."""
+
+
+class SceneReadError(RuntimeError):
+    """A scene still failed after every read attempt."""
 
 
 # Interpreter, numpy, rasterio, GDAL and allocator slack. Set so that the estimate for a
@@ -518,6 +529,45 @@ def fixed_bytes(settings: Settings, n_bands: int, height: int, width: int) -> in
     reads = settings.max_requests * 2 * plane
     finished = 2 * (n_bands * plane * 2 + plane * 4)
     return PROCESS_BASE_BYTES + settings.gdal_cache + reads + finished
+
+
+def check_memory(
+    scenes_by_month: dict[str, list[SceneRef]], settings: Settings, height: int, width: int
+) -> int:
+    """Raise MemoryBudgetError when the largest month needs more than the budget.
+
+    Returns the bytes the largest month needs. The estimate was checked against measured peak
+    RSS (bench/s2-ingest/portability.md); it scales with scenes per month and AOI pixels.
+    """
+    n_bands = len(REQUIRED_BANDS)
+    plane = height * width
+    base = fixed_bytes(settings, n_bands, height, width)
+    key = max(scenes_by_month, key=lambda m: len(scenes_by_month[m]))
+    n = len(scenes_by_month[key])
+    month = month_bytes(n, n_bands, height, width)
+    need = base + month
+    if need <= settings.memory_budget:
+        return need
+    gib = 1024**3
+    process = PROCESS_BASE_BYTES + settings.gdal_cache
+    per_read = 2 * plane
+    reads = settings.max_requests * per_read
+    finished = base - process - reads
+    raise MemoryBudgetError(
+        f"{key} has {n} scenes on a {width} x {height} grid and needs about {need / gib:.2f} "
+        f"GiB, more than the memory budget of {settings.memory_budget / gib:.2f} GiB "
+        f"({settings.memory_budget_source}). Nothing was downloaded.\n"
+        f"  month buffers ({n} scenes x {n_bands} bands): {month / gib:.2f} GiB\n"
+        f"  process and GDAL cache: {process / gib:.2f} GiB\n"
+        f"  {settings.max_requests} concurrent reads at {per_read / gib:.3f} GiB: "
+        f"{reads / gib:.2f} GiB\n"
+        f"  finished months kept for carry-forward and writing: {finished / gib:.2f} GiB\n"
+        "Options: if this much memory is free, pass --memory with at least "
+        f"{math.ceil(need / gib * 10) / 10:.1f}GB (the default budget is half of the available "
+        "memory); lower "
+        "--max-requests; or split the AOI or date range. A month is held in memory whole, so "
+        "a large AOI with many scenes per month needs it all at once."
+    )
 
 
 def _save_npz(path: Path, arrays: dict[str, np.ndarray]) -> None:
@@ -552,7 +602,7 @@ def build_monthly_mosaics(
     carry_forward: bool = True,
     report: RunReport | None = None,
     limiter: AdaptiveLimiter | None = None,
-    stop_on_failed_month: bool = True,
+    keep_going: bool = False,
 ) -> dict[str, Path]:
     """Build monthly composites and save them as .npz files.
 
@@ -567,9 +617,15 @@ def build_monthly_mosaics(
         carry_forward: If True, fill gaps with previous month's data
         report: Filled with counters and timings when given
         limiter: Concurrent read limiter; built from `settings` when omitted
-        stop_on_failed_month: Raise when every scene of a month fails to read. False writes
-            such a month anyway, all gaps filled from the month before (the behaviour before
-            2026-10), so a permanently broken asset cannot block an archive run.
+        keep_going: By default a scene that still fails after every attempt raises
+            SceneReadError when its month is finished; earlier months stay saved. With
+            keep_going, a month with some failed scenes is written and lists them in
+            `scenes_failed`, and a month whose scenes all failed is not written (it is retried
+            by the next run) instead of being filled from the month before.
+
+    Raises:
+        MemoryBudgetError: before any download, when the largest month does not fit.
+        SceneReadError: see `keep_going`.
 
     Returns:
         Dict mapping "YYYY-MM" to output file path.
@@ -580,6 +636,10 @@ def build_monthly_mosaics(
         - transform: 6 affine coefficients
         - epsg: int
         - band_names: string array
+        - scenes_searched: int, scenes of the month (the n in coverage = k / n)
+        - scenes_failed: string array, item IDs that could not be read (empty unless keep_going)
+        - carried_from: string array, empty or [month, sha256 of its bands]: the month whose
+          composite filled this month's gaps, so a stale chain can be detected
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     report = report if report is not None else RunReport()
@@ -605,9 +665,11 @@ def build_monthly_mosaics(
             logger.info("Skipping %s (already exists)", m)
     if not todo:
         return dict(sorted(outputs.items()))
+    check_memory({m: scenes_by_month[m] for m in todo}, settings, height, width)
 
-    first_href = next(s.scl_href for m in todo for s in scenes_by_month[m])
-    sign(first_href)  # fetch the first token once, before threads race for it
+    first_href = next((s.scl_href for m in todo for s in scenes_by_month[m]), None)
+    if first_href is not None:
+        sign(first_href)  # fetch the first token once, before threads race for it
 
     stop = threading.Event()
     throttle = HttpThrottleCounter()
@@ -682,7 +744,13 @@ def build_monthly_mosaics(
         report.add("median", time.perf_counter() - t0)
         return result
 
-    def save(key: str, bands: np.ndarray, coverage: np.ndarray) -> Path:
+    def save(
+        key: str,
+        bands: np.ndarray,
+        coverage: np.ndarray,
+        failed_ids: list[str],
+        carried_from: list[str],
+    ) -> Path:
         t0 = time.perf_counter()
         _save_npz(
             paths[key],
@@ -692,6 +760,9 @@ def build_monthly_mosaics(
                 "transform": np.array(list(transform)[:6]),
                 "epsg": np.array(target_epsg),
                 "band_names": np.array(list(REQUIRED_BANDS)),
+                "scenes_searched": np.array(len(scenes_by_month[key])),
+                "scenes_failed": np.array(failed_ids, dtype=str),
+                "carried_from": np.array(carried_from, dtype=str),
             },
         )
         report.add("write", time.perf_counter() - t0)
@@ -709,11 +780,14 @@ def build_monthly_mosaics(
     next_admit = 0
     next_finish = 0
     write_future: Future | None = None
-    prev_composite: np.ndarray | None = None
+    last_written: tuple[str, np.ndarray] | None = None  # cached previous month for carry-forward
+    failure_seen = False
 
     def admit() -> None:
         nonlocal next_admit, in_flight
         while next_admit < len(todo):
+            if failure_seen and not keep_going:
+                return  # the run stops at the failed month; do not start later ones
             # Keep the read queue fed but bounded: about two reads waiting per slot.
             queued = sum(1 for kind, _, _ in tasks.values() if kind in ("scl", "band"))
             if active and queued >= 2 * settings.max_requests:
@@ -723,17 +797,6 @@ def build_monthly_mosaics(
             need = month_bytes(len(scenes), n_bands, height, width)
             if active and base_bytes + in_flight + need > settings.memory_budget:
                 return
-            if not active and base_bytes + need > settings.memory_budget:
-                report.budget_exceeded.append(key)
-                logger.warning(
-                    "%s needs about %.2f GB (%d scenes) and the budget is %.2f GB. It is read "
-                    "alone; if less memory than that is actually free, the process may be killed. "
-                    "Raise --memory if the machine has it, or use a smaller AOI",
-                    key,
-                    (base_bytes + need) / 1e9,
-                    len(scenes),
-                    settings.memory_budget / 1e9,
-                )
             stack = np.zeros((len(scenes), n_bands, height, width), dtype=np.uint16)
             month = _Month(key, scenes, stack, need, pending=len(scenes))
             active[key] = month
@@ -754,14 +817,15 @@ def build_monthly_mosaics(
         if month.pending == 0:
             tasks[finish_pool.submit(composite, month)] = ("median", month, -1)
 
-    def previous_bands(key: str) -> np.ndarray | None:
-        idx = months.index(key)
-        if idx == 0:
+    def previous_month(key: str) -> tuple[str, np.ndarray] | None:
+        """The latest month before `key` that has a file: the source of carry-forward."""
+        earlier = [m for m in outputs if m < key]
+        if not earlier:
             return None
-        prev_key = months[idx - 1]
-        if prev_key in todo:
-            return prev_composite
-        return load_mosaic(paths[prev_key])["bands"]
+        prev_key = max(earlier)
+        if last_written is not None and last_written[0] == prev_key:
+            return last_written
+        return prev_key, load_mosaic(paths[prev_key])["bands"]
 
     try:
         admit()
@@ -773,8 +837,10 @@ def build_monthly_mosaics(
                     try:
                         valid = future.result()
                     except Exception as e:
-                        logger.warning("Skipping scene %s: %s", month.scenes[i].item_id, e)
+                        logger.warning("Scene %s failed: %s", month.scenes[i].item_id, e)
                         month.failed.add(i)
+                        month.errors[i] = str(e)
+                        failure_seen = True
                         report.add(None, scenes_failed=1)
                         scene_done(month, i)
                         continue
@@ -795,8 +861,10 @@ def build_monthly_mosaics(
                         future.result()
                     except Exception as e:
                         if i not in month.failed:
-                            logger.warning("Skipping scene %s: %s", month.scenes[i].item_id, e)
+                            logger.warning("Scene %s failed: %s", month.scenes[i].item_id, e)
                             month.failed.add(i)
+                            month.errors[i] = str(e)
+                            failure_seen = True
                             report.add(None, scenes_failed=1)
                     month.bands_left[i] -= 1
                     if month.bands_left[i] > 0:
@@ -818,30 +886,44 @@ def build_monthly_mosaics(
                 elif kind == "median":
                     month.result = future.result()
                     month.stack = np.empty(0, dtype=np.uint16)  # release the scene stack
-                    if month.failed:
-                        logger.warning(
-                            "Dropped %d/%d scenes due to errors",
-                            len(month.failed),
-                            len(month.scenes),
-                        )
 
             # Finish months in calendar order: carry-forward needs the month before.
             while next_finish < len(todo) and active.get(todo[next_finish]) is not None:
                 month = active[todo[next_finish]]
                 if month.result is None:
                     break
-                all_failed = month.scenes and len(month.failed) == len(month.scenes)
-                if all_failed and not stop_on_failed_month:
-                    report.months_all_failed.append(month.key)
+                failed_ids = sorted(month.scenes[i].item_id for i in month.failed)
+                if failed_ids and not keep_going:
+                    first = month.errors[min(month.failed)]
+                    ids = ", ".join(failed_ids)
+                    raise SceneReadError(
+                        f"{len(failed_ids)} of {len(month.scenes)} scenes of {month.key} could "
+                        f"not be read after {READ_ATTEMPTS} attempts each ({ids}; "
+                        f"first error: {first}). A median without them would not be the month's "
+                        "composite, so nothing was written for it; earlier months are saved. "
+                        "Re-run to resume from this month. --keep-going writes such months "
+                        "with the failed scenes listed in the file, and skips months where "
+                        "every scene failed."
+                    )
+                if failed_ids and len(failed_ids) == len(month.scenes):
                     logger.warning(
-                        "Every scene of %s failed; writing it from carry-forward", month.key
+                        "Every scene of %s failed; not writing it (the next run retries it)",
+                        month.key,
                     )
-                elif all_failed:
-                    raise RuntimeError(
-                        f"every scene of {month.key} failed to read; this is usually an outage, "
-                        "throttling or an expired token rather than bad scenes. Earlier months "
-                        "are saved; re-run to resume from this month, or pass --keep-going"
+                    report.months_not_written.append(month.key)
+                    del active[month.key]
+                    in_flight -= month.nbytes
+                    next_finish += 1
+                    continue
+                if failed_ids:
+                    logger.warning(
+                        "Writing %s without %d of %d scenes (listed in the file): %s",
+                        month.key,
+                        len(failed_ids),
+                        len(month.scenes),
+                        ", ".join(failed_ids),
                     )
+                    report.months_incomplete.append(month.key)
                 bands, coverage = month.result
                 logger.info(
                     "Monthly composite %s: %d scenes, mean coverage %.1f%%",
@@ -849,20 +931,26 @@ def build_monthly_mosaics(
                     len(month.scenes),
                     100.0 * coverage.mean(),
                 )
+                carried_from: list[str] = []
                 if carry_forward:
-                    prev = previous_bands(month.key)
+                    prev = previous_month(month.key)
                     if prev is not None:
+                        prev_key, prev_bands = prev
+                        carried_from = [prev_key, bands_sha256(prev_bands)]
                         gap_mask = np.all(bands == 0, axis=0)
                         if gap_mask.any():
                             logger.info(
-                                "Carry-forward: filling %d pixels from previous month",
+                                "Carry-forward: filling %d pixels from %s",
                                 int(gap_mask.sum()),
+                                prev_key,
                             )
-                            bands[:, gap_mask] = prev[:, gap_mask]
-                prev_composite = bands
+                            bands[:, gap_mask] = prev_bands[:, gap_mask]
+                last_written = (month.key, bands)
                 if write_future is not None:
                     write_future.result()  # at most one month waiting to be written
-                write_future = write_pool.submit(save, month.key, bands, coverage)
+                write_future = write_pool.submit(
+                    save, month.key, bands, coverage, failed_ids, carried_from
+                )
                 outputs[month.key] = paths[month.key]
                 if report.first_month_seconds is None:
                     write_future.result()
@@ -891,19 +979,31 @@ def build_monthly_mosaics(
     return dict(sorted(outputs.items()))
 
 
+def bands_sha256(bands: np.ndarray) -> str:
+    """Identity of a month's composite, recorded by the month whose gaps it filled."""
+    return hashlib.sha256(np.ascontiguousarray(bands).tobytes()).hexdigest()
+
+
 def load_mosaic(path: Path) -> dict:
     """Load a saved monthly mosaic .npz file.
 
     Returns:
-        Dict with keys: bands, coverage, transform, epsg, band_names
+        Dict with keys: bands, coverage, transform, epsg, band_names, scenes_failed and
+        carried_from. Files written before 2026-10-10 have no record of failed scenes or of the
+        carry-forward source: their scenes_failed and carried_from are None.
     """
-    data = np.load(path, allow_pickle=False)
-    coeffs = data["transform"]
-    transform = Affine(*coeffs)
-    return {
-        "bands": data["bands"],
-        "coverage": data["coverage"],
-        "transform": transform,
-        "epsg": int(data["epsg"]),
-        "band_names": list(data["band_names"]),
-    }
+    with np.load(path, allow_pickle=False) as data:
+        coeffs = data["transform"]
+        return {
+            "bands": data["bands"],
+            "coverage": data["coverage"],
+            "transform": Affine(*coeffs),
+            "epsg": int(data["epsg"]),
+            "band_names": list(data["band_names"]),
+            "scenes_failed": [str(v) for v in data["scenes_failed"]]
+            if "scenes_failed" in data
+            else None,
+            "carried_from": [str(v) for v in data["carried_from"]]
+            if "carried_from" in data
+            else None,
+        }
