@@ -37,9 +37,58 @@ Run the commands from the repository root. The AOIs are the keys under `aois:` i
 
 `--start` and `--end` change the date range, and `--out-dir` changes the root of `mosaics/` and `stores/`.
 
+## Performance settings
+
+The download phase needs no tuning. By default (`--performance auto`) it reads the CPUs and memory this process may use, including container quotas, SLURM allocations and rlimits. It runs 16 concurrent remote reads, the best or tied-best number in [the benchmark](#benchmark), or 4 per CPU on machines with fewer than 4 CPUs. It lowers that number when the host pushes back: by half when reads fail repeatedly, by a quarter when HTTP 429 or 5xx responses outnumber completed reads. It climbs back while throughput rises and never goes above `--max-requests`. With a higher `--max-requests` it also tries more than 16 and keeps a step only when throughput rises by more than 10 %. It never budgets more than half of the available memory. Add `--diagnostics` to print each chosen setting with its reason. When the download finishes, the same flag prints which resource limited the run and the time spent in each stage.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--performance auto\|fixed` | `auto` | `fixed` keeps the request concurrency constant; with `--memory` as well, every setting is the same on every run |
+| `--requests N` | 16, or 4 per CPU if fewer | concurrent remote reads; the start value in auto mode, the value itself in fixed mode |
+| `--max-requests N` | 16 | ceiling on concurrent reads; raise it (e.g. 32) on a high-latency link, lower it for a shared or rate-limited one |
+| `--cpu-workers N` | usable CPUs - 1 | threads for compositing |
+| `--memory SIZE` | half of available memory | budget for month buffers and the GDAL block cache, e.g. `4GB` |
+| `--diagnostics` | off | print settings, reasons, bottleneck and stage timings |
+
+```bash
+# a laptop on a slow or shared connection
+uv run python examples/sentinel2_pc/ingest.py --aoi ucayali_santa_maria --max-requests 8 --memory 4GB
+
+# a far-away or high-latency link: let auto mode try up to 32 reads
+uv run python examples/sentinel2_pc/ingest.py --aoi ucayali_santa_maria --max-requests 32
+
+# repeatable settings, e.g. on an HPC node
+uv run python examples/sentinel2_pc/ingest.py --aoi ucayali_santa_maria --performance fixed --requests 16 --diagnostics
+```
+
+There is no separate calibration step, so there are no stored calibration results to reuse. Adaptation runs during the download in 3-second steps.
+
+Every setting changes speed and memory only. The arrays in the `.npz` files are identical for any combination of settings and equal bit for bit to those of the earlier sequential implementation (tested in `tests/test_ingest_mosaic.py`, measured in [the benchmark](#benchmark)). The files themselves differ in bytes because they are compressed at zlib level 1 instead of 6.
+
+## Benchmark
+
+`bench.py` measures the download phase on frozen scene lists and checks every output month against the earlier implementation bit for bit. Each measurement runs in a fresh process, and configurations are interleaved in random order. The results go to `data/bench/results/` with the machine, settings, requests, bytes, peak memory and per-month hashes.
+
+```bash
+uv run python examples/sentinel2_pc/bench.py freeze --workload ucayali-1m      # search once, store the scene list
+uv run python examples/sentinel2_pc/bench.py compare --workloads ucayali-1m \
+    --configs baseline,fixed-4,fixed-16,auto --reps 3                         # baseline = mosaic.py at 01185cd
+uv run python examples/sentinel2_pc/bench.py summarize
+
+# without load on the public host: mirror the files once (9.7 GB), then shape a local server
+uv run python examples/sentinel2_pc/bench.py mirror --workload ucayali-1m --max-gb 10
+uv run python examples/sentinel2_pc/bench.py lab-workload --workload ucayali-1m --as lab-ucayali-x2 --alias-copies 2
+uv run python examples/sentinel2_pc/bench.py compare --workloads lab-ucayali-x2 \
+    --configs baseline,fixed-16,auto --reps 3 --lab 50,0,0,12                 # 50 ms, no cap, no random 503, 503 above 12 in flight
+```
+
+On one laptop and home connection (2026-10-10), the default settings were 1.9 to 4.7 times faster than the earlier implementation on five Planetary Computer workloads. Peak memory was 3 to 4 times lower on full-size AOIs, and the output arrays were bit-exact. Against a local server without shaping the speed-up was 7.9 times. The tables, method, failures and limits are in [evidence](../../docs/evidence.md#sentinel-2-ingest-performance). Only this machine has been measured so far.
+
 ## What the script does
 
-The download phase searches the Planetary Computer STAC API for scenes with `eo:cloud_cover < 80`. For each calendar month it builds a median composite of B02, B03, B04 and B08 at 10 m, in the UTM zone of the AOI. The median skips a pixel when any band is 0 or when its SCL class is not 4, 5, 6, 7 or 11. SCL is the Scene Classification Layer. A pixel with no valid scene takes the value from the previous month's composite (`carry_forward` in `mosaic.py`). A pixel with no earlier valid month stays 0, which is nodata. A month whose `.npz` file exists is skipped, so an interrupted download resumes.
+The download phase searches the Planetary Computer STAC API for scenes with `eo:cloud_cover < 80`. For each calendar month it builds a median composite of B02, B03, B04 and B08 at 10 m, in the UTM zone of the AOI. The median skips a pixel when any band is 0 or when its SCL class is not 4, 5, 6, 7 or 11. SCL is the Scene Classification Layer. A pixel with no valid scene takes the value from the previous month's composite (`carry_forward` in `mosaic.py`). A pixel with no earlier valid month stays 0, which is nodata. A month whose `.npz` file exists is skipped, so an interrupted download resumes; each file is written to a temporary name and renamed, so an interrupted write never leaves a partial month. A scene that still fails after four read attempts is left out of its month's median, as before, and the run reports how many. If every scene of a month fails, the run stops before that month instead of writing a month made only of carried-forward pixels.
+
+Each scene's SCL band is read first. A scene with no valid pixel in the AOI reads no other band. When a scene is in the AOI's UTM zone and its pixel grid lines up with the AOI grid, which is the usual case, the bands are read as windows on the native grid, and only the 512 by 512 source blocks that contain a valid pixel are fetched. On that grid, bilinear resampling returns the source pixel, so the result is identical to the `reproject` that every other scene goes through. Reads of later months start while earlier months are composited and written, within the memory budget, and months are finished in calendar order because each month's gaps are filled from the month before.
 
 The encode phase stacks the monthly files into a `(time, band, y, x)` uint16 array. It writes the array with `chronozarr.encode` and the default options, which store true values. Each band has a name, a `common_name` (blue, green, red or nir) and a scale of 0.0001. The `coverage` plane is 1 where at least one scene was valid and 0 where the value is carried forward or missing. It is a flag with no scene count. The `provenance` record names the collection, the `composite` ("monthly median") and the `gap_fill` ("carry-forward"). It also has notes on the cloud mask and the baseline 04.00 offset correction. With `--stac`, the script also writes the static STAC Collection and Item that `chronozarr stac` writes.
 
