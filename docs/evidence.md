@@ -375,7 +375,7 @@ The demo catalog lists two v0.3 stores on `data.chronozarr.org`, in the R2 bucke
 - `ucayali_santa_maria_v03`: 117 monthly Sentinel-2 composites, unsharded, 5,893 objects, 6,451,772,327 bytes.
 - `ucayali_santa_maria/png-v03`: the PNG frames demo, sharded, 35 objects, 112,879,724 bytes.
 
-The R2 bucket uses `deploy/r2-cors.json` and the Cache Rule in [hosting.md](hosting.md#32-cloudflare-r2).
+The R2 bucket uses `deploy/r2-cors.json` and the Cache Rule in [hosting-providers.md](hosting-providers.md#cloudflare-r2).
 
 History of the imagery store:
 
@@ -411,7 +411,7 @@ Publishing through wrangler starts in about 2 seconds per object. At 4 parallel 
 
 ### Doctor
 
-The `doctor` checklist in [hosting.md](hosting.md#1-checklist) was read from `src/chronozarr/doctor.py` on 2026-10-01. If that file changes, the file is the authority.
+The `doctor` checklist in [hosting-requirements.md](hosting-requirements.md#checklist) was read from `src/chronozarr/doctor.py` on 2026-10-01. If that file changes, the file is the authority.
 
 ### Cache copies per requesting site
 

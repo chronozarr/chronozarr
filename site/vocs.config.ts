@@ -26,7 +26,10 @@ export default defineConfig({
     ] },
     { text: 'Share and publish', items: [
       { text: 'Share a local store instantly', link: '/guides/share' },
-      { text: 'Hosting recipes', link: '/guides/hosting' },
+      { text: 'Hosting overview', link: '/guides/hosting' },
+      { text: 'Publish a store', link: '/guides/publish' },
+      { text: 'Hosting recipes', link: '/guides/hosting-providers' },
+      { text: 'Hosting requirements and troubleshooting', link: '/guides/hosting-requirements' },
       { text: 'Append timesteps', link: '/guides/append' },
       { text: 'Embed the viewer', link: '/guides/embedding' },
       { text: 'Self-host the packaged viewer', link: '/guides/viewer-distribution' },

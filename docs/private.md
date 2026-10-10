@@ -16,7 +16,7 @@ Three facts follow:
 
 The browser request for the viewer page includes the query string, so `?store=` reaches the host of chronozarr.org. `site/worker.js` does not read or log it. This repository cannot show what Cloudflare logs at the edge.
 
-A private bucket behind a public CDN URL is a public store. The [S3 and CloudFront recipe](hosting.md#31-amazon-s3-with-cloudfront) blocks public access to the bucket and leaves the distribution open. Anyone with the distribution URL can read the store.
+A private bucket behind a public CDN URL is a public store. The [S3 and CloudFront recipe](hosting-providers.md#amazon-s3-with-cloudfront) blocks public access to the bucket and leaves the distribution open. Anyone with the distribution URL can read the store.
 
 ## 2. Why one presigned URL is not enough
 
@@ -90,7 +90,7 @@ The auth now covers the viewer files and the store. The `store=` value holds a p
 
 The limits:
 
-- The auth must also allow `Range` requests, if the store is sharded, and must not add `Content-Encoding` ([hosting.md](hosting.md#1-checklist)).
+- The auth must also allow `Range` requests, if the store is sharded, and must not add `Content-Encoding` ([hosting-requirements.md](hosting-requirements.md#checklist)).
 - `chronozarr doctor` cannot send a cookie. Run it on a public test copy before you add auth, or use the network tab of the browser.
 - An expired session may show as a failed request, not as a login page. The viewer then shows "Could not open store". This repository did not test any host's expiry behaviour.
 - Each provider names its own cookie domain and path rules. Follow the provider's documentation.
@@ -123,7 +123,7 @@ const store = await openStore(url, { fetch: fetchWithCookies });
 
 This code was not run against a real cross-origin host. A custom header such as `Authorization` also works through `fetch`. The browser then sends a preflight request before every read, and the host must allow that header.
 
-The CORS settings in the [hosting recipes](hosting.md#3-recipes) use `*` and no credentials. They are for public stores. Do not copy them to a private store.
+The CORS settings in the [hosting recipes](hosting-providers.md) use `*` and no credentials. They are for public stores. Do not copy them to a private store.
 
 ### Not implemented: authenticated bucket proxy on 127.0.0.1
 

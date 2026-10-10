@@ -17,7 +17,7 @@ Run `chronozarr <command> --help` for every option.
 |---------|--------------|
 | `validate STORE` | Checks a store against the spec. Exits with status 1 on failure |
 | `info STORE` | Prints the times, bands and levels of a store |
-| `doctor TARGET` | Checks a hosted URL or a local store. See [hosting.md](hosting.md#1-checklist) |
+| `doctor TARGET` | Checks a hosted URL or a local store. See [hosting-requirements.md](hosting-requirements.md#checklist) |
 
 ## Explore and share
 
@@ -25,7 +25,7 @@ Run `chronozarr <command> --help` for every option.
 |---------|--------------|
 | `preview STORE` | Serves a local store on `127.0.0.1` and opens it in the viewer. Ctrl-C stops it. See [Preview a store](preview.md) |
 | `share STORE` | Starts a disposable Cloudflare quick tunnel for a local store, doctor-checks the public route, and prints a viewer link. Needs `cloudflared`; Ctrl-C stops both processes. See [Share a local store instantly](share.md) |
-| `publish STORE --destination s3://BUCKET/PREFIX` | Uploads a store to S3 or R2; `gs://` and `az://` destinations publish to Google Cloud Storage and Azure Blob Storage. It checks the hosted store and prints a viewer link. `--update` publishes eligible appended timesteps to the same prefix and link. Install the matching `publish` extra. See [Publish with the command](hosting.md#chronozarr-publish) |
+| `publish STORE --destination s3://BUCKET/PREFIX` | Uploads a store to S3 or R2; `gs://` and `az://` destinations publish to Google Cloud Storage and Azure Blob Storage. It checks the hosted store and prints a viewer link. `--update` publishes eligible appended timesteps to the same prefix and link. Install the matching `publish` extra. See [Publish with the command](publish.md#chronozarr-publish) |
 | `link STORE_URL` | Prints a viewer URL with an initial product, band, display limits and timestep, checked against the hosted store |
 
 ## Export
@@ -43,4 +43,4 @@ Run `chronozarr <command> --help` for every option.
 | `notebook` | `chronozarr.view(store)` for Jupyter. See [notebooks](notebooks.md) |
 | `netcdf`, `dask` | NetCDF input and dask arrays |
 | `s3` | Listing of an `s3://` prefix for `convert` |
-| `publish`, `publish-gcs`, `publish-azure` | The SDK that `publish` uses for S3 or R2, Google Cloud Storage or Azure. See [Publish with the command](hosting.md#chronozarr-publish) |
+| `publish`, `publish-gcs`, `publish-azure` | The SDK that `publish` uses for S3 or R2, Google Cloud Storage or Azure. See [Publish with the command](publish.md#chronozarr-publish) |

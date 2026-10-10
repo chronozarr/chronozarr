@@ -58,4 +58,4 @@ The input must be on an EPSG grid with north up. To write a store from an xarray
 
 - [Preview a store](preview.md) on your computer.
 - [Share a local store instantly](share.md).
-- [Publish to cloud storage](hosting.md#chronozarr-publish).
+- [Publish to cloud storage](publish.md#chronozarr-publish).

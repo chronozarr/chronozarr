@@ -46,7 +46,7 @@ To check the files first, add `--dry-run` to the `convert` command. It reports e
 |-----------|-----|
 | Look at a store on my computer | `chronozarr preview`. See [Preview a store](docs/preview.md) |
 | Send someone a temporary link | `chronozarr share`. See [Share a local store instantly](docs/share.md) |
-| Make a link that lasts | `chronozarr publish`. See [Hosting](docs/hosting.md#chronozarr-publish) |
+| Make a link that lasts | `chronozarr publish`. See [Publish a store](docs/publish.md#chronozarr-publish) |
 | Show a store in my own web page | [Embed the viewer](docs/embedding.md) |
 | Keep the data private | [Private stores](docs/private.md) |
 | Work in Jupyter or VS Code | [Explore a store in a notebook](docs/notebooks.md) |

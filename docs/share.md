@@ -12,7 +12,7 @@ The command starts a local server and a temporary Cloudflare tunnel. It checks t
 |-----------|-----|
 | Look at a store on my computer | [`chronozarr preview`](preview.md) |
 | Send someone a temporary link | `chronozarr share` |
-| Make a link that lasts | [`chronozarr publish`](hosting.md#chronozarr-publish) |
+| Make a link that lasts | [`chronozarr publish`](publish.md#chronozarr-publish) |
 | Show a store in my own web page | [Embed the viewer](embedding.md) |
 | Keep the data private | [Private stores](private.md) |
 
@@ -24,7 +24,7 @@ The command starts a local server and a temporary Cloudflare tunnel. It checks t
 
 The viewer page comes from chronozarr.org. The data does not. The viewer reads the store through the tunnel, directly from your machine. chronozarr.org holds no copy of your dataset.
 
-The link works while the command runs. Each read uses your upload bandwidth, so more viewers or faster scrubbing cost more. Anyone with the link can read the store. For a link that lasts, or one that needs a login, use [`publish`](hosting.md#chronozarr-publish) or [private hosting](private.md).
+The link works while the command runs. Each read uses your upload bandwidth, so more viewers or faster scrubbing cost more. Anyone with the link can read the store. For a link that lasts, or one that needs a login, use [`publish`](publish.md#chronozarr-publish) or [private hosting](private.md).
 
 ## Before you start
 
@@ -102,5 +102,5 @@ A tunnel targets a port, not a process. If another program owns the port, the tu
 |---------|---------------|
 | `cloudflared` not found | Install it and make sure it is on your `PATH` |
 | The command waits, then reports the route is not reachable | The new hostname has not propagated. Run the command again |
-| The link opens but the map stays empty | Run `chronozarr doctor` on the store. See [hosting.md](hosting.md#1-checklist) |
-| Scrubbing is slow | Every read passes through your upload link. Use [`publish`](hosting.md#chronozarr-publish) for more than a few viewers |
+| The link opens but the map stays empty | Run `chronozarr doctor` on the store. See [hosting-requirements.md](hosting-requirements.md#checklist) |
+| Scrubbing is slow | Every read passes through your upload link. Use [`publish`](publish.md#chronozarr-publish) for more than a few viewers |

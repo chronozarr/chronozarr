@@ -51,7 +51,7 @@ Give an absolute URL instead of a path:
 ./node_modules/.bin/chronozarr-viewer published --store https://example.org/my-store
 ```
 
-The host of the store must send CORS headers. See [hosting](hosting.md).
+The host of the store must send CORS headers. See [hosting requirements](hosting-requirements.md).
 
 ## What the copy command does
 
