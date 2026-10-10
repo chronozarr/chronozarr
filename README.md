@@ -222,7 +222,7 @@ There is no build step and no runtime dependency. Examples are in [js/README.md]
 
 ## Status
 
-The spec is v0.3.0, a draft. The packages are 0.3.1 on PyPI and npm. Readers open only v0.3 stores. To use a v0.2 store, convert it:
+The spec is v0.3.0, a draft. Python and npm package release numbers advance separately from the store format. Readers open only v0.3 stores. To use a v0.2 store, convert it:
 
 ```bash
 chronozarr convert OLD_STORE NEW_STORE
