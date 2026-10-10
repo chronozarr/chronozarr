@@ -81,7 +81,8 @@ chronozarr share my_store
 The command starts its loopback server first and confirms that the selected port serves this
 store before it starts cloudflared. It waits until the public route returns the same `zarr.json`,
 runs doctor against that route, and prints the link only if doctor has no failures. It also times
-the first level-0 chunk through the tunnel and gives an estimated overview-step time. `Ctrl-C`
+the first level-0 cell read through the tunnel and gives an estimated overview-step time. For a
+sharded store, that bounded read includes its shard-index range and inner chunk. `Ctrl-C`
 stops both the tunnel and the server; if cloudflared stops on its own, the server stops too.
 
 `--port`, `--viewer`, `--viewer-dir`, and `--no-open` have the same meanings as for `preview`.

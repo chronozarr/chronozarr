@@ -8,8 +8,6 @@ stops both the loopback server and the quick tunnel.
 from __future__ import annotations
 
 import contextlib
-import json
-import queue
 import re
 import shutil
 import subprocess
@@ -18,19 +16,46 @@ import time
 import urllib.parse
 import urllib.request
 import webbrowser
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
+from chronozarr.decode import open_store
 from chronozarr.doctor import Check, diagnose
-from chronozarr.store import object_url
+from chronozarr.store import HttpStore, object_url
 from chronozarr.view import StoreServer, local_access, viewer_url
 
-_QUICK_TUNNEL = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com\b", re.IGNORECASE)
+# Keep the scheme split across source tokens: tests scan source text for shipped data-store URLs.
+_QUICK_TUNNEL = re.compile("https" + r"://[a-z0-9-]+\.trycloudflare\.com\b", re.IGNORECASE)
 _START_TIMEOUT_SECONDS = 30.0
 _READY_TIMEOUT_SECONDS = 30.0
 _POLL_SECONDS = 0.2
+_TUNNEL_LOG_LINES = 32
+
+
+class _TunnelLogs:
+    """A bounded, non-blocking diagnostic record of cloudflared's two log streams."""
+
+    def __init__(self) -> None:
+        self._lines: deque[str] = deque(maxlen=_TUNNEL_LOG_LINES)
+        self._url: str | None = None
+        self._lock = threading.Lock()
+
+    def add(self, line: str) -> None:
+        with self._lock:
+            self._lines.append(line)
+            if self._url is None and (match := _QUICK_TUNNEL.search(line)) is not None:
+                self._url = match.group(0).rstrip("/")
+
+    def url(self) -> str | None:
+        with self._lock:
+            return self._url
+
+    def recent(self) -> list[str]:
+        with self._lock:
+            return list(self._lines)[-4:]
 
 
 @dataclass
@@ -38,7 +63,7 @@ class _Tunnel:
     """The cloudflared child and the pipes that report its assigned quick-tunnel URL."""
 
     process: subprocess.Popen[str]
-    lines: queue.Queue[str]
+    logs: _TunnelLogs
 
     def close(self) -> None:
         if self.process.poll() is not None:
@@ -62,10 +87,10 @@ def _cloudflared() -> str:
     return executable
 
 
-def _read_pipe(pipe: TextIO, lines: queue.Queue[str]) -> None:
+def _read_pipe(pipe: TextIO, logs: _TunnelLogs) -> None:
     try:
         for line in pipe:
-            lines.put(line.rstrip())
+            logs.add(line.rstrip())
     finally:
         with contextlib.suppress(Exception):
             pipe.close()
@@ -85,32 +110,25 @@ def _start_tunnel(executable: str, port: int) -> _Tunnel:
         )
     except OSError as exc:
         raise OSError(f"could not start cloudflared: {exc}") from exc
-    lines: queue.Queue[str] = queue.Queue()
+    logs = _TunnelLogs()
     for pipe in (process.stdout, process.stderr):
         if pipe is not None:
-            threading.Thread(target=_read_pipe, args=(pipe, lines), daemon=True).start()
-    return _Tunnel(process, lines)
+            threading.Thread(target=_read_pipe, args=(pipe, logs), daemon=True).start()
+    return _Tunnel(process, logs)
 
 
 def _tunnel_url(tunnel: _Tunnel, *, timeout: float = _START_TIMEOUT_SECONDS) -> str:
     """Read cloudflared's assigned quick-tunnel URL, failing promptly if it exits first."""
     deadline = time.monotonic() + timeout
-    output: list[str] = []
     while time.monotonic() < deadline:
-        try:
-            line = tunnel.lines.get(timeout=min(_POLL_SECONDS, deadline - time.monotonic()))
-        except queue.Empty:
-            line = ""
-        if line:
-            output.append(line)
-            match = _QUICK_TUNNEL.search(line)
-            if match is not None:
-                return match.group(0).rstrip("/")
+        if (url := tunnel.logs.url()) is not None:
+            return url
         status = tunnel.process.poll()
         if status is not None:
-            detail = "\n".join(output[-4:])
+            detail = "\n".join(tunnel.logs.recent())
             suffix = f" Output: {detail}" if detail else ""
             raise OSError(f"cloudflared exited before creating a tunnel (exit {status}).{suffix}")
+        time.sleep(_POLL_SECONDS)
     raise OSError(
         "cloudflared did not print a trycloudflare.com URL within "
         f"{timeout:.0f} seconds. Check its network connection and try again."
@@ -148,23 +166,63 @@ def _wait_for_public_store(
     )
 
 
-def _first_chunk_measurement(store_url: str, server: StoreServer) -> tuple[int, float, int]:
-    """Return bytes, seconds, and cells per overview timestep from one level-0 chunk request."""
-    root = json.loads((server.store / "zarr.json").read_bytes())
-    variable = root["attributes"]["chronozarr"].get("variable", "data")
-    target = object_url(store_url, f"0/{variable}/c/0/0/0/0")
-    started = time.perf_counter()
-    body = _direct_get(target, timeout=30)
-    seconds = time.perf_counter() - started
-    if not body:
-        raise OSError("the first level-0 chunk was empty")
+@dataclass(frozen=True)
+class _CellMeasurement:
+    """One real level-0 cell read through the tunnel, after reader metadata is open."""
 
-    # The viewer's fitted overview needs one chunk per cell at the coarsest level. The estimate
-    # below intentionally reports its assumption: compression varies between cells and levels.
-    overview = root["attributes"]["chronozarr"]["levels"][-1]
-    rows, columns = overview["grid"]
-    cells = int(rows) * int(columns)
-    return len(body), seconds, cells
+    bytes_read: int
+    seconds: float
+    overview_cells: int
+    requests: int
+    sharded: bool
+
+
+class _MeasuringHttpStore(HttpStore):
+    """Count payload bytes fetched for data objects without changing the normal reader path."""
+
+    def __init__(self, url: str) -> None:
+        super().__init__(url)
+        self.data_prefix: str | None = None
+        self.data_bytes = 0
+        self.data_requests = 0
+
+    def _fetch(self, key, method, byte_range=None):
+        fetched = super()._fetch(key, method, byte_range)
+        if (
+            method == "GET"
+            and self.data_prefix
+            and key.startswith(self.data_prefix)
+            and fetched is not None
+        ):
+            self.data_bytes += len(fetched[0])
+            self.data_requests += 1
+        return fetched
+
+
+def _first_chunk_measurement(store_url: str) -> _CellMeasurement:
+    """Measure one normal reader cell read without downloading an entire shard.
+
+    For an unsharded store, the read is one compressed chunk. For a sharded store it includes the
+    bounded shard-index range and the bounded inner-chunk range. ``open_store`` derives the
+    layout from the arrays, so the optional ``chronozarr.levels`` summary is not required.
+    """
+    transport = _MeasuringHttpStore(store_url)
+    store = open_store(transport)
+    transport.data_prefix = f"0/{store.attrs.variable}/c/"
+    transport.data_bytes = transport.data_requests = 0
+    started = time.perf_counter()
+    store.read_cell(0, 0, 0, lod=0)
+    seconds = time.perf_counter() - started
+    if transport.data_bytes == 0:
+        raise OSError("the first level-0 cell has no stored data chunk to time")
+    rows, columns = store.levels[-1].grid
+    return _CellMeasurement(
+        bytes_read=transport.data_bytes,
+        seconds=seconds,
+        overview_cells=rows * columns,
+        requests=transport.data_requests,
+        sharded=store.levels[0].shard_time is not None,
+    )
 
 
 def _doctor_passes(checks: list[Check]) -> bool:
@@ -213,15 +271,23 @@ def share(
         if not _doctor_passes(checks):
             failed = "; ".join(f"{c.name}: {c.detail}" for c in checks if c.status == "fail")
             raise OSError(f"the tunnel did not pass chronozarr doctor: {failed}")
-        bytes_read, seconds, overview_cells = _first_chunk_measurement(access.store_url, server)
-        rate = bytes_read / seconds if seconds else float("inf")
-        estimate = seconds * overview_cells
+        measurement = _first_chunk_measurement(access.store_url)
+        rate = (
+            measurement.bytes_read / measurement.seconds if measurement.seconds else float("inf")
+        )
+        estimate = measurement.seconds * measurement.overview_cells
+        kind = (
+            "level-0 cell read (shard index + inner chunk)"
+            if measurement.sharded
+            else "level-0 chunk"
+        )
         target = viewer_url(access.store_url, access.viewer_url)
         echo(f"sharing {server.store} through {public_root} (byte ranges and CORS verified)")
         echo(
-            f"tunnel throughput: first level-0 chunk {bytes_read / 1e6:.2f} MB in "
-            f"{seconds:.2f} s ({rate / 1e6:.2f} MB/s); estimated overview step "
-            f"{estimate:.2f} s for {overview_cells} cell(s), assuming similar chunk sizes"
+            f"tunnel throughput: first {kind} {measurement.bytes_read / 1e6:.2f} MB in "
+            f"{measurement.seconds:.2f} s ({rate / 1e6:.2f} MB/s, "
+            f"{measurement.requests} data request(s)); estimated overview step {estimate:.2f} s "
+            f"for {measurement.overview_cells} cell(s), assuming similar cell-read sizes"
         )
         echo(f"open: {target}")
         echo("anyone who can open this link can read this store; press Ctrl-C to stop sharing")

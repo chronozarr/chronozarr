@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import io
+import json
 import socket
 from pathlib import Path
 
@@ -77,7 +78,9 @@ def _ready_share(monkeypatch, process: FakeProcess):
         lambda _: [Check("root zarr.json", "ok", "public route works")],
     )
     monkeypatch.setattr(
-        share_module, "_first_chunk_measurement", lambda *args: (2_000_000, 0.5, 2)
+        share_module,
+        "_first_chunk_measurement",
+        lambda *args: share_module._CellMeasurement(2_000_000, 0.5, 2, 1, False),
     )
     return commands
 
@@ -146,6 +149,24 @@ def test_share_does_not_print_a_link_when_doctor_fails(store, monkeypatch):
     assert not view_module._servers
 
 
+def test_share_labels_a_sharded_measurement_as_a_cell_read(store, monkeypatch):
+    process = FakeProcess()
+    _ready_share(monkeypatch, process)
+    monkeypatch.setattr(
+        share_module,
+        "_first_chunk_measurement",
+        lambda *args: share_module._CellMeasurement(8_000, 0.25, 2, 2, True),
+    )
+    monkeypatch.setattr(share_module, "_wait_for_tunnel", _interrupt)
+    lines: list[str] = []
+
+    share_module.share(store, open_browser=False, echo=lines.append)
+
+    throughput = next(line for line in lines if line.startswith("tunnel throughput:"))
+    assert "level-0 cell read (shard index + inner chunk)" in throughput
+    assert "first level-0 chunk" not in throughput
+
+
 def test_share_stops_the_server_when_cloudflared_exits_during_startup(store, monkeypatch):
     process = FakeProcess(output="connection failed\n", exited=True)
     monkeypatch.setattr(share_module.shutil, "which", lambda _: "/mock/cloudflared")
@@ -188,8 +209,49 @@ def test_first_chunk_measurement_uses_an_isolated_synthetic_store(tmp_path):
     build_store(path, make_truth(2, 1, 20, 24), shard=False, chunk_size=16)
     server = serve_store(path)
 
-    bytes_read, seconds, overview_cells = share_module._first_chunk_measurement(server.url, server)
+    measurement = share_module._first_chunk_measurement(server.url)
 
-    assert bytes_read > 0
-    assert seconds >= 0
-    assert overview_cells == 1
+    assert measurement.bytes_read > 0
+    assert measurement.seconds >= 0
+    assert measurement.overview_cells == 1
+    assert measurement.requests == 1
+    assert not measurement.sharded
+
+
+def test_sharded_measurement_reads_an_index_and_inner_chunk_not_a_whole_shard(tmp_path):
+    path = tmp_path / "sharded"
+    build_store(path, make_truth(8, 1, 32, 32), shard=True, chunk_size=16)
+    server = serve_store(path)
+
+    measurement = share_module._first_chunk_measurement(server.url)
+    shard_bytes = (path / "0" / "data" / "c" / "0" / "0" / "0" / "0").stat().st_size
+
+    assert measurement.sharded
+    assert measurement.requests >= 2  # bounded shard index plus the requested inner chunk
+    assert 0 < measurement.bytes_read < shard_bytes
+
+
+def test_measurement_derives_levels_from_arrays_when_the_optional_mirror_is_absent(tmp_path):
+    path = tmp_path / "no-levels-mirror"
+    build_store(path, make_truth(2, 1, 20, 24), shard=False, chunk_size=16)
+    root_path = path / "zarr.json"
+    root = json.loads(root_path.read_text())
+    del root["attributes"]["chronozarr"]["levels"]
+    root_path.write_text(json.dumps(root))
+    server = serve_store(path)
+
+    measurement = share_module._first_chunk_measurement(server.url)
+
+    assert measurement.overview_cells == 1
+
+
+def test_tunnel_logs_keep_only_a_bounded_diagnostic_tail():
+    logs = share_module._TunnelLogs()
+    for number in range(share_module._TUNNEL_LOG_LINES * 3):
+        logs.add(f"log line {number}")
+    logs.add("created https://violet-rain.trycloudflare.com")
+
+    assert logs.url() == "https://violet-rain.trycloudflare.com"
+    assert len(logs._lines) <= share_module._TUNNEL_LOG_LINES
+    assert len(logs.recent()) <= 4
+    assert logs.recent()[-1] == "created https://violet-rain.trycloudflare.com"
