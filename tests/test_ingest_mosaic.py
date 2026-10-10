@@ -766,12 +766,17 @@ def test_strips_give_the_whole_grid_result(
     assert failed and all(w in strips for w in failed)
 
 
+def placeholder_scenes(n: int) -> list[catalog.SceneRef]:
+    """Scenes for the memory planner, which only counts them."""
+    return [scene(str(i), date(2024, 1, 1), {}) for i in range(n)]
+
+
 def months_need(planned, rows: int) -> int:
     return mosaic.fixed_bytes(planned, 4, rows, 2000) + mosaic.month_bytes(10, 4, rows, 2000)
 
 
 def test_plan_window_prefers_the_whole_grid_then_equal_strips(small_cells):
-    months = {"2024-01": [object()] * 10}
+    months = {"2024-01": placeholder_scenes(10)}
     roomy = settings(memory_budget=8 * performance.GIB)
     whole = mosaic.plan_window(months, roomy, 3000, 2000)
     assert whole.rows == 3000
@@ -795,7 +800,7 @@ def test_plan_window_prefers_the_whole_grid_then_equal_strips(small_cells):
 
 
 def test_plan_window_refuses_only_when_the_smallest_strip_does_not_fit():
-    months = {"2024-01": [object()] * 10}
+    months = {"2024-01": placeholder_scenes(10)}
     probe = settings(memory_budget=2 * performance.GIB)
     smallest = mosaic.fixed_bytes(probe, 4, 512, 8000) + mosaic.month_bytes(10, 4, 512, 8000)
     tight = settings(memory_budget=3 * smallest)
