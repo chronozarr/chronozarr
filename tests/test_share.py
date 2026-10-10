@@ -111,21 +111,58 @@ def test_share_prints_only_a_verified_public_viewer_link_and_cleans_up(store, mo
     assert not view_module._servers
 
 
-def test_share_reports_concise_startup_stages_in_order(store, monkeypatch):
+def test_share_reports_stages_before_their_corresponding_work(store, monkeypatch):
     process = FakeProcess()
     _ready_share(monkeypatch, process)
     monkeypatch.setattr(share_module, "_wait_for_tunnel", _interrupt)
     lines: list[str] = []
-
-    share_module.share(store, open_browser=False, echo=lines.append)
-
     stages = [
         "starting local server and quick tunnel...",
         "waiting for Cloudflare to assign a public address...",
-        "waiting for public access (new tunnel DNS can take up to 90 seconds)...",
+        "waiting for public access (allowing up to 90 seconds for DNS readiness)...",
         "checking browser access...",
         "measuring first transfer...",
     ]
+
+    local_access = share_module.local_access
+    local_access_calls = 0
+    start_tunnel = share_module._start_tunnel
+
+    def check_local_access(*args, **kwargs):
+        nonlocal local_access_calls
+        if local_access_calls == 0:
+            assert stages[0] in lines
+        local_access_calls += 1
+        return local_access(*args, **kwargs)
+
+    def check_start_tunnel(*args, **kwargs):
+        assert stages[0] in lines
+        return start_tunnel(*args, **kwargs)
+
+    def check_tunnel_url(*args, **kwargs):
+        assert stages[1] in lines
+        return "https://bright-sea.trycloudflare.com"
+
+    def check_public_store(*args, **kwargs):
+        assert stages[2] in lines
+
+    def check_doctor(*args, **kwargs):
+        assert stages[3] in lines
+        return [Check("root zarr.json", "ok", "public route works")]
+
+    def check_measurement(*args, **kwargs):
+        assert stages[4] in lines
+        return share_module._CellMeasurement(2_000_000, 0.5, 2, 1, False)
+
+    monkeypatch.setattr(share_module, "local_access", check_local_access)
+    monkeypatch.setattr(share_module, "_start_tunnel", check_start_tunnel)
+    monkeypatch.setattr(share_module, "_tunnel_url", check_tunnel_url)
+    monkeypatch.setattr(share_module, "_wait_for_public_store", check_public_store)
+    monkeypatch.setattr(share_module, "diagnose", check_doctor)
+    monkeypatch.setattr(share_module, "_first_chunk_measurement", check_measurement)
+
+    share_module.share(store, open_browser=False, echo=lines.append)
+
     assert [line for line in lines if line in stages] == stages
 
 

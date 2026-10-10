@@ -271,7 +271,7 @@ def share(
         access = local_access(
             store, port=server.port, base_url=public_root, viewer=viewer, viewer_dir=viewer_dir
         )
-        echo("waiting for public access (new tunnel DNS can take up to 90 seconds)...")
+        echo("waiting for public access (allowing up to 90 seconds for DNS readiness)...")
         _wait_for_public_store(access.store_url, (server.store / "zarr.json").read_bytes())
         echo("checking browser access...")
         checks = diagnose(access.store_url)
