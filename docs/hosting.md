@@ -6,6 +6,12 @@ The prefix of a store is its path in the bucket, for example `my_aoi/chronozarr-
 
 The recipes below publish a store that anyone with its URL can read. For data that must stay private, see [private.md](private.md).
 
+## Send a local store today
+
+For a short colleague review, you do not need to set up a bucket first. With your own dated GeoTIFFs on one matching grid, run `chronozarr convert`, inspect it with `chronozarr preview`, then run `chronozarr share`. It creates a temporary public link while your laptop and terminal remain running; the recipient needs only a browser, and their requested data uses your laptop's upload bandwidth. Choose the view, click `Copy link`, and send that link. The [laptop-sharing walkthrough](python.md#share-a-store-through-a-tunnel) lists the `cloudflared` prerequisite and the input checks.
+
+Use the hosting steps below when the link must keep working after the laptop stops, when several people need dependable delivery, or when the data needs access control.
+
 This page has a checklist, an upload procedure with a command that runs it, recipes for four hosts and a procedure for appending. The requirements come from [spec/CHRONOZARR.md](../spec/CHRONOZARR.md) section 8. Measurements and dates are in [evidence.md](evidence.md).
 
 ## 1. Checklist
