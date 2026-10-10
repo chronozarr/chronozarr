@@ -29,7 +29,7 @@ For a sharded store that will grow, choose a finite `--shard-time` only when the
 
 ## Publishing
 
-`chronozarr publish --update` puts an appended store on the prefix that already serves it. The public URL and every shared viewer link stay the same.
+In Python package 0.4.0, `chronozarr publish --update` puts an appended store on the prefix that already serves it. The public URL and every shared viewer link stay the same; the store format remains v0.3.
 
 ```bash
 chronozarr publish my_store \
