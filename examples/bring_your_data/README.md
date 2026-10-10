@@ -10,7 +10,7 @@ Run this command from the repository root.
 uv sync --extra geo
 ```
 
-This checkout uses the released `chronozarr[geo]` 0.4.0 package. For a standalone install, use `uv run python -m pip install --upgrade "chronozarr[geo]==0.4.0"` instead. Python 3.11 or newer is required.
+This checkout uses the 0.4.0 source version from the repository. For a standalone install, use `python -m pip install --upgrade "chronozarr[geo]==0.4.0"` instead. Python 3.11 or newer is required.
 
 The bundle script below needs this checkout because it copies the viewer from `js/`; it needs no npm install or build. To copy the viewer from the npm package instead, see [self-host the packaged viewer](../../docs/viewer-distribution.md).
 
@@ -61,7 +61,7 @@ For another filename pattern, pass `--date-pattern`, for example `--date-pattern
    uv run chronozarr preview /tmp/my-series
    ```
 
-   The preview serves the store on localhost and opens the viewer. To share a temporary view from your laptop, use `uv run chronozarr share /tmp/my-series`; it needs `cloudflared`, and the terminal and laptop must stay running while the recipient uses the link. The requested data is transferred from your laptop to the recipient's browser. In the viewer, choose the intended view and use `Copy link` to share it. The recipient needs only a modern browser.
+   The preview serves the store on localhost and opens the viewer. Press Ctrl-C to stop it before starting another command in the same terminal. To share a temporary view from your laptop, use `uv run chronozarr share /tmp/my-series`; it needs `cloudflared`, and the terminal and laptop must stay running while the recipient uses the link. The requested data is transferred from your laptop to the recipient's browser. In the viewer, choose the intended view and use `Copy link` to share it. The recipient needs only a modern browser.
 
 ## 4. Read a pixel's history
 
@@ -75,7 +75,7 @@ The script opens the store with the lazy xarray backend and selects one pixel be
 
 To convert an existing Zarr or NetCDF time series, use its path as the source and add `--variable NAME` where needed. NetCDF input needs `uv sync --extra geo --extra netcdf`. For rendered PNG frames, follow the [PNG georeferencing guide](../../docs/png-frames.md). A PNG holds display colors, and the converter stores them unchanged.
 
-For a source audit, a manifest can name each COG and its date. This is an advanced path; the directory/glob flow above is the main onboarding route.
+For a source audit, a manifest can name each COG and its date. Save this optional advanced manifest as `observations.csv`; the directory/glob flow above is the main onboarding route.
 
 ```csv
 uri,datetime

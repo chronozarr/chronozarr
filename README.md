@@ -39,7 +39,7 @@ To publish a store, upload it to a static host that sends CORS headers. A sharde
 Install the released Python package with GeoTIFF support. It needs Python 3.11 or later.
 
 ```bash
-uv run python -m pip install --upgrade "chronozarr[geo]==0.4.0"
+python -m pip install --upgrade "chronozarr[geo]==0.4.0"
 ```
 
 `0.4.0` is the Python package release. It reads and writes the unchanged chronozarr v0.3 store format.
@@ -78,7 +78,7 @@ Preview the store locally:
 chronozarr preview my_store
 ```
 
-The command serves the store on `127.0.0.1` and opens the viewer. For a temporary share from your laptop, run:
+The command serves the store on `127.0.0.1` and opens the viewer. Press Ctrl-C to stop the preview before starting another command in the same terminal. For a temporary share from your laptop, run:
 
 ```bash
 chronozarr share my_store
