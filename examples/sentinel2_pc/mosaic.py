@@ -546,8 +546,9 @@ def _budget_error(
         f"  finished strips kept for carry-forward and writing: {finished / gib:.2f} GiB\n"
         "Options: if this much memory is free, pass --memory with at least "
         f"{math.ceil(need / gib * 10) / 10:.1f}GB (the default budget is half of the available "
-        "memory); lower --max-requests or --cpu-workers; or split the AOI into narrower ones "
-        "(a strip spans the AOI's full width)."
+        "memory, or three quarters of a cgroup or SLURM limit); lower --max-requests or "
+        "--cpu-workers; or split the AOI into narrower ones (a strip spans the AOI's full "
+        "width)."
     )
 
 
