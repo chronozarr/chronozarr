@@ -69,41 +69,32 @@ The server answers byte ranges and CORS. It sends `Cache-Control: no-cache` and 
 
 ### Share a store through a tunnel
 
-A tunnel gives your local server an https address, so someone on another machine can open the store in the hosted viewer. The viewer needs an https store URL. A LAN address such as `http://192.168.1.5:8000` is blocked as mixed content.
+`chronozarr share` makes a disposable Cloudflare quick tunnel, verifies the public store with
+`chronozarr doctor`, and then prints one viewer link. It needs a local
+[cloudflared install](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/),
+but no Cloudflare account or configuration.
 
-1. Start the server on a fixed port. The command fails when the port is taken, and it prints the link only after the server answers for your store.
+```sh
+chronozarr share my_store
+```
 
-   ```sh
-   chronozarr preview my_store --port 8765 --no-open
-   ```
+The command starts its loopback server first and confirms that the selected port serves this
+store before it starts cloudflared. It waits until the public route returns the same `zarr.json`,
+runs doctor against that route, and prints the link only if doctor has no failures. It also times
+the first level-0 chunk through the tunnel and gives an estimated overview-step time. `Ctrl-C`
+stops both the tunnel and the server; if cloudflared stops on its own, the server stops too.
 
-2. Check the store locally before you start the tunnel.
+`--port`, `--viewer`, `--viewer-dir`, and `--no-open` have the same meanings as for `preview`.
+For example, use a self-hosted viewer or keep the browser closed while you copy the verified link:
 
-   ```sh
-   curl -s http://127.0.0.1:8765/my_store/zarr.json | head -c 100
-   ```
+```sh
+chronozarr share my_store --viewer-dir published --no-open
+```
 
-3. Point the tunnel at the port. For example, with cloudflared:
-
-   ```sh
-   cloudflared tunnel --url http://127.0.0.1:8765
-   ```
-
-4. Run doctor on the tunnel URL.
-
-   ```sh
-   chronozarr doctor https://<random>.trycloudflare.com/my_store
-   ```
-
-5. Stop the preview with Ctrl-C. Run it again with the tunnel address to print the link to share.
-
-   ```sh
-   chronozarr preview my_store --port 8765 --no-open --base-url https://<random>.trycloudflare.com
-   ```
-
-A tunnel targets a port, not a process. If another program owns the port, the tunnel exposes that program. Step 1 refuses a taken port for this reason. Do not start a tunnel on a port that you have not checked.
-
-Anyone with the link can read the store while the tunnel runs. Every read reaches your machine, so throughput is your upload bandwidth. The link stops working when you stop the command or the tunnel. For a link that lasts, upload the store. See [hosting.md](hosting.md).
+Anyone who has the link can read the store while the command runs. Every read reaches your
+machine, so the measured tunnel rate is limited by your upload connection. The address stops
+working when the command or cloudflared stops. For a durable or access-controlled route, upload
+the store instead; see [hosting.md](hosting.md).
 
 ## Show a store in a notebook
 
