@@ -135,3 +135,7 @@ output = "data/reports/coverage/python/coverage.json"
 
 [tool.coverage.xml]
 output = "data/reports/coverage/python/coverage.xml"
+
+[tool.ty.environment]
+# Tests import the Sentinel-2 example's modules by name (they are scripts, not a package).
+extra-paths = ["examples/sentinel2_pc"]
