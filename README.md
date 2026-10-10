@@ -83,13 +83,36 @@ pip install "chronozarr[geo]"
 
 ### With your data
 
-1. Write a store from GeoTIFFs. Use one file per timestep, with the date in each file name.
+1. Write a store from your rasters. `convert` is the command for files on disk or in S3. Point it at a directory, a quoted glob or an `s3://` prefix of GeoTIFFs with the date in each file name (`20240131`, `2024-01-31` or `2024-01`):
 
    ```bash
-   chronozarr encode "scenes/*.tif" my_store
+   chronozarr convert "scenes/*.tif" my_store --dry-run   # list files and dates, check every file, write nothing
+   chronozarr convert "scenes/*.tif" my_store
    ```
 
-   `encode` reads uint8, uint16, int16 and float32 GeoTIFFs. Band names, scale, offset, units and nodata come from the files. A file with no nodata value gives a store with no nodata. All files must share one grid. Use `chronozarr convert` to resample the files or to read them one timestep at a time.
+   The dry run prints each file with its date, then the grid, bands, validity and size of the store. A directory or `s3://` prefix is not searched recursively; use a glob such as `scenes/**/*.tif` for subdirectories. Listing an S3 prefix needs `pip install "chronozarr[s3]"` and uses your AWS credentials.
+
+   A date is read from a name only when the name holds exactly one. A name with no date, with several (`20240215_2024-03`), or two files with the same date are reported, never guessed. `--date-pattern` says where the date is, for example `--date-pattern "ndvi_%Y%m%d"`, and `--write-manifest found.csv` saves the files and dates as a manifest that `convert` reads back.
+
+   Before it reads any pixels in bulk, `convert` checks every file for its date, grid and CRS, bands, dtype, scale, offset, units and nodata. It reports all problems at once, grouped by file, each with a suggested fix, and writes nothing:
+
+   ```text
+   2 problem(s) in 2 of 24 source file(s); nothing was written:
+
+   scenes/ndvi_2024-03.tif
+     - has scales [0.5, 1.0]; scenes/ndvi_2024-01.tif has [1.0, 1.0]. A store holds one value per band for every timestep, so the sources must agree
+       fix: if the metadata is wrong, correct it (gdal_edit.py -scale -offset -units); ...
+
+   scenes/readme_copy.tif
+     - no date in the file name
+       fix: name the date YYYYMMDD, YYYY-MM-DD or YYYY-MM, or pass --date-pattern ...
+   ```
+
+   Nothing is resampled or rescaled unless you ask. Files on another grid fail with a suggestion to pass `--resampling`.
+
+   The store takes each band's description (its name), scale, offset and units from the files, so a Sentinel-2 file with a scale of 0.0001 gives reflectance. These must be identical in every file. It also takes the nodata value that the files declare; files that declare none give a store with no nodata, so a stored 0 is data. `chronozarr convert --help` lists the manifest, Zarr and NetCDF sources and the validity rules.
+
+   `chronozarr encode "scenes/*.tif" my_store` is the in-memory route for GeoTIFFs on one grid. It reads uint8, uint16, int16 and float32 files by the same rules, holds the whole stack in memory and never resamples. It points you to `convert` for directories, S3 prefixes and manifests.
 
 2. Check the store against the spec.
 
@@ -107,15 +130,23 @@ pip install "chronozarr[geo]"
    da = store.to_xarray(lod=0)   # xarray DataArray, loaded into memory
    ```
 
-4. Upload `my_store` to a static host. [docs/hosting.md](docs/hosting.md) has recipes for S3 with CloudFront, Cloudflare R2, Google Cloud Storage and Source Cooperative.
+4. Look at the store on your machine before you upload it.
 
-5. Check the host.
+   ```bash
+   chronozarr preview my_store
+   ```
+
+   The command serves the store on `127.0.0.1`, opens the viewer in your browser and stops on Ctrl-C. See [docs/python.md](docs/python.md#preview-from-the-command-line).
+
+5. Upload `my_store` to a static host. [docs/hosting.md](docs/hosting.md) has recipes for S3 with CloudFront, Cloudflare R2, Google Cloud Storage and Source Cooperative.
+
+6. Check the host.
 
    ```bash
    chronozarr doctor https://your-host/my_store
    ```
 
-6. Open the store in the hosted viewer:
+7. Open the store in the hosted viewer:
 
    ```
    https://chronozarr.org/demo/?store=https://your-host/my_store
@@ -141,16 +172,21 @@ Run `chronozarr <command> --help` for every option.
 
 | Command | What it does |
 |---------|--------------|
-| `encode INPUT OUT` | Writes a store from a Zarr store, a NetCDF file or a quoted glob of GeoTIFFs |
-| `convert SOURCE OUT` | Writes a store one timestep at a time, from a manifest of COGs or PNG frames, a Zarr store or a NetCDF file. Also converts a v0.2 store to v0.3 |
+| `convert SOURCE OUT` | The command for existing raster files. Writes a store one timestep at a time from a directory, quoted glob or `s3://` prefix of dated GeoTIFFs, a manifest of COGs or PNG frames, a Zarr store or a NetCDF file. `--dry-run` checks every file and reports all problems per file. Also converts a v0.2 store to v0.3 |
+| `encode INPUT OUT` | Writes a store in memory from a Zarr store, a NetCDF file or a quoted glob of GeoTIFFs. Points to `convert` for anything else |
 | `append STORE INPUT` | Adds timesteps at the end of a store. See [docs/append.md](docs/append.md) |
 | `validate STORE` | Checks a store against the spec. Exits with status 1 on failure |
 | `info STORE` | Prints the times, bands and levels of a store |
+| `bands STORE` | Lists the bands, the role each plays and the viewer products they allow. `--band-role B04=red` sets a band's `common_name`. `encode` and `convert` take the same flag. See [docs/python.md](docs/python.md#band-roles-and-the-first-view) |
+| `link STORE_URL` | Prints a viewer URL with an initial product, band, display limits and timestep, checked against the hosted store |
+
+| `preview STORE` | Serves a local store on `127.0.0.1` and opens it in the viewer. Ctrl-C stops it |
 | `doctor TARGET` | Checks a hosted URL or a local store. See [docs/hosting.md](docs/hosting.md) |
+| `publish STORE --destination s3://BUCKET/PREFIX` | Uploads a store to S3 or R2, checks the hosted store and prints a viewer link. `--update` publishes appended timesteps to the same prefix and link. Needs the `publish` extra. See [docs/hosting.md](docs/hosting.md#chronozarr-publish) |
 | `export-cog STORE OUT_DIR` | Writes true-value COGs for GDAL and QGIS. Needs the `geo` extra |
 | `stac STORE --out DIR` | Writes a static STAC Collection and Item. Needs the `geo` extra |
 
-Other extras: `notebook` adds `chronozarr.view(store)`, which shows a local store in Jupyter. `netcdf` and `dask` add those inputs.
+Other extras: `notebook` adds `chronozarr.view(store)`, which shows a local store in Jupyter. `netcdf` and `dask` add those inputs. `s3` adds listing of an `s3://` prefix for `convert`.
 
 ## JavaScript
 

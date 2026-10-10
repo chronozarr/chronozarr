@@ -10,6 +10,7 @@ const sources = {
   'docs/hosting.md': 'guides/hosting',
   'docs/append.md': 'guides/append',
   'docs/embedding.md': 'guides/embedding',
+  'docs/private.md': 'guides/private',
   'docs/viewer-distribution.md': 'guides/viewer-distribution',
   'docs/format-comparison.md': 'guides/format-comparison',
   'docs/png-frames.md': 'guides/png-frames',

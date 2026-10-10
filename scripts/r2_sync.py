@@ -61,7 +61,7 @@ def local_objects(prefix: str) -> dict[str, Path]:
 
 def client(endpoint: str):
     try:
-        import boto3  # ty: ignore[unresolved-import]  # optional: supplied by `uv run --with boto3`
+        import boto3  # optional: `uv run --with boto3`, or the `s3` extra
     except ImportError:
         sys.exit("boto3 is missing: run with `uv run --with boto3 python scripts/r2_sync.py ...`")
     key_id = os.environ.get("R2_ACCESS_KEY_ID")

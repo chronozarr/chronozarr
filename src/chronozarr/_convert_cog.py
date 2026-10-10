@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import math
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, ParamSpec, TypeVar
+from typing import Any, NoReturn, ParamSpec, TypeVar
 
 import numpy as np
 
 from chronozarr import schema
 from chronozarr._convert_manifest import Entry
+from chronozarr._convert_preflight import PreflightError, Problem
 from chronozarr._convert_source import (
     Bounds,
     Grid,
@@ -193,7 +194,32 @@ def _read_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader
                 units=tuple(src.units[i - 1] or None for i in indexes),
             )
     except (rasterio.errors.RasterioIOError, ValueError) as exc:
-        raise ValueError(f"cannot open source {uri}: {exc}") from exc
+        raise ValueError(str(exc)) from exc
+
+
+def _open_fix(uri: str, exc: ValueError) -> str | None:
+    """A remedy for a source GDAL could not open; None when the error already says what to do."""
+    from rasterio.errors import RasterioIOError
+
+    if not isinstance(exc.__cause__, RasterioIOError):
+        return None
+    if uri.startswith("s3://"):
+        return (
+            "GDAL reads s3:// objects with the AWS environment (AWS_ACCESS_KEY_ID and "
+            "AWS_SECRET_ACCESS_KEY or AWS_PROFILE, AWS_REGION; AWS_NO_SIGN_REQUEST=YES for a "
+            "public bucket). Check that the object exists and these credentials can read it, or "
+            "leave the file out"
+        )
+    if "://" in uri:
+        return "check that the URL is reachable and serves byte ranges, or leave the file out"
+    return "check that the file exists and is a readable raster, or leave it out"
+
+
+def _open_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader | Problem:
+    try:
+        return _read_header(uri, crs, bounds)
+    except ValueError as exc:
+        return Problem(uri, f"cannot open source: {exc}", _open_fix(uri, exc))
 
 
 def _parse_resampling(name: str) -> Any:
@@ -219,22 +245,40 @@ class CogManifestSource(Source):
         nodata: float | int | None | str,
         chunk_size: int,
         bounds: Bounds | None = None,
+        undated: Sequence[str] = (),
+        prior_problems: Sequence[Problem] = (),
     ) -> None:
+        """Open every source's header and check the set is one series.
+
+        Every incompatibility is collected, per file, and raised together as a `PreflightError`
+        (with `prior_problems`, found before this point). `undated` are files that could not be
+        given a time: they are checked like the rest but are not timesteps.
+        """
         self.entries = entries
         self.times = [e.time for e in entries]
         self.resampling = resampling
         self.chunk_size = chunk_size
-        workers = min(8, len(entries))
+        uris = [*(e.uri for e in entries), *undated]
+        workers = min(8, len(uris))
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            headers = list(pool.map(lambda e: _read_header(e.uri, target_crs, bounds), entries))
-        first = headers[0]
+            opened = list(pool.map(lambda uri: _open_header(uri, target_crs, bounds), uris))
+        problems = [*prior_problems, *(r for r in opened if isinstance(r, Problem))]
+        good = [(u, h) for u, h in zip(uris, opened, strict=True) if isinstance(h, _CogHeader)]
+        if not good:
+            self._raise(problems, uris)
+        first_uri, first = good[0]
+        if bounds is not None:
+            problems += self._size_problems(good)
+        self.grid = self._target_grid(first, target_crs, target_transform, target_shape)
+        problems += self._consistency_problems(good, band_names is None)
+        if resampling is None:
+            problems += self._grid_problems(good, first_uri)
+        if problems:
+            self._raise(problems, uris)
+        headers = [h for _, h in good]
+        self._headers = headers
         if all(h.driver == "PNG" for h in headers):
             self.kind = "manifest of PNG frames"
-        if bounds is not None:
-            self._check_same_size(headers)
-        self.grid = self._target_grid(first, target_crs, target_transform, target_shape)
-        self._check_consistent(headers, compare_labels=band_names is None)
-        self._headers = headers
         if band_names is None:
             # a description names the band; else a colour band is named by its colour and says so
             labels = [
@@ -256,8 +300,6 @@ class CogManifestSource(Source):
             i for i, h in enumerate(headers) if not _same_grid(h.grid, self.grid)
         )
         if self.warped:
-            if resampling is None:
-                self._explain_mismatch(headers)
             assert resampling is not None
             _parse_resampling(resampling)
         explicit = []
@@ -272,6 +314,7 @@ class CogManifestSource(Source):
             explicit=explicit,
             footprint=bool(self.warped),
         )
+        self.notes = self._nodata_notes(good) if nodata == "auto" else ()
         self._auto_nodata = nodata == "auto"
         # Values equal to an explicit --nodata are invalid; declared nodata is GDAL's to judge.
         self._sentinels: tuple[float | int, ...] = (
@@ -296,6 +339,12 @@ class CogManifestSource(Source):
             mask=validity.mask,
             validity=validity.why,
         )
+
+    @staticmethod
+    def _raise(problems: list[Problem], uris: list[str]) -> NoReturn:
+        order = {uri: i for i, uri in enumerate(uris)}
+        problems.sort(key=lambda p: order.get(p.uri, len(order)))
+        raise PreflightError(problems, len(uris))
 
     @staticmethod
     def _target_grid(
@@ -332,31 +381,53 @@ class CogManifestSource(Source):
             width,
         )
 
-    def _check_same_size(self, headers: list[_CogHeader]) -> None:
+    @staticmethod
+    def _size_problems(good: list[tuple[str, _CogHeader]]) -> list[Problem]:
         """With `bounds` every frame covers the same extent, so a different size is a different
         pixel size: refuse it rather than guess."""
-        first = headers[0].grid
-        for entry, header in zip(self.entries, headers, strict=True):
-            grid = header.grid
-            if (grid.height, grid.width) != (first.height, first.width):
-                raise ValueError(
-                    f"{entry.uri} is {grid.height} x {grid.width} px; {self.entries[0].uri} is "
-                    f"{first.height} x {first.width} px. With bounds every frame covers the "
-                    "same extent, so all frames must have the same size"
-                )
+        first_uri, first_header = good[0]
+        first = first_header.grid
+        return [
+            Problem(
+                uri,
+                f"is {header.grid.height} x {header.grid.width} px; {first_uri} is "
+                f"{first.height} x {first.width} px. With bounds every frame covers the same "
+                "extent, so all frames must have the same size",
+                "leave out or re-export the frames of another size",
+            )
+            for uri, header in good[1:]
+            if (header.grid.height, header.grid.width) != (first.height, first.width)
+        ]
 
-    def _check_consistent(self, headers: list[_CogHeader], *, compare_labels: bool) -> None:
-        first = headers[0]
-        first_uri = self.entries[0].uri
-        for entry, header in zip(self.entries, headers, strict=True):
+    @staticmethod
+    def _consistency_problems(
+        good: list[tuple[str, _CogHeader]], compare_labels: bool
+    ) -> list[Problem]:
+        """What differs from the first source: band count, dtype, scale, offset, units and
+        (unless the manifest names the bands) band descriptions and colours."""
+        first_uri, first = good[0]
+        problems = []
+        for uri, header in good:
             if header.count != first.count:
-                raise ValueError(
-                    f"{entry.uri} has {header.count} bands; {first_uri} has {first.count}"
+                problems.append(
+                    Problem(
+                        uri,
+                        f"has {header.count} bands; {first_uri} has {first.count}",
+                        "select the same bands in every file (for example gdal_translate -b 1 "
+                        "-b 2), or leave this file out",
+                    )
                 )
+                continue
             if header.dtype != first.dtype:
-                raise ValueError(
-                    f"{entry.uri} is {header.dtype}; {first_uri} is {first.dtype}. "
-                    "All sources must share one dtype"
+                problems.append(
+                    Problem(
+                        uri,
+                        f"is {header.dtype}; {first_uri} is {first.dtype}. All sources must "
+                        "share one dtype",
+                        "re-export the odd files in the dtype of the others (gdal_translate "
+                        "-ot) only if their values are on the same scale, or leave them out; "
+                        "chronozarr does not change a dtype for you",
+                    )
                 )
             fields = [
                 ("scales", header.scales, first.scales),
@@ -367,30 +438,67 @@ class CogManifestSource(Source):
                 fields.append(("band descriptions", header.descriptions, first.descriptions))
                 fields.append(("band colours", header.colors, first.colors))
             for what, found, wanted in fields:
-                if found != wanted:
-                    raise ValueError(
-                        f"{entry.uri} has {what} {list(found)}; {first_uri} has {list(wanted)}. "
-                        "A store holds one scale, offset and unit per band for every timestep, "
-                        "so the sources must agree: rescale them to one first"
+                if found == wanted:
+                    continue
+                relabel = what.startswith("band")
+                problems.append(
+                    Problem(
+                        uri,
+                        f"has {what} {list(found)}; {first_uri} has {list(wanted)}. "
+                        "A store holds one value per band for every timestep, so the sources "
+                        "must agree",
+                        "name the bands in a manifest (a bands column or key; --write-manifest "
+                        "writes one to edit), or relabel the odd files"
+                        if relabel
+                        else "if the metadata is wrong, correct it (gdal_edit.py -scale -offset "
+                        "-units); if the values really are on another scale, rescale the odd "
+                        "files to the first one yourself, or leave them out",
                     )
+                )
         if first.dtype.name not in schema.DTYPES:
-            raise ValueError(
-                f"sources are {first.dtype}; chronozarr stores hold {list(schema.DTYPES)}. "
-                "Convert the sources first (for example with gdal_translate -ot)"
+            problems.append(
+                Problem(
+                    first_uri,
+                    f"sources are {first.dtype}; chronozarr stores hold {list(schema.DTYPES)}",
+                    "convert the sources first (for example with gdal_translate -ot)",
+                )
             )
+        return problems
 
-    def _explain_mismatch(self, headers: list[_CogHeader]) -> None:
-        offenders = [
-            (self.entries[i].uri, _grid_difference(headers[i].grid, self.grid))
-            for i in sorted(self.warped)
+    def _grid_problems(self, good: list[tuple[str, _CogHeader]], first_uri: str) -> list[Problem]:
+        """Sources that are not on the target grid, which warping would have to move; chronozarr
+        warps only when asked to."""
+        return [
+            Problem(
+                uri,
+                f"is not on the target grid ({self.grid.describe()}): "
+                f"{_grid_difference(header.grid, self.grid)}",
+                f"pass --resampling {'|'.join(RESAMPLING_METHODS)} to warp it onto the grid of "
+                f"{first_uri}, or choose the grid with --crs/--transform/--shape, or re-export "
+                "the odd files on one grid",
+            )
+            for uri, header in good
+            if not _same_grid(header.grid, self.grid)
         ]
-        shown = "; ".join(f"{uri}: {why}" for uri, why in offenders[:3])
-        more = f" (and {len(offenders) - 3} more)" if len(offenders) > 3 else ""
-        raise ValueError(
-            f"{len(offenders)} of {len(self.entries)} sources are not on the target grid "
-            f"({self.grid.describe()}): {shown}{more}. Pass --resampling "
-            f"{'|'.join(RESAMPLING_METHODS)} to warp them onto it, or choose the grid with "
-            "--crs/--transform/--shape"
+
+    @staticmethod
+    def _nodata_notes(good: list[tuple[str, _CogHeader]]) -> tuple[str, ...]:
+        """One line when the sources declare different nodata, which makes the store use a mask."""
+        if len({token for _, h in good for token in h.nodata}) < 2:
+            return ()
+        groups: dict[tuple[float | int | str | None, ...], list[str]] = {}
+        for uri, header in good:
+            groups.setdefault(header.nodata, []).append(uri)
+        parts = []
+        for tokens, uris in groups.items():
+            label = ", ".join("none" if t is None else str(t) for t in tokens)
+            shown = ", ".join(uris[:3]) + (f", and {len(uris) - 3} more" if len(uris) > 3 else "")
+            parts.append(f"[{label}] in {shown}")
+        return (
+            "nodata:     the files declare different nodata values per band: "
+            + "; ".join(parts)
+            + ". The store gets a mask; pass --nodata N to use one value for all, or --nodata "
+            "none to ignore the declared values",
         )
 
     def fingerprint(self) -> Any:

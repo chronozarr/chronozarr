@@ -200,6 +200,18 @@ An unsharded append uploads only the objects it wrote. The measurement had 63 ob
 
 An append to a live store has not been exercised yet.
 
+### Mixed states during an update
+
+2026-10-09, zarr 3.1.6, a synthetic 50 x 70 pixel store appended from 4 to 6 timesteps, copied to local directories (no host). Each directory mixes objects of the two states, as a reader could see them between two puts of `chronozarr publish --update`.
+
+| Mix | Result |
+|---|---|
+| Root and array metadata at 4 timesteps, `0/time/c/0` at 6 | `zarr.open_group(...)["0/time"][:]` raises `ValueError: cannot reshape array of size 6 into shape (4,)`, with and without consolidated metadata |
+| Same mix | `chronozarr.open_store(...).to_xarray(lod=0)` reads 4 timesteps: it takes `times` from the root |
+| Level 0 `zarr.json` files at 6 timesteps, root at 4 | With consolidated metadata, `0/data` has shape (4, ...). Without it, `0/data` has shape (6, ...) next to 4 root `times`, and reading `0/time` raises `ValueError` |
+
+The update tests in `tests/test_publish_update.py` run against a fake bucket. The update has not run against AWS S3 or R2.
+
 Advice that follows from the numbers:
 
 - Choose a finite `--shard-time` (12 for monthly data) only when object count matters more than the rewrite cost.
@@ -479,3 +491,23 @@ The same mismatch can occur for up to the short lifetime when a CDN holds an old
 - In an unsharded store, that object is the chunk of timestep 0. It is immutable for good.
 - In a sharded store, it is time shard 0. It is immutable once a second time shard exists.
 - While a sharded store has one time shard, that object is the trailing shard with `max-age=300`. Doctor warns on a versioned prefix. The warning is expected then.
+
+## Local preview and remote notebooks
+
+Checked on 2026-10-09 on macOS with Python 3.11 and a synthetic store of 6 timesteps, 2 bands and 200 by 220 pixels.
+
+### Self-hosted viewer
+
+`chronozarr preview STORE --viewer-dir DIR` served a viewer folder written by `chronozarr-viewer`. The viewer opened at `http://127.0.0.1:<port>/_viewer/demo/index.html`, read the store from the same server and painted the first timestep.
+
+### Proxy route
+
+A stand-in for `jupyter-server-proxy` removed the prefix `/user/ada/proxy/<port>` and answered 403 without a login cookie. With the cookie, the viewer opened at `/user/ada/proxy/<port>/_viewer/demo/index.html?store=/user/ada/proxy/<port>/store`. It made 103 store requests through the proxy and painted the first timestep. The notebook player (`player.js`) also reached `ready` with the two paths on the proxy origin. This was not run on a live JupyterHub or with the real `jupyter-server-proxy`.
+
+### Port in use
+
+With `--port` set, `chronozarr preview` fails when anything listens on the port. A `python -m http.server --bind 0.0.0.0` process on the port gave the error "port 8795 on 127.0.0.1 is already in use". A plain bind on `127.0.0.1` next to a listener on `0.0.0.0` succeeds on macOS when `SO_REUSEADDR` is set, so the server also connects to the port before it binds.
+
+### Interrupt
+
+A SIGINT stopped the command with exit status 0 after it printed "stopped". The same port was free for a new bind afterwards.

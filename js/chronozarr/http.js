@@ -2,6 +2,8 @@
 // accounting the decoder needs. A request holds a concurrency slot only while it is on the wire: the wait
 // between retries happens outside the limiter, so a failing shard never occupies slots.
 
+import { redactUrl } from './redact.js';
+
 export const abortError = () => new DOMException('Aborted', 'AbortError');
 export const isAbort = (error) => error?.name === 'AbortError';
 
@@ -9,7 +11,7 @@ export const isAbort = (error) => error?.name === 'AbortError';
 export class FetchError extends Error {
   constructor({ url, method, range, status, statusText, cause, attempts }) {
     const what = status ? `HTTP ${status}${statusText ? ` ${statusText}` : ''}` : `${cause.name}: ${cause.message}`;
-    super(`${method} ${url}${range ? ` [${range}]` : ''}: ${what} (${attempts} attempt${attempts === 1 ? '' : 's'})`);
+    super(`${method} ${redactUrl(url)}${range ? ` [${range}]` : ''}: ${what} (${attempts} attempt${attempts === 1 ? '' : 's'})`);
     this.name = 'FetchError';
     Object.assign(this, { url, method, range, status, attempts, cause });
   }
@@ -113,7 +115,7 @@ export class HttpStore {
       const { status, statusText, cause } = outcome;
       const retryable = status === undefined || status >= 500 || status === 429;
       const delayMs = retryable && attempt <= this.#delays.length ? this.#delays[attempt - 1] * (0.7 + 0.6 * Math.random()) : null;
-      const details = { url: request.url, method, range, status, error: `${cause.name}: ${cause.message}`, attempt, of: this.#delays.length + 1, retryInMs: delayMs === null ? null : Math.round(delayMs) };
+      const details = { url: redactUrl(request.url), method, range, status, error: `${cause.name}: ${cause.message}`, attempt, of: this.#delays.length + 1, retryInMs: delayMs === null ? null : Math.round(delayMs) };
       if (delayMs === null) {
         console.error('chronozarr: request failed, giving up', details);
         throw new FetchError({ url: request.url, method, range, status, statusText, cause, attempts: attempt });

@@ -8,7 +8,8 @@ export default defineConfig({
   topNav: [
     { text: 'Docs', link: '/getting-started' },
     { text: 'Specification', link: '/specification' },
-    { text: 'Demo', link: '/demo/' },
+    // Absolute so Vocs does not route it client-side: /demo/ is a static page, not a Vocs route.
+    { text: 'Demo', link: 'https://chronozarr.org/demo/' },
   ],
   socials: [{ icon: 'github', link: 'https://github.com/chronozarr/chronozarr' }],
   sidebar: [
@@ -21,6 +22,7 @@ export default defineConfig({
       { text: 'Hosting recipes', link: '/guides/hosting' },
       { text: 'Append timesteps', link: '/guides/append' },
       { text: 'Embed the viewer', link: '/guides/embedding' },
+      { text: 'Private stores', link: '/guides/private' },
       { text: 'Self-host the packaged viewer', link: '/guides/viewer-distribution' },
       { text: 'PNG frames', link: '/guides/png-frames' },
     ] },

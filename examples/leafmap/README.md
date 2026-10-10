@@ -19,7 +19,7 @@
 
 The browser must allow module imports from blob URLs and reach the reader at `https://chronozarr.org/maplibre/layer.js`. Set `reader_url=` to use your own copy. The store URL must send CORS headers.
 
-The arguments are `url`, `t`, `product`, `opacity`, `fit_bounds` and `name`. Each added layer needs a unique `name`. A local store path works as `url`, and the helper serves it with a local CORS and byte-range server. To start that server yourself, use `from chronozarr.view import serve_store`. A remote kernel needs a store URL that the browser can reach. To try the rendered PNG frames, pass `"https://data.chronozarr.org/ucayali_santa_maria/png-v03"` as `url` on a new map.
+The arguments are `url`, `t`, `product`, `opacity`, `fit_bounds` and `name`. Each added layer needs a unique `name`. A local store path works as `url`, and the helper serves it with a local CORS and byte-range server. To start that server yourself, use `from chronozarr.view import serve_store`. A remote kernel needs a store URL that the browser can reach. Pass the absolute `http(s)` address of the local server as `base_url`, for example one that a proxy or an SSH forward gives. See [Remote notebooks](../../docs/python.md#remote-notebooks). To try the rendered PNG frames, pass `"https://data.chronozarr.org/ucayali_santa_maria/png-v03"` as `url` on a new map.
 
 The two sidebar arguments turn off the floating sidebar of leafmap. leafmap 0.63.1 builds that sidebar with `ipyvuetify.ExpansionPanelHeader`, which ipyvuetify 3 removed. To use the sidebar, install `ipyvuetify<3` and `ipyvue<3`. Versions 1.11.3 and 1.12.0 were checked with leafmap 0.63.1 on 2026-10-02.
 

@@ -10,6 +10,8 @@ import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js
 import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrubLevel, planScrubLoads, readyRun, savesData, scrubLevels, scrubNeed, stepsAhead } from './scrub.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
+import { bindOpenStoreForm, checkUniformChunks, explainOpenError } from './open-store.js';
+import { redactText, redactUrl } from '../chronozarr/redact.js';
 import { toggleExportPanel } from './export.js';
 import { FrameMonitor, formatBytes, formatMs, formatRate, hitRate, readStats } from './perf.js';
 import { Renderer } from './renderer.js';
@@ -227,7 +229,8 @@ class Viewer {
    * `coarseAfterMetadataMs`) and to the first complete frame at the target level (`firstPaintMs`).
    * @param {string} url
    * @param {{lod?:number, fetch?:typeof fetch, maxCacheBytes?:number, workers?:number, camera?:{cx:number,cy:number,scale:number},
-   *   viewSearch?:string}} [options]  `viewSearch`: a query string whose t, p, b, z, c parameters restore the view (see permalink.js)
+   *   viewSearch?:string, store?:object}} [options]  `viewSearch`: a query string whose t, p, b, z, c parameters restore the view (see permalink.js).
+   *   `store`: a store the caller has opened and checked (open-store.js); it is used as is, with no second read.
    */
   async loadStore(url, options = {}) {
     this.#playback?.pause();
@@ -238,12 +241,13 @@ class Viewer {
     this.#hideError();
     this.#setProgress(0.02);
     const started = performance.now();
-    let store;
+    let store = options.store ?? null;
     try {
-      store = await openStore(url, { fetch: options.fetch, maxCacheBytes: options.maxCacheBytes, workers: options.workers });
-      this.#checkUniformChunks(store);
+      store ??= await openStore(url, { fetch: options.fetch, maxCacheBytes: options.maxCacheBytes, workers: options.workers });
+      checkUniformChunks(store);
     } catch (error) {
-      this.#showError('Could not open store', error.message, { code: 'store_open_failed' });
+      const failure = await explainOpenError(error, { url });
+      if (generation === this.#storeGeneration) this.#showError('Could not open store', failure.text, { code: 'store_open_failed' });
       this.#setProgress(0);
       throw error;
     }
@@ -286,6 +290,7 @@ class Viewer {
     if (view.t !== undefined) this.t = view.t;
     if (view.productId !== undefined) this.productIndex = this.products.findIndex((p) => p.id === view.productId);
     if (view.bandName !== undefined) this.bandChoice = bandNames.indexOf(view.bandName);
+    if (view.range !== undefined && this.#usesLinearRange()) this.#linear = { range: view.range, manual: true };
     if (options.camera) this.camera = { ...options.camera };
     else if (view.zoom !== undefined || view.center !== undefined) this.#restoreCamera(view);
     else this.fit();
@@ -470,9 +475,9 @@ class Viewer {
     }
   }
 
-  /** `store=<url>` when the store is not from the catalog, else nothing. */
+  /** `store=<url>` when the store is not from the catalog, else nothing. Without a login or signed query: the address bar is history. */
   #storeQuery() {
-    return this.pinnedStore ? `store=${encodeURIComponent(this.pinnedStore)}` : '';
+    return this.pinnedStore ? `store=${encodeURIComponent(redactUrl(this.pinnedStore))}` : '';
   }
 
   /** The query of the view as it is now: the store when it is not from the catalog, then whatever differs from the default view. */
@@ -487,6 +492,7 @@ class Viewer {
         t: this.t === 0 ? null : this.t,
         productId: this.productIndex === this.products.findIndex((p) => p.available) ? null : product.id,
         bandName: product.id === 'band' && this.bandChoice !== 0 ? this.bands[this.bandChoice].name : null,
+        range: this.#usesLinearRange() ? this.stretchRange : null,
         zoom: atFit ? null : scale / (window.devicePixelRatio || 1),
         center: atFit ? null : { col: cx, row: cy },
       },
@@ -1040,15 +1046,6 @@ class Viewer {
     this.#prefetchAbort = null;
   }
 
-  #checkUniformChunks(store) {
-    const first = store.levels[0];
-    for (const level of store.levels) {
-      if (level.chunkWidth !== first.chunkWidth || level.chunkHeight !== first.chunkHeight) {
-        throw new Error(`level ${level.lod} chunk size ${level.chunkWidth}x${level.chunkHeight} differs from level 0 (${first.chunkWidth}x${first.chunkHeight})`);
-      }
-    }
-  }
-
   #configurePool() {
     const { store, renderer } = this;
     const first = store.levels[0];
@@ -1385,6 +1382,7 @@ class Viewer {
     this.#linear = { range: [lo, hi], manual: true };
     this.#dirty = true;
     this.requestRender();
+    this.#scheduleUrlSync();
   }
 
   /** Back to the range measured from the data on screen. */
@@ -1392,6 +1390,7 @@ class Viewer {
     this.#linear = { range: null, manual: false };
     this.#dirty = true;
     this.requestRender();
+    this.#scheduleUrlSync();
   }
 
   /** 2nd percentile of tone-mapped true-color samples (physical reflectance), kept fixed while scrubbing. 0 without red, green and blue bands. */
@@ -2244,7 +2243,7 @@ async function main() {
   const select = $('catalog-select');
   const inCatalog = (url) => catalog.some((entry) => entry.url === url);
   const initialSearch = location.search;
-  const open = (url, { fallback = true, viewSearch } = {}) => {
+  const open = (url, { fallback = true, viewSearch, store } = {}) => {
     // A catalog store is not pinned in the URL, so an open tab follows catalog changes on reload;
     // only an external store is shareable via ?store=. The view (t, p, z, c) in the URL is restored
     // when the page first opens; opening another store starts from its default view.
@@ -2254,28 +2253,44 @@ async function main() {
     // An external store earns a dropdown entry only once it has loaded, so a dead URL from an old
     // permalink never lingers as an option.
     const optionFor = (value) => [...select.options].find((option) => option.value === value);
-    window.chronozarr.ready = viewer
-      .loadStore(url, { viewSearch })
+    // Labels and logs carry the address without a login or signed query (redact.js); the option's value is the URL to read.
+    return (window.chronozarr.ready = viewer
+      .loadStore(url, { viewSearch, store })
       .then((result) => {
         if (!inCatalog(url) && catalog.length > 0 && !optionFor(url)) {
-          select.add(new Option(url.replace(/^https?:\/\//, ''), url));
+          select.add(new Option(redactUrl(url).replace(/^https?:\/\//, ''), url));
           select.value = url;
         }
         return result;
       })
       .catch((error) => {
-        console.error(`loadStore(${url}) failed:`, error);
+        console.error(`loadStore(${redactUrl(url)}) failed:`, redactText(error?.message ?? error));
         optionFor(url)?.remove();
         if (fallback && catalog.length > 0 && catalog[0].url !== url) {
           console.warn(`falling back to the catalog store ${catalog[0].url}`);
           open(catalog[0].url, { fallback: false });
         }
-      });
+      }));
   };
+  // "Open store URL": the store is opened and checked before open() lets go of the current one, and the address bar changes only then.
+  const opener = embed.embed
+    ? null
+    : bindOpenStoreForm(
+        { form: $('open-store'), input: $('open-store-url'), status: $('open-store-status'), error: $('open-store-error') },
+        {
+          load: async ({ url, store }) => {
+            // undefined means the open failed after the store was checked; null, that another store took the viewer over.
+            if ((await open(url, { store, fallback: false })) === undefined) throw new Error('the viewer could not show the store');
+          },
+        },
+      );
   if (catalog.length > 0) {
     select.replaceChildren(...catalog.map((entry) => new Option(entry.name, entry.url)));
     select.hidden = false;
-    select.addEventListener('change', () => open(select.value));
+    select.addEventListener('change', () => {
+      opener?.cancel();
+      open(select.value);
+    });
   }
 
   const requested = new URLSearchParams(location.search).get('store');

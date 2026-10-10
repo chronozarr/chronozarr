@@ -48,6 +48,7 @@ All parameters go in the iframe URL. The parameters of the full viewer also work
 | `t` | timestep index | 0 | Initial timestep. |
 | `p` | `true_color`, `false_color`, `ndvi`, `ndwi`, `water` or `band` | the first product that the store's bands allow | Initial product. |
 | `b` | band name | first band | Band of the single-band product (`p=band`). |
+| `r` | `low,high` | measured from the data on screen | Display limits of the single-band product, in physical units (`stored * scale + offset`) with `low` below `high`. The viewer ignores it for another product and for a band it tones as reflectance, an unsigned 8-bit or 16-bit band whose largest physical value is 10 or less. The viewer keeps it in its address bar after you set limits. |
 | `z` | number above 0 | the fitted view | Initial zoom in CSS pixels per full-resolution data pixel. The same ground width then shows in a window of any size. |
 | `c` | `x,y` | the store center | Initial view center in the store's projected coordinates. A store with no georeferencing uses level-0 pixels. |
 
@@ -226,7 +227,7 @@ While the pointer is over the iframe, the map takes the mouse wheel for zoom and
 
 The iframe runs on `chronozarr.org`, in its own origin. It does not inherit your page's login, cookies or headers. Its requests for the store carry no credentials. The store must therefore be readable by anyone who can open the page. It must send `Access-Control-Allow-Origin: *` (or `https://chronozarr.org`). A sharded store also needs byte ranges. The other requirements are in [hosting.md](hosting.md). `chronozarr doctor <store-url>` checks them.
 
-For a private store, the host page can put a prefix-wide signed URL in `store=`. The viewer appends the query string of `store` to every request. The token must therefore authorize every object under the prefix. These work:
+For a private store, read [private.md](private.md) first. The host page can put a prefix-wide signed URL in `store=`. The viewer appends the query string of `store` to every request. The token must therefore authorize every object under the prefix. These work:
 
 - a CloudFront signed URL with a custom policy and a wildcard resource
 - an Azure Blob container or prefix SAS

@@ -16,7 +16,7 @@ from zarr.storage import LocalStore
 from chronozarr import schema
 from chronozarr.schema import Chronozarr, SchemaError, Transform
 from chronozarr.store import HttpStore as HttpStore
-from chronozarr.store import IndexStore
+from chronozarr.store import IndexStore, redact_url
 from chronozarr.store import as_store as as_store
 
 
@@ -328,6 +328,10 @@ def _plane(group: zarr.Group, name: str | None, where: str) -> zarr.Array | None
     return None if name is None else schema.get_array(group, name, where)
 
 
+def _shown(path_or_url: Any) -> str:
+    return redact_url(str(path_or_url))
+
+
 def open_store(path_or_url: Any) -> ChronoStore:
     """Open a chronozarr store from a path, http(s) URL, or zarr Store.
 
@@ -341,7 +345,7 @@ def open_store(path_or_url: Any) -> ChronoStore:
         group = zarr.open_group(IndexStore(transport), mode="r", zarr_format=3)
     except (GroupNotFoundError, FileNotFoundError) as exc:
         raise SchemaError(
-            f"{path_or_url}: no Zarr v3 group found; is this a chronozarr store?"
+            f"{_shown(path_or_url)}: no Zarr v3 group found; is this a chronozarr store?"
         ) from exc
     try:
         return ChronoStore(group, str(path_or_url))
