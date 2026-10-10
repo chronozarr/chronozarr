@@ -2,6 +2,8 @@
 
 The `chronozarr` package writes a store, reads it and opens it in xarray. The [README](../README.md) has a first run. This page lists the functions. The docstring of `chronozarr.encode` lists every option of `encode`.
 
+Want to show your own dated raster series to a colleague today? Follow [Share a store through a tunnel](#share-a-store-through-a-tunnel): convert it, preview it, choose the view, then send a temporary link that opens in their browser.
+
 ## Write a store
 
 ```python
@@ -69,7 +71,7 @@ The server answers byte ranges and CORS. It sends `Cache-Control: no-cache` and 
 
 ### Share a store through a tunnel
 
-This workflow takes a folder of dated GeoTIFFs to a viewer link for a colleague.
+Use this temporary route when you want to show a colleague your own raster series before you set up a bucket. Start with dated GeoTIFFs on one matching north-up grid, convert them, inspect the local viewer, then share it. The recipient opens the copied link in a modern browser; they do not need Python or a chronozarr install.
 
 Install these prerequisites once:
 
@@ -89,7 +91,7 @@ and `YYYY-MM`. Every file must use the same north-up grid, CRS, dimensions, band
 band metadata. A directory is not recursive. Quote a glob, such as `"rasters/**/*.tif"`, to
 include subdirectories. `convert` checks every file before it writes the store.
 
-1. Check the files without writing anything.
+1. Check the dated files without writing a store.
 
    ```sh
    chronozarr convert "rasters/*.tif" my_store --dry-run
@@ -116,16 +118,16 @@ include subdirectories. `convert` checks every file before it writes the store.
    Keep this terminal open while you inspect the map. Press `Ctrl-C` when the local check is
    complete.
 
-5. Start sharing from the laptop.
+5. Start the temporary public link from the same laptop.
 
    ```sh
    chronozarr share my_store
    ```
 
-   Keep this terminal open while your colleague uses the link. The command starts its own local
-   server and quick tunnel, checks the public route, and opens the verified viewer link. New
-   hostnames may take time to become reachable. The command waits up to 90 seconds; that wait
-   does not guarantee that public DNS propagates within 90 seconds.
+   Keep this terminal open and the laptop awake while your colleague uses the link. The command
+   starts its own local server and quick tunnel, checks the public route, and opens the verified
+   viewer link. New hostnames may take time to become reachable. The command waits up to 90
+   seconds; that wait does not guarantee that public DNS propagates within 90 seconds.
 
 6. Choose the view in the browser.
 
@@ -135,15 +137,15 @@ include subdirectories. `convert` checks every file before it writes the store.
 7. Send the copied link to your colleague.
 
    The colleague needs only a modern browser. They do not need Python or a chronozarr install.
-   They can watch, scrub the timeline, zoom, pan and inspect pixels while the command runs.
+   They can watch, scrub the timeline, zoom, pan and inspect pixels while the command runs. Each
+   requested object is streamed from your laptop, using its upload bandwidth.
 
 8. Stop sharing when you finish.
 
    Press `Ctrl-C` in the `chronozarr share` terminal. This stops the tunnel and the local server.
-   Anyone with the link can read the store while the command runs. Each read uses your laptop's
-   upload bandwidth, so more viewers or faster scrubbing increases that cost. The address is
-   temporary and stops working with the command. For a durable or access-controlled route, upload
-   the store instead; see [hosting.md](hosting.md).
+   Anyone with the link can read the store while the command runs. The address is temporary and
+   stops working with the command. For a durable or access-controlled route, upload the store to
+   static hosting instead; see [hosting.md](hosting.md).
 
 `--port`, `--viewer`, `--viewer-dir`, and `--no-open` have the same meanings as for `preview`.
 Use `--no-open` when you want to open the link yourself:

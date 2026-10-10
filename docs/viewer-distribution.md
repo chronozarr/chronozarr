@@ -41,6 +41,8 @@ uv run --with rangehttpserver python -m RangeHTTPServer 8000
 chronozarr preview my_store --viewer-dir published
 ```
 
+To show a local store to a colleague for a short review, use `chronozarr share my_store` instead. It starts a temporary public link through `cloudflared` and uses the hosted viewer by default; keep the terminal and laptop running. Follow the [laptop-sharing walkthrough](python.md#share-a-store-through-a-tunnel). A copied viewer is useful when you need an offline viewer or one served on your own origin.
+
 In a notebook, pass `viewer_dir="published"` to `chronozarr.view` or `chronozarr.player`. The folder needs `demo/index.html`, which the copy command writes. The same server serves the viewer and the store, so there is no CORS or mixed-content step. On JupyterHub the viewer and the store go through `jupyter-server-proxy`. See [python.md](python.md#remote-notebooks).
 
 ## Use a store on another host
