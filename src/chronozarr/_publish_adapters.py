@@ -18,7 +18,7 @@ def _reject_s3_options(
         if value is not None:
             raise PublishError(
                 f"{flag} is an S3 option and does not apply to {scheme}:// destinations. "
-                "Credentials come from the provider's own chain (docs/hosting.md)."
+                "Credentials come from the provider's own chain (docs/publish.md)."
             )
 
 

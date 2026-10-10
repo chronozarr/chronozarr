@@ -181,13 +181,14 @@ class S3Adapter:
                 "Custom Domains) or enable its public r2.dev URL, then pass that address as "
                 "--public-url. CORS on R2 can be set with a token that has bucket admin "
                 "permission: `npx wrangler r2 bucket cors set BUCKET --file deploy/r2-cors.json`. "
-                "docs/hosting.md section 3.2 has the cache rules."
+                "docs/hosting-providers.md (Cloudflare R2) has the cache rules."
             )
         return (
             "The objects are stored but browsers cannot read them from the public URL. A bucket "
             "that blocks public access serves nothing to the web: chronozarr never changes public "
             "access. Either serve the bucket through CloudFront with an origin access control "
-            "(docs/hosting.md section 3.1) and pass the distribution URL as --public-url, or "
+            "(docs/hosting-providers.md, Amazon S3 with CloudFront) and pass the distribution "
+            "URL as --public-url, or "
             "change the bucket's public access block and policy yourself. CORS alone does not "
             "make objects readable."
         )
