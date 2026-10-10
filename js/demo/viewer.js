@@ -502,11 +502,18 @@ class Viewer {
     return [store, view].filter(Boolean).join('&');
   }
 
-  /** A shareable full-viewer URL for the current state. The query is built by #viewQuery(), including its redaction. */
+  /** The copied query always names the store, including the selected catalog entry; the address bar intentionally does not. */
+  #shareQuery() {
+    if (!this.store || this.pinnedStore) return this.#viewQuery();
+    const store = `store=${encodeURIComponent(redactUrl(this.store.url))}`;
+    return [store, this.#viewQuery()].filter(Boolean).join('&');
+  }
+
+  /** A shareable full-viewer URL for the current state. The query uses the normal permalink and redacts its store URL. */
   get shareUrl() {
     if (!this.store) return null;
     const url = new URL(location.href);
-    url.search = this.#viewQuery();
+    url.search = this.#shareQuery();
     url.hash = '';
     return url.href;
   }
