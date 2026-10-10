@@ -8,10 +8,11 @@ controls and Python message queue. Leafmap is optional; importing chronozarr doe
 import json
 import math
 import os
+import urllib.parse
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from chronozarr.view import serve_store
+from chronozarr.view import normalize_base_url, serve_store
 
 DEFAULT_STORE = "https://data.chronozarr.org/ucayali_santa_maria_v03"
 DEFAULT_READER = "https://chronozarr.org/maplibre/layer.js"
@@ -30,12 +31,15 @@ def add_chronozarr(
     fit_bounds=True,
     reader_url=DEFAULT_READER,
     port=0,
+    base_url=None,
 ):
     """Add a layer and browser time slider; return the supplied leafmap map.
 
     Use ``import leafmap.maplibregl as leafmap`` and ``m = leafmap.Map()``.
     Local store paths are served by a local CORS/range server. Hosted URLs must
-    allow CORS. Remote kernels need port forwarding for local stores.
+    allow CORS. Remote kernels need port forwarding for local stores, or ``base_url``: the
+    absolute http(s) URL at which the browser reaches the local server's root (the server
+    listens on 127.0.0.1 only, so a proxy or forward must map that URL to it).
     ``band`` selects the single-band product; ``range`` sets fixed physical limits.
     Reader URL can point to a local no-cache server for development.
     """
@@ -54,8 +58,13 @@ def add_chronozarr(
     ):
         raise ValueError("range must contain two finite increasing limits")
     local = isinstance(url, os.PathLike) or (isinstance(url, str) and not urlsplit(url).scheme)
+    if base_url is not None and not local:
+        raise ValueError("base_url applies to a local store path, not to a URL")
     if local:
-        url = serve_store(os.fspath(url), port=port).url
+        server = serve_store(os.fspath(url), port=port)
+        url = server.url
+        if base_url is not None:
+            url = f"{normalize_base_url(base_url)}/{urllib.parse.quote(server.store.name)}"
     for value in (url, reader_url):
         if urlsplit(value).scheme not in {"http", "https"}:
             raise ValueError("store and reader URLs must use HTTP or HTTPS")

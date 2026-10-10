@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import glob
+import inspect
 import re
 import sys
 import time
@@ -17,8 +18,17 @@ import numpy as np
 import xarray as xr
 
 from chronozarr import schema
+from chronozarr._convert_discover import is_discovery_source
 from chronozarr._convert_source import UndeclaredNaNError
 from chronozarr.append import append, is_store
+from chronozarr.bands import (
+    assign_roles,
+    display_limits_apply,
+    parse_roles,
+    product_status,
+    resolve_roles,
+    set_band_roles,
+)
 from chronozarr.convert import (
     FIDELITY_HELP,
     RESAMPLING_METHODS,
@@ -28,11 +38,13 @@ from chronozarr.convert import (
     convert,
 )
 from chronozarr.decode import open_store
-from chronozarr.doctor import DEFAULT_ORIGIN, diagnose
+from chronozarr.doctor import DEFAULT_ORIGIN, diagnose, is_url
 from chronozarr.encode import EncodeReport, encode
 from chronozarr.export import export_cog, select_times
 from chronozarr.schema import Band, SchemaError, validate
 from chronozarr.stac import write_stac
+from chronozarr.store import redact_url
+from chronozarr.view import VIEWER_URL, preview, preview_command, viewer_url
 
 _DATE_IN_NAME = re.compile(r"(?<!\d)(\d{4})-?(\d{2})(?:-?(\d{2}))?(?!\d)")
 _GLOB_CHARS = "*?["
@@ -127,6 +139,24 @@ def _read_geotiffs(pattern: str, crs: str | None) -> _GeotiffStack:
         mask=None if valid is None else xr.DataArray(valid, dims=schema.PLANE_DIMENSIONS),
         nodata=info.nodata,
         bands=info.bands,
+    )
+
+
+def _refuse_files_for_convert(input: str, out: Path) -> None:
+    """Point a manifest, directory or S3 prefix at `convert`, the entry point for files on disk."""
+    lowered = input.lower()
+    if lowered.endswith((".csv", ".json")):
+        kind = "a manifest"
+    elif lowered.startswith("s3://") or (
+        not any(ch in input for ch in _GLOB_CHARS) and is_discovery_source(input)
+    ):
+        kind = "a directory, S3 prefix or file of GeoTIFFs"
+    else:
+        return
+    raise click.ClickException(
+        f"'{input}' is {kind}, which `chronozarr encode` does not read. Use "
+        f"`chronozarr convert {input} {out}`: it lists, checks and streams the files one "
+        "timestep at a time"
     )
 
 
@@ -226,6 +256,25 @@ def _command_errors() -> Iterator[None]:
         raise click.ClickException("\n".join([str(exc), *notes])) from exc
 
 
+_band_role_option = click.option(
+    "--band-role",
+    "band_roles",
+    multiple=True,
+    metavar="NAME=ROLE",
+    help="Give band NAME the STAC common name ROLE (red, green, blue, nir, ...), so the "
+    "viewer's products find it; 'none' removes one. Repeatable or comma-separated: "
+    "--band-role B04=red,B08=nir. Only unambiguous names are detected without it.",
+)
+
+
+def _band_roles(texts: tuple[str, ...]) -> dict[str, str]:
+    """Parsed `--band-role` values; a malformed one is a usage error."""
+    try:
+        return parse_roles(texts)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--band-role") from exc
+
+
 def _encode_options(command: Any) -> Any:
     """Options shared by `encode` and `convert`; they map one-to-one onto `encode()` keywords."""
     options = [
@@ -316,24 +365,35 @@ def main() -> None:
 @_encode_options
 @click.option("--crs", default=None, help="CRS such as EPSG:32631 (default: from the input).")
 @click.option("--variable", default=None, help="Variable to encode from a Zarr/NetCDF input.")
+@_band_role_option
 def encode_command(
     input: str,
     out: Path,
     crs: str | None,
     variable: str | None,
+    band_roles: tuple[str, ...],
     **options: Any,
 ) -> None:
-    """Encode INPUT into a chronozarr store at OUT.
+    """Encode INPUT into a chronozarr store at OUT, holding the whole stack in memory.
 
     INPUT is a Zarr store or NetCDF file with dims (time, band, y, x), or a quoted glob of
     GeoTIFFs, one per timestep, with the date in the file name.
+
+    For raster files on disk or in S3 use `chronozarr convert` instead: it takes directories,
+    globs, S3 prefixes, manifests, Zarr and NetCDF, reads one timestep at a time and reports
+    every incompatible file before writing.
 
     GeoTIFFs of uint8, uint16, int16 or float32 are read as `convert` reads COGs: band names,
     scale, offset, units, nodata and masks come from the files (see `convert --help`). The files
     must share one grid, and the whole stack is read into memory. To resample or to stream the
     files one timestep at a time, use `convert`.
+
+    Band names are free. Run `chronozarr bands OUT` to see which viewer products the bands
+    allow; --band-role B04=red,B08=nir sets the common names that select them.
     """
+    roles = _band_roles(band_roles)
     file_options: dict[str, Any] = {}
+    _refuse_files_for_convert(input, out)
     if any(ch in input for ch in _GLOB_CHARS):
         with _command_errors():
             stack = _read_geotiffs(input, crs)
@@ -343,8 +403,12 @@ def encode_command(
     else:
         da = _read_xarray(input, variable)
     with _command_errors():
+        if roles:
+            named = file_options.get("bands") or [Band(str(n)) for n in da.coords["band"].values]
+            file_options["bands"] = assign_roles(named, roles)
         report = encode(da, out, crs=crs, **file_options, **_encode_kwargs(options))
     click.echo(_encode_summary(out, report))
+    click.echo(f"preview it: {preview_command(out)}")
 
 
 @main.command("append")
@@ -408,7 +472,7 @@ def info_command(store: str) -> None:
     with _command_errors():
         opened = open_store(store)
     attrs = opened.attrs
-    click.echo(f"store:     {store}")
+    click.echo(f"store:     {redact_url(store)}")
     click.echo(f"version:   chronozarr {attrs.spec_version}")
     click.echo(f"crs:       {attrs.crs}")
     click.echo(f"times:     {len(opened.times)} ({attrs.times[0]} .. {attrs.times[-1]})")
@@ -462,7 +526,7 @@ def doctor_command(target: str, origin: str, full_read_limit_mb: float) -> None:
     """
     checks = diagnose(target, origin=origin, full_read_limit_mb=full_read_limit_mb)
     width = max(len(c.name) for c in checks)
-    click.echo(f"chronozarr doctor {target}")
+    click.echo(f"chronozarr doctor {redact_url(target)}")
     for check in checks:
         click.echo(f"{_STATUS_LABEL[check.status]} {check.name.ljust(width)}  {check.detail}")
         if check.hint and check.status in ("warn", "fail"):
@@ -474,6 +538,59 @@ def doctor_command(target: str, origin: str, full_read_limit_mb: float) -> None:
     )
     if counts["fail"]:
         sys.exit(1)
+
+
+@main.command("preview")
+@click.argument("store", type=click.Path(path_type=Path))
+@click.option(
+    "--port",
+    type=click.IntRange(0, 65535),
+    default=0,
+    help="Port on 127.0.0.1 (default: a free one). An occupied port is an error.",
+)
+@click.option(
+    "--viewer-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Self-hosted viewer folder (output of `chronozarr-viewer`), served by the same server. "
+    "Needs no internet access.",
+)
+@click.option(
+    "--viewer",
+    default=None,
+    help="URL of another viewer deployment (default: https://chronozarr.org/demo/, which needs "
+    "internet access; the store is still read from this machine).",
+)
+@click.option(
+    "--base-url",
+    default=None,
+    help="Absolute http(s) URL at which your browser reaches this server's root, when a proxy "
+    "or port forward maps a different address to it. The server still listens on 127.0.0.1 only.",
+)
+@click.option("--no-open", is_flag=True, help="Print the URL without opening a browser.")
+def preview_command_(
+    store: Path,
+    port: int,
+    viewer_dir: Path | None,
+    viewer: str | None,
+    base_url: str | None,
+    no_open: bool,
+) -> None:
+    """Serve the local store STORE and open it in the viewer. Ctrl-C stops the server.
+
+    The server answers byte ranges with CORS on 127.0.0.1 and nothing else can reach it. The
+    viewer comes from chronozarr.org unless --viewer-dir or --viewer is given.
+    """
+    with _command_errors():
+        preview(
+            store,
+            port=port,
+            viewer=viewer,
+            viewer_dir=viewer_dir,
+            base_url=base_url,
+            open_browser=not no_open,
+            echo=click.echo,
+        )
 
 
 @main.command("export-cog")
@@ -657,7 +774,24 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
 )
 @click.option("--resume", is_flag=True, help="Reuse timesteps staged by an interrupted run.")
 @click.option(
-    "--dry-run", is_flag=True, help="Check the source and print size and time estimates."
+    "--date-pattern",
+    default=None,
+    help="Directory, glob or S3 prefix only: where the date is in each file name, with %Y %m "
+    "%d %H %M %S (for example 'ndvi_%Y%m%d'). Default: YYYYMMDD, YYYY-MM-DD or YYYY-MM, read "
+    "only when a name holds exactly one date.",
+)
+@click.option(
+    "--write-manifest",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Directory, glob or S3 prefix only: write the files and dates found as a manifest "
+    "(.csv or .json) that convert reads back. Refuses to overwrite.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Check every file and print the dates, size and time estimates; writes no store. "
+    "Reports all problems at once, grouped per file, with suggested fixes.",
 )
 @click.option(
     "--read-ahead",
@@ -666,6 +800,7 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     show_default=True,
     help="Timesteps read concurrently while staging; memory is about this many timesteps.",
 )
+@_band_role_option
 def convert_command(
     source: str,
     out: Path,
@@ -682,14 +817,35 @@ def convert_command(
     resume: bool,
     dry_run: bool,
     read_ahead: int,
+    band_roles: tuple[str, ...],
+    date_pattern: str | None,
+    write_manifest: Path | None,
     **options: Any,
 ) -> None:
-    """Convert SOURCE into a chronozarr store at OUT without loading the whole stack.
+    """Convert existing raster files into a chronozarr store at OUT, one timestep at a time.
 
-    SOURCE is a manifest (.csv with columns uri,datetime[,bands] or .json) of COG or PNG frame
-    URIs, a Zarr store (path or URL) or a NetCDF file, the last two with --variable. Each
-    timestep is read, resampled if needed, staged under the work directory and then encoded
-    cell by cell. The size and time estimate is printed first; --dry-run stops there.
+    This is the command for files on disk or in S3. SOURCE is one of:
+
+    \b
+      a directory, quoted glob or s3:// prefix of GeoTIFFs, each dated from its file name
+      a manifest (.csv with columns uri,datetime[,bands] or .json) of COG or PNG frame URIs
+      a Zarr store (path or URL) or a NetCDF file, the last two with --variable
+
+    A directory or S3 prefix is not searched recursively; use a glob such as 'dir/**/*.tif'
+    for subdirectories. S3 prefixes are listed with your AWS credentials and need
+    `pip install 'chronozarr[s3]'`. A date is read from a name only when it holds exactly one
+    (YYYYMMDD, YYYY-MM-DD or YYYY-MM); otherwise the file is reported and --date-pattern or a
+    manifest says where the date is. --write-manifest saves what was found.
+
+    Every file is checked before anything is read in bulk: dates, grid and CRS, bands, dtype,
+    scale, offset, units and nodata. All problems are reported together, per file, with a
+    suggested fix; nothing is resampled or rescaled unless you ask (--resampling). Each timestep
+    is then read, staged under the work directory and encoded cell by cell. The size and time
+    estimate is printed first; --dry-run stops there.
+
+    For a Zarr or NetCDF array that fits in memory, `chronozarr encode` is the shorter route.
+    --band-role NAME=ROLE sets a band's common name, e.g. for a manifest that names its bands
+    (those get none) or sources whose band names the viewer does not know.
     """
     last_report = 0.0
     migration = False
@@ -697,7 +853,7 @@ def convert_command(
     def show_plan(plan: Plan) -> None:
         nonlocal migration
         migration = plan.source.kind == "chronozarr v0.2"
-        for line in plan.lines(read_ahead):
+        for line in plan.lines(read_ahead, list_files=dry_run):
             click.echo(line)
 
     def show_progress(done: int, total: int) -> None:
@@ -721,14 +877,19 @@ def convert_command(
             resampling=resampling,
             nodata=_parse_nodata(nodata),
             mask_var=mask_var,
+            band_roles=_band_roles(band_roles),
             work_dir=work_dir,
             resume=resume,
             dry_run=dry_run,
             read_ahead=read_ahead,
+            date_pattern=date_pattern,
+            write_manifest_to=write_manifest,
             on_plan=show_plan,
             progress=show_progress,
             **_encode_kwargs(options),
         )
+    if write_manifest is not None:
+        click.echo(f"wrote manifest {write_manifest}")
     if report.encode is None:
         click.echo("dry run: nothing was written")
         return
@@ -738,11 +899,314 @@ def convert_command(
             f"verified every value in {len(report.encode.levels)} levels, "
             f"{report.plan.n_time} timesteps; total {report.total_s:.1f} s"
         )
+        click.echo(f"preview it: {preview_command(out)}")
         return
     click.echo(
         f"read {report.n_staged} timesteps ({report.n_reused} reused) in {report.read_s:.1f} s, "
         f"encoded in {report.encode_s:.1f} s, total {report.total_s:.1f} s"
     )
+    click.echo(f"preview it: {preview_command(out)}")
 
 
-convert_command.help = f"{convert_command.help}\n\n{FIDELITY_HELP}"
+convert_command.help = f"{inspect.cleandoc(convert_command.help or '')}\n\n{FIDELITY_HELP}"
+
+
+@main.command("publish")
+@click.argument("store", type=click.Path(path_type=Path))
+@click.option(
+    "--destination",
+    required=True,
+    metavar="s3://BUCKET/PREFIX | gs://BUCKET/PREFIX | az://ACCOUNT/CONTAINER/PREFIX",
+    help="Where to write: a storage location, not a browser URL. Use a fresh PREFIX per version.",
+)
+@click.option(
+    "--public-url",
+    default=None,
+    metavar="HTTPS_URL",
+    help="Address browsers read the store from (custom domain or CDN, ending at the store "
+    "root). Required for R2 and other --endpoint-url hosts; for AWS S3, Google Cloud "
+    "Storage and Azure Blob Storage it defaults to the storage's own HTTPS endpoint.",
+)
+@click.option(
+    "--profile", default=None, help="Named AWS profile for s3:// (default: boto3's own chain)."
+)
+@click.option(
+    "--endpoint-url",
+    default=None,
+    help="S3-compatible endpoint for s3://, e.g. https://<account id>.r2.cloudflarestorage.com "
+    "for R2.",
+)
+@click.option(
+    "--region", default=None, help="Region for s3:// (R2 endpoints use `auto` without this)."
+)
+@click.option(
+    "--dry-run", is_flag=True, help="Print the plan and what is already stored; upload nothing."
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    help="Replace objects whose content differs from the store. Never deletes. Objects are "
+    "cached for a year, so prefer a fresh prefix.",
+)
+@click.option(
+    "--update",
+    is_flag=True,
+    help="The prefix already holds an earlier version of STORE (published, then appended to): "
+    "upload only the new and changed objects, new chunks first and the root zarr.json last, and "
+    "keep the public URL and link. Refuses a prefix that is not an earlier state of STORE, and "
+    "a sharded append that rewrites a trailing shard. Not atomic; rerun to resume.",
+)
+@click.option(
+    "--apply-cors",
+    is_flag=True,
+    help="If the CORS check fails, add the viewer rule after the bucket's existing rules. "
+    "Without this flag the bucket's CORS configuration is only read. Public access is never "
+    "changed.",
+)
+@click.option("--workers", type=click.IntRange(min=1), default=16, show_default=True)
+def publish_command(
+    store: Path,
+    destination: str,
+    public_url: str | None,
+    profile: str | None,
+    endpoint_url: str | None,
+    region: str | None,
+    dry_run: bool,
+    overwrite: bool,
+    update: bool,
+    apply_cors: bool,
+    workers: int,
+) -> None:
+    """Upload STORE to your own static hosting and print a verified viewer link.
+
+    Validates the store, uploads chunks before metadata (root zarr.json last) with cache
+    headers, skips objects that are already stored (so a rerun resumes), runs the `doctor`
+    checks against --public-url and prints a chronozarr.org/demo link only if they pass. The
+    dataset stays on your host; its storage and delivery charges are yours. chronozarr.org
+    serves the viewer, not the data. Credentials come from the provider's own chain (boto3,
+    Google Application Default Credentials, Azure DefaultAzureCredential) and are never printed.
+
+    With --update the prefix already holds an earlier version of STORE: only the objects that
+    `chronozarr append` produced are uploaded, and the link stays the same. See docs/append.md for
+    what readers see while it runs.
+    """
+    from chronozarr._publish_adapters import open_adapter
+    from chronozarr.publish import (
+        PublishError,
+        failures,
+        format_checks,
+        inspect_destination,
+        parse_destination,
+        plan_store,
+        publish,
+    )
+    from chronozarr.publish_update import plan_update, publish_update
+
+    if update and overwrite:
+        raise click.UsageError(
+            "--update and --overwrite exclude each other: --update never replaces a chunk."
+        )
+    try:
+        target = parse_destination(destination)
+        adapter = open_adapter(target, profile=profile, endpoint_url=endpoint_url, region=region)
+        plan = plan_store(store, target, adapter, public_url)
+        if update:
+            update_plan = plan_update(plan, adapter)
+            click.echo(update_plan.summary(adapter))
+            if dry_run:
+                click.echo("dry run: nothing was uploaded")
+                return
+            result = publish_update(
+                update_plan, adapter, apply_cors=apply_cors, workers=workers, log=click.echo
+            )
+        elif dry_run:
+            state = inspect_destination(plan, adapter)
+            click.echo(plan.summary(adapter, state.describe(overwrite)))
+            if state.conflicts and not overwrite:
+                raise click.ClickException(
+                    "dry run: publishing would be refused, see prefix above"
+                )
+            click.echo("dry run: nothing was uploaded")
+            return
+        else:
+            click.echo(plan.summary(adapter))
+            result = publish(
+                plan,
+                adapter,
+                overwrite=overwrite,
+                apply_cors=apply_cors,
+                workers=workers,
+                log=click.echo,
+            )
+    except PublishError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"\nchronozarr doctor {plan.public_url}")
+    click.echo(format_checks(result.checks))
+    for note in result.notes:
+        click.echo(f"\n{note}")
+    if result.link is None:
+        if any(not c.name.startswith("CORS") for c in failures(result.checks)):
+            click.echo(f"\n{adapter.access_help()}")
+        click.echo(
+            "\nnot verified: the objects are stored but the hosted store failed the checks "
+            "above, so no link is printed. Fix the listed items and run the same command again; "
+            "stored objects are skipped.",
+            err=True,
+        )
+        sys.exit(1)
+    opening = (
+        "verified. The viewer link is unchanged; open it (reload a page that is already open):"
+        if update
+        else "verified. Open the store in the viewer:"
+    )
+    click.echo(f"\n{opening}\n\n  {result.link}\n")
+    click.echo(
+        "The dataset stays on your host and its storage and delivery charges are yours; "
+        "chronozarr.org supplies the viewer only."
+    )
+
+
+def _band_rows(bands: tuple[Band, ...]) -> list[tuple[str, ...]]:
+    """Header and one row per band: name, common name, the roles it plays and why, scaling."""
+    plays: dict[str, list[str]] = {band.name: [] for band in bands}
+    for resolution in resolve_roles(bands).values():
+        for name in resolution.bands:
+            plays[name].append(f"{resolution.role} ({resolution.source})")
+    rows = [("name", "common_name", "role", "scale", "offset", "units")]
+    for band in bands:
+        rows.append(
+            (
+                band.name,
+                band.common_name or "-",
+                ", ".join(plays[band.name]) or "-",
+                f"{1.0 if band.scale is None else band.scale:g}",
+                f"{0.0 if band.offset is None else band.offset:g}",
+                band.units or "-",
+            )
+        )
+    return rows
+
+
+def _print_bands(bands: tuple[Band, ...]) -> None:
+    rows = _band_rows(bands)
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+    click.echo("bands:")
+    for row in rows:
+        click.echo(
+            "  "
+            + "  ".join(
+                cell.ljust(width) for cell, width in zip(row, widths, strict=True)
+            ).rstrip()
+        )
+    for resolution in resolve_roles(bands).values():
+        if resolution.ambiguous:
+            names = ", ".join(resolution.bands)
+            click.echo(
+                f"warning: {names} all answer to {resolution.role} (by {resolution.source}); the "
+                f"viewer uses the first. Give {resolution.role} to one with --band-role "
+                "NAME=ROLE and clear or reassign the others",
+                err=True,
+            )
+    click.echo("products:")
+    for status in product_status(bands):
+        detail = "available" if status.available else f"needs {', '.join(status.missing)}"
+        click.echo(f"  {status.name.ljust(12)}  {detail}")
+
+
+@main.command("bands")
+@click.argument("store")
+@_band_role_option
+@click.option("--dry-run", is_flag=True, help="Show the result of --band-role without writing it.")
+def bands_command(store: str, band_roles: tuple[str, ...], dry_run: bool) -> None:
+    """List the bands of STORE, the role each plays, and the viewer products they allow.
+
+    The viewer picks the bands of True color, False color, NDVI, NDWI and Water by role: a
+    band's common_name, else (when it has none) its name if that is red, green, blue or nir,
+    else its Sentinel-2 name (B04, B03, B02, B08). Nothing else is guessed. For other names,
+    --band-role NAME=ROLE sets the common_name in the local STORE, in place: only the root
+    zarr.json (and consolidated metadata) changes, never data, scale, offset or units. A hosted
+    copy needs its root zarr.json uploaded again and any CDN copy purged.
+    """
+    roles = _band_roles(band_roles)
+    with _command_errors():
+        opened = open_store(store)
+        bands = opened.attrs.bands
+        if roles:
+            bands = set_band_roles(store, roles) if not dry_run else assign_roles(bands, roles)
+    click.echo(f"store:     {store}")
+    if roles:
+        click.echo("dry run: nothing was written" if dry_run else "common names written")
+    _print_bands(bands)
+
+
+@main.command("link")
+@click.argument("store_url")
+@click.option("--product", default=None, help="Initial product id (see `chronozarr bands`).")
+@click.option("--band", default=None, help="Band of the single-band product.")
+@click.option(
+    "--range",
+    "limits",
+    default=None,
+    metavar="LOW,HIGH",
+    help="Display limits of the single-band product, in physical units (the band's scale and "
+    "offset applied). Needs --product band.",
+)
+@click.option("--time", "t", type=int, default=None, help="Initial timestep index.")
+@click.option("--viewer", default=VIEWER_URL, show_default=True, help="Viewer URL.")
+def link_command(
+    store_url: str,
+    product: str | None,
+    band: str | None,
+    limits: str | None,
+    t: int | None,
+    viewer: str,
+) -> None:
+    """Print a viewer URL that opens the hosted store STORE_URL at a chosen initial view.
+
+    The product, band, display limits and timestep live in the URL, not in the store, so the
+    store stays readable by every client and anyone with the URL sees the same first view. Each
+    value is checked against the store (read over HTTP), because the viewer silently ignores one
+    the store cannot honor. To set the bands a product uses, see `chronozarr bands`.
+    """
+    if not is_url(store_url):
+        raise click.ClickException(
+            f"{store_url} is not an http(s) URL. A link needs the hosted store; to look at a "
+            "local one, use chronozarr.view() or chronozarr.player() in a notebook"
+        )
+    low_high = _parse_numbers(limits, 2, "--range", float)
+    with _command_errors():
+        opened = open_store(store_url)
+        bands = opened.attrs.bands
+        statuses = {s.id: s for s in product_status(bands)}
+        if product is not None:
+            if product not in statuses:
+                raise click.BadParameter(
+                    f"{product!r} is not a product; products are {', '.join(statuses)}",
+                    param_hint="--product",
+                )
+            if not statuses[product].available:
+                available = ", ".join(i for i, s in statuses.items() if s.available)
+                raise click.BadParameter(
+                    f"{product} needs {', '.join(statuses[product].missing)}, which no band "
+                    f"is; available: {available}. See `chronozarr bands {store_url}`",
+                    param_hint="--product",
+                )
+        if band is not None and band not in opened.bands:
+            raise click.BadParameter(
+                f"{band!r} is not a band; bands are {', '.join(opened.bands)}",
+                param_hint="--band",
+            )
+        if t is not None and not 0 <= t < len(opened.times):
+            raise click.BadParameter(
+                f"{t} is outside 0..{len(opened.times) - 1}", param_hint="--time"
+            )
+        if low_high is not None:
+            chosen = next(b for b in bands if b.name == (band or bands[0].name))
+            if product != "band":
+                raise click.UsageError("--range sets the single-band product: add --product band")
+            if not display_limits_apply(opened.dtype.name, chosen):
+                raise click.UsageError(
+                    f"band {chosen.name} is shown as reflectance with fixed limits, so --range "
+                    "would be ignored; choose a band whose values are not reflectance-like"
+                )
+        click.echo(viewer_url(store_url, viewer, t=t, product=product, band=band, range=low_high))

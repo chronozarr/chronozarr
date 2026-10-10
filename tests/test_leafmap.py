@@ -76,3 +76,23 @@ def test_displayed_map_is_rejected():
     m._rendered = True
     with pytest.raises(ValueError, match="before displaying"):
         add_chronozarr(m)
+
+
+def test_base_url_replaces_the_loopback_address_of_a_local_store(tmp_path):
+    (tmp_path / "zarr.json").write_text("{}")
+    m = Map()
+    try:
+        add_chronozarr(m, tmp_path, base_url="https://forward.example:9000/")
+        assert m.calls[0][1]["options"]["url"] == (f"https://forward.example:9000/{tmp_path.name}")
+    finally:
+        from chronozarr.view import _servers
+
+        for server in list(_servers.values()):
+            server.close()
+
+
+def test_base_url_needs_a_local_store():
+    m = Map()
+    with pytest.raises(ValueError, match="local store"):
+        add_chronozarr(m, "https://example.com/store", base_url="https://forward.example")
+    assert m.calls == []

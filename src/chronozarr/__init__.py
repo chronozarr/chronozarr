@@ -6,7 +6,7 @@ from chronozarr.encode import EncodeReport, encode
 from chronozarr.leafmap import add_chronozarr
 from chronozarr.notebook import player
 from chronozarr.schema import Band, SchemaError, validate
-from chronozarr.view import view
+from chronozarr.view import diagnose_view, view
 
 __all__ = [
     "AppendReport",
@@ -17,6 +17,7 @@ __all__ = [
     "SchemaError",
     "add_chronozarr",
     "append",
+    "diagnose_view",
     "encode",
     "open_store",
     "player",

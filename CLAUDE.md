@@ -11,26 +11,28 @@ Read `.napkin.md` first every session.
 
 ```
 spec/CHRONOZARR.md        normative format spec (v0.3.0)
-src/chronozarr/           Python package; CLI `chronozarr` (commands: append | encode | validate | info | doctor | export-cog | stac | convert)
+src/chronozarr/           Python package; CLI `chronozarr` (commands: append | encode | validate | info | doctor | export-cog | stac | convert | bands | link)
   schema.py               attribute dataclasses, layout helpers, validate()
   encode.py               encode(): pyramid, true values, optional volatility, optional sharding (default off), shard_bytes, mask/coverage
   decode.py               open_store() / ChronoStore: lazy reads, to_xarray(); HttpStore (stdlib HTTP range store)
   backend.py              xarray backend: xr.open_dataset(path_or_url, engine="chronozarr")
-  convert.py              streaming conversion of COG manifests, Zarr variables and NetCDF into a store
+  convert.py              streaming conversion of dated GeoTIFFs (directory, glob, s3:// prefix), COG manifests, Zarr variables and NetCDF into a store;
+                          _convert_discover.py lists and dates the files, _convert_preflight.py collects every incompatibility per file
   stac.py                 static STAC Collection and Item JSON for a store (datacube extension)
+  bands.py                band roles: which bands answer to red, green, blue, nir, the products that follow, `set_band_roles` (CLI `bands`, `--band-role`); mirrors js/shared/products.js
   export.py               export_cog(): true-value Cloud Optimized GeoTIFFs for GDAL and QGIS
   doctor.py               `chronozarr doctor`: CORS, byte range, caching and decode checks against a URL or path
   view.py                 serve_store(), view(): local range server and notebook viewer iframe
   cli.py                  CLI entry point
 js/chronozarr/            DOM-free reader on zarrita (spec 0.3): decoder.js (openStore, getCell, prefetch), metadata.js,
-                          http.js, cache.js, bandwidth.js, limiter.js, pool.js + decode-worker.js, codec.js, shard.js
+                          http.js, cache.js, bandwidth.js, limiter.js, pool.js + decode-worker.js, codec.js, shard.js, redact.js (URLs without login or signed query, for messages)
 js/maplibre/              MapLibre custom layer on the reader: layer.js, mesh.js, projection.js, shader.js, slots.js, view.js; demo.js + index.html
-js/demo/                 viewer: index.html?store=<url>, viewer.js, renderer.js (WebGL2), products.js, playback.js, chart.js, export.js, permalink.js, bench.js
+js/demo/                 viewer: index.html?store=<url>, viewer.js, renderer.js (WebGL2), products.js, playback.js, chart.js, export.js, permalink.js, open-store.js (the "Open store URL" field), bench.js
 js/test/                  node --test suites (fixtures skip if data/spike is absent)
 js/support/               static-server.js (byte ranges), synthetic-store.js, test fixtures
 tests/                    pytest, marker `unit`
 docs/                     user guides: hosting.md (S3 + CloudFront, R2, GCS, Source Cooperative; doctor checklist), append.md,
-                          embedding.md, viewer-distribution.md, png-frames.md, format-comparison.md, python.md (API reference);
+                          embedding.md, private.md, viewer-distribution.md, png-frames.md, format-comparison.md, python.md (API reference);
                           evidence.md holds measurements and dated observations. site/scripts/sync-content.mjs publishes these on chronozarr.org
 deploy/                   README.md (R2 bucket + Worker publishing), r2-cors.json
 scripts/reencode_aoi.py   monthly mosaics in data/mosaics/<aoi> -> chronozarr store

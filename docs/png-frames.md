@@ -70,7 +70,7 @@ Check that the extent you pass is the extent of the rendered image. An exporter 
 
 The viewer picks products by band name. The three color bands enable True color. False color, NDVI, NDWI and Water need a near-infrared band, so they stay off. Single band is available.
 
-A manifest can name the bands in a `bands` column or key. Those names replace `red`, `green` and `blue`, and the bands then have no common names.
+A manifest can name the bands in a `bands` column or key. Those names replace `red`, `green` and `blue`, and the bands then have no common names. Pass `--band-role NAME=red,...` to `convert` to give them (see [Band roles](python.md#band-roles-and-the-first-view)).
 
 ### Alpha
 

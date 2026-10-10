@@ -69,6 +69,20 @@ test('invalid or out-of-range values are ignored, valid ones kept', () => {
   assert.equal(decodeView('t=5&p=nope&z=3', STORE).zoom, 3);
 });
 
+test('display limits round trip as r=low,high, comma kept readable, in physical units', () => {
+  const query = encodeView({ productId: 'band', bandName: 'B04', range: [-0.25, 0.0004] });
+  assert.equal(query, 'p=band&b=B04&r=-0.25,0.0004');
+  assert.deepEqual(decodeView(query, STORE), { productId: 'band', bandName: 'B04', range: [-0.25, 0.0004] });
+  assert.deepEqual(decodeView('r=1e-7,2.5e3', STORE), { range: [1e-7, 2500] }, 'exponent forms, as Python writes them');
+  assert.equal(encodeView({ range: null }), '');
+});
+
+test('malformed display limits are ignored', () => {
+  for (const bad of ['r=5,5', 'r=6,5', 'r=1', 'r=1,2,3', 'r=a,b', 'r=,2', 'r=1,', 'r=1,Infinity', 'r=NaN,2', 'r=']) {
+    assert.deepEqual(decodeView(bad, STORE), {}, bad);
+  }
+});
+
 test('a leading ? and extra parameters (store=) are tolerated', () => {
   assert.deepEqual(decodeView('?store=https%3A%2F%2Fx%2Fs&t=4&p=ndvi', STORE), { t: 4, productId: 'ndvi' });
 });

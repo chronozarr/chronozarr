@@ -4,7 +4,9 @@ A chronozarr store is a directory of static files. A host serves it with no serv
 
 The prefix of a store is its path in the bucket, for example `my_aoi/chronozarr-2`.
 
-This page has a checklist, an upload procedure, recipes for four hosts and a procedure for appending. The requirements come from [spec/CHRONOZARR.md](../spec/CHRONOZARR.md) section 8. Measurements and dates are in [evidence.md](evidence.md).
+The recipes below publish a store that anyone with its URL can read. For data that must stay private, see [private.md](private.md).
+
+This page has a checklist, an upload procedure with a command that runs it, recipes for four hosts and a procedure for appending. The requirements come from [spec/CHRONOZARR.md](../spec/CHRONOZARR.md) section 8. Measurements and dates are in [evidence.md](evidence.md).
 
 ## 1. Checklist
 
@@ -79,7 +81,88 @@ The root `zarr.json` marks that a store exists. Upload in three phases:
 
 A reader that finds the root then finds a complete store.
 
+`chronozarr publish` splits phase 1 in two. It uploads the `time/c/0` and `volatility` chunks after the other chunks, because an append rewrites only those.
+
 Do not request the final URL before phase 3 ends. A CDN caches a `404` for seconds to minutes. A cached `404` on the root `zarr.json` makes a finished store look absent.
+
+### `chronozarr publish`
+
+`chronozarr publish STORE` runs the four phases below against an S3 bucket, an S3-compatible bucket such as Cloudflare R2, a Google Cloud Storage bucket or an Azure Blob Storage container. It then checks the hosted store with `chronozarr doctor` and prints a viewer link. The destination scheme picks the provider:
+
+| Provider | Destination | Extra | SDK | Credentials |
+|---|---|---|---|---|
+| AWS S3, Cloudflare R2 | `s3://BUCKET/PREFIX` | `publish` | boto3 | boto3's chain |
+| Google Cloud Storage | `gs://BUCKET/PREFIX` | `publish-gcs` | google-cloud-storage | Application Default Credentials |
+| Azure Blob Storage | `az://ACCOUNT/CONTAINER/PREFIX` | `publish-azure` | azure-storage-blob, azure-identity | `DefaultAzureCredential`, or `AZURE_STORAGE_CONNECTION_STRING` |
+
+Each provider has its own extra, so you install one SDK only. For example: `uv sync --extra publish-azure` or `pip install 'chronozarr[publish-azure]'`.
+
+```bash
+# AWS S3. The credentials come from boto3's chain: environment, ~/.aws, SSO or an instance role.
+chronozarr publish my_store \
+  --destination s3://my-bucket/aoi/store-v1 \
+  --public-url https://d111111abcdef8.cloudfront.net/aoi/store-v1 \
+  --profile research
+
+# Cloudflare R2. The endpoint is authenticated, so --public-url is required.
+chronozarr publish my_store \
+  --destination s3://my-bucket/aoi/store-v1 \
+  --endpoint-url https://<account id>.r2.cloudflarestorage.com \
+  --public-url https://data.example.com/aoi/store-v1
+
+# Google Cloud Storage. Run `gcloud auth application-default login` once, or set
+# GOOGLE_APPLICATION_CREDENTIALS. Without --public-url the store URL is
+# https://storage.googleapis.com/my-bucket/aoi/store-v1.
+chronozarr publish my_store \
+  --destination gs://my-bucket/aoi/store-v1
+
+# Azure Blob Storage. Run `az login` once, or set the AZURE_CLIENT_ID, AZURE_TENANT_ID and
+# AZURE_CLIENT_SECRET of a service principal. The destination names the storage account, the
+# container and the prefix. Without --public-url the store URL is
+# https://myaccount.blob.core.windows.net/stores/aoi/store-v1.
+chronozarr publish my_store \
+  --destination az://myaccount/stores/aoi/store-v1
+```
+
+`--profile`, `--endpoint-url` and `--region` are S3 options. The command rejects them with a `gs://` or `az://` destination.
+
+Add `--dry-run` to print the plan and what the prefix already holds, with nothing uploaded.
+
+The destination and the public URL are two addresses:
+
+| | Destination | Public URL |
+|---|---|---|
+| Form | `s3://BUCKET/PREFIX`, `gs://BUCKET/PREFIX` or `az://ACCOUNT/CONTAINER/PREFIX` | `https://HOST/PREFIX` |
+| Used by | the upload, with your credentials | browsers and the viewer link |
+| Source | `--destination` | `--public-url`, or without a CDN the HTTPS endpoint of the bucket (AWS S3, Google Cloud Storage, Azure Blob Storage) |
+
+An `s3://` address is rejected as a public URL, and so is a URL with credentials, a query string (a signed URL) or a fragment, because the URL ends up in a link that other people open. For R2 there is no default: the storage endpoint is authenticated, so give the custom domain or the public endpoint of the bucket. For AWS the default `https://BUCKET.s3.REGION.amazonaws.com/PREFIX` serves objects only when the bucket allows public reads. For a private bucket behind CloudFront (section 3.1), pass the distribution URL. For Google Cloud Storage the default is `https://storage.googleapis.com/BUCKET/PREFIX`. It serves objects only when the bucket allows anonymous reads. The command never uses `storage.cloud.google.com`, because that host authenticates with cookies and does not answer CORS. For Azure the default is `https://ACCOUNT.blob.core.windows.net/CONTAINER/PREFIX`. It serves objects only when the storage account allows anonymous access and the container's public access level is Blob.
+
+The Azure destination names the storage account because a container name alone does not say which account to write to. An `https://ACCOUNT.blob.core.windows.net/...` address is not accepted as a destination. Pass it as `--public-url`.
+
+
+What the command does, in order:
+
+1. Validates the store, as `chronozarr validate` does. A store that fails is not uploaded.
+2. Prints the plan: destination, public URL, object count, bytes, the four phases and the cache headers.
+3. Lists the prefix. A prefix that holds only objects identical to the store (same size and MD5) is an interrupted upload and resumes. A prefix that holds any other object is refused. Use a new prefix for every version. A store that you published and then appended to is the exception: use `--update` ([section 7](#publishing-an-append)). `--overwrite` replaces objects whose content differs. It never deletes, and it leaves a one-year cached copy stale for readers that already loaded it.
+4. Uploads in four phases: data chunks, then the time and volatility chunks, then the group and array `zarr.json` files, then the root `zarr.json`. A phase starts after the previous one is fully stored. If an upload fails, the command stops with no root `zarr.json` in the bucket and names the failing key. Running the same command again skips the stored objects, so a retry repeats no work and a finished upload is a no-op. boto3 retries each request up to five times before a failure is reported. The Google client retries transient errors with its default policy, which the command requests explicitly for every upload. The Azure client retries each request up to five times.
+5. Runs the doctor checks against the public URL, with `Origin: https://chronozarr.org`.
+6. Prints `https://chronozarr.org/demo/?store=<URL-encoded public URL>` only when no check failed. Warnings are printed and do not block the link. When a check fails, the objects stay in the bucket, no link is printed and the exit status is 1.
+
+Cache headers follow the table in section 7. Every `zarr.json`, each level's `time/c/0` and the `volatility` chunks get `public, max-age=300`. Every other object gets `public, max-age=31536000, immutable`. The command does not mark the last shard of a sharded store as short-lived. `--update` therefore refuses a sharded append that rewrites a trailing shard (section 7).
+
+CORS and public access:
+
+- The command reads the bucket's CORS rules only when the doctor reports a CORS failure. Without `--apply-cors` it prints the rule the viewer needs and the number of rules that exist, and changes nothing.
+- With `--apply-cors` it writes the existing rules unchanged, in their order, followed by the viewer rule (the rule of `deploy/r2-cors.json`), and runs the checks again. Putting the new rule last means no request that an existing rule answers today changes its answer. If an earlier rule already matches the viewer's requests without the headers it needs, the checks still fail and you merge the rules by hand.
+- Google Cloud Storage keeps CORS on the bucket as a list of rules. The command reads it with `storage.buckets.get` and writes it with `storage.buckets.update`. The viewer rule is the one in section 3.3.
+- Azure keeps CORS on the Blob service of the storage account. One rule list applies to every container in the account. The command keeps the existing rules, appends the viewer rule and writes the whole list. Azure allows five rules, and the command refuses to write a sixth. Reading and writing the list needs the Storage Account Contributor role (Microsoft.Storage/storageAccounts/blobServices/read and write), or an account key in `AZURE_STORAGE_CONNECTION_STRING`.
+- S3 CORS needs `s3:GetBucketCORS` and `s3:PutBucketCORS`. An R2 token with Object Read and Write cannot manage CORS. Use a token with bucket admin permission, or run `npx wrangler r2 bucket cors set` (section 3.2).
+- When a bucket sits behind CloudFront, CORS comes from the response headers policy (section 3.1), and the bucket's CORS rules are not what the checks see.
+- The command never changes a bucket's public access block, bucket policy, IAM bindings, custom domains or cache rules. For Google Cloud Storage that includes `allUsers` grants and public access prevention. For Azure it includes the account's anonymous access setting and the container's public access level. When the objects are stored but the doctor gets 403 or 404, it prints what to change in the provider's console. Setting CORS does not make private objects readable.
+
+The command does not create buckets. The dataset stays in your bucket, and its storage and delivery charges are yours. chronozarr.org serves the viewer and holds no data.
 
 ### The upload script
 
@@ -130,7 +213,7 @@ It sets `Cache-Control` for each object:
 
 ### 3.1 Amazon S3 with CloudFront
 
-Keep the bucket private. CloudFront reads it through an origin access control (OAC). CloudFront gives HTTPS on your own domain and caching. It is also the only way to add `Timing-Allow-Origin` in front of S3.
+Keep the bucket private. CloudFront reads it through an origin access control (OAC). The distribution in this recipe is public: anyone with its URL reads the store ([private.md](private.md)). CloudFront gives HTTPS on your own domain and caching. It is also the only way to add `Timing-Allow-Origin` in front of S3.
 
 1. Create the bucket and block public access.
 
@@ -422,7 +505,7 @@ With `immutable` and a one-year `max-age`, a rewritten object stays stale in bro
 
 ### Local testing
 
-`python -m http.server` ignores `Range`. A sharded store then reads whole shards, and doctor reports a failure. An unsharded store reads fine. For a sharded store, use `chronozarr.view(store)` from a notebook or any static server that supports ranges.
+`python -m http.server` ignores `Range`. A sharded store then reads whole shards, and doctor reports a failure. An unsharded store reads fine. For a sharded store, use `chronozarr preview STORE`, `chronozarr.view(store)` from a notebook, or any static server that supports ranges. To show a local store to someone on another machine without a bucket, see [Share a store through a tunnel](python.md#share-a-store-through-a-tunnel).
 
 ### Shard size
 
@@ -461,7 +544,7 @@ Costs and measurements: [evidence.md](evidence.md#appending) and [append.md](app
    ```bash
    mkdir -p work/aoi-working
    cp -R data/stores/aoi/chronozarr-4 work/aoi-working/chronozarr-4
-   touch work/stamp
+   touch work/stamp                                       # only for scripts/upload_stores.sh
    ```
 
 3. Append to the copy.
@@ -476,13 +559,43 @@ Costs and measurements: [evidence.md](evidence.md#appending) and [append.md](app
    chronozarr validate work/aoi-working/chronozarr-4
    ```
 
-5. Publish only the objects that the append changed. The script uploads shards and chunks first and the root `zarr.json` last.
+5. Publish the append. `chronozarr publish --update` compares the copy with the prefix and uploads only the new and changed objects. It keeps the public URL, so the shared viewer link stays valid.
 
    ```bash
-   STORE=chronozarr-4 ROOT=work scripts/upload_stores.sh --newer-than work/stamp --trailing-ttl 300 aoi-working
+   chronozarr publish work/aoi-working/chronozarr-4 \
+     --destination s3://my-bucket/aoi/chronozarr-4 \
+     --public-url https://data.example.com/aoi/chronozarr-4 \
+     --update --dry-run
    ```
 
-The script reads `$ROOT/<aoi>/$STORE`. The working copy must sit at `work/<aoi>/chronozarr-4`.
+   Run it again without `--dry-run` to upload.
+
+### Publishing an append
+
+`--update` accepts the destination, `--public-url`, `--profile`, `--endpoint-url`, `--region`, `--apply-cors`, `--workers` and `--dry-run` of a first publish. It rejects `--overwrite`. AWS S3, R2, GCS and Azure support updates. Each adapter can read the hosted root back.
+
+Dry run prints the hosted and local number of timesteps, the objects per phase and the cache headers, and writes nothing. A plain `chronozarr publish` still refuses a prefix that holds other objects and mentions `--update`.
+
+What `--update` writes, in order:
+
+| Phase | Objects | Cache-Control |
+|---|---|---|
+| 1 | New data chunks of the new timesteps | `public, max-age=31536000, immutable` |
+| 2 | `time/c/0` of each level, `volatility` chunks | `public, max-age=300` |
+| 3 | Level and array `zarr.json` | `public, max-age=300` |
+| 4 | Root `zarr.json` | `public, max-age=300` |
+
+The command refuses a prefix that is not an earlier state of the local store, and a sharded append that rewrites a trailing shard. It deletes nothing. The update is not atomic. [append.md](append.md#publishing) lists what a reader sees between two puts, how a cache that holds the old root behaves and how to resume.
+
+After the upload the command runs `chronozarr doctor` against the public URL and then reads the public root `zarr.json` with `Cache-Control: no-cache`. It prints the link only when the root lists the new number of timesteps. A CDN can still serve the old root for up to 300 seconds. The command then exits with status 1 and no link. The objects are stored, and the same command run later only checks.
+
+For a host without an adapter, use `scripts/upload_stores.sh`. It uploads the files that changed since a stamp file, with the same order and headers.
+
+```bash
+STORE=chronozarr-4 ROOT=work scripts/upload_stores.sh --newer-than work/stamp --trailing-ttl 300 aoi-working
+```
+
+The script reads `$ROOT/<aoi>/$STORE`. The working copy must sit at `work/<aoi>/chronozarr-4`. Create `work/stamp` with `touch` before the append.
 
 ### Cache classes
 
@@ -498,6 +611,8 @@ Only these objects change in place. They need a short lifetime.
 | every other shard | no append rewrites it | `public, max-age=31536000, immutable` |
 | every chunk of an unsharded store | new timesteps are new keys | `public, max-age=31536000, immutable` |
 
+`chronozarr publish --update` does not rewrite the trailing-shard row. It refuses a sharded append that changes one (see [append.md](append.md#publishing)).
+
 The trailing shard of a cell is the shard that holds its last timestep. When the next shard opens, the old shard becomes immutable. It keeps `max-age=300`, because `--newer-than` does not touch it. To fix that, upload those shards once without `--newer-than`. A run without `--newer-than` sets the header of every object from the current state of the whole store.
 
 ### Cloudflare
@@ -506,7 +621,7 @@ The Cache Rule in section 3.2 follows the headers in the table above, so an appe
 
 ### Open viewers
 
-A viewer keeps the root `zarr.json` it loaded until the page reloads. It shows the old timesteps until then. Reload the page to see the new timesteps.
+A viewer keeps the root `zarr.json` it loaded until the page reloads. It shows the old timesteps until then. Reload the page to see the new timesteps. The shared link does not change.
 
 A stale viewer of a sharded store can fail to read a shard index. Reloading fixes it. An unsharded store has no shard index, so it has no such failure. Details: [evidence.md](evidence.md#open-viewers-after-an-append).
 
