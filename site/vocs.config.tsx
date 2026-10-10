@@ -20,7 +20,9 @@ export default defineConfig({
   title: 'chronozarr',
   description: 'chronozarr turns a raster time series into static files that you can put in a storage bucket.',
   iconUrl: '/favicon.svg',
-  head: (
+  // A function, not a bare element: Vocs 1.4.1 reads a bare element as a path-to-element map
+  // (`typeof === 'object'`), finds no key matching the URL, and renders nothing.
+  head: () => (
     <>
       <link rel="preconnect" href="https://fonts.googleapis.com" />
       <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />

@@ -31,6 +31,8 @@ For a sharded store that will grow, choose a finite `--shard-time` only when the
 
 In Python package 0.4.0, `chronozarr publish --update` puts an appended store on the prefix that already serves it. The public URL and every shared viewer link stay the same; the store format remains v0.3.
 
+`chronozarr share` is for a temporary laptop-hosted review and stops when its command stops. Use `publish --update` when a growing store needs a durable URL.
+
 ```bash
 chronozarr publish my_store \
   --destination s3://my-bucket/aoi/store-v1 \

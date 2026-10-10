@@ -42,7 +42,7 @@ python -m pip install --upgrade "chronozarr[geo]==0.4.0"
 
 The input files must have one date in each name. Accepted forms include `YYYYMMDD`, `YYYY-MM-DD` and `YYYY-MM`. Every file must use the same north-up grid, CRS, dimensions, bands, dtype and band metadata. A directory is not searched recursively. Quote a glob, such as `"rasters/**/*.tif"`, to include subdirectories. `convert` checks every file before it writes the store.
 
-1. Check the files without writing anything.
+1. Check the dated files without writing a store.
 
    ```sh
    chronozarr convert "rasters/*.tif" my_store --dry-run
@@ -72,7 +72,7 @@ The input files must have one date in each name. Accepted forms include `YYYYMMD
    chronozarr share my_store
    ```
 
-   Keep this terminal open while your colleague uses the link. A new hostname can take time to become reachable. The command waits up to 90 seconds, and that wait does not guarantee that public DNS propagates in time.
+   Keep this terminal open and the laptop awake while your colleague uses the link. A new hostname can take time to become reachable. The command waits up to 90 seconds, and that wait does not guarantee that public DNS propagates in time.
 
 6. Choose the view in the browser.
 
@@ -80,7 +80,7 @@ The input files must have one date in each name. Accepted forms include `YYYYMMD
 
 7. Send the copied link to your colleague.
 
-   They can watch, scrub the timeline, zoom, pan and inspect pixels while the command runs.
+   They can watch, scrub the timeline, zoom, pan and inspect pixels while the command runs. Each requested object is streamed from your laptop, using its upload bandwidth.
 
 8. Stop sharing with `Ctrl-C` in the `chronozarr share` terminal. This stops the tunnel and the local server.
 

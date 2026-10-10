@@ -18,13 +18,20 @@ Four commands take a folder of dated GeoTIFFs to a link.
    python -m pip install --upgrade "chronozarr[geo]==0.4.0"
    ```
 
-2. Convert your rasters. Each file name holds one date: `20240131`, `2024-01-31` or `2024-01`.
+2. Convert your rasters. Use one GeoTIFF per timestep, with one date in each file name: `20240131`, `2024-01-31` or `2024-01`. The files must share a north-up grid, band names, dtype, scale, offset, units and nodata.
+
+   ```text
+   rasters/
+     ndvi_2024-01.tif
+     ndvi_2024-02.tif
+     ndvi_2024-03.tif
+   ```
 
    ```bash
    chronozarr convert "rasters/*.tif" my_store
    ```
 
-3. Explore on your computer.
+3. Explore on your computer. Press Ctrl-C to stop the preview before the next command.
 
    ```bash
    chronozarr preview my_store

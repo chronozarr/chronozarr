@@ -18,6 +18,8 @@ The browser request for the viewer page includes the query string, so `?store=` 
 
 A private bucket behind a public CDN URL is a public store. The [S3 and CloudFront recipe](hosting-providers.md#amazon-s3-with-cloudfront) blocks public access to the bucket and leaves the distribution open. Anyone with the distribution URL can read the store.
 
+`chronozarr share` is also a public route while it runs: the Cloudflare quick-tunnel URL has no login. It is useful for temporary review of data that is safe to expose to anyone holding the link. Do not use it for a private store.
+
 ## 2. Why one presigned URL is not enough
 
 A store is many objects: group and array metadata, plus one object per chunk or shard. The 117-month imagery store has about 5,900 objects when unsharded.
