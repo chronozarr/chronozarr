@@ -581,6 +581,15 @@ Result for the 117 Ucayali months on disk (written 2026-09-29 and 30), checked 2
 
 No month needs to be rebuilt. The per-month report is `bench/s2-ingest/audit-ucayali_santa_maria.json`.
 
+### Lake Mead scene audit
+
+The 127 Lake Mead months on disk were written on 2026-04-19, by the pipeline as it was then. The same audit (2,318 scenes, `bench/s2-ingest/audit-lake_mead.json`) finds every month up to 2023-05 complete. From 2023-06 on, 674 scenes with valid pixels are missing in 34 months:
+
+- In 24 months every scene is missing: 2023-07, 2023-09 to 2023-11, 2024-02, 2024-03, 2024-05, 2024-07 to 2025-02, 2025-04 to 2025-07, 2025-09, 2025-10, 2025-12, 2026-02 and 2026-03. These months are copies of an earlier month, made by carry-forward.
+- In 10 months 1 to 20 scenes are missing: 2023-06 (at least 20 of 24; 2.3 million pixels of shortfall remain unattributed), 2023-08, 2023-12, 2024-01, 2024-04, 2024-06, 2025-03, 2025-08, 2025-11 and 2026-01.
+
+The pattern, intact months followed by failures in calendar order, matches the expired SAS tokens described in the napkin for the first Ucayali run. A second defect predates the audit: the median visible DN of June is 1650, 1602 and 1732 in 2019 to 2021 and 2830 in 2022, so the +1000 offset of processing baseline 04.00 is not removed from 2022 on. Months from 2022-01 on, and the `lake_mead/water-1` water-mask store built from them, need rebuilding; that is a new download of about 50 months and was not done here. The other AOIs have stores but no monthly files on disk; their coverage is a 0/1 flag, which cannot attribute missing scenes.
+
 ### Tried and not kept
 
 - `GDAL_NUM_THREADS` of 2 or more on a partial window: GDAL fetches the needed tiles in one multi-range batch, 22 % fewer bytes (486 against 595 MB, 184 against 386 requests on the 6-scene Yukon month) but 30 to 45 % longer wall time at 8 concurrent reads on the home link. GDAL stays at its default of 1.
@@ -597,4 +606,5 @@ No month needs to be rebuilt. The per-month report is `bench/s2-ingest/audit-uca
 | `reproject(num_threads=...)` on the warp path | the warp path is the slowest workload; GDAL's multithreaded warp splits the output into chunks, so equality with the single-threaded warp must be checked | a few hours with the existing equality test |
 | Several writer threads | the single `.npz` writer caps a fast link at about 75 months per minute at Ucayali size | an hour |
 | Benchmarks on a second machine, a Linux HPC node and a cloud VM | only this laptop has been measured | `bench.py` runs unchanged |
+| Spatial tiling, so a month larger than memory can be composited | Every step after the read is per pixel (mask, offset, median, coverage, carry-forward), so compositing the AOI in strips of rows gives the same values. Native-grid reads of a strip are a subset of the block rectangles already read, so they are exact too. The warp path is the risk: GDAL's approximate transformer interpolates over the destination chunk, so a strip's output can differ from the full warp by up to its 0.125-pixel error threshold; it would need `reproject(..., error_threshold=0)` or a per-strip equality test. Each strip reopens every asset (a HEAD and a header read per asset and strip); strips aligned to the 512-pixel source blocks avoid reading a block twice. A simpler step with the same memory effect is a disk-backed month stack (`np.memmap`), which changes no read | memmap: half a day to a day; row strips with the native path only: 2 to 3 days, plus warp equality tests |
 | Single-band and other band sets | the pipeline reads B02, B03, B04, B08 and SCL only, so the harness has no single-band case | depends on making the band list a parameter |
