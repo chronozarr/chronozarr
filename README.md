@@ -36,11 +36,13 @@ To publish a store, upload it to a static host that sends CORS headers. A sharde
 
 ## Quickstart
 
-Install the package with GeoTIFF support. It needs Python 3.11 or later.
+Install the released Python package with GeoTIFF support. It needs Python 3.11 or later.
 
 ```bash
-pip install "chronozarr[geo]"
+python -m pip install --upgrade "chronozarr[geo]==0.4.0"
 ```
+
+`0.4.0` is the Python package release. It reads and writes the unchanged chronozarr v0.3 store format.
 
 ### Without data
 
@@ -90,9 +92,9 @@ pip install "chronozarr[geo]"
    chronozarr convert "scenes/*.tif" my_store
    ```
 
-   The dry run prints each file with its date, then the grid, bands, validity and size of the store. A directory or `s3://` prefix is not searched recursively; use a glob such as `scenes/**/*.tif` for subdirectories. Listing an S3 prefix needs `pip install "chronozarr[s3]"` and uses your AWS credentials.
+   The dry run runs the same discovery and preflight checks as conversion, then prints each file with its date and the planned grid, bands, validity and size. It writes no store. A directory or `s3://` prefix is not searched recursively; use a glob such as `scenes/**/*.tif` for subdirectories. Listing an S3 prefix needs `pip install "chronozarr[s3]"` and uses your AWS credentials.
 
-   A date is read from a name only when the name holds exactly one. A name with no date, with several (`20240215_2024-03`), or two files with the same date are reported, never guessed. `--date-pattern` says where the date is, for example `--date-pattern "ndvi_%Y%m%d"`, and `--write-manifest found.csv` saves the files and dates as a manifest that `convert` reads back.
+   A date is read from a name only when the name holds exactly one. A name with no date, with several (`20240215_2024-03`), or two files with the same date are reported, never guessed. `--date-pattern` says where the date is, for example `--date-pattern "ndvi_%Y%m%d"`. `--write-manifest found.csv` saves discovered files and dates as a manifest that `convert` reads back; it is the one output allowed with `--dry-run`.
 
    Before it reads any pixels in bulk, `convert` checks every file for its date, grid and CRS, bands, dtype, scale, offset, units and nodata. It reports all problems at once, grouped by file, each with a suggested fix, and writes nothing:
 
@@ -136,7 +138,9 @@ pip install "chronozarr[geo]"
    chronozarr preview my_store
    ```
 
-   The command serves the store on `127.0.0.1`, opens the viewer in your browser and stops on Ctrl-C. See [docs/python.md](docs/python.md#preview-from-the-command-line).
+   The command serves the store on `127.0.0.1`, opens the viewer in your browser and stops on Ctrl-C. The default viewer page is hosted, so it needs internet access; use `--viewer-dir` for an offline self-hosted viewer. See [docs/python.md](docs/python.md#preview-from-the-command-line).
+
+   To show a local store temporarily from your laptop, run `chronozarr share my_store`. It needs `cloudflared`; keep the terminal open while others use the link, choose the view and use `Copy link` to share it. The [sharing walkthrough](docs/python.md#share-a-store-through-a-tunnel) covers its checks and limits.
 
 5. Upload `my_store` to a static host. [docs/hosting.md](docs/hosting.md) has recipes for S3 with CloudFront, Cloudflare R2, Google Cloud Storage and Source Cooperative.
 
@@ -146,10 +150,10 @@ pip install "chronozarr[geo]"
    chronozarr doctor https://your-host/my_store
    ```
 
-7. Open the store in the hosted viewer:
+7. Print a checked viewer link, then open it in your browser:
 
    ```
-   https://chronozarr.org/demo/?store=https://your-host/my_store
+   chronozarr link https://your-host/my_store
    ```
 
 The input must be on an EPSG grid with north up. To write a store from an xarray `DataArray`, call `chronozarr.encode` as in the script above.
@@ -183,7 +187,7 @@ Run `chronozarr <command> --help` for every option.
 | `preview STORE` | Serves a local store on `127.0.0.1` and opens it in the viewer. Ctrl-C stops it |
 | `share STORE` | Starts a disposable Cloudflare quick tunnel for a local store, doctor-checks the public route, and prints a viewer link. Needs `cloudflared`; Ctrl-C stops both processes |
 | `doctor TARGET` | Checks a hosted URL or a local store. See [docs/hosting.md](docs/hosting.md) |
-| `publish STORE --destination s3://BUCKET/PREFIX` | Uploads a store to S3 or R2, checks the hosted store and prints a viewer link. `--update` publishes appended timesteps to the same prefix and link. Needs the `publish` extra. See [docs/hosting.md](docs/hosting.md#chronozarr-publish) |
+| `publish STORE --destination s3://BUCKET/PREFIX` | Uploads a store to S3 or R2; `gs://` and `az://` destinations publish to Google Cloud Storage and Azure Blob Storage. It checks the hosted store and prints a viewer link. `--update` publishes eligible appended timesteps to the same prefix and link. Install the matching `publish` extra. See [docs/hosting.md](docs/hosting.md#chronozarr-publish) |
 | `export-cog STORE OUT_DIR` | Writes true-value COGs for GDAL and QGIS. Needs the `geo` extra |
 | `stac STORE --out DIR` | Writes a static STAC Collection and Item. Needs the `geo` extra |
 
@@ -192,7 +196,7 @@ Other extras: `notebook` adds `chronozarr.view(store)`, which shows a local stor
 ## JavaScript
 
 ```bash
-npm install chronozarr
+npm install chronozarr@0.4.0
 ```
 
 The package has four parts:
@@ -222,7 +226,7 @@ There is no build step and no runtime dependency. Examples are in [js/README.md]
 
 ## Status
 
-The spec is v0.3.0, a draft. Python and npm package release numbers advance separately from the store format. Readers open only v0.3 stores. To use a v0.2 store, convert it:
+The released Python and npm packages are 0.4.0. The spec remains v0.3.0, a draft: package upgrades do not change existing v0.3 stores, and readers open v0.3 stores. To use a v0.2 store, convert it:
 
 ```bash
 chronozarr convert OLD_STORE NEW_STORE

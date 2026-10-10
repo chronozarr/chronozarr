@@ -87,7 +87,7 @@ Do not request the final URL before phase 3 ends. A CDN caches a `404` for secon
 
 ### `chronozarr publish`
 
-`chronozarr publish STORE` runs the four phases below against an S3 bucket, an S3-compatible bucket such as Cloudflare R2, a Google Cloud Storage bucket or an Azure Blob Storage container. It then checks the hosted store with `chronozarr doctor` and prints a viewer link. The destination scheme picks the provider:
+`chronozarr publish STORE` is available in the released Python package 0.4.0. It runs the four phases below against an S3 bucket, an S3-compatible bucket such as Cloudflare R2, a Google Cloud Storage bucket or an Azure Blob Storage container. It then checks the hosted store with `chronozarr doctor` and prints a viewer link. The destination scheme picks the provider:
 
 | Provider | Destination | Extra | SDK | Credentials |
 |---|---|---|---|---|
@@ -95,7 +95,7 @@ Do not request the final URL before phase 3 ends. A CDN caches a `404` for secon
 | Google Cloud Storage | `gs://BUCKET/PREFIX` | `publish-gcs` | google-cloud-storage | Application Default Credentials |
 | Azure Blob Storage | `az://ACCOUNT/CONTAINER/PREFIX` | `publish-azure` | azure-storage-blob, azure-identity | `DefaultAzureCredential`, or `AZURE_STORAGE_CONNECTION_STRING` |
 
-Each provider has its own extra, so you install one SDK only. For example: `uv sync --extra publish-azure` or `pip install 'chronozarr[publish-azure]'`.
+Each provider has its own extra, so you install one SDK only. For example: `uv sync --extra publish-azure` or `pip install 'chronozarr[publish-azure]==0.4.0'`. Package 0.4.0 still writes the v0.3 store format.
 
 ```bash
 # AWS S3. The credentials come from boto3's chain: environment, ~/.aws, SSO or an instance role.

@@ -36,7 +36,7 @@ A token works for a store only if one token is valid for every object under the 
 | 3.2 Viewer and store on one origin behind CDN auth | Holders of the CDN credential | No, self-hosted viewer | Works by design, not tested against a host |
 | 3.3 Prefix-wide token in `store=` | Holders of the link | Yes | Works, with leaks (section 4) |
 | 3.4 Cookies across origins | Holders of the cookie | No | Not supported |
-| Live bucket read on 127.0.0.1 | You | Yes | Not implemented |
+| Authenticated bucket proxy on 127.0.0.1 | You | Yes | Not implemented |
 
 ### 3.1 Local copy served on 127.0.0.1
 
@@ -125,9 +125,9 @@ This code was not run against a real cross-origin host. A custom header such as 
 
 The CORS settings in the [hosting recipes](hosting.md#3-recipes) use `*` and no credentials. They are for public stores. Do not copy them to a private store.
 
-### Not implemented: live bucket read on 127.0.0.1
+### Not implemented: authenticated bucket proxy on 127.0.0.1
 
-No command reads a private bucket with your credentials and serves it on 127.0.0.1. That needs a loopback server that signs each upstream request. The local preview command (issue #47) and remote notebook support (issue #51) are the places for it. Use section 3.1 until then.
+`chronozarr preview` and `chronozarr.view` serve a local store copy. No command reads a private bucket with your credentials and proxies it through 127.0.0.1. That would need a loopback server that signs each upstream request. Use section 3.1 until such a proxy exists.
 
 ## 4. Keeping credentials out of links, notebooks and logs
 

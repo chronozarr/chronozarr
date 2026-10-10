@@ -53,7 +53,7 @@ A plain Zarr reader opens a level without chronozarr and returns the stored valu
 chronozarr preview my_store
 ```
 
-The command serves the store on `127.0.0.1`, prints the address and opens the viewer in your browser. Ctrl-C stops the server. `encode` and `convert` print this command when they finish.
+The command serves the store on `127.0.0.1`, prints the address and opens the viewer in your browser. Ctrl-C stops the server. `encode` and `convert` print this command when they finish. It serves a local directory; it does not use your cloud credentials to proxy an `s3://` or other private bucket.
 
 | Option | Effect |
 |--------|--------|
@@ -78,10 +78,10 @@ Install these prerequisites once:
 - [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
   on your `PATH`. A quick tunnel needs no Cloudflare account or configuration.
 
-Install the Python package with:
+Install or upgrade to the 0.4.0 release with:
 
 ```sh
-python -m pip install "chronozarr[geo]"
+python -m pip install --upgrade "chronozarr[geo]==0.4.0"
 ```
 
 The input files must have one date in each name. Accepted forms include `YYYYMMDD`, `YYYY-MM-DD`
@@ -130,7 +130,7 @@ include subdirectories. `convert` checks every file before it writes the store.
 6. Choose the view in the browser.
 
    Select a product or band, move to a timestep, zoom or pan, and click the map to inspect values.
-   Click `Copy link` to copy the current view. The link does not store playback or loop settings.
+   Click `Copy link` to copy the current store and view: the selected catalog store, timestep, product, band or display limits, zoom and map centre. The link does not store playback or loop settings. It copies a redacted store URL, so a signed query is not carried into the copied link.
 
 7. Send the copied link to your colleague.
 
@@ -226,7 +226,7 @@ chronozarr bands my_store --band-role b4=red,b8=nir --dry-run
 chronozarr bands my_store --band-role b4=red,b8=nir        # write them
 ```
 
-`bands` lists each band with its common name, its role and the rule that gave it, and the products with what each one still needs. `--band-role NAME=ROLE` sets `common_name` on a local store, in place. `ROLE` is a STAC common name, or `none` to remove one. The command changes the root `zarr.json` and its consolidated metadata and nothing else. Data, `scale`, `offset` and `units` stay as they are. It refuses an unknown band, a name outside the vocabulary, and an assignment that leaves two bands with the same role. A hosted copy needs its root `zarr.json` uploaded again, and a cached copy purged.
+`bands` lists each band with its common name, its role and the rule that gave it, and the products with what each one still needs. `--band-role NAME=ROLE` sets `common_name` on a local store, in place. `ROLE` is a STAC common name, or `none` to remove one. The command changes the root `zarr.json` and its consolidated metadata and nothing else. Data, `scale`, `offset` and `units` stay as they are. It refuses an unknown band, a name outside the vocabulary, and an assignment that leaves two bands with the same role. For an immutable published store, assign roles before the first upload. A later role change needs a new prefix, or a deliberate metadata update and cache purge; `publish --update` is only for appended timesteps.
 
 `chronozarr encode` and `chronozarr convert` take `--band-role` too, so a store can carry the roles from the start. In Python, `convert` has `band_roles={"b8": "nir"}` and `encode` takes `Band(..., common_name="nir")` in `bands=`. A manifest that names its bands has no common names unless you give them.
 
