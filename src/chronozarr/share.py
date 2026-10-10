@@ -260,20 +260,25 @@ def share(
     tunnel: _Tunnel | None = None
     stopped_by_user = False
     try:
+        echo("starting local server and quick tunnel...")
         # Binding with port=0 avoids a find-free-port race. Verify the selected port before
         # cloudflared sees it, using the same byte-for-byte root check as explicit preview ports.
         server = local_access(store, port=port, viewer_dir=viewer_dir).server
         server._check_answers()
         tunnel = _start_tunnel(executable, server.port)
+        echo("waiting for Cloudflare to assign a public address...")
         public_root = _tunnel_url(tunnel)
         access = local_access(
             store, port=server.port, base_url=public_root, viewer=viewer, viewer_dir=viewer_dir
         )
+        echo("waiting for public access (allowing up to 90 seconds for DNS readiness)...")
         _wait_for_public_store(access.store_url, (server.store / "zarr.json").read_bytes())
+        echo("checking browser access...")
         checks = diagnose(access.store_url)
         if not _doctor_passes(checks):
             failed = "; ".join(f"{c.name}: {c.detail}" for c in checks if c.status == "fail")
             raise OSError(f"the tunnel did not pass chronozarr doctor: {failed}")
+        echo("measuring first transfer...")
         measurement = _first_chunk_measurement(access.store_url)
         rate = (
             measurement.bytes_read / measurement.seconds if measurement.seconds else float("inf")
