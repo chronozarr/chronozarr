@@ -124,8 +124,8 @@ include subdirectories. `convert` checks every file before it writes the store.
 
    Keep this terminal open while your colleague uses the link. The command starts its own local
    server and quick tunnel, checks the public route, and opens the verified viewer link. A new
-   hostname can take up to 90 seconds to become reachable. The command waits up to 90 seconds;
-   that wait does not guarantee that public DNS propagates within 90 seconds.
+   New hostnames may take time to become reachable. The command waits up to 90 seconds; that wait
+   does not guarantee that public DNS propagates within 90 seconds.
 
 6. Choose the view in the browser.
 
