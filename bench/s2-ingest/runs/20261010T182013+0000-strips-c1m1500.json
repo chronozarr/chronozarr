@@ -1,0 +1,62 @@
+{
+ "tag": "strips-c1m1500",
+ "timestamp": "2026-10-10T18:20:13+00:00",
+ "bench_args": [
+  "--workload",
+  "lab-ucayali-x2",
+  "--config",
+  "baseline",
+  "--lab",
+  "0,0,0",
+  "--rep",
+  "1",
+  "--baseline-ref",
+  "d7c2ce1"
+ ],
+ "workload": "lab-ucayali-x2",
+ "config": "baseline",
+ "rep": 1,
+ "lab": {
+  "latency_ms": 0.0,
+  "bandwidth_mbps": 0.0,
+  "fail_rate": 0.0
+ },
+ "warm": false,
+ "container": {
+  "cpus": "1",
+  "memory": "1500m",
+  "memory_swap": "1500m",
+  "nofile": null,
+  "exit_code": 1,
+  "oom_killed": false,
+  "cgroup": {
+   "memory.peak": "90054656",
+   "memory.max": "1572864000",
+   "memory.events": {
+    "low": "0",
+    "high": "0",
+    "max": "0",
+    "oom": "0",
+    "oom_kill": "0",
+    "oom_group_kill": "0"
+   },
+   "cpu.max": {
+    "100000": "100000"
+   },
+   "cpu.stat": {
+    "usage_usec": "1252775",
+    "user_usec": "1183964",
+    "system_usec": "68811",
+    "nice_usec": "0",
+    "nr_periods": "13",
+    "nr_throttled": "5",
+    "throttled_usec": "2225373",
+    "nr_bursts": "0",
+    "burst_usec": "0"
+   }
+  }
+ },
+ "ok": false,
+ "stderr_tail": "    ~~~~~~~~~^^^^^^\n  File \"/repo/examples/sentinel2_pc/bench.py\", line 861, in cmd_run\n    record = run_once(args)\n  File \"/repo/examples/sentinel2_pc/bench.py\", line 807, in run_once\n    result = execute(measured_dir)\n  File \"/repo/examples/sentinel2_pc/bench.py\", line 780, in execute\n    finish = runner(out_dir)\n  File \"/repo/examples/sentinel2_pc/bench.py\", line 671, in run\n    mosaic.build_monthly_mosaics(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        scenes,\n        ^^^^^^^\n    ...<6 lines>...\n        limiter=limiter,\n        ^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/tmp/bench-baseline-3sb4mj7c/mosaic.py\", line 668, in build_monthly_mosaics\n  File \"/tmp/bench-baseline-3sb4mj7c/mosaic.py\", line 556, in check_memory\nmosaic.MemoryBudgetError: 2024-07 has 20 scenes on a 2759 x 2765 grid and needs about 2.35 GiB, more than the memory budget of 0.71 GiB (50% of 1.4 GiB (cgroup memory limit)). Nothing was downloaded.\n  month buffers (20 scenes x 4 bands): 1.39 GiB\n  process and GDAL cache: 0.56 GiB\n  16 concurrent reads at 0.014 GiB: 0.23 GiB\n  finished months kept for carry-forward and writing: 0.17 GiB\nOptions: if this much memory is free, pass --memory with at least 2.4GB (the default budget is half of the available memory); lower --max-requests; or split the AOI or date range. A month is held in memory whole, so a large AOI with many scenes per month needs it all at once.",
+ "bench_record": null
+}

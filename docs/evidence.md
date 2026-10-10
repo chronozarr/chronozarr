@@ -590,11 +590,62 @@ The 127 Lake Mead months on disk were written on 2026-04-19, by the pipeline as 
 
 The pattern, intact months followed by failures in calendar order, matches the expired SAS tokens described in the napkin for the first Ucayali run. A second defect predates the audit: the +1000 offset of processing baseline 04.00 and later is not removed. The rule goes by processing baseline, not acquisition date, and ESA reprocessed some older acquisitions: 4 scenes of 2019-03 (baseline 05.00) and 4 of 2021-12 (04.00) carry the offset, and every scene from 2022-01 on does. Checked against `BOA_ADD_OFFSET` in 23 product-metadata files and against fresh reads of B04 on a desert target (June 2022: stored median 3882, offset removed 2882, June 2021 2765). `catalog.py` applies the rule correctly today; the months predate that code (2026-09-30). Carry-forward spreads the 2019-03 values into gap pixels of every month to 2021-11 (0.77 % of pixels in 2019-04, falling to 0.01 %). So every month from 2019-03 to 2026-03 (85 months, about 30 to 41 GB to read again) and the `lake_mead/water-1` store built from them need rebuilding; nothing was rebuilt here. The manifest, the evidence and the rebuild procedure are in `bench/s2-ingest/lake-mead-recovery.md` (branch `data/lake-mead-recovery`). The other AOIs have stores but no monthly files on disk; their coverage is a 0/1 flag, which cannot attribute missing scenes.
 
+### Spatial strips
+
+Measured 2026-10-10 on the same laptop, Docker VM and home connection as above. Branch `perf/s2-ingest-tiles`; the comparator ("PR #90") is the pipeline at `d7c2ce1`, run by `bench.py --baseline-ref d7c2ce1` with its own default settings. Records: `bench/s2-ingest/results/strips/` and `bench/s2-ingest/runs/*strips*.json`.
+
+A month whose scene stack does not fit the memory budget is composited in full-width strips of the AOI grid, with heights in multiples of 512 rows; the planner picks the tallest strip that fits. When the whole month fits, it is one strip, the earlier path. Monthly files became tiled GeoTIFFs written strip by strip, so no month is held whole at any point, and the encode step reads them one 512 by 512 cell of every month at a time.
+
+**Exactness.** Every step after the read is per pixel. Native-grid reads of a strip are bit-exact, so every native-grid record (all lab workloads, all strip heights, all Docker limits, 14 Planetary Computer runs) has the same month hashes as PR #90 and the original pipeline. Warps are not chunk-independent in GDAL by default, for three reasons, each checked on a real scene (2834 and 9202 pixels square, EPSG:32718 to 32719):
+
+- GDAL derives the bilinear scale of each warp chunk from the chunk's shape. Strips of 256 rows differed from the whole grid by up to 1049 DN. Pinning `XSCALE`/`YSCALE` to the pixel-size ratio removes this.
+- GDAL's approximate transformer (error up to 0.125 source pixels) interpolates along each destination row over the chunk's width. Column splits changed 4.1 million of 8 million pixels; full-width strips changed none.
+- GDAL splits a warp chunk where the source covers only part of it (`SRC_FILL_RATIO_HEURISTICS`), which is the normal case for a scene from the neighbouring UTM zone, and it splits large grids by memory. On the 9202-pixel grid this made the whole-grid default warp differ from any strip on 0.4 % of pixels.
+
+The pipeline therefore warps each full-width strip in one chunk (`warp_mem_limit` 8192 MB, which is a threshold, not an allocation; heuristics off; scale pinned). Then any strip height gives the whole grid's pixels: the lab warp month has one hash across the whole grid and strips of 512, 1024 and the budget-planned height. The exact transformer (`tolerance=0`) would also allow column splits, but cost 5.5 times the warp CPU (0.32 to 1.75 s per band at Ucayali size), so it is not used, and strips are full-width only. Against PR #90 the warped month differs on 0.18 % of band values (median 1 DN, 99.9th percentile 1 DN); on 0.05 % of pixels the set of valid scenes changes, because the 20 m SCL nearest-neighbour sample moves to the adjacent pixel, and there the median can change by up to 2006 DN (`bench/s2-ingest/warp_compare.py`). Neither output is closer to the exact geometry by construction; the new one does not depend on how the grid is cut. `tests/test_ingest_mosaic.py` bounds the bilinear difference by a quarter of the local source range.
+
+**Memory.** The first strip runs exceeded their budget (1000 MiB budget, 1.35 GB peak RSS): masking and the median worked in fixed row blocks, about 56 MB of temporaries per CPU worker for a 20-scene month 2759 pixels wide, times 15 workers. Both now work in blocks of 2 MiB, and the estimate counts the workers' temporaries and GDAL's 5 MB per-file cache of each read. A cgroup or SLURM limit is now budgeted at 75 % instead of 50 %, since it is memory set aside for the job.
+
+| Run (20-scene lab month unless noted) | Budget | Estimate | Peak RSS | Strips |
+|---|---|---|---|---|
+| macOS, 16 CPUs, `--memory 1500MB` | 1.46 GiB | 1.45 GiB | 1.35 GiB | 3 |
+| macOS, `--memory 2000MB` | 1.95 GiB | 1.81 GiB | 1.62 GiB | 2 |
+| macOS, whole grid | 24.5 GiB | 2.98 GiB | 2.39 GiB | 1 |
+| Docker 2 CPUs, 2 GB | 1.46 GiB | 1.34 GiB | 0.90 GiB (cgroup 1.09) | 3 |
+| Docker 1 CPU, 1.5 GB | 1.06 GiB | 0.98 GiB | 0.72 GiB (cgroup 0.87) | 6 |
+| Docker 2 CPUs, 3 GB (50 % budget) | 1.48 GiB | 1.35 GiB | 0.92 GiB (cgroup 1.10) | 3 |
+| Docker 4 CPUs, 4 GB (50 % budget) | 1.98 GiB | 1.72 GiB | 1.09 GiB (cgroup 1.33) | 2 |
+| Docker 1 CPU, 2 GB, 4 months | 1.46 GiB | 1.31 GiB | 1.17 GiB (cgroup 1.50) | 2 |
+| Docker 2 CPUs, 2 GB, warp month | 1.46 GiB | 1.13 GiB | 0.93 GiB (cgroup 1.08) | 6 |
+
+The estimate was above the process's peak RSS in every run, by 7 to 45 % (scenes without valid pixels never touch their zeroed planes). The cgroup peak also counts the lab server and the page cache. PR #90 refused every one of the Docker cases at its default budget (the month needs 2.35 GiB); with `--memory 2600MB` set by hand it ran the 2 CPU, 3 GB case in 7.8 s at a 2.54 GB cgroup peak, against 7.7 s and 1.10 GB for strips by default. A 1 GB container is refused before any download: a 512-row strip needs 0.98 GiB, mostly the fixed 0.5 GiB allowance for the interpreter and libraries.
+
+**Speed** (lab server on the mirror, median of 3, 2 for shaped links; bytes and requests as served):
+
+| Workload, link | PR #90 | Whole grid | 1024-row strips | 512-row strips | `--memory 1500MB` |
+|---|---|---|---|---|---|
+| 5 km box, 3 months | 0.31 s | 0.30 s | 0.30 s (1 strip) | 0.30 s (1 strip) | 0.29 s (1 strip) |
+| 20 scenes, no shaping | 2.24 s, 3.28 GB, 870 MB | 1.51 s, 2.43 GB, 870 MB | 1.51 s, 2.01 GB, 1030 MB | 1.83 s, 1.81 GB, 1347 MB | 1.75 s, 1.44 GB (3 strips) |
+| 20 scenes, 50 ms | 4.36 s | 3.71 s | 3.59 s | 4.82 s | 4.22 s |
+| 20 scenes, 20 ms, 10 MB/s | 88.3 s | 87.5 s | 103.3 s | 134.8 s | |
+| 20 scenes, 50 ms, 503 above 12 in flight | 22.0 s | 19.1 s | 15.1 s | | |
+| 4 months, no shaping | 5.24 s, 4.04 GB | 2.72 s, 3.90 GB | 2.99 s, 2.16 GB | 3.52 s, 1.37 GB | 4.10 s, 1.51 GB (2 strips) |
+| 4 months, 50 ms | 7.23 s | 6.29 s | 6.30 s | 8.81 s | 8.05 s |
+| warp month, no shaping | 3.53 s, 3.69 GB, 997 MB | 2.96 s, 2.74 GB, 997 MB | 2.89 s, 1.80 GB, 1176 MB | 3.13 s, 1.65 GB, 1516 MB | 3.48 s, 1.21 GB (6 strips) |
+
+The whole-grid path is faster than PR #90 mainly because a zstd GeoTIFF is cheaper to write than a zlib `.npz`, and the bounded temporaries lowered its peak RSS. Strips cost bytes, not results: a source block cut by a strip edge is read once per strip (18 % more bytes at 1024 rows, 55 % at 512). On a capped link the time follows the bytes (10 MB/s: +18 % and +54 %); on an uncapped link 1024-row strips cost nothing measurable. Header requests are not repeated, since GDAL keeps a file's size and header across reopens; a larger GDAL download cache (`CPL_VSIL_CURL_CACHE_SIZE` up to 1 GB) did not avoid re-reading the cut blocks (1348 to 1333 MB). The first strip is on disk well before the month: 46 s instead of 87.5 s at 10 MB/s with 512-row strips. Under the 503 throttle every configuration retried through GDAL (49 to 75 HTTP retries per run) and stayed bit-exact.
+
+**Planetary Computer** (home link, `ucayali-1m`, 10 scenes, 14 runs, interleaved and alternating): PR #90 11.7 to 18.6 s (3 runs), whole grid 11.7 to 28.6 s (5), 1024-row strips 11.1 to 55.2 s (6); 435 MB for the whole grid and 508 to 510 MB in strips. Every output was bit-exact. Three of the six strip runs hit DNS failures ("Could not resolve host: sentinel2l2a01.blob.core.windows.net", 12 to 24 failed reads each); none of the eight others did. The retries recovered every scene, but repeated failures halve the request limit, so those runs averaged about 2.4 concurrent reads and took 44 to 55 s. The three clean strip runs took 11.1, 14.1 and 18.5 s. 640 concurrent lookups through the system resolver all succeeded, so the cause is not established; strips open each asset once per strip, which may make more name lookups than the whole grid.
+
+**Encode.** On the 117 Ucayali months on disk (legacy `.npz`), PR #90's encode stacked all months: 30.5 s and 10.2 GB peak RSS. The lazy reader took 56.6 s and 3.3 GB, of which 29.9 s copied the legacy months to temporary GeoTIFFs one at a time (months written by the new pipeline skip that). The two stores are equal in every value of every level, time step, band and coverage. What remains is chronozarr's own encoder, which holds a cell of every time step per cell in flight (2 MB per time step for 4 bands of 512 by 512 pixels, times 4 cells), so its memory grows with the length of the series, not the AOI.
+
 ### Tried and not kept
 
 - `GDAL_NUM_THREADS` of 2 or more on a partial window: GDAL fetches the needed tiles in one multi-range batch, 22 % fewer bytes (486 against 595 MB, 184 against 386 requests on the 6-scene Yukon month) but 30 to 45 % longer wall time at 8 concurrent reads on the home link. GDAL stays at its default of 1.
 - `CPL_VSIL_CURL_USE_HEAD=NO`: the HEAD becomes a GET, so the request count does not change.
 - Climbing above 16 reads by default: no net gain on the home link (see above).
+- A larger GDAL download cache (`CPL_VSIL_CURL_CACHE_SIZE` 256 MB and 1 GB) so that strips reuse the source blocks their edges cut: 1333 instead of 1348 MB on 512-row strips. Not kept.
+- GDAL's exact transformer (`tolerance=0`) for warps, which would allow windows narrower than the AOI: 5.5 times the warp CPU. Not kept; strips span the full width.
 - An early sweep on the home link (24 asset reads, 4 to 32 workers, 2 repetitions) showed no effect of concurrency, 11 to 18 MB/s. The interleaved runs above, with 3 repetitions per cell over two sessions, consistently favoured 16 over 4.
 
 ### Remaining opportunities
@@ -606,5 +657,4 @@ The pattern, intact months followed by failures in calendar order, matches the e
 | `reproject(num_threads=...)` on the warp path | the warp path is the slowest workload; GDAL's multithreaded warp splits the output into chunks, so equality with the single-threaded warp must be checked | a few hours with the existing equality test |
 | Several writer threads | the single `.npz` writer caps a fast link at about 75 months per minute at Ucayali size | an hour |
 | Benchmarks on a second machine, a Linux HPC node and a cloud VM | only this laptop has been measured | `bench.py` runs unchanged |
-| Spatial tiling, so a month larger than memory can be composited | Every step after the read is per pixel (mask, offset, median, coverage, carry-forward), so compositing the AOI in strips of rows gives the same values. Native-grid reads of a strip are a subset of the block rectangles already read, so they are exact too. The warp path is the risk: GDAL's approximate transformer interpolates over the destination chunk, so a strip's output can differ from the full warp by up to its 0.125-pixel error threshold; it would need `reproject(..., error_threshold=0)` or a per-strip equality test. Each strip reopens every asset (a HEAD and a header read per asset and strip); strips aligned to the 512-pixel source blocks avoid reading a block twice. A simpler step with the same memory effect is a disk-backed month stack (`np.memmap`), which changes no read | memmap: half a day to a day; row strips with the native path only: 2 to 3 days, plus warp equality tests |
 | Single-band and other band sets | the pipeline reads B02, B03, B04, B08 and SCL only, so the harness has no single-band case | depends on making the band list a parameter |

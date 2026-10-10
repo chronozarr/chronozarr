@@ -7,6 +7,7 @@ Evidence for the download pipeline in `examples/sentinel2_pc/` (2026-10-10, one 
 - `runs/`: one JSON per Docker run (limits, exit code, cgroup memory peak).
 - `audit-ucayali_santa_maria.json`, `audit-lake_mead.json`: per-month output of `examples/sentinel2_pc/audit_scenes.py` (no missing scenes in Ucayali; 674 in 34 Lake Mead months, see docs/evidence.md).
 - `make_workload.py`, `make_multimonth.py`: derive the 5 km and 4-month lab workloads from the mirror.
+- `results/strips/`: the spatial-strip runs against PR #90 (`--baseline-ref d7c2ce1`), lab and Planetary Computer; `workloads/lab-ucayali-x2-warp.json` is the 20-scene lab month on EPSG:32719, so every scene is warped. `runs/*strips*.json` are their Docker runs. `warp_compare.py` runs PR #90 and the strip pipeline on that month from the mirror and compares the arrays. See [docs/evidence.md](../../docs/evidence.md#spatial-strips).
 - `Dockerfile`, `constrained.sh` and the helper scripts: rerun the constrained cases.
 
 `bench.py` writes to `data/bench/results/` (not committed); copy the files here to keep them.
