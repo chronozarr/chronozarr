@@ -10,46 +10,37 @@ Run this command from the repository root.
 uv sync --extra geo
 ```
 
-uv picks an installed Python unless you add `--python`, as in `uv sync --python 3.13 --extra geo`. On Python 3.14 the locked codec dependency may need a source build. On 2026-10-02 this recipe ran from a clean checkout with Python 3.13, a fresh environment and newly downloaded observations.
+This checkout uses the released `chronozarr[geo]` 0.4.0 package. For a standalone install, use `uv run python -m pip install --upgrade "chronozarr[geo]==0.4.0"` instead. Python 3.11 or newer is required.
 
-The converter and reader are also on PyPI as `chronozarr[geo]`. The bundle script needs this checkout, because it copies the viewer from `js/`. It needs no npm install and no build. To copy the viewer from the npm package instead, see [self-host the packaged viewer](../../docs/viewer-distribution.md).
+The bundle script below needs this checkout because it copies the viewer from `js/`; it needs no npm install or build. To copy the viewer from the npm package instead, see [self-host the packaged viewer](../../docs/viewer-distribution.md).
 
-## 2. Prepare observations
+## 2. Prepare dated GeoTIFFs
 
-For your own rasters, write `observations.csv` next to your files:
+Put one GeoTIFF per timestep in a directory. Each filename must contain exactly one date, such as `20240131`, `2024-01-31` or `2024-01`:
 
-```csv
-uri,datetime
-january.tif,2024-01-01
-february.tif,2024-02-01
-march.tif,2024-03-01
+```text
+rasters/
+  ndvi_2024-01.tif
+  ndvi_2024-02.tif
+  ndvi_2024-03.tif
 ```
 
-Each row names one raster and its ISO-8601 date. A URI is an HTTP URL or a path relative to the manifest. For a first run, use rasters on the same north-up grid with the same CRS, bands, dtype, scales and offsets. The converter keeps the band descriptions and the scale and offset metadata of the source rasters, so set them there. Band names such as `red`, `green`, `blue` and `nir` let the viewer offer the matching products. A single measured variable also works.
+Use the same north-up grid in every file: CRS, width and height, pixel size and transform, band count and names, dtype, scale, offset, units and nodata metadata. Band names such as `red`, `green`, `blue` and `nir` let the viewer offer matching products. A single measured variable also works.
 
-If your rasters are GeoTIFFs with the date in each file name, you can skip the manifest: `uv run chronozarr convert "rasters/*.tif" /tmp/my-series --dry-run --write-manifest observations.csv` lists the files and dates it found, checks every file, and writes `observations.csv` in the format above. It reads a date only when a name holds exactly one (`20240131`, `2024-01-31` or `2024-01`); `--date-pattern "ndvi_%Y%m%d"` says where the date is otherwise. The same command also takes a directory or an `s3://` prefix (`uv sync --extra s3`). Fix whatever it reports, then use `observations.csv` or the same source in the steps below.
+For another filename pattern, pass `--date-pattern`, for example `--date-pattern "ndvi_%Y%m%d"`. A directory is not searched recursively; use a glob such as `rasters/**/*.tif` for subdirectories.
 
-For a sample, download three Sentinel-2 acquisitions near Lake Mead from May to July 2020. This needs network access but no account and no API key.
-
-```sh
-uv sync --extra geo --extra ingest
-uv run python examples/bring_your_data/fetch_sample.py /tmp/lake-mead-input
-```
-
-The script writes three COGs, `observations.csv` and `source.json` into `/tmp/lake-mead-input`. For each month it picks the acquisition with the lowest scene cloud cover from one tile that covers the whole area. It resamples four bands to one 10 m UTM grid and applies the validity rule of the [Sentinel-2 example](../sentinel2_pc/README.md). It stops if an observation has less than 50% valid pixels. The manifest dates are acquisition dates, and `source.json` lists the scene IDs that your run used. In the steps below, use `/tmp/lake-mead-input/observations.csv` in place of `observations.csv`.
-
-## 3. Convert and validate
+## 3. Convert, validate and preview
 
 1. Print the plan. A dry run writes nothing.
 
    ```sh
-   uv run chronozarr convert observations.csv /tmp/my-series --dry-run
+   uv run chronozarr convert "rasters/*.tif" /tmp/my-series --dry-run
    ```
 
 2. Convert the observations into a new output directory.
 
    ```sh
-   uv run chronozarr convert observations.csv /tmp/my-series
+   uv run chronozarr convert "rasters/*.tif" /tmp/my-series
    ```
 
 3. Validate the store against the spec.
@@ -64,7 +55,13 @@ The script writes three COGs, `observations.csv` and `source.json` into `/tmp/la
    uv run chronozarr doctor /tmp/my-series
    ```
 
-To convert an existing Zarr or NetCDF time series, use its path as the source and add `--variable NAME` where needed. NetCDF input needs `uv sync --extra geo --extra netcdf`. Run `uv run chronozarr convert --help` for the reprojection and resampling options. Resampling changes values, so use it only when you want that. For rendered PNG frames, follow the [PNG georeferencing guide](../../docs/png-frames.md). A PNG holds display colors, and the converter stores them unchanged.
+5. Open the store in the viewer before you upload it.
+
+   ```sh
+   uv run chronozarr preview /tmp/my-series
+   ```
+
+   The preview serves the store on localhost and opens the viewer. To share a temporary view from your laptop, use `uv run chronozarr share /tmp/my-series`; it needs `cloudflared`, and the terminal and laptop must stay running while the recipient uses the link. The requested data is transferred from your laptop to the recipient's browser. In the viewer, choose the intended view and use `Copy link` to share it. The recipient needs only a modern browser.
 
 ## 4. Read a pixel's history
 
@@ -74,7 +71,17 @@ uv run python examples/bring_your_data/read_series.py /tmp/my-series --row 20 --
 
 The script opens the store with the lazy xarray backend and selects one pixel before it reads values. It prints physical values, which are the stored values after scale and offset, with NaN for invalid values. Add `physical=False` to `xr.open_dataset` to get the stored values. Over HTTP, a pixel history transfers one whole chunk per date.
 
-## 5. Check the store against COG sources (optional)
+## 5. Advanced inputs and source checks
+
+To convert an existing Zarr or NetCDF time series, use its path as the source and add `--variable NAME` where needed. NetCDF input needs `uv sync --extra geo --extra netcdf`. For rendered PNG frames, follow the [PNG georeferencing guide](../../docs/png-frames.md). A PNG holds display colors, and the converter stores them unchanged.
+
+For a source audit, a manifest can name each COG and its date. This is an advanced path; the directory/glob flow above is the main onboarding route.
+
+```csv
+uri,datetime
+January.tif,2024-01-01
+February.tif,2024-02-01
+```
 
 The checks read one copy of the store with chronozarr and another with plain xarray and Zarr code, so convert the manifest a second time.
 

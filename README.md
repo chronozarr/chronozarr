@@ -39,124 +39,56 @@ To publish a store, upload it to a static host that sends CORS headers. A sharde
 Install the released Python package with GeoTIFF support. It needs Python 3.11 or later.
 
 ```bash
-python -m pip install --upgrade "chronozarr[geo]==0.4.0"
+uv run python -m pip install --upgrade "chronozarr[geo]==0.4.0"
 ```
 
 `0.4.0` is the Python package release. It reads and writes the unchanged chronozarr v0.3 store format.
 
-### Without data
+### 1. Put dated GeoTIFFs in a directory
 
-1. Save this script as `quickstart.py`. It writes a store of three synthetic timesteps and reads one back. The pixels are 10 m in UTM zone 31N.
+Use one GeoTIFF per timestep, with exactly one date in each filename. For example:
 
-   ```python
-   import numpy as np
-   import xarray as xr
-   import chronozarr
+```text
+scenes/
+  ndvi_2024-01.tif
+  ndvi_2024-02.tif
+  ndvi_2024-03.tif
+```
 
-   values = np.arange(3 * 64 * 64, dtype=np.uint16).reshape(3, 1, 64, 64)
-   da = xr.DataArray(
-       values,
-       dims=("time", "band", "y", "x"),
-       coords={
-           "time": np.array(["2024-01-01", "2024-02-01", "2024-03-01"], dtype="datetime64[ns]"),
-           "band": ["example"],
-           "y": 5000000 - (np.arange(64) + 0.5) * 10,
-           "x": 500000 + (np.arange(64) + 0.5) * 10,
-       },
-   )
-   chronozarr.encode(da, "synthetic_store", crs="EPSG:32631", nodata=None)
+The files must share a north-up grid: CRS, width and height, pixel size and transform, band count and names, dtype, scale, offset, units and nodata metadata. Names can contain a date as `20240131`, `2024-01-31` or `2024-01`. If a filename uses another pattern, pass `--date-pattern` to `convert`.
 
-   store = chronozarr.open_store("synthetic_store")
-   print((store.read(t=1) == values[1]).all())
-   ```
+### 2. Convert and check the store
 
-2. Run the script. It prints `True`: level 0 returns the values that you wrote.
+Point `convert` at the directory or a quoted glob. A dry run is optional, but useful before writing:
 
-   ```bash
-   python quickstart.py
-   ```
+```bash
+chronozarr convert "scenes/*.tif" my_store --dry-run
+chronozarr convert "scenes/*.tif" my_store
+chronozarr validate my_store
+chronozarr info my_store
+```
 
-3. Check the store.
+The dry run checks every input and writes nothing. `convert` preserves the source values and metadata; it does not resample or rescale unless you request it. A directory or `s3://` prefix is not recursive, so use a glob such as `scenes/**/*.tif` for subdirectories. S3 listing needs the `s3` extra.
 
-   ```bash
-   chronozarr validate synthetic_store
-   chronozarr info synthetic_store
-   ```
+### 3. Open and share the first view
 
-### With your data
+Preview the store locally:
 
-1. Write a store from your rasters. `convert` is the command for files on disk or in S3. Point it at a directory, a quoted glob or an `s3://` prefix of GeoTIFFs with the date in each file name (`20240131`, `2024-01-31` or `2024-01`):
+```bash
+chronozarr preview my_store
+```
 
-   ```bash
-   chronozarr convert "scenes/*.tif" my_store --dry-run   # list files and dates, check every file, write nothing
-   chronozarr convert "scenes/*.tif" my_store
-   ```
+The command serves the store on `127.0.0.1` and opens the viewer. For a temporary share from your laptop, run:
 
-   The dry run runs the same discovery and preflight checks as conversion, then prints each file with its date and the planned grid, bands, validity and size. It writes no store. A directory or `s3://` prefix is not searched recursively; use a glob such as `scenes/**/*.tif` for subdirectories. Listing an S3 prefix needs `pip install "chronozarr[s3]"` and uses your AWS credentials.
+```bash
+chronozarr share my_store
+```
 
-   A date is read from a name only when the name holds exactly one. A name with no date, with several (`20240215_2024-03`), or two files with the same date are reported, never guessed. `--date-pattern` says where the date is, for example `--date-pattern "ndvi_%Y%m%d"`. `--write-manifest found.csv` saves discovered files and dates as a manifest that `convert` reads back; it is the one output allowed with `--dry-run`.
+This needs `cloudflared`. Keep the terminal and laptop running while the recipient uses the link; the requested store data is transferred from your laptop to the recipient's browser. In the viewer, choose the intended date and view, then use `Copy link` to share that state. The recipient only needs a modern browser. See the [sharing walkthrough](docs/python.md#share-a-store-through-a-tunnel) for checks and limits.
 
-   Before it reads any pixels in bulk, `convert` checks every file for its date, grid and CRS, bands, dtype, scale, offset, units and nodata. It reports all problems at once, grouped by file, each with a suggested fix, and writes nothing:
+For durable hosting, upload the store to a static host, run `chronozarr doctor https://your-host/my_store`, and use `chronozarr link https://your-host/my_store`. See the [hosting guide](docs/hosting.md). The [Python guide](docs/python.md) covers the API and notebook viewer.
 
-   ```text
-   2 problem(s) in 2 of 24 source file(s); nothing was written:
-
-   scenes/ndvi_2024-03.tif
-     - has scales [0.5, 1.0]; scenes/ndvi_2024-01.tif has [1.0, 1.0]. A store holds one value per band for every timestep, so the sources must agree
-       fix: if the metadata is wrong, correct it (gdal_edit.py -scale -offset -units); ...
-
-   scenes/readme_copy.tif
-     - no date in the file name
-       fix: name the date YYYYMMDD, YYYY-MM-DD or YYYY-MM, or pass --date-pattern ...
-   ```
-
-   Nothing is resampled or rescaled unless you ask. Files on another grid fail with a suggestion to pass `--resampling`.
-
-   The store takes each band's description (its name), scale, offset and units from the files, so a Sentinel-2 file with a scale of 0.0001 gives reflectance. These must be identical in every file. It also takes the nodata value that the files declare; files that declare none give a store with no nodata, so a stored 0 is data. `chronozarr convert --help` lists the manifest, Zarr and NetCDF sources and the validity rules.
-
-   `chronozarr encode "scenes/*.tif" my_store` is the in-memory route for GeoTIFFs on one grid. It reads uint8, uint16, int16 and float32 files by the same rules, holds the whole stack in memory and never resamples. It points you to `convert` for directories, S3 prefixes and manifests.
-
-2. Check the store against the spec.
-
-   ```bash
-   chronozarr validate my_store
-   ```
-
-3. Read the values in Python.
-
-   ```python
-   import chronozarr
-
-   store = chronozarr.open_store("my_store")
-   store.read(t=42)              # (band, y, x), exact stored values
-   da = store.to_xarray(lod=0)   # xarray DataArray, loaded into memory
-   ```
-
-4. Look at the store on your machine before you upload it.
-
-   ```bash
-   chronozarr preview my_store
-   ```
-
-   The command serves the store on `127.0.0.1`, opens the viewer in your browser and stops on Ctrl-C. The default viewer page is hosted, so it needs internet access; use `--viewer-dir` for an offline self-hosted viewer. See [docs/python.md](docs/python.md#preview-from-the-command-line).
-
-   To show a local store temporarily from your laptop, run `chronozarr share my_store`. It needs `cloudflared`; keep the terminal open while others use the link, choose the view and use `Copy link` to share it. The [sharing walkthrough](docs/python.md#share-a-store-through-a-tunnel) covers its checks and limits.
-
-5. Upload `my_store` to a static host. [docs/hosting.md](docs/hosting.md) has recipes for S3 with CloudFront, Cloudflare R2, Google Cloud Storage and Source Cooperative.
-
-6. Check the host.
-
-   ```bash
-   chronozarr doctor https://your-host/my_store
-   ```
-
-7. Print a checked viewer link, then open it in your browser:
-
-   ```
-   chronozarr link https://your-host/my_store
-   ```
-
-The input must be on an EPSG grid with north up. To write a store from an xarray `DataArray`, call `chronozarr.encode` as in the script above.
+Advanced sources and workflows are documented in `chronozarr convert --help`, the [bring-your-data example](examples/bring_your_data/README.md), and the [PNG georeferencing guide](docs/png-frames.md).
 
 ## Read a store without chronozarr
 
