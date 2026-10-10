@@ -1,6 +1,6 @@
 [project]
 name = "chronozarr"
-version = "0.3.1"
+version = "0.4.0"
 description = "Zarr v3 convention and reader for raster time series with true stored values"
 readme = "README.md"
 license = "Apache-2.0"

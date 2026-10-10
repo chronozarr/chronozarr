@@ -1,6 +1,6 @@
 {
   "name": "chronozarr",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Browser and Node reader for chronozarr v0.3 true-value stores, plus a MapLibre GL JS custom layer",
   "keywords": [
     "chronozarr",
