@@ -1,0 +1,29 @@
+{
+ "tag": "fdprobe-nofile32-fixed-16-r2",
+ "timestamp": "2026-10-10T15:26:13+00:00",
+ "bench_args": [
+  "--workload",
+  "lab-ucayali-x2",
+  "--config",
+  "fixed-16",
+  "--rep",
+  "2"
+ ],
+ "workload": "lab-ucayali-x2",
+ "config": "fixed-16",
+ "rep": 2,
+ "lab": null,
+ "warm": false,
+ "container": {
+  "cpus": "4",
+  "memory": "4g",
+  "memory_swap": "4g",
+  "nofile": "32",
+  "exit_code": 137,
+  "oom_killed": false,
+  "cgroup": {}
+ },
+ "ok": false,
+ "stderr_tail": "Read failed (T18MWS_20240728T151719_B03_10m.tif), attempt 1/6, retrying in 1.3s: Read failed. See previous exception for details.\nRead failed (T18MWS_20240728T151719_B08_10m.tif), attempt 1/6, retrying in 2.3s: Read failed. See previous exception for details.\nRead failed (T18MWS_20240728T151719_B04_10m.tif), attempt 1/6, retrying in 2.9s: Read failed. See previous exception for details.\nRead failed (T18MWS_20240703T151721_B02_10m.tif), attempt 1/6, retrying in 2.1s: Read failed. See previous exception for details.\nRead failed (T18MWS_20240728T151719_B03_10m.tif), attempt 2/6, retrying in 4.7s: CURL error: Connection timed out after 30003 milliseconds\nRead failed (T18MWS_20240728T151719_B08_10m.tif), attempt 2/6, retrying in 2.9s: CURL error: Connection timed out after 30007 milliseconds",
+ "bench_record": null
+}

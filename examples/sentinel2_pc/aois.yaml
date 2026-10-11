@@ -39,6 +39,13 @@ aois:
     epsg: 32718  # UTM zone 18S
     expected_behavior: "Bank migration of 50-200 m/yr visible month to month; persistent cloud, so expect gap-filled months"
 
+  yukon_ykd:
+    label: "Yukon-Kuskokwim Delta (Alaska, USA)"
+    description: "Thermokarst lake-rich coastal tundra; bbox is the union of the two AOI polygons plus ~1 km"
+    bbox: [-164.18, 59.75, -163.49, 60.085]
+    epsg: 32603  # UTM zone 3N
+    expected_behavior: "Lake ice-out and freeze-up, lake drainage events, snow cover; sparse winter acquisitions"
+
 # Bands and cloud mask that catalog.py / mosaic.py request (fixed in code)
 bands:
   - B02  # Blue  (10m)

@@ -16,6 +16,7 @@ This file holds measurements, tested versions, dates and caveats. User docs link
 - [Comparison notes](#comparison-notes)
 - [Live store and publishing](#live-store-and-publishing)
 - [Hosting observations](#hosting-observations)
+- [Sentinel-2 ingest performance](#sentinel-2-ingest-performance)
 
 ## Reader checks
 
@@ -511,3 +512,99 @@ With `--port` set, `chronozarr preview` fails when anything listens on the port.
 ### Interrupt
 
 A SIGINT stopped the command with exit status 0 after it printed "stopped". The same port was free for a new bind afterwards.
+
+## Sentinel-2 ingest performance
+
+Measured 2026-10-10 on one machine: Apple M3 Max laptop (16 CPUs, 128 GB), macOS, home connection in Chapel Hill, GDAL 3.12.1 from the rasterio 1.5.0 wheel, numpy 2.4.4. The pipeline is `examples/sentinel2_pc/mosaic.py`; the baseline is the same file at commit `01185cd`. Cross-machine performance has not been tested. The harness (`examples/sentinel2_pc/bench.py`) records the machine with every result, so the same commands can be run elsewhere unchanged.
+
+### Method
+
+Each workload is a frozen scene list (`bench.py freeze`, scene IDs and a SHA-256 in `data/bench/workloads/`). Every measurement is a fresh process (`bench.py run`); `bench.py compare` runs every workload and configuration once per repetition, in a new random order each repetition. Wall time runs from the pipeline call to the last `.npz` on disk; scene search is excluded. Requests and bytes come from GDAL's own network statistics. Peak memory is the process maximum RSS. Tables give the median and interquartile range of 3 repetitions (2 for the 10 MB/s lab case). A difference smaller than the spread of the network is reported as no difference. Correctness is the SHA-256 of each month's `bands` and `coverage` arrays, compared with the baseline's: all 111 new-pipeline runs in the final data (137 runs with the baselines) were bit-exact. Earlier throttled lab runs that were not are described under "Read retries"; their records are kept in `data/bench/archive/`.
+
+`fixed-N` is N concurrent reads without adaptation. `auto` is the default: 16 concurrent reads, lowered when the host fails or throttles. `auto-max32` is auto mode with `--max-requests 32`, which also climbs above 16. `auto-capped` is auto with `--max-requests 8 --cpu-workers 4 --memory 2GB`. The baseline reads 4 scenes at a time, each scene's 5 files one after another.
+
+### Planetary Computer over a home connection
+
+The runs in this section and the next predate two later changes from the constrained runs in [bench/s2-ingest/portability.md](../bench/s2-ingest/portability.md). Band reads now fill the month buffer in place and masking works in row blocks, which lowered peak RSS in Docker from 2.8-3.0 to 2.4 GB for the 20-scene month. Auto mode now starts at 4 reads per CPU when that is below 16, which does not change anything on this 16-CPU machine. Output and concurrency here are unaffected; the peak RSS columns are higher than the current code reaches.
+
+| Workload | Scenes | Baseline | fixed-4 | fixed-16 | auto | auto-max32 | Peak RSS baseline / auto |
+|---|---|---|---|---|---|---|---|
+| Ucayali, 1 month | 10 | 44.1 s [42.8-44.5] | 26.4 s | 20.9 s | 22.8 s | 21.5 s | 10.6 / 2.7 GB |
+| Ucayali 5 km box, 3 months | 15 | 19.6 s [19.0-19.8] | | 4.2 s | 4.3 s | 5.0 s | 0.39 / 0.31 GB |
+| Ucayali, other UTM zone (warp path) | 10 | 45.3 s [44.9-47.5] | | 20.2 s | 22.5 s | 24.8 s | 10.9 / 2.9 GB |
+| Lake Mead, 1 month, 4 tiles | 16 | 34.9 s [34.1-35.0] | 20.3 s | 14.0 s | | 14.8 s | 12.7 / 3.0 GB |
+| Yukon delta, 3 sparse months | 11 | 145.4 s [142.6-152.3] | 69.2 s | 48.4 s | | 41.8 s | 14.5 / 4.6 GB |
+
+The new pipeline is 1.9 to 4.7 times faster than the baseline at its default settings (auto, or fixed-16, which auto equals when no read fails). At the baseline's concurrency (fixed-4), the pipeline changes alone give 1.7 to 2.1 times. The rest comes from concurrency: 16 reads beat 4 on every workload. Auto and fixed-16 are indistinguishable; auto-max32 is about 15 % slower on the short runs and about 14 % faster on the 3-month Yukon run, so the default ceiling is 16. Downloaded bytes fell 13 to 26 % on the native-grid workloads (Yukon: 1663 to 1289 MB, 1031 to 837 requests) from reading SCL first and skipping source blocks without a valid pixel; the warp path skips only whole scenes and read the same 499 MB as the baseline.
+
+Three of these runs retried a failed read (Ucayali fixed-16, warp auto-max32 and Yukon auto-capped; they are the top of each spread, up to 101 s). They predate the fix under "Read retries" and were still bit-exact.
+
+### Local server with traffic shaping
+
+`bench.py lab-workload` serves a full mirror of the Ucayali month (9.7 GB) from `labserver.py`, with each scene under two URLs, so a month has 20 scenes. The server adds latency, a shared bandwidth cap, or HTTP 503 for requests beyond a number in flight.
+
+| Condition | Baseline | fixed-4 | fixed-16 | fixed-32 | auto | auto-max32 |
+|---|---|---|---|---|---|---|
+| No shaping | 18.1 s | 3.4 s | 2.3 s | 2.5 s | | 2.3 s |
+| 50 ms per response | 28.0 s | 12.0 s | 4.3 s | 3.3 s | | 4.3 s |
+| 20 ms, 10 MB/s shared | 115.1 s | 89.3 s | 88.3 s | | | 88.2 s |
+| 50 ms, 503 above 12 in flight | 29.6 s | 16.8 s | 18.3 s | 18.0 s | 18.9 s | 18.2 s |
+
+Without shaping the new pipeline is 7.9 times faster and peak RSS falls from 16.9 GB to 4.3 to 4.8 GB. With 50 ms latency, 32 reads beat 16, but the run lasts 4 s and auto-max32 does not climb within it. With a 10 MB/s cap every configuration waits on the link, and the 1.3 times gain is the 13 % fewer bytes plus overlap. The throttled host costs every new configuration about the same, and none drops a scene.
+
+### What changed and what each change bought
+
+- Reading SCL first and skipping bands of scenes, and source blocks, with no valid pixel: 13 to 26 % fewer bytes on the native-grid workloads. The windowed read on the native grid equals bilinear `reproject` bit for bit when the scene's CRS is the AOI's and the origins differ by whole pixels, which holds for Sentinel-2 in its own UTM zone (`tests/test_ingest_mosaic.py`, and on real Planetary Computer files).
+- One read per asset in a shared pool instead of one thread per scene reading 5 assets in turn, and months that overlap within a memory budget instead of a barrier per month.
+- The median over scenes on uint16 with invalid pixels as 0, in parallel row blocks: 0.20 s instead of 12.7 s for 16 scenes of 2765 x 2759 pixels, equal to float32 `nanmedian`.
+- An explicit GDAL block cache (64 to 512 MB) instead of GDAL's default of 5 % of RAM, and a uint16 stack instead of float32: peak RSS 10.6 to 2.7 GB for one Ucayali month.
+- `.npz` written at zlib level 1 instead of 6: 0.8 s instead of 2.6 s per month, files 2 % larger, same arrays. Without shaping this was 65 % of a 1-month run.
+- Writes to a temporary name and a rename, so an interrupted run never leaves a partial month. A SIGINT during a 10 MB/s lab run exited after the 16 reads in flight drained (14.6 s) and left no file.
+
+### Read retries
+
+GDAL remembers a failed open of a URL for the life of the process. A second open of the same URL fails at once with the first error and sends no request, until `VSICurlPartialClearCache` drops the entry (checked by serving one URL from a server that always answers 503, then from a healthy one on the same port). A Planetary Computer signed URL is the same until its token refreshes, so the baseline's retries of a scene could not reach the host after a failed open; they could only succeed when the first failure came after the open. The audit below finds no missing scene in the current Ucayali months. Before the fix, in the throttled lab case, fixed-32 dropped one scene in 2 of 3 runs (66.6 s median, output not bit-exact) and auto in 1 of 3. The pipeline now clears the entry before every retry, and the same case was bit-exact in all 15 new-pipeline runs (`tests/test_ingest_mosaic.py::test_pipeline_recovers_from_a_transient_error_on_every_asset`).
+
+GDAL retries most HTTP 503 responses by itself (`GDAL_HTTP_MAX_RETRY`), so they never surface as errors. They appear as warnings on the `rasterio._env` logger, which auto mode counts. One read is several HTTP requests, so even 4 reads hit a limit of 12 in flight now and then. Halving at every second 503 drove the request limit down to 1 and made auto the slowest configuration. Auto now lowers the limit by a quarter only when an epoch's 503s outnumber its completed reads, and halves it when reads fail outright.
+
+### Ucayali scene audit
+
+Earlier full-archive runs dropped scenes after read errors (throttling, and expired tokens before the fix of 2026-09). `examples/sentinel2_pc/audit_scenes.py` checks saved months without downloading any band. A month's `coverage` is k/n, where n counts every scene searched and k only those read and valid. The script repeats the scene search, reads each scene's SCL band, predicts k per pixel and attributes any shortfall to specific scenes. In a test with 7 scenes removed by hand from the counts of 4 months, it named exactly those 7 scenes. Two clear acquisitions of one tile ten days apart, with 99.6 % of their valid pixels in common, needed the thresholds at the measured noise level (99.9 % and 0.05 %) to be told apart.
+
+Result for the 117 Ucayali months on disk (written 2026-09-29 and 30), checked 2026-10-10:
+
+- The scene count n stored in every month equals today's search, so the scenes searched then and now are the same: 739 scenes.
+- No scene with a valid pixel is missing. The largest unexplained shortfall in any month is 694 of 7,628,635 pixels. These are pixels where SCL is valid but a band is 0; the pipeline excludes them, and the SCL-only prediction does not see them. No pixel has more valid scenes saved than predicted.
+- Six scenes have fewer than 1000 valid pixels (24 to 560), below what the shortfall test can resolve. None of their pixels shows a shortfall, so they were included.
+- Eight scenes have no valid pixel in the AOI. Whether they were read cannot be told, and it does not change any value.
+- The local v0.3 store `data/stores/ucayali_santa_maria_v03` equals the months on disk bit for bit in all 117 time steps. The published copy was not downloaded to compare.
+
+No month needs to be rebuilt. The per-month report is `bench/s2-ingest/audit-ucayali_santa_maria.json`.
+
+### Lake Mead scene audit
+
+The 127 Lake Mead months on disk were written on 2026-04-19, by the pipeline as it was then. The same audit (2,318 scenes, `bench/s2-ingest/audit-lake_mead.json`) finds every month up to 2023-05 complete. From 2023-06 on, 674 scenes with valid pixels are missing in 34 months:
+
+- In the 33 months from 2023-07 to 2026-03 no scene contributed at all. Some of them also have scenes without a valid pixel, which is why the audit lists fewer missing scenes than scenes for 9 of them (2023-08, 2023-12, 2024-01, 2024-04, 2024-06, 2025-03, 2025-08, 2025-11, 2026-01). Every one of the 33 is a carry-forward copy of an earlier month; the `water-1` build skipped all 33 as having no valid pixel.
+- 2023-06 is the only partial month: at least 20 of 24 scenes are missing, and 2.3 million pixels of shortfall remain unattributed.
+
+The pattern, intact months followed by failures in calendar order, matches the expired SAS tokens described in the napkin for the first Ucayali run. A second defect predates the audit: the +1000 offset of processing baseline 04.00 and later is not removed. The rule goes by processing baseline, not acquisition date, and ESA reprocessed some older acquisitions: 4 scenes of 2019-03 (baseline 05.00) and 4 of 2021-12 (04.00) carry the offset, and every scene from 2022-01 on does. Checked against `BOA_ADD_OFFSET` in 23 product-metadata files and against fresh reads of B04 on a desert target (June 2022: stored median 3882, offset removed 2882, June 2021 2765). `catalog.py` applies the rule correctly today; the months predate that code (2026-09-30). Carry-forward spreads the 2019-03 values into gap pixels of every month to 2021-11 (0.77 % of pixels in 2019-04, falling to 0.01 %). So every month from 2019-03 to 2026-03 (85 months, about 30 to 41 GB to read again) and the `lake_mead/water-1` store built from them need rebuilding; nothing was rebuilt here. The manifest, the evidence and the rebuild procedure are in `bench/s2-ingest/lake-mead-recovery.md` (branch `data/lake-mead-recovery`). The other AOIs have stores but no monthly files on disk; their coverage is a 0/1 flag, which cannot attribute missing scenes.
+
+### Tried and not kept
+
+- `GDAL_NUM_THREADS` of 2 or more on a partial window: GDAL fetches the needed tiles in one multi-range batch, 22 % fewer bytes (486 against 595 MB, 184 against 386 requests on the 6-scene Yukon month) but 30 to 45 % longer wall time at 8 concurrent reads on the home link. GDAL stays at its default of 1.
+- `CPL_VSIL_CURL_USE_HEAD=NO`: the HEAD becomes a GET, so the request count does not change.
+- Climbing above 16 reads by default: no net gain on the home link (see above).
+- An early sweep on the home link (24 asset reads, 4 to 32 workers, 2 repetitions) showed no effect of concurrency, 11 to 18 MB/s. The interleaved runs above, with 3 repetitions per cell over two sessions, consistently favoured 16 over 4.
+
+### Remaining opportunities
+
+| Opportunity | Evidence | Effort |
+|---|---|---|
+| Split one large window into stripes read in parallel, for months with few scenes | one 90 MB read: 10.6 and 11.6 s whole, 7.8 and 9.9 s in 4 stripes; Yukon slots were 46 % busy with 2 scenes | half a day, plus a bit-exact check of the stitched read |
+| Multi-range fetch (`GDAL_NUM_THREADS` >= 2) on metered or capped links | 22 % fewer bytes, slower here | a flag and one measurement on a capped link |
+| `reproject(num_threads=...)` on the warp path | the warp path is the slowest workload; GDAL's multithreaded warp splits the output into chunks, so equality with the single-threaded warp must be checked | a few hours with the existing equality test |
+| Several writer threads | the single `.npz` writer caps a fast link at about 75 months per minute at Ucayali size | an hour |
+| Benchmarks on a second machine, a Linux HPC node and a cloud VM | only this laptop has been measured | `bench.py` runs unchanged |
+| Spatial tiling, so a month larger than memory can be composited | Every step after the read is per pixel (mask, offset, median, coverage, carry-forward), so compositing the AOI in strips of rows gives the same values. Native-grid reads of a strip are a subset of the block rectangles already read, so they are exact too. The warp path is the risk: GDAL's approximate transformer interpolates over the destination chunk, so a strip's output can differ from the full warp by up to its 0.125-pixel error threshold; it would need `reproject(..., error_threshold=0)` or a per-strip equality test. Each strip reopens every asset (a HEAD and a header read per asset and strip); strips aligned to the 512-pixel source blocks avoid reading a block twice. A simpler step with the same memory effect is a disk-backed month stack (`np.memmap`), which changes no read | memmap: half a day to a day; row strips with the native path only: 2 to 3 days, plus warp equality tests |
+| Single-band and other band sets | the pipeline reads B02, B03, B04, B08 and SCL only, so the harness has no single-band case | depends on making the band list a parameter |

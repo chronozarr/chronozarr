@@ -1,0 +1,187 @@
+{
+ "tag": "c2m3g-lat50-auto-r5",
+ "timestamp": "2026-10-10T15:59:43+00:00",
+ "bench_args": [
+  "--workload",
+  "lab-ucayali-x2",
+  "--config",
+  "auto",
+  "--rep",
+  "5",
+  "--lab",
+  "50,0,0"
+ ],
+ "workload": "lab-ucayali-x2",
+ "config": "auto",
+ "rep": 5,
+ "lab": {
+  "latency_ms": 50.0,
+  "bandwidth_mbps": 0.0,
+  "fail_rate": 0.0
+ },
+ "warm": false,
+ "container": {
+  "cpus": "2",
+  "memory": "3g",
+  "memory_swap": "3g",
+  "nofile": null,
+  "exit_code": 0,
+  "oom_killed": false,
+  "cgroup": {
+   "memory.peak": "3221217280",
+   "memory.max": "3221225472",
+   "memory.events": {
+    "low": "0",
+    "high": "0",
+    "max": "45",
+    "oom": "0",
+    "oom_kill": "0",
+    "oom_group_kill": "0"
+   },
+   "cpu.max": {
+    "200000": "100000"
+   },
+   "cpu.stat": {
+    "usage_usec": "15355621",
+    "user_usec": "13154876",
+    "system_usec": "2200745",
+    "nice_usec": "0",
+    "nr_periods": "94",
+    "nr_throttled": "53",
+    "throttled_usec": "24389081",
+    "nr_bursts": "0",
+    "burst_usec": "0"
+   }
+  }
+ },
+ "ok": true,
+ "stderr_tail": "",
+ "bench_record": {
+  "ok": true,
+  "workload": "lab-ucayali-x2",
+  "config": "auto",
+  "rep": 5,
+  "git_sha": "01185cd",
+  "git_dirty": true,
+  "baseline_ref": null,
+  "timestamp": "2026-10-10T15:59:43+00:00",
+  "machine": {
+   "platform": "Linux-6.12.76-linuxkit-aarch64-with-glibc2.41",
+   "machine": "aarch64",
+   "processor": "",
+   "python": "3.13.16",
+   "resources": {
+    "cpus": 2,
+    "cpu_source": "cgroup CPU quota",
+    "memory_total": 8216215552,
+    "memory_available": 7586070528,
+    "memory_limit": 3168759808,
+    "memory_source": "cgroup memory limit",
+    "open_files": 1048576
+   }
+  },
+  "lab": {
+   "latency_ms": 50.0,
+   "bandwidth_mbps": 0.0,
+   "fail_rate": 0.0
+  },
+  "warm": false,
+  "wall_seconds": 7.818,
+  "first_month_seconds": 7.811,
+  "cpu_seconds": 11.29,
+  "peak_rss_bytes": 3192692736,
+  "gdal_network": {
+   "get_requests": 480,
+   "head_requests": 100,
+   "downloaded_bytes": 870001902
+  },
+  "lab_server": {
+   "requests": {
+    "HEAD": 100,
+    "GET": 868
+   },
+   "status": {
+    "200": 100,
+    "206": 868
+   },
+   "bytes_sent": 870001902,
+   "bursts": 0,
+   "config": {
+    "latency_ms": 50.0,
+    "bandwidth_mbps": 0.0,
+    "fail_rate": 0.0,
+    "fail_after": 0,
+    "fail_for": 5.0,
+    "max_inflight": 0,
+    "fail_first": 0,
+    "seed": 0
+   }
+  },
+  "nic_rx_bytes": 482,
+  "month_sha256": {
+   "2024-07": "495d6657e2921b5beace3f3c856883c82d0d07e05fdb762492cb7885ba2e75dd"
+  },
+  "output_pixels": 30514540,
+  "output_bytes": 61029080,
+  "useful_MBps": 7.807,
+  "Mpx_per_s": 3.903,
+  "settings": {
+   "adaptive": true,
+   "requests": 16,
+   "max_requests": 16,
+   "cpu_workers": 2,
+   "memory_budget": 1584379904,
+   "gdal_cache": 99023744,
+   "reasons": [
+    "2 usable CPUs (cgroup CPU quota)",
+    "cpu_workers=2: usable CPUs less one for the scheduler",
+    "max_requests=16: default ceiling 16; raise it to let auto mode climb higher",
+    "requests=16: start value; lowered only if the host fails or throttles reads",
+    "memory_budget=1.5 GiB: 50% of 3.0 GiB (cgroup memory limit)",
+    "gdal_cache=94 MiB: 1/16 of the budget, 64-512 MiB"
+   ]
+  },
+  "run_summary": {
+   "wall_seconds": 7.813,
+   "first_month_seconds": 7.811,
+   "months": 1,
+   "months_skipped": 0,
+   "scenes": 20,
+   "scenes_no_valid": 0,
+   "scenes_failed": 0,
+   "reads": 100,
+   "reads_native": 100,
+   "read_retries": 0,
+   "http_throttled": 0,
+   "pixel_fraction_read": 0.6236,
+   "stage_thread_seconds": {
+    "read": 86.09,
+    "mask": 5.06,
+    "median": 0.85,
+    "write": 0.83
+   },
+   "cpu_seconds": 11.29,
+   "cpu_utilisation": 0.723,
+   "request_slot_occupancy": 0.689,
+   "mean_request_limit": 16.0,
+   "final_request_limit": 16,
+   "limiter_events": [
+    {
+     "t": 0.0,
+     "limit": 16,
+     "rate_MBps": null,
+     "reason": "start"
+    },
+    {
+     "t": 3.14,
+     "limit": 16,
+     "rate_MBps": 131.36,
+     "reason": "at ceiling"
+    }
+   ],
+   "months_over_budget": [],
+   "months_all_failed": [],
+   "bottleneck": "neither saturated (request slots busy 69%, CPU 72%): latency, few scenes per month, or a small AOI"
+  }
+ }
+}
