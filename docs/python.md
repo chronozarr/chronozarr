@@ -4,6 +4,16 @@ The `chronozarr` package writes a store, reads it and opens it in xarray. The [R
 
 Want to show your own dated raster series to a colleague today? Follow [Share a store through a tunnel](#share-a-store-through-a-tunnel): convert it, preview it, choose the view, then send a temporary link that opens in their browser.
 
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first. For a project that imports the library, add it to that project's environment with
+`uv add chronozarr` (or `uv add 'chronozarr[geo]'` for GeoTIFF and export
+features), then run scripts with `uv run python script.py`. With pip, install
+into the active environment using `pip install chronozarr`, then run
+`python script.py` and `chronozarr` directly. If you need only the CLI, use
+`uv tool install chronozarr` or a one-off
+`uvx --from chronozarr chronozarr --help`; those isolated commands do not
+install the library into your project.
+The shell examples below assume the CLI is installed with `uv tool install`.
+
 ## Write a store
 
 ```python

@@ -36,11 +36,25 @@ To publish a store, upload it to a static host that sends CORS headers. A sharde
 
 ## Quickstart
 
-Install the released Python package with GeoTIFF support. It needs Python 3.11 or later.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first.
+For a new project, initialize it and add chronozarr with GeoTIFF support. This
+makes the package available both to Python imports and the CLI in this project.
+The project uses Python 3.13; chronozarr supports Python 3.11 and later.
 
 ```bash
-python -m pip install --upgrade "chronozarr[geo]==0.4.0"
+uv init --python 3.13
+uv add 'chronozarr[geo]==0.4.0'
 ```
+
+In an existing project, run only `uv add 'chronozarr[geo]==0.4.0'`.
+
+To use only the command-line tool without adding it to a project, install it in
+an isolated environment with `uv tool install 'chronozarr[geo]'`, or run a
+one-off command with `uvx --from 'chronozarr[geo]' chronozarr --help`. These
+isolated CLI options do not make `chronozarr` importable from your project.
+With pip, install into your active environment with
+`python -m pip install 'chronozarr[geo]==0.4.0'`, then run `python` and
+`chronozarr` directly. The `uv run` prefixes below are for the uv workflow.
 
 `0.4.0` is the Python package release. It reads and writes the unchanged chronozarr v0.3 store format.
 
@@ -62,26 +76,26 @@ The files must share a north-up grid: CRS, width and height, pixel size and tran
 Point `convert` at the directory or a quoted glob. A dry run is optional, but useful before writing:
 
 ```bash
-chronozarr convert "scenes/*.tif" my_store --dry-run
-chronozarr convert "scenes/*.tif" my_store
-chronozarr validate my_store
-chronozarr info my_store
+uv run chronozarr convert "scenes/*.tif" my_store --dry-run
+uv run chronozarr convert "scenes/*.tif" my_store
+uv run chronozarr validate my_store
+uv run chronozarr info my_store
 ```
 
-The dry run checks every input and writes nothing. `convert` preserves the source values and metadata; it does not resample or rescale unless you request it. A directory or `s3://` prefix is not recursive, so use a glob such as `scenes/**/*.tif` for subdirectories. S3 listing needs the `s3` extra.
+The dry run checks every input and writes nothing. `convert` preserves the source values and metadata; it does not resample or rescale unless you request it. A directory or `s3://` prefix is not recursive, so use a glob such as `scenes/**/*.tif` for subdirectories. S3 listing needs the `s3` extra: `uv add 'chronozarr[geo,s3]==0.4.0'`.
 
 ### 3. Open and share the first view
 
 Preview the store locally:
 
 ```bash
-chronozarr preview my_store
+uv run chronozarr preview my_store
 ```
 
 The command serves the store on `127.0.0.1` and opens the viewer. Press Ctrl-C to stop the preview before starting another command in the same terminal. For a temporary share from your laptop, run:
 
 ```bash
-chronozarr share my_store
+uv run chronozarr share my_store
 ```
 
 This needs `cloudflared`. Keep the terminal and laptop running while the recipient uses the link; the requested store data is transferred from your laptop to the recipient's browser. In the viewer, choose the intended date and view, then use `Copy link` to share that state. The recipient only needs a modern browser. See the [sharing walkthrough](docs/python.md#share-a-store-through-a-tunnel) for checks and limits.
@@ -104,7 +118,8 @@ GDAL 3.13 reads the CRS, the georeferencing and the values. It attaches the coar
 
 ## Commands
 
-Run `chronozarr <command> --help` for every option.
+Run `uv run chronozarr <command> --help` for every option in a uv project.
+With a standalone tool or pip installation, run `chronozarr <command> --help`.
 
 | Command | What it does |
 |---------|--------------|
@@ -161,7 +176,7 @@ There is no build step and no runtime dependency. Examples are in [js/README.md]
 The released Python and npm packages are 0.4.0. The spec remains v0.3.0, a draft: package upgrades do not change existing v0.3 stores, and readers open v0.3 stores. To use a v0.2 store, convert it:
 
 ```bash
-chronozarr convert OLD_STORE NEW_STORE
+uv run chronozarr convert OLD_STORE NEW_STORE
 ```
 
 ## License

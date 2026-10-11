@@ -43,7 +43,7 @@ data/                     gitignored: mosaics/, stores/, spike/ (P0 fixtures)
 ## Run
 
 ```bash
-uv sync --extra dev                # add --extra ingest for the Sentinel-2 example
+uv sync --locked                   # includes the dev group; add --extra ingest for the Sentinel-2 example
 uv run pytest -q -m unit
 cd js && node --test
 # dev server with byte ranges (needed for sharded stores), from .claude/launch.json "spike":

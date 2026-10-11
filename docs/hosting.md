@@ -16,6 +16,22 @@ This page has a checklist, an upload procedure with a command that runs it, reci
 
 ## 1. Checklist
 
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and the
+standalone CLI with `uv tool install chronozarr` to use the commands on this
+page. For a one-off command, prefix it with
+`uvx --from chronozarr chronozarr`; for example,
+`uvx --from chronozarr chronozarr doctor <store-url>`. If you need the command
+inside a project, add `chronozarr` with `uv add chronozarr` and run it with
+`uv run chronozarr ...`. With pip, install
+into your active environment with `pip install chronozarr`, then run the
+`chronozarr` command directly.
+
+For `publish`, the standalone tool and one-off forms must include the provider
+extra, such as `uv tool install 'chronozarr[publish-azure]'` or
+`uvx --from 'chronozarr[publish-azure]' chronozarr publish ...`. In a project,
+use `uv add 'chronozarr[publish-azure]'` and run commands with
+`uv run chronozarr ...`.
+
 `chronozarr doctor <store-url>` runs the HTTP checks and the decode checks against a live URL. Against a local directory, it runs only the decode checks. It sends `Origin: https://chronozarr.org`. The `--origin` option changes that header.
 
 The source of the checks is `src/chronozarr/doctor.py`.
@@ -101,7 +117,11 @@ Do not request the final URL before phase 3 ends. A CDN caches a `404` for secon
 | Google Cloud Storage | `gs://BUCKET/PREFIX` | `publish-gcs` | google-cloud-storage | Application Default Credentials |
 | Azure Blob Storage | `az://ACCOUNT/CONTAINER/PREFIX` | `publish-azure` | azure-storage-blob, azure-identity | `DefaultAzureCredential`, or `AZURE_STORAGE_CONNECTION_STRING` |
 
-Each provider has its own extra, so you install one SDK only. For example: `uv sync --extra publish-azure` or `pip install 'chronozarr[publish-azure]==0.4.0'`. Package 0.4.0 still writes the v0.3 store format.
+Each provider has its own extra, so you install one SDK only. For example, use
+`uv add 'chronozarr[publish-azure]==0.4.0'` in a project, or
+`uv tool install 'chronozarr[publish-azure]==0.4.0'` for the standalone CLI.
+The pip equivalent is `pip install 'chronozarr[publish-azure]==0.4.0'`.
+Package 0.4.0 still writes the v0.3 store format.
 
 ```bash
 # AWS S3. The credentials come from boto3's chain: environment, ~/.aws, SSO or an instance role.
