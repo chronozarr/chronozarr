@@ -78,6 +78,15 @@ READ_ATTEMPTS = 6
 READ_BACKOFF_SECONDS = 2.0
 READ_BACKOFF_MAX_SECONDS = 30.0
 
+# libcurl 8.16 to 8.21 (rasterio 1.5 wheels bundle 8.17) stores a failed name resolve, transient
+# or not, for half of its 60 s DNS cache timeout, per connection cache; GDAL keeps one per
+# thread, and a retry runs on the same thread. A retry sooner than this fails at once without
+# asking the resolver: three reads failed this way for about 40 s on Planetary Computer
+# (2026-10-10) while other threads read the same host. Such a failure is local, not the host
+# pushing back, so it does not lower the request limit.
+RESOLVE_FAILURE = "Could not resolve host"
+RESOLVE_RETRY_SECONDS = 31.0
+
 
 _clear_cache_function: Callable[[bytes], None] | None = None
 _clear_cache_searched = False
@@ -689,13 +698,17 @@ def build_monthly_mosaics(
                     pixels, native = read_asset(url, grid, out, resampling, env, needed=needed)
             except Exception as e:  # network, auth expiry, throttling, truncated data
                 forget_url(url)
+                resolve_failure = RESOLVE_FAILURE in str(e)
                 limiter.throttled(throttle.events)
-                limiter.record(False)
+                if not resolve_failure:
+                    limiter.record(False)
                 report.add("read", time.perf_counter() - t0, read_retries=1)
                 if attempt == READ_ATTEMPTS - 1:
                     raise
                 wait_s = min(READ_BACKOFF_MAX_SECONDS, READ_BACKOFF_SECONDS * 2**attempt)
                 wait_s *= 0.5 + random.random()
+                if resolve_failure:
+                    wait_s = max(wait_s, RESOLVE_RETRY_SECONDS)
                 logger.warning(
                     "Read failed (%s), attempt %d/%d, retrying in %.1fs: %s",
                     href.rsplit("/", 1)[-1],
