@@ -30,7 +30,16 @@ import catalog  # noqa: E402
 import mosaic  # noqa: E402
 import performance  # noqa: E402
 
-pytestmark = pytest.mark.unit
+pytestmark = [
+    pytest.mark.unit,
+    # rasterio wraps a numpy warp destination in a MEM dataset inside warnings.catch_warnings()
+    # to hide this warning, then sets the transform. catch_warnings is not thread-safe, so with
+    # concurrent warps the filter is sometimes gone when the warning fires (2 in 3600 threaded
+    # reads); the outputs are unaffected. Every input in these tests is georeferenced.
+    pytest.mark.filterwarnings(
+        "ignore:Dataset has no geotransform, gcps, or rpcs:rasterio.errors.NotGeoreferencedWarning"
+    ),
+]
 
 BBOX = (-75.0, -7.6, -74.985, -7.585)
 EPSG = 32718
