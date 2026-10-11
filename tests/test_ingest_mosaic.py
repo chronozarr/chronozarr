@@ -939,3 +939,40 @@ def test_resume_from_an_npz_month_carries_forward_from_it(tmp_path, no_backoff):
     march = mosaic.load_mosaic(outputs["2024-03"])
     assert march["carried_from"] == ["2024-01", mosaic.bands_sha256(jan_bands)]
     assert march["scenes_searched"] == 1
+
+
+def test_a_failed_name_resolve_waits_out_curl_and_keeps_the_request_limit(
+    tmp_path, no_backoff, monkeypatch
+):
+    """libcurl caches a failed resolve on the thread for 30 s, so the retry waits past it, and
+    a local resolver failure is not taken as the host pushing back."""
+    _, by_month = build_case(tmp_path)
+    jan = {"2024-01": by_month["2024-01"][:2]}
+    monkeypatch.setattr(mosaic, "RESOLVE_RETRY_SECONDS", 0.3)
+    read_asset = mosaic.read_asset
+    failed: set[str] = set()
+
+    def flaky(href, *args, **kwargs):
+        if href not in failed:
+            failed.add(href)
+            raise rasterio.errors.RasterioIOError("CURL error: Could not resolve host: example")
+        return read_asset(href, *args, **kwargs)
+
+    monkeypatch.setattr(mosaic, "read_asset", flaky)
+    limiter = performance.AdaptiveLimiter(4, 4, adaptive=True)
+    report = mosaic.RunReport()
+    outputs = mosaic.build_monthly_mosaics(
+        jan,
+        BBOX,
+        EPSG,
+        tmp_path / "out",
+        settings=settings(requests=4, max_requests=4),
+        sign=str,
+        report=report,
+        limiter=limiter,
+    )
+    assert report.read_retries == len(failed) and report.scenes_failed == 0
+    assert limiter.limit == 4 and limiter.failures == 0
+    assert report.wall_seconds >= 0.3
+    expected = reference_mosaics(jan, _grid())["2024-01"][0]
+    np.testing.assert_array_equal(load(outputs["2024-01"])[0], expected)
