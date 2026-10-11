@@ -12,7 +12,7 @@ credentials write. The public URL (`https://...`) is where a browser reads. Noth
 one from the other except through the adapter, and the viewer link is built from the public URL
 after `chronozarr.doctor` has passed against it.
 
-Upload order follows docs/hosting.md section 2: chunk and shard objects, then the time and
+Upload order follows docs/publish.md (upload order): chunk and shard objects, then the time and
 volatility chunks (the only chunks a later append rewrites), then the group and array `zarr.json`
 files, then the root `zarr.json` (which carries the consolidated metadata). A phase starts only
 after every object of the previous phase is stored, so a reader that finds the root finds a

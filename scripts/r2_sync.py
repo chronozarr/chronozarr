@@ -9,7 +9,7 @@ Credentials: an R2 API token with Object Read & Write on the bucket, as the envi
 R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY (dashboard: R2 > Manage R2 API Tokens). The endpoint is
 https://<account id>.r2.cloudflarestorage.com, from R2_ENDPOINT or --endpoint.
 
-Cache-Control follows docs/hosting.md: every zarr.json object, each level's time/c/0 and the
+Cache-Control follows docs/publish.md: every zarr.json object, each level's time/c/0 and the
 volatility chunk get max-age=300 (they change on append); every other object is immutable.
 
     uv run --with boto3 python scripts/r2_sync.py upload ucayali_santa_maria/png-v03

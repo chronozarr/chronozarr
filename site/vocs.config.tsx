@@ -88,23 +88,35 @@ export default defineConfig({
   sidebar: [
     { text: 'Start here', items: [
       { text: 'Getting started', link: '/getting-started' },
-      { text: 'How it works', link: '/getting-started#how-it-works' },
+      { text: 'Live demo', link: 'https://chronozarr.org/demo/' },
     ] },
-    { text: 'Use chronozarr', items: [
-      { text: 'Bring your own data', link: '/guides/bring-your-data' },
-      { text: 'Hosting recipes', link: '/guides/hosting' },
-      { text: 'Append timesteps', link: '/guides/append' },
-      { text: 'Embed the viewer', link: '/guides/embedding' },
-      { text: 'Private stores', link: '/guides/private' },
-      { text: 'Self-host the packaged viewer', link: '/guides/viewer-distribution' },
+    { text: 'Create and explore', items: [
+      { text: 'Convert your data', link: '/guides/convert' },
+      { text: 'Preview locally', link: '/guides/preview' },
+      { text: 'Explore in a notebook', link: '/guides/notebooks' },
+      { text: 'Bring your own data (full example)', link: '/guides/bring-your-data' },
       { text: 'PNG frames', link: '/guides/png-frames' },
     ] },
-    { text: 'Reference', items: [
-      { text: 'Specification v0.3 (draft)', link: '/specification' },
-      { text: 'Python API', link: '/reference/python' },
-      { text: 'Command line', link: '/getting-started#commands' },
+    { text: 'Share and publish', items: [
+      { text: 'Share a local store instantly', link: '/guides/share' },
+      { text: 'Hosting overview', link: '/guides/hosting' },
+      { text: 'Publish a store', link: '/guides/publish' },
+      { text: 'Hosting recipes', link: '/guides/hosting-providers' },
+      { text: 'Hosting requirements and troubleshooting', link: '/guides/hosting-requirements' },
+      { text: 'Append timesteps', link: '/guides/append' },
+      { text: 'Embed the viewer', link: '/guides/embedding' },
+      { text: 'Self-host the packaged viewer', link: '/guides/viewer-distribution' },
+      { text: 'Private stores', link: '/guides/private' },
+    ] },
+    { text: 'Integrations', items: [
+      { text: 'Python and xarray', link: '/reference/python' },
       { text: 'JavaScript reader', link: '/reference/javascript' },
       { text: 'MapLibre layer', link: '/reference/maplibre' },
+    ] },
+    { text: 'Reference and internals', items: [
+      { text: 'Command line', link: '/reference/cli' },
+      { text: 'How it works', link: '/how-it-works' },
+      { text: 'Specification v0.3 (draft)', link: '/specification' },
       { text: 'Format comparison', link: '/guides/format-comparison' },
     ] },
   ],
