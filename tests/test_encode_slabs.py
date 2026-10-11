@@ -187,15 +187,23 @@ def test_a_sharded_store_is_one_slab_and_unchanged(monkeypatch, tmp_path):
 
 
 def test_peak_python_memory_does_not_grow_with_the_series(monkeypatch, tmp_path):
-    peaks = []
-    for n_time in (12, 96):
-        truth = make_truth(n_time, BANDS, 29, 21)
-        da = make_da(truth, ["b0", "b1"])
-        _slab_steps(monkeypatch, 4)
+    """With slabs, the arrays traced during encoding stay the same size from 12 to 96
+    timesteps; in one slab they grow with the series. Cells of 128 x 128 make a whole-series
+    block 6 MB, well above allocator noise."""
+    cs = 128
+    step = BANDS * cs * cs * 2
+
+    def peak(n_time: int, steps: int) -> int:
+        da = make_da(make_truth(n_time, BANDS, 2 * cs, 2 * cs), ["b0", "b1"])
+        monkeypatch.setattr(_writer, "SLAB_BYTES", steps * step)
         tracemalloc.start()
-        chronozarr.encode(da, tmp_path / f"t{n_time}", chunk_size=CS, volatility=True)
-        _, peak = tracemalloc.get_traced_memory()
+        chronozarr.encode(da, tmp_path / f"t{n_time}-{steps}", chunk_size=cs, volatility=True)
+        _, traced = tracemalloc.get_traced_memory()
         tracemalloc.stop()
-        # the input array itself is allocated before tracing starts, but its slices are not
-        peaks.append(peak)
-    assert peaks[1] < 2 * peaks[0], peaks
+        return traced
+
+    peak(6, 4)  # warm up lazy imports and codec state outside the measurement
+    short, long = peak(12, 6), peak(96, 6)
+    one_slab = peak(96, 10**6)
+    assert long < 1.5 * short, (short, long)
+    assert one_slab > 3 * long, (long, one_slab)  # the measurement can see the difference
