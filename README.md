@@ -12,11 +12,14 @@ chronozarr turns dated GeoTIFFs into a time-series viewer. Explore it on your co
 
 Four commands take a folder of dated GeoTIFFs to a link.
 
-1. Install. It needs Python 3.11 or later.
+1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then add chronozarr with GeoTIFF support to a project. chronozarr supports Python 3.11 and later.
 
    ```bash
-   python -m pip install --upgrade "chronozarr[geo]==0.4.0"
+   uv init --python 3.13
+   uv add 'chronozarr[geo]==0.4.0'
    ```
+
+   For the command-line tool alone, use `uv tool install 'chronozarr[geo]'` and drop the `uv run` prefix below. With pip, run `python -m pip install 'chronozarr[geo]==0.4.0'` and also drop the prefix.
 
 2. Convert your rasters. Use one GeoTIFF per timestep, with one date in each file name: `20240131`, `2024-01-31` or `2024-01`. The files must share a north-up grid, band names, dtype, scale, offset, units and nodata.
 
@@ -28,19 +31,19 @@ Four commands take a folder of dated GeoTIFFs to a link.
    ```
 
    ```bash
-   chronozarr convert "rasters/*.tif" my_store
+   uv run chronozarr convert "rasters/*.tif" my_store
    ```
 
 3. Explore on your computer. Press Ctrl-C to stop the preview before the next command.
 
    ```bash
-   chronozarr preview my_store
+   uv run chronozarr preview my_store
    ```
 
 4. Share a link.
 
    ```bash
-   chronozarr share my_store
+   uv run chronozarr share my_store
    ```
 
 `share` needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/). It needs no bucket and no Cloudflare account. Keep the terminal open while others use the link. Anyone with the link can read the store while it runs.

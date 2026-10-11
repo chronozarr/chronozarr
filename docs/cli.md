@@ -1,6 +1,6 @@
 # Command line
 
-Run `chronozarr <command> --help` for every option.
+Run `chronozarr <command> --help` for every option. In a uv project, run `uv run chronozarr <command> --help`. A standalone tool or pip installation runs `chronozarr` directly.
 
 ## Create
 

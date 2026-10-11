@@ -35,7 +35,8 @@ Install these once:
 - [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) on your `PATH`. A quick tunnel needs no Cloudflare account or configuration.
 
 ```sh
-python -m pip install --upgrade "chronozarr[geo]==0.4.0"
+# With pip: python -m pip install 'chronozarr[geo]==0.4.0'
+uv tool install 'chronozarr[geo]==0.4.0'
 ```
 
 ## From GeoTIFFs to a link

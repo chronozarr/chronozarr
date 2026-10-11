@@ -14,7 +14,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-10-02T19:23:55.482587Z"
+exclude-newer = "2026-10-04T02:45:26.106827Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -428,12 +428,6 @@ dependencies = [
 dask = [
     { name = "dask" },
 ]
-dev = [
-    { name = "coverage" },
-    { name = "pytest" },
-    { name = "ruff" },
-    { name = "ty" },
-]
 geemap = [
     { name = "geemap", version = "0.37.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "geemap", version = "0.38.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -476,6 +470,14 @@ s3 = [
     { name = "boto3" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "coverage" },
+    { name = "pytest" },
+    { name = "ruff" },
+    { name = "ty" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "anywidget", marker = "extra == 'notebook'", specifier = ">=0.9" },
@@ -484,7 +486,6 @@ requires-dist = [
     { name = "boto3", marker = "extra == 'publish'", specifier = ">=1.34" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.34" },
     { name = "click", specifier = ">=8.1" },
-    { name = "coverage", marker = "extra == 'dev'", specifier = ">=7.6" },
     { name = "dask", marker = "extra == 'dask'", specifier = ">=2024.1" },
     { name = "geemap", marker = "extra == 'geemap'", specifier = ">=0.37.2" },
     { name = "google-cloud-storage", marker = "extra == 'publish-gcs'", specifier = ">=2.16" },
@@ -498,16 +499,21 @@ requires-dist = [
     { name = "planetary-computer", marker = "extra == 'ingest'", specifier = ">=1.0" },
     { name = "pystac", marker = "extra == 'ingest'", specifier = ">=1.10" },
     { name = "pystac-client", marker = "extra == 'ingest'", specifier = ">=0.8" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pyyaml", marker = "extra == 'ingest'", specifier = ">=6.0" },
     { name = "rasterio", marker = "extra == 'geo'", specifier = ">=1.3" },
     { name = "rasterio", marker = "extra == 'ingest'", specifier = ">=1.3" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
-    { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.23" },
     { name = "xarray", specifier = ">=2024.1" },
     { name = "zarr", specifier = ">=3.1" },
 ]
-provides-extras = ["geo", "notebook", "leafmap", "geemap", "dask", "netcdf", "s3", "ingest", "dev", "publish", "publish-gcs", "publish-azure"]
+provides-extras = ["geo", "notebook", "leafmap", "geemap", "dask", "netcdf", "s3", "ingest", "publish", "publish-gcs", "publish-azure"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "coverage", specifier = ">=7.6" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "ruff", specifier = ">=0.5" },
+    { name = "ty", specifier = ">=0.0.23" },
+]
 
 [[package]]
 name = "click"

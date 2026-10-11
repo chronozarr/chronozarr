@@ -6,6 +6,22 @@ The requirements come from [spec/CHRONOZARR.md](../spec/CHRONOZARR.md) section 8
 
 ## Checklist
 
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and the
+standalone CLI with `uv tool install chronozarr` to use the commands in these
+pages. For a one-off command, prefix it with
+`uvx --from chronozarr chronozarr`; for example,
+`uvx --from chronozarr chronozarr doctor <store-url>`. If you need the command
+inside a project, add `chronozarr` with `uv add chronozarr` and run it with
+`uv run chronozarr ...`. With pip, install
+into your active environment with `pip install chronozarr`, then run the
+`chronozarr` command directly.
+
+For `publish`, the standalone tool and one-off forms must include the provider
+extra, such as `uv tool install 'chronozarr[publish-azure]'` or
+`uvx --from 'chronozarr[publish-azure]' chronozarr publish ...`. In a project,
+use `uv add 'chronozarr[publish-azure]'` and run commands with
+`uv run chronozarr ...`.
+
 `chronozarr doctor <store-url>` runs the HTTP checks and the decode checks against a live URL. Against a local directory, it runs only the decode checks. It sends `Origin: https://chronozarr.org`. The `--origin` option changes that header.
 
 The source of the checks is `src/chronozarr/doctor.py`.

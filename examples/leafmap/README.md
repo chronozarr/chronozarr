@@ -4,7 +4,7 @@
 
 ## Run it
 
-1. Install the extra with `pip install "chronozarr[leafmap]"`. In this checkout, run `uv sync --extra leafmap` instead.
+1. Add the extra to your project with `uv add 'chronozarr[leafmap]'`. The pip fallback is `pip install 'chronozarr[leafmap]'`. In this checkout, run `uv sync --locked --all-extras`.
 2. Open `demo.ipynb` in a local notebook, or run this code in a cell.
 
    ```python

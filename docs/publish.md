@@ -14,7 +14,11 @@ The command publishes a store that anyone with its URL can read. For data that m
 | Google Cloud Storage | `gs://BUCKET/PREFIX` | `publish-gcs` | google-cloud-storage | Application Default Credentials |
 | Azure Blob Storage | `az://ACCOUNT/CONTAINER/PREFIX` | `publish-azure` | azure-storage-blob, azure-identity | `DefaultAzureCredential`, or `AZURE_STORAGE_CONNECTION_STRING` |
 
-Each provider has its own extra, so you install one SDK only. For example: `uv sync --extra publish-azure` or `pip install 'chronozarr[publish-azure]==0.4.0'`. Package 0.4.0 still writes the v0.3 store format.
+Each provider has its own extra, so you install one SDK only. For example, use
+`uv add 'chronozarr[publish-azure]==0.4.0'` in a project, or
+`uv tool install 'chronozarr[publish-azure]==0.4.0'` for the standalone CLI.
+The pip equivalent is `pip install 'chronozarr[publish-azure]==0.4.0'`.
+Package 0.4.0 still writes the v0.3 store format.
 
 ```bash
 # AWS S3. The credentials come from boto3's chain: environment, ~/.aws, SSO or an instance role.
