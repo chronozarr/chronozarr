@@ -42,7 +42,7 @@ from catalog import REQUIRED_BANDS, SceneRef
 from performance import AdaptiveLimiter, Settings
 from rasterio.crs import CRS  # ty: ignore[unresolved-import]  (compiled module, no stubs)
 from rasterio.transform import Affine, from_bounds
-from rasterio.warp import Resampling, reproject
+from rasterio.warp import Resampling, reproject, transform
 from rasterio.windows import Window
 
 logger = logging.getLogger(__name__)
@@ -80,15 +80,15 @@ READ_ATTEMPTS = 6
 # what a chunk needs, so this is a threshold, not an allocation (see read_asset).
 WARP_MEMORY_MB = 8192
 
-# Error of GDAL's warp transformer in source pixels (rasterio's `tolerance`), per resampling. The
-# SCL warp (nearest) decides which scenes count at a pixel, so it uses the exact transformer:
-# GDAL's default of 0.125 put 0.12 % of warped SCL pixels in the neighbouring source pixel and
-# changed validity on 0.02 to 0.03 % of them, all within 0.08 pixels of a source pixel edge,
-# while tolerance 0 matched an independent pyproj computation on every pixel (10 real scenes,
-# EPSG:32718 to 32719, 2026-10-10). It costs 22 times the approximate SCL warp. Band values
-# (bilinear) only carry interpolation error: 0.01 pixels gives p99 2 DN against the exact
-# transformer instead of 20 DN, at the cost of the default; exact bands would cost 7 times.
-WARP_TOLERANCE = {Resampling.nearest: 0.0, Resampling.bilinear: 0.01}
+# Error of GDAL's approximate warp transformer in source pixels for band warps (rasterio's
+# `tolerance`). Bands only carry interpolation error: 0.01 pixels gives p99 2 DN against the
+# exact transformer instead of 20 DN at GDAL's default of 0.125, at the same cost; exact band
+# warps would cost 7 times (10 real scenes, 2026-10-10). rasterio before 1.5 passes `tolerance`
+# to GDAL as a warp option, which GDAL ignores, so there band warps keep the default. The SCL
+# band is not warped by GDAL: see read_nearest.
+BAND_WARP_TOLERANCE = 0.01
+# Grid rows whose source coordinates or indices are computed at once (bounds temporaries).
+COORDINATE_ROWS = 128
 READ_BACKOFF_SECONDS = 2.0
 READ_BACKOFF_MAX_SECONDS = 30.0
 
@@ -320,6 +320,77 @@ def read_native(
     return pixels
 
 
+Coordinates = tuple[np.ndarray, np.ndarray]
+
+
+def source_coordinates(grid: Grid, src_crs: CRS) -> Coordinates:
+    """Exact (x, y) in `src_crs` of every pixel centre of `grid`, float64 arrays of grid shape.
+
+    GDAL's coordinate transformation point by point, in row blocks to bound its Python lists.
+    """
+    t = grid.transform
+    cols = np.arange(grid.width) + 0.5
+    x = np.empty((grid.height, grid.width))
+    y = np.empty((grid.height, grid.width))
+    for r0 in range(0, grid.height, COORDINATE_ROWS):
+        r1 = min(grid.height, r0 + COORDINATE_ROWS)
+        rows = (np.arange(r0, r1) + 0.5)[:, np.newaxis]
+        gx = t.c + t.a * cols + t.b * rows
+        gy = t.f + t.d * cols + t.e * rows
+        if src_crs == grid.crs:
+            x[r0:r1], y[r0:r1] = gx, gy
+            continue
+        tx, ty = transform(grid.crs, src_crs, gx.ravel(), gy.ravel())
+        x[r0:r1] = np.asarray(tx).reshape(gx.shape)
+        y[r0:r1] = np.asarray(ty).reshape(gx.shape)
+    return x, y
+
+
+def read_nearest(src, coordinates: Coordinates, out: np.ndarray) -> int:
+    """Fill `out` with the source pixel that contains each grid pixel's centre; returns the
+    number of grid pixels inside the source.
+
+    `coordinates` are the exact centres in the source CRS (source_coordinates). This is what
+    GDAL's nearest-neighbour warp computes with its exact transformer; its default approximate
+    transformer (up to 0.125 source pixels off) put 0.12 % of warped SCL pixels in the
+    neighbouring source pixel and changed validity on 0.02 % (10 real scenes, 2026-10-10). The
+    SCL decides which scenes count at a pixel, so it is read this way, which also costs one
+    coordinate transformation per strip and source CRS instead of one per scene.
+    """
+    x, y = coordinates
+    inv = ~src.transform
+
+    def indices(r0: int, r1: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        # GDAL's order of terms for an inverse geotransform.
+        col = np.floor(inv.c + x[r0:r1] * inv.a + y[r0:r1] * inv.b)
+        row = np.floor(inv.f + x[r0:r1] * inv.d + y[r0:r1] * inv.e)
+        inside = (col >= 0) & (col < src.width) & (row >= 0) & (row < src.height)
+        return row, col, inside
+
+    blocks = [
+        (r0, min(out.shape[0], r0 + COORDINATE_ROWS))
+        for r0 in range(0, out.shape[0], COORDINATE_ROWS)
+    ]
+    lo, hi = [src.height, src.width], [-1, -1]
+    for r0, r1 in blocks:
+        row, col, inside = indices(r0, r1)
+        if inside.any():
+            lo = [min(lo[0], int(row[inside].min())), min(lo[1], int(col[inside].min()))]
+            hi = [max(hi[0], int(row[inside].max())), max(hi[1], int(col[inside].max()))]
+    if hi[0] < 0:
+        return 0
+    data = src.read(1, window=Window.from_slices((lo[0], hi[0] + 1), (lo[1], hi[1] + 1)))
+    pixels = 0
+    for r0, r1 in blocks:
+        row, col, inside = indices(r0, r1)
+        block = out[r0:r1]
+        block[inside] = data[
+            row[inside].astype(np.intp) - lo[0], col[inside].astype(np.intp) - lo[1]
+        ]
+        pixels += int(inside.sum())
+    return pixels
+
+
 def read_asset(
     href: str,
     grid: Grid,
@@ -327,14 +398,23 @@ def read_asset(
     resampling: Resampling,
     env: dict,
     needed: np.ndarray | None = None,
+    coordinates: Callable[[CRS], Coordinates] | None = None,
 ) -> tuple[int, bool]:
-    """Read one single-band asset into `out` (grid shape). Returns (pixels read, native path)."""
+    """Read one single-band asset into `out` (grid shape). Returns (pixels read, native path).
+
+    A nearest-neighbour read off the native grid takes the source pixel under each grid pixel
+    centre (read_nearest), with centres from `coordinates(src_crs)` when given.
+    """
     with rasterio.Env(**env), rasterio.open(href) as src:
         offset = native_offset(src.transform, src.crs, grid)
         exact = offset is not None and (offset[2] == 1 or resampling == Resampling.nearest)
         if exact:
             assert offset is not None
             return read_native(src, grid, offset, out, needed), True
+        if resampling == Resampling.nearest:
+            centres = coordinates(src.crs) if coordinates else source_coordinates(grid, src.crs)
+            read_nearest(src, centres, out)
+            return out.size, False
         # A warp must give the same pixel whatever strip of the grid it fills. GDAL derives
         # the bilinear scale of each warp chunk from the chunk's shape (up to 1049 DN apart on
         # a real scene in 256-row strips), so the scale is pinned to the ratio of pixel sizes
@@ -357,7 +437,7 @@ def read_asset(
             YSCALE=scale,
             warp_mem_limit=WARP_MEMORY_MB,
             SRC_FILL_RATIO_HEURISTICS="NO",
-            tolerance=WARP_TOLERANCE[resampling],
+            tolerance=BAND_WARP_TOLERANCE,
         )
         return out.size, False
 
@@ -490,13 +570,18 @@ def split_grid(height: int, width: int, rows: int) -> list[AoiWindow]:
 PROCESS_BASE_BYTES = 512 * 1024**2
 
 
-def month_bytes(n_scenes: int, n_bands: int, height: int, width: int) -> int:
-    """Memory one window of a month holds while it is read and composited."""
+def month_bytes(n_scenes: int, n_bands: int, height: int, width: int, warp: bool = False) -> int:
+    """Memory one window of a month holds while it is read and composited.
+
+    With `warp`, also the exact source coordinates of the window's pixels for the SCL reads
+    (float64 x and y), for up to two source CRSs.
+    """
     plane = height * width
     stack = n_scenes * n_bands * plane * 2
     masks = n_scenes * plane  # SCL masks held until each scene is masked
     composite = n_bands * plane * 2 + plane * 8  # composite, valid counts
-    return stack + masks + composite
+    coordinates = 2 * 16 * plane if warp else 0
+    return stack + masks + composite + coordinates
 
 
 def read_bytes(height: int, width: int, warp: bool) -> int:
@@ -546,7 +631,7 @@ def _budget_error(
     what: str,
 ) -> MemoryBudgetError:
     gib = 1024**3
-    month = month_bytes(n, n_bands, height, width)
+    month = month_bytes(n, n_bands, height, width, warp)
     base = fixed_bytes(settings, n_bands, height, width, warp)
     need = base + month
     process = PROCESS_BASE_BYTES + settings.gdal_cache
@@ -602,7 +687,9 @@ def plan_window(
     n = len(scenes_by_month[key])
 
     def need(r: int) -> int:
-        return fixed_bytes(settings, n_bands, r, width, warp) + month_bytes(n, n_bands, r, width)
+        return fixed_bytes(settings, n_bands, r, width, warp) + month_bytes(
+            n, n_bands, r, width, warp
+        )
 
     def error(r: int, what: str) -> MemoryBudgetError:
         return _budget_error(key, n, n_bands, r, width, settings, warp, what)
@@ -960,6 +1047,16 @@ class _Unit:
     errors: dict[int, str] = field(default_factory=dict)
     valid: dict[int, np.ndarray] = field(default_factory=dict)
     result: tuple[np.ndarray, np.ndarray] | None = None  # composite, valid counts
+    coordinates: dict = field(default_factory=dict)  # source CRS -> exact pixel centres
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def centres(self, src_crs: CRS) -> Coordinates:
+        """The window's pixel centres in `src_crs`, computed once for all its scenes."""
+        with self.lock:
+            key = src_crs.to_wkt()
+            if key not in self.coordinates:
+                self.coordinates[key] = source_coordinates(self.grid, src_crs)
+            return self.coordinates[key]
 
 
 @dataclass
@@ -1080,7 +1177,9 @@ def build_monthly_mosaics(
     gdal_logger = logging.getLogger("rasterio._env")
     gdal_logger.addFilter(throttle)
 
-    def read(href: str, target: Grid, out: np.ndarray, resampling: Resampling, needed=None):
+    def read(
+        href: str, target: Grid, out: np.ndarray, resampling: Resampling, needed=None, centres=None
+    ):
         for attempt in range(READ_ATTEMPTS):
             if stop.is_set():
                 raise RuntimeError("cancelled")
@@ -1090,7 +1189,9 @@ def build_monthly_mosaics(
             url = sign(href)
             try:
                 with limiter.slot():
-                    pixels, native = read_asset(url, target, out, resampling, env, needed=needed)
+                    pixels, native = read_asset(
+                        url, target, out, resampling, env, needed=needed, coordinates=centres
+                    )
             except Exception as e:  # network, auth expiry, throttling, truncated data
                 forget_url(url)
                 resolve_failure = RESOLVE_FAILURE in str(e)
@@ -1128,7 +1229,7 @@ def build_monthly_mosaics(
 
     def read_scl(unit: _Unit, scene: SceneRef) -> np.ndarray:
         scl = np.zeros((unit.grid.height, unit.grid.width), dtype=np.uint8)
-        read(scene.scl_href, unit.grid, scl, Resampling.nearest)
+        read(scene.scl_href, unit.grid, scl, Resampling.nearest, centres=unit.centres)
         return _SCL_LUT[scl]
 
     def read_band(unit: _Unit, i: int, b: int, needed: np.ndarray) -> None:
@@ -1209,7 +1310,7 @@ def build_monthly_mosaics(
             key, w = units[next_admit]
             scenes = scenes_by_month[key]
             win = windows[w]
-            need = month_bytes(len(scenes), n_bands, win.height, win.width)
+            need = month_bytes(len(scenes), n_bands, win.height, win.width, warp)
             if active and base_bytes + in_flight + need > settings.memory_budget:
                 return
             stack = np.zeros((len(scenes), n_bands, win.height, win.width), dtype=np.uint16)
@@ -1305,6 +1406,7 @@ def build_monthly_mosaics(
                 elif kind == "median":
                     unit.result = future.result()
                     unit.stack = np.empty(0, dtype=np.uint16)  # release the scene stack
+                    unit.coordinates.clear()
 
             # Finish windows in order: carry-forward needs the same window of the month before.
             while next_finish < len(units):

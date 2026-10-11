@@ -85,7 +85,7 @@ def reproject_ref(
                 "YSCALE": scale,
                 "warp_mem_limit": 8192,
                 "SRC_FILL_RATIO_HEURISTICS": "NO",
-                "tolerance": mosaic.WARP_TOLERANCE[resampling],
+                "tolerance": mosaic.BAND_WARP_TOLERANCE,
             }
         reproject(
             source=rasterio.band(src, 1),
@@ -97,6 +97,23 @@ def reproject_ref(
             resampling=resampling,
             **options,
         )
+    return out
+
+
+def exact_nearest_ref(href: str, grid: mosaic.Grid) -> np.ndarray:
+    """The source pixel containing each grid pixel centre, computed with pyproj (not GDAL)."""
+    pyproj = pytest.importorskip("pyproj")
+    with rasterio.open(href) as src:
+        data, t, crs = src.read(1), src.transform, src.crs
+    g = grid.transform
+    jj, ii = np.meshgrid(np.arange(grid.width) + 0.5, np.arange(grid.height) + 0.5)
+    to_source = pyproj.Transformer.from_crs(grid.crs, crs, always_xy=True)
+    x, y = to_source.transform(g.c + jj * g.a, g.f + ii * g.e)
+    col = np.floor((x - t.c) / t.a).astype(int)
+    row = np.floor((y - t.f) / t.e).astype(int)
+    inside = (col >= 0) & (col < data.shape[1]) & (row >= 0) & (row < data.shape[0])
+    out = np.zeros((grid.height, grid.width), dtype=data.dtype)
+    out[inside] = data[row[inside], col[inside]]
     return out
 
 
@@ -173,7 +190,7 @@ def reference_mosaics(
                         for b in BANDS
                     ]
                 )
-                scl = reproject_ref(s.scl_href, grid, np.uint8, Resampling.nearest)
+                scl = exact_nearest_ref(s.scl_href, grid)
             except rasterio.errors.RasterioIOError:
                 continue
             if s.boa_offset:
@@ -287,6 +304,36 @@ def test_warped_scl_takes_the_source_pixel_under_each_grid_pixel(tmp_path):
     row = np.floor((y - src_transform.f) / -20).astype(int)
     assert (col >= 0).all() and (row >= 0).all() and (col < 160).all() and (row < 160).all()
     np.testing.assert_array_equal(got, scl[row, col])
+
+
+def test_nearest_read_equals_gdal_exact_warp_and_shared_centres(tmp_path):
+    """read_nearest gives what GDAL's nearest warp gives with its exact transformer (rasterio
+    1.5 and later can request it), and centres shared across scenes change nothing."""
+    grid = _grid()
+    hrefs = scene_files(tmp_path, np.random.default_rng(9), "n", grid, 2, 3, epsg=32719)
+    own = np.zeros((grid.height, grid.width), dtype=np.uint8)
+    mosaic.read_asset(hrefs["SCL"], grid, own, Resampling.nearest, {})
+    shared = np.zeros_like(own)
+    centres = mosaic.source_coordinates(grid, CRS.from_epsg(32719))
+    mosaic.read_asset(
+        hrefs["SCL"], grid, shared, Resampling.nearest, {}, coordinates=lambda crs: centres
+    )
+    np.testing.assert_array_equal(own, shared)
+    if tuple(int(v) for v in rasterio.__version__.split(".")[:2]) < (1, 5):
+        pytest.skip("rasterio before 1.5 cannot request GDAL's exact transformer")
+    gdal = np.zeros_like(own)
+    with rasterio.open(hrefs["SCL"]) as src:
+        reproject(
+            rasterio.band(src, 1),
+            gdal,
+            src_transform=src.transform,
+            src_crs=src.crs,
+            dst_transform=grid.transform,
+            dst_crs=grid.crs,
+            resampling=Resampling.nearest,
+            tolerance=0,
+        )
+    np.testing.assert_array_equal(own, gdal)
 
 
 def test_half_pixel_shift_is_not_native():
@@ -861,7 +908,11 @@ def test_warped_read_in_strips_equals_the_whole_grid(tmp_path, rows):
     ):
         whole = np.zeros((grid.height, grid.width), dtype=dtype)
         mosaic.read_asset(hrefs[band], grid, whole, resampling, env)
-        np.testing.assert_array_equal(whole, reproject_ref(hrefs[band], grid, dtype, resampling))
+        if resampling == Resampling.nearest:
+            expected = exact_nearest_ref(hrefs[band], grid)
+        else:
+            expected = reproject_ref(hrefs[band], grid, dtype, resampling)
+        np.testing.assert_array_equal(whole, expected)
         for window in mosaic.split_grid(grid.height, grid.width, rows):
             part = np.zeros((window.height, window.width), dtype=dtype)
             mosaic.read_asset(hrefs[band], window.subgrid(grid), part, resampling, env)
