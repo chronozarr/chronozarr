@@ -85,6 +85,7 @@ def reproject_ref(
                 "YSCALE": scale,
                 "warp_mem_limit": 8192,
                 "SRC_FILL_RATIO_HEURISTICS": "NO",
+                "tolerance": mosaic.WARP_TOLERANCE[resampling],
             }
         reproject(
             source=rasterio.band(src, 1),
@@ -259,6 +260,33 @@ def test_warp_differs_from_gdal_default_only_within_the_transformer_error(tmp_pa
     local_range = window.max(axis=(2, 3)) - window.min(axis=(2, 3))
     assert np.all(np.abs(ours - gdal)[both] <= local_range[both] // 4 + 1)
     assert ((ours > 0) != (gdal > 0)).sum() <= 2 * (grid.height + grid.width)  # edges only
+
+
+def test_warped_scl_takes_the_source_pixel_under_each_grid_pixel(tmp_path):
+    """The SCL warp decides which scenes count at a pixel, so it must pick the source pixel that
+    contains the grid pixel's centre, computed here with pyproj independently of GDAL. A
+    checkerboard of valid and invalid classes puts a class edge at every source pixel edge,
+    where GDAL's approximate transformer (0.125 pixels) picks the neighbour."""
+    pyproj = pytest.importorskip("pyproj")
+    grid = _grid()
+    t = grid.transform
+    origin = rasterio.warp.transform(CRS.from_epsg(EPSG), CRS.from_epsg(32719), [t.c], [t.f])
+    src_transform = Affine(
+        20, 0, round(origin[0][0] / 20) * 20 - 600, 0, -20, round(origin[1][0] / 20) * 20 + 600
+    )
+    rows, cols = np.indices((160, 160))
+    scl = np.where((rows + cols) % 2 == 0, 4, 8).astype(np.uint8)  # vegetation / cloud
+    href = write_tif(tmp_path / "checker_SCL.tif", scl, src_transform, 32719, block=16)
+    got = np.zeros((grid.height, grid.width), dtype=np.uint8)
+    mosaic.read_asset(href, grid, got, Resampling.nearest, dict(mosaic.GDAL_ENV))
+
+    jj, ii = np.meshgrid(np.arange(grid.width) + 0.5, np.arange(grid.height) + 0.5)
+    to_source = pyproj.Transformer.from_crs(EPSG, 32719, always_xy=True)
+    x, y = to_source.transform(t.c + jj * t.a, t.f + ii * t.e)
+    col = np.floor((x - src_transform.c) / 20).astype(int)
+    row = np.floor((y - src_transform.f) / -20).astype(int)
+    assert (col >= 0).all() and (row >= 0).all() and (col < 160).all() and (row < 160).all()
+    np.testing.assert_array_equal(got, scl[row, col])
 
 
 def test_half_pixel_shift_is_not_native():
