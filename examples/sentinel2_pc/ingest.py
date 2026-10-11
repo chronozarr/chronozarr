@@ -2,13 +2,15 @@ r"""Ingest one AOI from aois.yaml: Sentinel-2 monthly mosaics -> chronozarr stor
 
 Phase 1 (download) searches Planetary Computer for Sentinel-2 L2A scenes, masks clouds with
 the SCL band, and writes one monthly median composite per month to
-<out-dir>/mosaics/<aoi>/YYYY-MM.npz. Months that already exist are skipped.
+<out-dir>/mosaics/<aoi>/YYYY-MM.tif, in strips of the AOI when a month does not fit the memory
+budget. Months that already exist (.tif, or .npz from before 2026-10-11) are skipped.
 
-Phase 2 (encode) stacks those .npz files into a (time, band, y, x) uint16 array and writes it
-with chronozarr.encode to <out-dir>/stores/<aoi>/chronozarr/, with band metadata, a coverage
-plane (1 where at least one scene was valid, 0 where the value is carried forward or missing)
-and provenance recorded in the store. With --stac it also writes a static STAC Collection and
-Item to <out-dir>/stores/<aoi>/stac/.
+Phase 2 (encode) reads those files as one lazy (time, band, y, x) uint16 array, one cell of
+every month at a time, and writes it with chronozarr.encode to
+<out-dir>/stores/<aoi>/chronozarr/, with band metadata, a coverage plane (1 where at least one
+scene was valid, 0 where the value is carried forward or missing) and provenance recorded in
+the store. With --stac it also writes a static STAC Collection and Item to
+<out-dir>/stores/<aoi>/stac/.
 
 Usage:
     uv run python examples/sentinel2_pc/ingest.py --aoi nile_delta
@@ -34,22 +36,35 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import rasterio
 import xarray as xr
 import yaml
 from catalog import PC_STAC_URL, S2_COLLECTION, search_scenes_by_month, sign_href
 from mosaic import (
+    RECORD_KEYS,
+    Grid,
     MemoryBudgetError,
     RunReport,
     SceneReadError,
-    bands_sha256,
     build_monthly_mosaics,
+    load_mosaic,
+    month_record,
     run_summary,
+    save_month,
 )
 from performance import AdaptiveLimiter, Settings, detect_resources, parse_bytes, plan_settings
+from rasterio.crs import CRS  # ty: ignore[unresolved-import]  (compiled module, no stubs)
+from rasterio.windows import Window
+from xarray.backends import BackendArray
+from xarray.core import indexing
 
 import chronozarr
 from chronozarr.schema import Band
@@ -106,6 +121,7 @@ def download_mosaics(
     cpus: int,
     diagnostics: bool = False,
     keep_going: bool = False,
+    strip_rows: int | None = None,
 ) -> dict[str, Path]:
     bbox = tuple(aoi["bbox"])
 
@@ -127,6 +143,7 @@ def download_mosaics(
         report=report,
         limiter=limiter,
         keep_going=keep_going,
+        strip_rows=strip_rows,
     )
 
     elapsed = time.perf_counter() - t0
@@ -149,99 +166,185 @@ def download_mosaics(
     return outputs
 
 
-def _grid(npz: np.lib.npyio.NpzFile) -> tuple:
-    """CRS, affine transform and band names of one mosaic; identical across months."""
-    return (
-        int(npz["epsg"]),
-        tuple(float(v) for v in npz["transform"]),
-        tuple(str(b) for b in npz["band_names"]),
-    )
+class _MonthStack(BackendArray):
+    """Monthly GeoTIFFs as one lazy array, read one window per month on access.
+
+    `band_indexes` are the file bands (1-based) behind the band axis; without a band axis
+    (`plane=True`) the array is (time, y, x) of the single band given, passed through
+    `transform`.
+    """
+
+    def __init__(self, paths, band_indexes, height, width, plane=False, transform=None):
+        self.paths = paths
+        self.band_indexes = band_indexes
+        self.plane = plane
+        self.transform = transform
+        if plane:
+            self.shape = (len(paths), height, width)
+        else:
+            self.shape = (len(paths), len(band_indexes), height, width)
+        self.dtype = np.dtype(np.uint8 if plane else np.uint16)
+
+    def __getitem__(self, key):
+        return indexing.explicit_indexing_adapter(
+            key, self.shape, indexing.IndexingSupport.BASIC, self._read
+        )
+
+    def _read(self, key: tuple) -> np.ndarray:
+        def span(k, n: int) -> tuple[slice, slice | int]:
+            """(contiguous slice to read, selection to apply to what was read)."""
+            if isinstance(k, int | np.integer):
+                return slice(int(k), int(k) + 1), 0
+            start, stop, step = k.indices(n)
+            return slice(start, max(start, stop)), slice(None, None, step)
+
+        times = range(self.shape[0])[key[0]]
+        bands = [self.band_indexes[0]] if self.plane else self.band_indexes
+        if not self.plane:
+            bands = bands[key[1]] if isinstance(key[1], slice) else [bands[key[1]]]
+        (ys, y_sel), (xs, x_sel) = span(key[-2], self.shape[-2]), span(key[-1], self.shape[-1])
+        window = Window.from_slices(ys, xs)
+        planes = []
+        for t in times if isinstance(times, range) else [times]:
+            with rasterio.open(self.paths[t]) as src:
+                data = src.read(bands, window=window)[:, y_sel, x_sel]
+            planes.append(data if self.transform is None else self.transform(data))
+        out = np.stack(planes)
+        if self.plane:
+            out = out[:, 0]
+        else:
+            band_sel = slice(None) if isinstance(key[1], slice) else 0
+            out = out[:, band_sel]
+        return out[0] if isinstance(key[0], int | np.integer) else out
 
 
-def load_mosaic_stack(
-    mosaic_dir: Path, keep_going: bool = False
-) -> tuple[xr.DataArray, xr.DataArray | None, dict[str, list[str]]]:
-    """Stack every YYYY-MM.npz in `mosaic_dir`.
+@dataclass
+class MosaicStack:
+    """The monthly files of an AOI as lazy arrays, ready for chronozarr.encode."""
 
-    Returns the (time, band, y, x) uint16 data, when every file has a `coverage` plane a
-    (time, y, x) uint8 coverage flag (1 where any scene was valid, 0 otherwise), and the months
-    written without some scenes, with those scene IDs.
+    data: xr.DataArray  # (time, band, y, x) uint16
+    coverage: xr.DataArray  # (time, y, x) uint8: 1 where any scene was valid that month
+    incomplete: dict[str, list[str]]  # months written without some scenes -> scene IDs
+
+
+def month_files(mosaic_dir: Path) -> list[Path]:
+    """The monthly files in `mosaic_dir` in time order: YYYY-MM.tif, or .npz from before."""
+    by_month: dict[str, Path] = {}
+    for path in sorted([*mosaic_dir.glob("*.tif"), *mosaic_dir.glob("*.npz")]):
+        if path.stem in by_month:
+            raise SystemExit(f"{path.stem} has both a .tif and an .npz in {mosaic_dir}")
+        by_month[path.stem] = path
+    if not by_month:
+        raise SystemExit(f"No monthly mosaics in {mosaic_dir}; run without --skip-download first")
+    return [by_month[m] for m in sorted(by_month)]
+
+
+@contextmanager
+def open_mosaic_stack(
+    mosaic_dir: Path, keep_going: bool = False, scratch_dir: Path | None = None
+) -> Iterator[MosaicStack]:
+    """Every month in `mosaic_dir` as lazy (time, band, y, x) data and a coverage flag.
+
+    Nothing but the months' records is read here; encoding reads one cell of every month at a
+    time. Months saved as .npz (before 2026-10-11) are first copied to GeoTIFFs, one at a time,
+    in a temporary directory under `scratch_dir` (default: the system's), never in
+    `mosaic_dir`.
 
     Refuses months that list failed scenes unless `keep_going`, and any month whose gaps were
     filled from something other than the month before it in the stack (a month re-run or
     removed after its successor was built).
     """
-    paths = sorted(mosaic_dir.glob("*.npz"))
-    if not paths:
-        raise SystemExit(f"No .npz mosaics in {mosaic_dir}; run without --skip-download first")
+    paths = month_files(mosaic_dir)
+    with tempfile.TemporaryDirectory(prefix=".npz-months-", dir=scratch_dir) as scratch:
+        tifs: list[Path] = []
+        records: list[dict] = []
+        for path in paths:
+            if path.suffix == ".npz":
+                path = _npz_as_tif(path, Path(scratch))
+            tifs.append(path)
+            records.append(month_record(path))
+        reference = records[0]
+        for path, record in zip(paths, records, strict=True):
+            for name in ("epsg", "transform", "shape", "band_names"):
+                if record[name] != reference[name]:
+                    raise SystemExit(f"{path} has a different {name} than {paths[0]}")
 
-    with np.load(paths[0], allow_pickle=False) as first:
-        reference = _grid(first)
-        band_shape = first["bands"].shape
-    epsg, transform, band_names = reference
-
-    stack = np.empty((len(paths), *band_shape), dtype=np.uint16)
-    coverage = np.empty((len(paths), *band_shape[1:]), dtype=np.uint8)
-    has_coverage = True
-    incomplete: dict[str, list[str]] = {}
-    unchecked: list[str] = []
-    stale: list[str] = []
-    for i, path in enumerate(paths):
-        with np.load(path, allow_pickle=False) as npz:
-            bands = npz["bands"]
-            if _grid(npz) != reference or bands.shape != band_shape:
-                raise SystemExit(f"{path} has a different grid, CRS or bands than {paths[0]}")
-            stack[i] = bands
-            if "coverage" in npz:
-                coverage[i] = npz["coverage"] > 0
-            else:
-                has_coverage = False
-            if "scenes_failed" in npz and npz["scenes_failed"].size:
-                incomplete[path.stem] = [str(v) for v in npz["scenes_failed"]]
-            if "carried_from" not in npz:
+        incomplete: dict[str, list[str]] = {}
+        unchecked: list[str] = []
+        stale: list[str] = []
+        for i, (path, record) in enumerate(zip(paths, records, strict=True)):
+            if record["scenes_failed"]:
+                incomplete[path.stem] = record["scenes_failed"]
+            if record["carried_from"] is None:
                 unchecked.append(path.stem)
                 continue
-            carried_from = [str(v) for v in npz["carried_from"]]
-        expected = [] if i == 0 else [paths[i - 1].stem, bands_sha256(stack[i - 1])]
-        if carried_from != expected:
-            source = carried_from[0] if carried_from else "nothing"
-            before = paths[i - 1].stem if i else "nothing"
-            stale.append(f"{path.stem} (filled from {source}; the stack has {before} before it)")
-    if not has_coverage:
-        logger.warning("Some mosaics have no coverage plane; the store will not have one")
-    if stale:
-        raise SystemExit(
-            "These months filled their gaps from a different month than the one before them "
-            f"in {mosaic_dir}: {'; '.join(stale)}. Delete them and the months after them, then "
-            "re-run the download."
-        )
-    if unchecked:
-        logger.info(
-            "%d months were written before carry-forward sources were recorded; their chain "
-            "is not checked",
-            len(unchecked),
-        )
-    if incomplete and not keep_going:
-        listing = "; ".join(f"{m}: {', '.join(ids)}" for m, ids in incomplete.items())
-        raise SystemExit(
-            f"{len(incomplete)} months were written without some scenes (--keep-going): "
-            f"{listing}. Delete those .npz files and re-run the download to retry them, or "
-            "pass --keep-going to encode them; the store's provenance notes then list them."
-        )
+            expected = [] if i == 0 else [paths[i - 1].stem, records[i - 1]["bands_sha256"]]
+            if record["carried_from"] != expected:
+                source = record["carried_from"][0] if record["carried_from"] else "nothing"
+                before = paths[i - 1].stem if i else "nothing"
+                stale.append(
+                    f"{path.stem} (filled from {source}; the stack has {before} before it)"
+                )
+        if stale:
+            raise SystemExit(
+                "These months filled their gaps from a different month than the one before "
+                f"them in {mosaic_dir}: {'; '.join(stale)}. Delete them and the months after "
+                "them, then re-run the download."
+            )
+        if unchecked:
+            logger.info(
+                "%d months were written before carry-forward sources were recorded; their chain "
+                "is not checked",
+                len(unchecked),
+            )
+        if incomplete and not keep_going:
+            listing = "; ".join(f"{m}: {', '.join(ids)}" for m, ids in incomplete.items())
+            raise SystemExit(
+                f"{len(incomplete)} months were written without some scenes (--keep-going): "
+                f"{listing}. Delete those files and re-run the download to retry them, or "
+                "pass --keep-going to encode them; the store's provenance notes then list them."
+            )
 
-    times = np.array([np.datetime64(f"{p.stem}-01", "s") for p in paths])
-    data = xr.DataArray(
-        stack,
-        dims=("time", "band", "y", "x"),
-        coords={"time": times, "band": list(band_names)},
-        attrs={"crs": f"EPSG:{epsg}", "transform": transform},
+        n_bands, height, width = reference["shape"]
+        times = np.array([np.datetime64(f"{p.stem}-01", "s") for p in paths])
+        stack = _MonthStack(tifs, list(range(1, n_bands + 1)), height, width)
+        flags = _MonthStack(
+            tifs, [n_bands + 1], height, width, plane=True, transform=lambda c: c > 0
+        )
+        data = xr.DataArray(
+            xr.Variable(("time", "band", "y", "x"), indexing.LazilyIndexedArray(stack)),
+            coords={"time": times, "band": list(reference["band_names"])},
+            attrs={
+                "crs": f"EPSG:{reference['epsg']}",
+                "transform": tuple(reference["transform"])[:6],
+            },
+        )
+        coverage = xr.DataArray(
+            xr.Variable(("time", "y", "x"), indexing.LazilyIndexedArray(flags)),
+            coords={"time": times},
+        )
+        yield MosaicStack(data, coverage, incomplete)
+
+
+def _npz_as_tif(path: Path, directory: Path) -> Path:
+    """A month saved as .npz, rewritten as a GeoTIFF in `directory` with the same record."""
+    month = load_mosaic(path)
+    count = month["valid_count"]
+    if count is None:  # before scenes_searched was saved: only "any valid scene" is known
+        count = (month["coverage"] > 0).astype(np.uint16)
+    _, height, width = month["bands"].shape
+    grid = Grid(month["transform"], CRS.from_epsg(month["epsg"]), height, width)
+    out = directory / f"{path.stem}.tif"
+    save_month(
+        out,
+        grid,
+        month["epsg"],
+        month["band_names"],
+        month["bands"],
+        count,
+        {k: month[k] for k in RECORD_KEYS},
     )
-    plane = (
-        xr.DataArray(coverage, dims=("time", "y", "x"), coords={"time": times})
-        if has_coverage
-        else None
-    )
-    return data, plane, incomplete
+    return out
 
 
 def band_metadata(names: list[str]) -> list[Band]:
@@ -266,23 +369,24 @@ def provenance_for(incomplete: dict[str, list[str]]) -> dict:
 
 def encode(mosaic_dir: Path, store_dir: Path, keep_going: bool = False) -> None:
     t0 = time.perf_counter()
-    da, coverage, incomplete = load_mosaic_stack(mosaic_dir, keep_going=keep_going)
-    logger.info(
-        "Loaded %d monthly mosaics %s, %.2f GB, %.1fs",
-        da.sizes["time"],
-        da.shape,
-        da.nbytes / 1e9,
-        time.perf_counter() - t0,
-    )
-
-    t0 = time.perf_counter()
-    report = chronozarr.encode(
-        da,
-        store_dir,
-        bands=band_metadata([str(b) for b in da["band"].values]),
-        coverage=coverage,
-        provenance=provenance_for(incomplete),
-    )
+    store_dir.parent.mkdir(parents=True, exist_ok=True)
+    with open_mosaic_stack(mosaic_dir, keep_going, scratch_dir=store_dir.parent) as stack:
+        da = stack.data
+        logger.info(
+            "Found %d monthly mosaics %s (%.2f GB uncompressed), %.1fs",
+            da.sizes["time"],
+            da.shape,
+            da.size * 2 / 1e9,
+            time.perf_counter() - t0,
+        )
+        t0 = time.perf_counter()
+        report = chronozarr.encode(
+            da,
+            store_dir,
+            bands=band_metadata([str(b) for b in da["band"].values]),
+            coverage=stack.coverage,
+            provenance=provenance_for(stack.incomplete),
+        )
     logger.info(
         "Encoded %d levels (true values): %.2f MB in %d files, %.1fs -> %s",
         len(report.levels),
@@ -351,6 +455,13 @@ def main() -> None:
         "(default: half of available memory)",
     )
     perf.add_argument(
+        "--strip-rows",
+        type=int,
+        help="rows per strip of the AOI grid composited at a time, a multiple of 512 (default: "
+        "the whole grid when a month fits the memory budget, else the tallest strips of which "
+        "two fit)",
+    )
+    perf.add_argument(
         "--keep-going",
         action="store_true",
         help="continue when a scene cannot be read: write months with failed scenes (listed in "
@@ -408,8 +519,9 @@ def main() -> None:
                 resources.cpus,
                 diagnostics=args.diagnostics,
                 keep_going=args.keep_going,
+                strip_rows=args.strip_rows,
             )
-        except (MemoryBudgetError, SceneReadError) as e:
+        except (MemoryBudgetError, SceneReadError, ValueError) as e:
             raise SystemExit(f"error: {e}") from e
 
     encode(mosaic_dir, store_dir, keep_going=args.keep_going)

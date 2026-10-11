@@ -1,0 +1,208 @@
+{
+ "tag": "final-c2m2g-warp",
+ "timestamp": "2026-10-11T03:24:37+00:00",
+ "bench_args": [
+  "--workload",
+  "lab-ucayali-x2-warp",
+  "--config",
+  "auto",
+  "--lab",
+  "0,0,0",
+  "--rep",
+  "0"
+ ],
+ "workload": "lab-ucayali-x2-warp",
+ "config": "auto",
+ "rep": 0,
+ "lab": {
+  "latency_ms": 0.0,
+  "bandwidth_mbps": 0.0,
+  "fail_rate": 0.0
+ },
+ "warm": false,
+ "container": {
+  "cpus": "2",
+  "memory": "2g",
+  "memory_swap": "2g",
+  "nofile": null,
+  "exit_code": 0,
+  "oom_killed": false,
+  "cgroup": {
+   "memory.peak": "1150615552",
+   "memory.max": "2147483648",
+   "memory.events": {
+    "low": "0",
+    "high": "0",
+    "max": "0",
+    "oom": "0",
+    "oom_kill": "0",
+    "oom_group_kill": "0"
+   },
+   "cpu.max": {
+    "200000": "100000"
+   },
+   "cpu.stat": {
+    "usage_usec": "105622319",
+    "user_usec": "102239060",
+    "system_usec": "3383258",
+    "nice_usec": "0",
+    "nr_periods": "535",
+    "nr_throttled": "520",
+    "throttled_usec": "614204791",
+    "nr_bursts": "0",
+    "burst_usec": "0"
+   }
+  }
+ },
+ "ok": true,
+ "stderr_tail": "/opt/venv/lib/python3.13/site-packages/rasterio/warp.py:385: NotGeoreferencedWarning: Dataset has no geotransform, gcps, or rpcs. The identity matrix will be returned.\n  dest = _reproject(\n/opt/venv/lib/python3.13/site-packages/rasterio/warp.py:385: NotGeoreferencedWarning: Dataset has no geotransform, gcps, or rpcs. The identity matrix will be returned.\n  dest = _reproject(",
+ "bench_record": {
+  "ok": true,
+  "workload": "lab-ucayali-x2-warp",
+  "config": "auto",
+  "rep": 0,
+  "git_sha": "19b248a",
+  "git_dirty": false,
+  "baseline_ref": null,
+  "timestamp": "2026-10-11T03:24:36+00:00",
+  "machine": {
+   "platform": "Linux-6.12.76-linuxkit-aarch64-with-glibc2.41",
+   "machine": "aarch64",
+   "processor": "",
+   "python": "3.13.16",
+   "resources": {
+    "cpus": 2,
+    "cpu_source": "cgroup CPU quota",
+    "memory_total": 8216215552,
+    "memory_available": 7600189440,
+    "memory_limit": 2095493120,
+    "memory_source": "cgroup memory limit",
+    "open_files": 1048576
+   }
+  },
+  "lab": {
+   "latency_ms": 0.0,
+   "bandwidth_mbps": 0.0,
+   "fail_rate": 0.0
+  },
+  "warm": false,
+  "wall_seconds": 52.019,
+  "first_month_seconds": 52.012,
+  "cpu_seconds": 101.0,
+  "peak_rss_bytes": 1000435712,
+  "gdal_network": {
+   "get_requests": 676,
+   "head_requests": 100,
+   "downloaded_bytes": 1516061942
+  },
+  "lab_server": {
+   "requests": {
+    "HEAD": 100,
+    "GET": 1192
+   },
+   "status": {
+    "200": 100,
+    "206": 1192
+   },
+   "bytes_sent": 1516061942,
+   "bursts": 0,
+   "config": {
+    "latency_ms": 0.0,
+    "bandwidth_mbps": 0.0,
+    "fail_rate": 0.0,
+    "fail_after": 0,
+    "fail_for": 5.0,
+    "max_inflight": 0,
+    "fail_first": 0,
+    "seed": 0
+   }
+  },
+  "nic_rx_bytes": 482,
+  "month_sha256": {
+   "2024-07": "4c65c4999e2564c8613719f8d56b08c69548fcf812d812a554322887d6b6d690"
+  },
+  "output_pixels": 31708112,
+  "output_bytes": 63416224,
+  "useful_MBps": 1.219,
+  "Mpx_per_s": 0.61,
+  "settings": {
+   "adaptive": true,
+   "requests": 8,
+   "max_requests": 16,
+   "cpu_workers": 2,
+   "memory_budget": 1571619840,
+   "memory_budget_source": "75% of 2.0 GiB (cgroup memory limit)",
+   "gdal_cache": 98226240,
+   "reasons": [
+    "2 usable CPUs (cgroup CPU quota)",
+    "cpu_workers=2: all 2 usable CPUs",
+    "max_requests=16: default ceiling 16; raise it to let auto mode climb higher",
+    "requests=8: start value; climbs toward 16 while throughput rises",
+    "memory_budget=1.5 GiB: 75% of 2.0 GiB (cgroup memory limit)",
+    "gdal_cache=93 MiB: 1/16 of the budget, 64-512 MiB"
+   ]
+  },
+  "run_summary": {
+   "wall_seconds": 52.015,
+   "first_window_seconds": 17.811,
+   "first_month_seconds": 52.012,
+   "months": 1,
+   "months_skipped": 0,
+   "window": [
+    512,
+    2812
+   ],
+   "windows_per_month": 6,
+   "window_reason": "2024-07 (20 scenes) needs 3.13 GiB for the whole grid, more than the budget of 1.46 GiB (75% of 2.0 GiB (cgroup memory limit)); a strip of 512 rows needs 1.13 GiB",
+   "memory_estimate_bytes": 1209869376,
+   "scenes": 20,
+   "scenes_no_valid": 6,
+   "scenes_failed": 0,
+   "reads": 576,
+   "reads_native": 0,
+   "read_retries": 0,
+   "http_throttled": 0,
+   "pixel_fraction_read": 1.0,
+   "stage_thread_seconds": {
+    "read": 806.13,
+    "mask": 41.79,
+    "median": 9.52,
+    "write": 1.87
+   },
+   "cpu_seconds": 101.0,
+   "cpu_utilisation": 0.971,
+   "request_slot_occupancy": 0.968,
+   "mean_request_limit": 15.22,
+   "final_request_limit": 16,
+   "limiter_events": [
+    {
+     "t": 0.0,
+     "limit": 8,
+     "rate_MBps": null,
+     "reason": "start"
+    },
+    {
+     "t": 3.35,
+     "limit": 12,
+     "rate_MBps": 3.87,
+     "reason": "throughput rose; probe up"
+    },
+    {
+     "t": 6.77,
+     "limit": 16,
+     "rate_MBps": 5.05,
+     "reason": "throughput rose; probe up"
+    },
+    {
+     "t": 9.97,
+     "limit": 16,
+     "rate_MBps": 12.61,
+     "reason": "at ceiling"
+    }
+   ],
+   "months_not_written": [],
+   "months_incomplete": [],
+   "bottleneck": "CPU: the process used 97% of 2 CPUs"
+  }
+ }
+}

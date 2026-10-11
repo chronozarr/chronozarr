@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 from catalog import SceneRef, search_scenes_by_month, sign_href
-from ingest import DEFAULT_OUT_DIR, load_aoi_config
+from ingest import DEFAULT_OUT_DIR, load_aoi_config, month_files
 from mosaic import (
     _SCL_LUT,
     GDAL_ENV,
@@ -32,6 +32,7 @@ from mosaic import (
     Grid,
     compute_target_grid,
     forget_url,
+    load_mosaic,
     read_asset,
 )
 from rasterio.crs import CRS  # ty: ignore[unresolved-import]  (compiled module, no stubs)
@@ -78,8 +79,7 @@ def attribute(masks: list[np.ndarray], shortfall: np.ndarray) -> list[int]:
 
 
 def audit_month(path: Path, scenes: list[SceneRef], grid: Grid, pool) -> dict:
-    with np.load(path) as data:
-        coverage = data["coverage"]
+    coverage = load_mosaic(path)["coverage"]
     n = len(scenes)
     saved = np.rint(coverage * n).astype(np.int32)
     if not np.allclose(coverage * n, saved, atol=1e-3):
@@ -120,7 +120,7 @@ def main() -> None:
 
     aoi = load_aoi_config(args.aoi)
     mosaic_dir = args.out_dir / "mosaics" / args.aoi
-    paths = {p.stem: p for p in sorted(mosaic_dir.glob("*.npz"))}
+    paths = {p.stem: p for p in month_files(mosaic_dir)}
     if args.months:
         paths = {m: paths[m] for m in args.months.split(",")}
     if not paths:

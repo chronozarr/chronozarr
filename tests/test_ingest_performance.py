@@ -73,8 +73,16 @@ def test_auto_defaults_leave_headroom():
 
 
 def test_memory_limit_beats_available_memory():
-    s = perf.plan_settings(resources(memory_limit=4 * GIB))
-    assert s.memory_budget == 2 * GIB
+    """A cgroup or SLURM limit is memory set aside for the job: three quarters of it. An
+    address-space rlimit counts virtual memory too, and available memory below the limit means
+    a shared machine: half."""
+    cgroup = "cgroup memory limit"
+    s = perf.plan_settings(resources(memory_limit=4 * GIB, memory_source=cgroup))
+    assert s.memory_budget == 3 * GIB
+    rlimit = perf.plan_settings(resources(memory_limit=4 * GIB, memory_source="RLIMIT_AS"))
+    assert rlimit.memory_budget == 2 * GIB
+    shared = perf.plan_settings(resources(memory_limit=20 * GIB, memory_source=cgroup))
+    assert shared.memory_budget == 8 * GIB  # half of the 16 GiB available
 
 
 def test_unknown_memory_gets_conservative_budget():
