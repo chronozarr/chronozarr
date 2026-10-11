@@ -7,10 +7,10 @@ budget. Months that already exist (.tif, or .npz from before 2026-10-11) are ski
 
 Phase 2 (encode) reads those files as one lazy (time, band, y, x) uint16 array, one cell of
 every month at a time, and writes it with chronozarr.encode to
-<out-dir>/stores/<aoi>/chronozarr/, with band metadata, a coverage plane (1 where at least one
-scene was valid, 0 where the value is carried forward or missing) and provenance recorded in
-the store. With --stac it also writes a static STAC Collection and Item to
-<out-dir>/stores/<aoi>/stac/.
+<out-dir>/stores/<aoi>/chronozarr/, with band metadata, a coverage plane (the number of valid
+scenes behind each pixel, saturated at 255; 0 where the value is carried forward or missing)
+and provenance recorded in the store. With --stac it also writes a static STAC Collection and
+Item to <out-dir>/stores/<aoi>/stac/.
 
 Usage:
     uv run python examples/sentinel2_pc/ingest.py --aoi nile_delta
@@ -22,6 +22,8 @@ Usage:
     uv run python examples/sentinel2_pc/ingest.py --aoi nile_delta --diagnostics
     uv run python examples/sentinel2_pc/ingest.py --aoi nile_delta --performance fixed --requests 8
     uv run python examples/sentinel2_pc/ingest.py --aoi nile_delta --max-requests 32
+    uv run python examples/sentinel2_pc/ingest.py --aoi ucayali_santa_maria --skip-download \
+        --scenes-searched bench/s2-ingest/audit-ucayali_santa_maria.json
 
 Performance: by default (--performance auto) the download phase detects usable CPUs and memory
 (including container, SLURM and rlimit caps) and runs 16 concurrent reads. It lowers that number
@@ -93,9 +95,8 @@ PROVENANCE = {
         "pixel and month, the median of scenes whose SCL class is 4, 5, 6, 7 or 11 and whose "
         "bands are non-zero; the +1000 offset of processing baseline 04.00 and later is removed. "
         "A pixel with no valid scene takes the previous month's composite, and stays 0 if there "
-        "is none. coverage is 1 where at least one scene was valid that month and 0 where the "
-        "value is carried forward or missing (the monthly files store the valid fraction, not a "
-        "scene count)."
+        "is none. coverage is the number of valid scenes behind the pixel that month (saturated "
+        "at 255), and 0 where the value is carried forward or missing."
     ),
 }
 STAC_LICENSE = "proprietary"
@@ -223,7 +224,7 @@ class MosaicStack:
     """The monthly files of an AOI as lazy arrays, ready for chronozarr.encode."""
 
     data: xr.DataArray  # (time, band, y, x) uint16
-    coverage: xr.DataArray  # (time, y, x) uint8: 1 where any scene was valid that month
+    coverage: xr.DataArray | None  # (time, y, x) uint8 valid scenes per pixel, max 255
     incomplete: dict[str, list[str]]  # months written without some scenes -> scene IDs
 
 
@@ -241,9 +242,13 @@ def month_files(mosaic_dir: Path) -> list[Path]:
 
 @contextmanager
 def open_mosaic_stack(
-    mosaic_dir: Path, keep_going: bool = False, scratch_dir: Path | None = None
+    mosaic_dir: Path,
+    keep_going: bool = False,
+    scratch_dir: Path | None = None,
+    scenes_searched: dict[str, int] | None = None,
+    no_coverage: bool = False,
 ) -> Iterator[MosaicStack]:
-    """Every month in `mosaic_dir` as lazy (time, band, y, x) data and a coverage flag.
+    """Every month in `mosaic_dir` as lazy (time, band, y, x) data and coverage counts.
 
     Nothing but the months' records is read here; encoding reads one cell of every month at a
     time. Months saved as .npz (before 2026-10-11) are first copied to GeoTIFFs, one at a time,
@@ -253,14 +258,24 @@ def open_mosaic_stack(
     Refuses months that list failed scenes unless `keep_going`, and any month whose gaps were
     filled from something other than the month before it in the stack (a month re-run or
     removed after its successor was built).
+
+    Coverage is the number of valid scenes per pixel, as chronozarr's coverage variable
+    requires, saturated at 255. Months saved as .npz before `scenes_searched` was recorded hold
+    only the valid fraction k / n without n, so the count cannot be recovered from the file; a
+    flag would be a wrong count. Such months are refused unless `scenes_searched` supplies n
+    for each (month -> n, checked by `counts_from_fraction`; a month whose file records a
+    different n is an error) or `no_coverage` asks for a store without coverage.
     """
     paths = month_files(mosaic_dir)
+    scenes_searched = scenes_searched or {}
+    if not no_coverage:
+        _check_supplied_counts(paths, scenes_searched)
     with tempfile.TemporaryDirectory(prefix=".npz-months-", dir=scratch_dir) as scratch:
         tifs: list[Path] = []
         records: list[dict] = []
         for path in paths:
             if path.suffix == ".npz":
-                path = _npz_as_tif(path, Path(scratch))
+                path = _npz_as_tif(path, Path(scratch), scenes_searched.get(path.stem))
             tifs.append(path)
             records.append(month_record(path))
         reference = records[0]
@@ -308,8 +323,13 @@ def open_mosaic_stack(
         n_bands, height, width = reference["shape"]
         times = np.array([np.datetime64(f"{p.stem}-01", "s") for p in paths])
         stack = _MonthStack(tifs, list(range(1, n_bands + 1)), height, width)
-        flags = _MonthStack(
-            tifs, [n_bands + 1], height, width, plane=True, transform=lambda c: c > 0
+        counts = _MonthStack(
+            tifs,
+            [n_bands + 1],
+            height,
+            width,
+            plane=True,
+            transform=lambda c: np.minimum(c, 255).astype(np.uint8),
         )
         data = xr.DataArray(
             xr.Variable(("time", "band", "y", "x"), indexing.LazilyIndexedArray(stack)),
@@ -319,19 +339,114 @@ def open_mosaic_stack(
                 "transform": tuple(reference["transform"])[:6],
             },
         )
-        coverage = xr.DataArray(
-            xr.Variable(("time", "y", "x"), indexing.LazilyIndexedArray(flags)),
-            coords={"time": times},
-        )
+        coverage = None
+        if no_coverage:
+            logger.warning("--no-coverage: the store will have no coverage variable")
+        else:
+            coverage = xr.DataArray(
+                xr.Variable(("time", "y", "x"), indexing.LazilyIndexedArray(counts)),
+                coords={"time": times},
+            )
         yield MosaicStack(data, coverage, incomplete)
 
 
-def _npz_as_tif(path: Path, directory: Path) -> Path:
-    """A month saved as .npz, rewritten as a GeoTIFF in `directory` with the same record."""
+def counts_from_fraction(coverage: np.ndarray, n: int) -> np.ndarray:
+    """Valid-scene counts k from a stored fraction float32(k / n), or ValueError.
+
+    k = rint(coverage * n) is accepted only if float32(k / n), computed as mosaic.py did
+    (`count.astype(np.float32) / n`), reproduces every stored value bit for bit, so a wrong n
+    is caught unless it is a multiple of the true one. When every stored value is 0 or 1 and
+    n > 1 the check cannot tell n apart from any other, so that is refused too.
+    """
+    if not 1 <= n <= np.iinfo(np.uint16).max:
+        raise ValueError(f"n={n} is not a scene count")
+    values = np.unique(coverage)
+    in_range = (values >= 0) & (values <= 1)  # False for NaN
+    counts = np.rint(np.where(in_range, values, 0).astype(np.float64) * n)
+    exact = counts.astype(np.uint16).astype(np.float32) / n == values
+    if not (in_range & exact).all():
+        worst = float(values[~(in_range & exact)][0])
+        raise ValueError(f"coverage {worst!r} is not float32(k / {n}) for any whole k")
+    if n > 1 and np.isin(values, (0.0, 1.0)).all():
+        raise ValueError(f"coverage is only 0 and 1, which cannot confirm n={n}")
+    return np.rint(coverage.astype(np.float64) * n).astype(np.uint16)
+
+
+def _recorded_n(path: Path) -> int | None:
+    """The `scenes_searched` a monthly file records, None for an .npz that predates it."""
+    if path.suffix == ".npz":
+        with np.load(path, allow_pickle=False) as data:
+            return int(data["scenes_searched"]) if "scenes_searched" in data else None
+    return month_record(path)["scenes_searched"]
+
+
+def _check_supplied_counts(paths: list[Path], supplied: dict[str, int]) -> None:
+    """Exit unless every month saved without `scenes_searched` has an n in `supplied` that
+    reproduces its stored fraction, and `supplied` agrees with every month whose file records n.
+    """
+    recorded = {path: _recorded_n(path) for path in paths}
+    missing = [p.stem for p, n in recorded.items() if n is None and p.stem not in supplied]
+    if missing:
+        raise SystemExit(
+            f"{len(missing)} months were saved without scenes_searched, so their stored valid "
+            f"fraction k / n cannot become a scene count: {', '.join(missing)}. Either pass "
+            "--scenes-searched FILE (a JSON mapping of YYYY-MM to the number of scenes searched "
+            "that month, e.g. the audit report from audit_scenes.py), which is checked against "
+            "each month's stored values, or pass --no-coverage to write a store without a "
+            "coverage variable."
+        )
+    bad = []
+    for path, n in recorded.items():
+        if path.stem not in supplied:
+            continue
+        if n is not None:
+            if n != supplied[path.stem]:
+                bad.append(f"{path.stem}: file records n={n}, mapping says {supplied[path.stem]}")
+            continue
+        with np.load(path, allow_pickle=False) as data:
+            coverage = data["coverage"]
+        try:
+            counts_from_fraction(coverage, supplied[path.stem])
+        except ValueError as e:
+            bad.append(f"{path.stem} (n={supplied[path.stem]}): {e}")
+    if bad:
+        raise SystemExit(
+            "--scenes-searched does not match the monthly files; no count is guessed: "
+            + "; ".join(bad)
+        )
+
+
+def read_scenes_searched(path: Path) -> dict[str, int]:
+    """A --scenes-searched file: {"YYYY-MM": n}, or the audit report ({"YYYY-MM": {"n": n}})."""
+    try:
+        raw = json.loads(path.read_text())
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"cannot read --scenes-searched {path}: {e}") from e
+    counts: dict[str, int] = {}
+    for month, value in raw.items() if isinstance(raw, dict) else []:
+        n = value.get("n") if isinstance(value, dict) else value
+        if not isinstance(n, int) or isinstance(n, bool):
+            raise SystemExit(f"{path}: {month} has no integer n (got {value!r})")
+        counts[month] = n
+    if not counts:
+        raise SystemExit(f'{path} must be a JSON object of "YYYY-MM": n')
+    return counts
+
+
+def _npz_as_tif(path: Path, directory: Path, supplied_n: int | None = None) -> Path:
+    """A month saved as .npz, rewritten as a GeoTIFF in `directory` with the same record.
+
+    A month without `scenes_searched` takes `supplied_n` (checked by `counts_from_fraction`);
+    without one it gets a zero count plane, which the caller never reads (--no-coverage).
+    """
     month = load_mosaic(path)
+    record = {k: month[k] for k in RECORD_KEYS}
     count = month["valid_count"]
-    if count is None:  # before scenes_searched was saved: only "any valid scene" is known
-        count = (month["coverage"] > 0).astype(np.uint16)
+    if count is None and supplied_n is not None:
+        count = counts_from_fraction(month["coverage"], supplied_n)
+        record["scenes_searched"] = supplied_n
+    elif count is None:
+        count = np.zeros(month["coverage"].shape, dtype=np.uint16)
     _, height, width = month["bands"].shape
     grid = Grid(month["transform"], CRS.from_epsg(month["epsg"]), height, width)
     out = directory / f"{path.stem}.tif"
@@ -342,7 +457,7 @@ def _npz_as_tif(path: Path, directory: Path) -> Path:
         month["band_names"],
         month["bands"],
         count,
-        {k: month[k] for k in RECORD_KEYS},
+        record,
     )
     return out
 
@@ -367,10 +482,22 @@ def provenance_for(incomplete: dict[str, list[str]]) -> dict:
     return {**PROVENANCE, "notes": str(PROVENANCE["notes"]) + note}
 
 
-def encode(mosaic_dir: Path, store_dir: Path, keep_going: bool = False) -> None:
+def encode(
+    mosaic_dir: Path,
+    store_dir: Path,
+    keep_going: bool = False,
+    scenes_searched: dict[str, int] | None = None,
+    no_coverage: bool = False,
+) -> None:
     t0 = time.perf_counter()
     store_dir.parent.mkdir(parents=True, exist_ok=True)
-    with open_mosaic_stack(mosaic_dir, keep_going, scratch_dir=store_dir.parent) as stack:
+    with open_mosaic_stack(
+        mosaic_dir,
+        keep_going,
+        scratch_dir=store_dir.parent,
+        scenes_searched=scenes_searched,
+        no_coverage=no_coverage,
+    ) as stack:
         da = stack.data
         logger.info(
             "Found %d monthly mosaics %s (%.2f GB uncompressed), %.1fs",
@@ -474,6 +601,21 @@ def main() -> None:
         action="store_true",
         help="print the chosen settings with reasons, the bottleneck and per-stage timings",
     )
+    legacy = parser.add_mutually_exclusive_group()
+    legacy.add_argument(
+        "--scenes-searched",
+        type=Path,
+        metavar="FILE",
+        help="encode phase, for .npz months saved without scenes_searched: a JSON file mapping "
+        "YYYY-MM to the number of scenes searched (audit_scenes.py's report works). Each "
+        "month's stored valid fraction must equal k / n bit for bit, or encoding stops",
+    )
+    legacy.add_argument(
+        "--no-coverage",
+        action="store_true",
+        help="write the store without a coverage variable (needed for .npz months saved "
+        "without scenes_searched unless --scenes-searched is given)",
+    )
     parser.add_argument(
         "--out-dir",
         type=Path,
@@ -524,7 +666,14 @@ def main() -> None:
         except (MemoryBudgetError, SceneReadError, ValueError) as e:
             raise SystemExit(f"error: {e}") from e
 
-    encode(mosaic_dir, store_dir, keep_going=args.keep_going)
+    scenes_searched = read_scenes_searched(args.scenes_searched) if args.scenes_searched else None
+    encode(
+        mosaic_dir,
+        store_dir,
+        keep_going=args.keep_going,
+        scenes_searched=scenes_searched,
+        no_coverage=args.no_coverage,
+    )
     if args.stac:
         emit_stac(store_dir, args.aoi)
     logger.info("Done: %s", args.aoi)
