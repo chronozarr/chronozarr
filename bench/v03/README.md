@@ -21,7 +21,7 @@ From the repository root, once (setup):
 
 ```bash
 cd bench && npm ci && cd ..          # playwright 1.63.0, maplibre-gl, zarr-layer, esbuild: from bench/package-lock.json
-uv sync --extra dev --extra geo      # rasterio for export-cog and the reference read
+uv sync --locked --extra geo         # rasterio for export-cog and the reference read
 # Playwright's Chromium (about 170 MB): `cd bench && npx playwright install chromium` if it is not installed yet
 # Docker Desktop running; the store at data/stores/ucayali_santa_maria_v03 (or BENCH_DATA=<dir that holds stores/...>)
 ```

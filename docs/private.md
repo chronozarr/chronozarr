@@ -4,6 +4,13 @@ A viewer link on `chronozarr.org` shows a store only if the browser can read the
 
 Statements about hosts describe general provider behaviour. Check your provider's documentation. This repository tested none of the auth products named here. Statements about chronozarr come from the code and say where.
 
+The command examples assume the standalone CLI is installed with
+`uv tool install chronozarr`. For a one-off command, use
+`uvx --from chronozarr chronozarr <command>`; for example,
+`uvx --from chronozarr chronozarr validate ./chronozarr-2`. To use the library
+from a Python project, add it with `uv add chronozarr` (or install with
+`pip install chronozarr`).
+
 ## 1. What a viewer link exposes
 
 `https://chronozarr.org/demo/?store=<url>` loads the viewer page from chronozarr.org. The page then reads the store directly from `<url>` in the viewer's browser. chronozarr.org does not host, copy or proxy the data.

@@ -2,8 +2,13 @@
 
 ## Checks
 
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then run these
+commands from the checkout. `.python-version` selects Python 3.13; the package
+continues to support Python 3.11 and newer. The default `dev` dependency group
+installs the test and lint tools. Add development tools with `uv add --dev`.
+
 ```bash
-uv sync --extra dev --extra geo --extra netcdf --extra dask
+uv sync --locked --extra geo --extra netcdf --extra dask
 uv run python scripts/check_architecture.py
 uv run coverage run -m pytest -q -m unit
 uv run coverage report
