@@ -85,6 +85,7 @@ def reproject_ref(
                 "YSCALE": scale,
                 "warp_mem_limit": 8192,
                 "SRC_FILL_RATIO_HEURISTICS": "NO",
+                "tolerance": mosaic.WARP_TOLERANCE[resampling],
             }
         reproject(
             source=rasterio.band(src, 1),
@@ -259,6 +260,33 @@ def test_warp_differs_from_gdal_default_only_within_the_transformer_error(tmp_pa
     local_range = window.max(axis=(2, 3)) - window.min(axis=(2, 3))
     assert np.all(np.abs(ours - gdal)[both] <= local_range[both] // 4 + 1)
     assert ((ours > 0) != (gdal > 0)).sum() <= 2 * (grid.height + grid.width)  # edges only
+
+
+def test_warped_scl_takes_the_source_pixel_under_each_grid_pixel(tmp_path):
+    """The SCL warp decides which scenes count at a pixel, so it must pick the source pixel that
+    contains the grid pixel's centre, computed here with pyproj independently of GDAL. A
+    checkerboard of valid and invalid classes puts a class edge at every source pixel edge,
+    where GDAL's approximate transformer (0.125 pixels) picks the neighbour."""
+    pyproj = pytest.importorskip("pyproj")
+    grid = _grid()
+    t = grid.transform
+    origin = rasterio.warp.transform(CRS.from_epsg(EPSG), CRS.from_epsg(32719), [t.c], [t.f])
+    src_transform = Affine(
+        20, 0, round(origin[0][0] / 20) * 20 - 600, 0, -20, round(origin[1][0] / 20) * 20 + 600
+    )
+    rows, cols = np.indices((160, 160))
+    scl = np.where((rows + cols) % 2 == 0, 4, 8).astype(np.uint8)  # vegetation / cloud
+    href = write_tif(tmp_path / "checker_SCL.tif", scl, src_transform, 32719, block=16)
+    got = np.zeros((grid.height, grid.width), dtype=np.uint8)
+    mosaic.read_asset(href, grid, got, Resampling.nearest, dict(mosaic.GDAL_ENV))
+
+    jj, ii = np.meshgrid(np.arange(grid.width) + 0.5, np.arange(grid.height) + 0.5)
+    to_source = pyproj.Transformer.from_crs(EPSG, 32719, always_xy=True)
+    x, y = to_source.transform(t.c + jj * t.a, t.f + ii * t.e)
+    col = np.floor((x - src_transform.c) / 20).astype(int)
+    row = np.floor((y - src_transform.f) / -20).astype(int)
+    assert (col >= 0).all() and (row >= 0).all() and (col < 160).all() and (row < 160).all()
+    np.testing.assert_array_equal(got, scl[row, col])
 
 
 def test_half_pixel_shift_is_not_native():
@@ -911,3 +939,40 @@ def test_resume_from_an_npz_month_carries_forward_from_it(tmp_path, no_backoff):
     march = mosaic.load_mosaic(outputs["2024-03"])
     assert march["carried_from"] == ["2024-01", mosaic.bands_sha256(jan_bands)]
     assert march["scenes_searched"] == 1
+
+
+def test_a_failed_name_resolve_waits_out_curl_and_keeps_the_request_limit(
+    tmp_path, no_backoff, monkeypatch
+):
+    """libcurl caches a failed resolve on the thread for 30 s, so the retry waits past it, and
+    a local resolver failure is not taken as the host pushing back."""
+    _, by_month = build_case(tmp_path)
+    jan = {"2024-01": by_month["2024-01"][:2]}
+    monkeypatch.setattr(mosaic, "RESOLVE_RETRY_SECONDS", 0.3)
+    read_asset = mosaic.read_asset
+    failed: set[str] = set()
+
+    def flaky(href, *args, **kwargs):
+        if href not in failed:
+            failed.add(href)
+            raise rasterio.errors.RasterioIOError("CURL error: Could not resolve host: example")
+        return read_asset(href, *args, **kwargs)
+
+    monkeypatch.setattr(mosaic, "read_asset", flaky)
+    limiter = performance.AdaptiveLimiter(4, 4, adaptive=True)
+    report = mosaic.RunReport()
+    outputs = mosaic.build_monthly_mosaics(
+        jan,
+        BBOX,
+        EPSG,
+        tmp_path / "out",
+        settings=settings(requests=4, max_requests=4),
+        sign=str,
+        report=report,
+        limiter=limiter,
+    )
+    assert report.read_retries == len(failed) and report.scenes_failed == 0
+    assert limiter.limit == 4 and limiter.failures == 0
+    assert report.wall_seconds >= 0.3
+    expected = reference_mosaics(jan, _grid())["2024-01"][0]
+    np.testing.assert_array_equal(load(outputs["2024-01"])[0], expected)
