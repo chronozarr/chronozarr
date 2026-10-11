@@ -976,3 +976,46 @@ def test_a_failed_name_resolve_waits_out_curl_and_keeps_the_request_limit(
     assert report.wall_seconds >= 0.3
     expected = reference_mosaics(jan, _grid())["2024-01"][0]
     np.testing.assert_array_equal(load(outputs["2024-01"])[0], expected)
+
+
+def test_a_run_interrupted_inside_a_month_resumes_to_the_same_files(
+    tmp_path, no_backoff, small_cells, monkeypatch
+):
+    """An interrupt while a month's strips are being written leaves the earlier months and no
+    partial file; the next run writes the rest, equal to an uninterrupted run."""
+    _, by_month = build_case(tmp_path)
+    run = {"2024-01": by_month["2024-01"], "2024-03": by_month["2024-03"]}
+    reference = month_files(
+        mosaic.build_monthly_mosaics(
+            run, BBOX, EPSG, tmp_path / "once", settings=settings(), sign=str, strip_rows=32
+        )
+    )
+    write = mosaic._MonthWriter.write
+    calls: list[str] = []
+
+    def interrupted(self, window, bands, count):
+        calls.append(self.path.stem)
+        if self.path.stem == "2024-03" and calls.count("2024-03") == 2:
+            raise KeyboardInterrupt
+        write(self, window, bands, count)
+
+    out = tmp_path / "resumed"
+    monkeypatch.setattr(mosaic._MonthWriter, "write", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        mosaic.build_monthly_mosaics(
+            run, BBOX, EPSG, out, settings=settings(), sign=str, strip_rows=32
+        )
+    assert sorted(p.name for p in out.iterdir()) == ["2024-01.tif"]
+    monkeypatch.setattr(mosaic._MonthWriter, "write", write)
+    report = mosaic.RunReport()
+    resumed = month_files(
+        mosaic.build_monthly_mosaics(
+            run, BBOX, EPSG, out, settings=settings(), sign=str, strip_rows=32, report=report
+        )
+    )
+    assert report.months_skipped == 1
+    for key, month in reference.items():
+        for name in ("bands", "valid_count"):
+            np.testing.assert_array_equal(resumed[key][name], month[name], err_msg=key)
+        for name in ("bands_sha256", "carried_from", "scenes_searched", "scenes_failed"):
+            assert resumed[key][name] == month[name], (key, name)
