@@ -1079,3 +1079,68 @@ def test_a_run_interrupted_inside_a_month_resumes_to_the_same_files(
             np.testing.assert_array_equal(resumed[key][name], month[name], err_msg=key)
         for name in ("bands_sha256", "carried_from", "scenes_searched", "scenes_failed"):
             assert resumed[key][name] == month[name], (key, name)
+
+
+def test_an_interrupt_does_not_wait_out_a_retry(tmp_path, no_backoff, monkeypatch):
+    """A read waiting to retry (here the 30 s wait after a failed name resolve) stops as soon
+    as the run is interrupted, instead of sleeping on while the pools shut down."""
+    import time
+
+    _, by_month = build_case(tmp_path)
+    monkeypatch.setattr(mosaic, "READ_ATTEMPTS", 6)
+    monkeypatch.setattr(mosaic, "RESOLVE_RETRY_SECONDS", 30.0)
+
+    def unresolvable(*args, **kwargs):
+        raise rasterio.errors.RasterioIOError("CURL error: Could not resolve host: example")
+
+    monkeypatch.setattr(mosaic, "read_asset", unresolvable)
+    real_wait = mosaic.wait
+    calls = []
+
+    def interrupted_wait(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            time.sleep(0.5)  # let the reads fail and start their retry wait
+            raise KeyboardInterrupt
+        return real_wait(*args, **kwargs)
+
+    monkeypatch.setattr(mosaic, "wait", interrupted_wait)
+    t0 = time.perf_counter()
+    with pytest.raises(KeyboardInterrupt):
+        mosaic.build_monthly_mosaics(
+            {"2024-01": by_month["2024-01"]},
+            BBOX,
+            EPSG,
+            tmp_path / "out",
+            settings=settings(),
+            sign=str,
+        )
+    assert time.perf_counter() - t0 < 5
+
+
+def test_months_record_the_software_and_a_resume_on_other_versions_warns(
+    tmp_path, no_backoff, monkeypatch, caplog
+):
+    """Warped pixels depend on the rasterio version (rasterio before 1.5 cannot pass the band
+    warp tolerance), so each month records it, and resuming with other versions says so."""
+    import stat
+
+    _, by_month = build_case(tmp_path)
+    out = tmp_path / "out"
+    mosaic.build_monthly_mosaics(
+        {"2024-01": by_month["2024-01"]}, BBOX, EPSG, out, settings=settings(), sign=str
+    )
+    january = mosaic.month_record(out / "2024-01.tif")
+    assert january["software"] == mosaic.software()
+    assert stat.S_IMODE((out / "2024-01.tif").stat().st_mode) & 0o044  # readable by others
+    monkeypatch.setattr(mosaic, "software", lambda: {"rasterio": "9.9", "gdal": "9.9"})
+    with caplog.at_level("WARNING", logger="mosaic"):
+        mosaic.build_monthly_mosaics(
+            {"2024-01": by_month["2024-01"], "2024-03": by_month["2024-03"]},
+            BBOX,
+            EPSG,
+            out,
+            settings=settings(),
+            sign=str,
+        )
+    assert "2024-01.tif was written with" in caplog.text

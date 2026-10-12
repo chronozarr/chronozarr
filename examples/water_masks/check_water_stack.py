@@ -21,12 +21,16 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 from pathlib import Path
 
 import numpy as np
 import xarray as xr
 
 import chronozarr
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sentinel2_pc"))
+from months import month_arrays, month_path
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -44,10 +48,10 @@ def recompute(
     npz_path: Path, boa_offset_from: str | None, threshold: int
 ) -> tuple[np.ndarray, ...]:
     """(ndwi int16, water int16 0 or 10000, valid bool) of one mosaic, straight from its arrays."""
-    with np.load(npz_path, allow_pickle=False) as npz:
-        names = [str(b) for b in npz["band_names"]]
-        bands = npz["bands"].astype(np.int32)
-        valid = npz["coverage"] > 0
+    npz = month_arrays(npz_path)
+    names = [str(b) for b in npz["band_names"]]
+    bands = npz["bands"].astype(np.int32)
+    valid = npz["coverage"] > 0
     if boa_offset_from is not None and npz_path.stem >= boa_offset_from:
         bands = np.where(bands > 0, np.maximum(bands - 1000, 1), 0)
     green, nir = bands[names.index("B03")], bands[names.index("B08")]
@@ -97,9 +101,10 @@ def main() -> None:
     )
     t = list(stored["time"].dt.strftime("%Y-%m").values).index(month)
     threshold = round(float(rows[month]["threshold"]) * 1e4)
-    ndwi, water, valid = recompute(
-        DATA / "mosaics" / args.aoi / f"{month}.npz", args.boa_offset_from, threshold
-    )
+    path = month_path(DATA / "mosaics" / args.aoi, month)
+    if path is None:
+        raise SystemExit(f"no mosaic for {month} in {DATA / 'mosaics' / args.aoi}")
+    ndwi, water, valid = recompute(path, args.boa_offset_from, threshold)
     print(f"month {month} (t={t}): threshold {threshold} stored units, {valid.sum()} valid pixels")
 
     window = physical.isel(time=t, band=0).data.values

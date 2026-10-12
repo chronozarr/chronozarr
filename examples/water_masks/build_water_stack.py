@@ -1,6 +1,6 @@
 """Derive a water-mask chronozarr store from an AOI's monthly Sentinel-2 mosaics.
 
-Reads data/mosaics/<aoi>/YYYY-MM.npz (the ingest in examples/sentinel2_pc) and writes
+Reads data/mosaics/<aoi>/YYYY-MM.tif or .npz (the ingest in examples/sentinel2_pc) and writes
 data/stores/<aoi>/<store-name>/ on the AOI's native UTM grid with two int16 bands:
 
     ndwi   (green - nir) / (green + nir) from B03 and B08, stored x10000 (scale 1e-4)
@@ -58,6 +58,7 @@ import csv
 import itertools
 import shutil
 import struct
+import sys
 import time
 import zlib
 from collections.abc import Iterator
@@ -65,6 +66,9 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sentinel2_pc"))
+from months import month_arrays, month_files
 
 import chronozarr
 from chronozarr.schema import Band
@@ -135,7 +139,7 @@ class Derived:
     red: np.ndarray
 
 
-def read_grid(npz: np.lib.npyio.NpzFile) -> Grid:
+def read_grid(npz: dict) -> Grid:
     coverage = npz["coverage"]
     return Grid(
         shape=(int(coverage.shape[0]), int(coverage.shape[1])),
@@ -149,19 +153,19 @@ def scan(paths: list[Path]) -> tuple[Grid, list[Month]]:
     months: list[Month] = []
     grid: Grid | None = None
     for path in paths:
-        with np.load(path, allow_pickle=False) as npz:
-            here = read_grid(npz)
-            if grid is None:
-                grid = here
-            elif here != grid:
-                raise SystemExit(f"{path} has a different grid or CRS than {paths[0]}: {here}")
-            months.append(
-                Month(
-                    path=path,
-                    time=np.datetime64(f"{path.stem}-01", "s"),
-                    valid_px=int(np.count_nonzero(npz["coverage"] > 0)),
-                )
+        npz = month_arrays(path)
+        here = read_grid(npz)
+        if grid is None:
+            grid = here
+        elif here != grid:
+            raise SystemExit(f"{path} has a different grid or CRS than {paths[0]}: {here}")
+        months.append(
+            Month(
+                path=path,
+                time=np.datetime64(f"{path.stem}-01", "s"),
+                valid_px=int(np.count_nonzero(npz["coverage"] > 0)),
             )
+        )
     assert grid is not None
     return grid, months
 
@@ -170,10 +174,10 @@ def load_month(
     path: Path, boa_offset_from: str | None
 ) -> tuple[dict[str, np.ndarray], np.ndarray]:
     """The month's bands by name (uint16 DN, offset-corrected when asked) and its coverage."""
-    with np.load(path, allow_pickle=False) as npz:
-        names = [str(b) for b in npz["band_names"]]
-        bands = npz["bands"]
-        coverage = npz["coverage"]
+    npz = month_arrays(path)
+    names = [str(b) for b in npz["band_names"]]
+    bands = npz["bands"]
+    coverage = npz["coverage"]
     missing = {GREEN, NIR, BLUE} - set(names)
     if missing:
         raise SystemExit(f"{path} lacks bands {sorted(missing)}; it has {names}")
@@ -399,9 +403,9 @@ def main() -> None:
     if not -NDWI_LIMIT <= floor <= NDWI_LIMIT:
         raise SystemExit(f"--floor {args.floor} is outside the NDWI range -1..1")
 
-    paths = sorted((args.mosaic_root / args.aoi).glob("*.npz"))
+    paths = month_files(args.mosaic_root / args.aoi)
     if not paths:
-        raise SystemExit(f"no .npz mosaics in {args.mosaic_root / args.aoi}; run the ingest first")
+        raise SystemExit(f"no mosaics in {args.mosaic_root / args.aoi}; run the ingest first")
     if args.months:
         paths = paths[: args.months]
     out = args.out_root / args.aoi / args.store_name
