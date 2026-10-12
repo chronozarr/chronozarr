@@ -143,6 +143,21 @@ def _linux_available() -> int | None:
     return None
 
 
+CGROUP = Path("/sys/fs/cgroup")
+
+
+def _stat_value(path: Path, key: str) -> int:
+    """The value of `key` in a cgroup memory.stat file, 0 when absent."""
+    try:
+        for line in path.read_text().splitlines():
+            name, _, value = line.partition(" ")
+            if name == key and value.strip().isdigit():
+                return int(value)
+    except OSError:
+        pass
+    return 0
+
+
 def detect_memory() -> tuple[int | None, int | None, int | None, str]:
     """(total, available, limit, source). The limit is a cgroup, SLURM or rlimit cap if any."""
     total = None
@@ -159,17 +174,26 @@ def detect_memory() -> tuple[int | None, int | None, int | None, str]:
         available = None
 
     limits: list[tuple[int, str]] = []
-    for path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
-        value = _read_int(path)
+    # cgroup v2, then v1: (limit, usage, memory.stat, its key for reclaimable page cache).
+    for limit_file, usage_file, stat_file, cache_key in (
+        ("memory.max", "memory.current", "memory.stat", "inactive_file"),
+        (
+            "memory/memory.limit_in_bytes",
+            "memory/memory.usage_in_bytes",
+            "memory/memory.stat",
+            "total_inactive_file",
+        ),
+    ):
+        value = _read_int(str(CGROUP / limit_file))
         if value and (total is None or value < total):
-            usage = _read_int(
-                path.replace("memory.max", "memory.current").replace(
-                    "limit_in_bytes", "usage_in_bytes"
-                )
+            # Usage counts the page cache, which the kernel reclaims before it runs out; only
+            # the rest is taken. Files written earlier in the cgroup otherwise shrink the budget.
+            usage = (_read_int(str(CGROUP / usage_file)) or 0) - _stat_value(
+                CGROUP / stat_file, cache_key
             )
-            limits.append((value - (usage or 0), "cgroup memory limit"))
+            limits.append((max(0, value - max(0, usage)), "cgroup memory limit"))
     slurm_node = os.environ.get("SLURM_MEM_PER_NODE")
-    if slurm_node and slurm_node.isdigit():
+    if slurm_node and slurm_node.isdigit() and int(slurm_node) > 0:
         limits.append((int(slurm_node) * MIB, "SLURM_MEM_PER_NODE"))
     slurm_cpu = os.environ.get("SLURM_MEM_PER_CPU")
     if slurm_cpu and slurm_cpu.isdigit():

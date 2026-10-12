@@ -1079,3 +1079,40 @@ def test_a_run_interrupted_inside_a_month_resumes_to_the_same_files(
             np.testing.assert_array_equal(resumed[key][name], month[name], err_msg=key)
         for name in ("bands_sha256", "carried_from", "scenes_searched", "scenes_failed"):
             assert resumed[key][name] == month[name], (key, name)
+
+
+def test_an_interrupt_does_not_wait_out_a_retry(tmp_path, no_backoff, monkeypatch):
+    """A read waiting to retry (here the 30 s wait after a failed name resolve) stops as soon
+    as the run is interrupted, instead of sleeping on while the pools shut down."""
+    import time
+
+    _, by_month = build_case(tmp_path)
+    monkeypatch.setattr(mosaic, "READ_ATTEMPTS", 6)
+    monkeypatch.setattr(mosaic, "RESOLVE_RETRY_SECONDS", 30.0)
+
+    def unresolvable(*args, **kwargs):
+        raise rasterio.errors.RasterioIOError("CURL error: Could not resolve host: example")
+
+    monkeypatch.setattr(mosaic, "read_asset", unresolvable)
+    real_wait = mosaic.wait
+    calls = []
+
+    def interrupted_wait(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            time.sleep(0.5)  # let the reads fail and start their retry wait
+            raise KeyboardInterrupt
+        return real_wait(*args, **kwargs)
+
+    monkeypatch.setattr(mosaic, "wait", interrupted_wait)
+    t0 = time.perf_counter()
+    with pytest.raises(KeyboardInterrupt):
+        mosaic.build_monthly_mosaics(
+            {"2024-01": by_month["2024-01"]},
+            BBOX,
+            EPSG,
+            tmp_path / "out",
+            settings=settings(),
+            sign=str,
+        )
+    assert time.perf_counter() - t0 < 5
