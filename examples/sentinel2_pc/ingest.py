@@ -43,6 +43,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+import months
 import numpy as np
 import rasterio
 import xarray as xr
@@ -154,7 +155,7 @@ def download_mosaics(
         logger.warning(
             "--keep-going: %d months written without some scenes (%s) and %d months not "
             "written because every scene failed (%s). Encoding refuses the incomplete months "
-            "unless --keep-going is given again; delete their .npz files and re-run to retry.",
+            "unless --keep-going is given again; delete their monthly files and re-run to retry.",
             len(report.months_incomplete),
             ", ".join(report.months_incomplete) or "none",
             len(report.months_not_written),
@@ -229,14 +230,13 @@ class MosaicStack:
 
 def month_files(mosaic_dir: Path) -> list[Path]:
     """The monthly files in `mosaic_dir` in time order: YYYY-MM.tif, or .npz from before."""
-    by_month: dict[str, Path] = {}
-    for path in sorted([*mosaic_dir.glob("*.tif"), *mosaic_dir.glob("*.npz")]):
-        if path.stem in by_month:
-            raise SystemExit(f"{path.stem} has both a .tif and an .npz in {mosaic_dir}")
-        by_month[path.stem] = path
-    if not by_month:
+    try:
+        paths = months.month_files(mosaic_dir)
+    except ValueError as e:
+        raise SystemExit(str(e)) from e
+    if not paths:
         raise SystemExit(f"No monthly mosaics in {mosaic_dir}; run without --skip-download first")
-    return [by_month[m] for m in sorted(by_month)]
+    return paths
 
 
 @contextmanager

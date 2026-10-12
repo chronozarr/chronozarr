@@ -1,6 +1,6 @@
 """Measure what appending one date to a chronozarr store costs, on real monthly mosaics.
 
-Reads data/mosaics/<aoi>/YYYY-MM.npz (the files `reencode_aoi.py` reads). For each layout
+Reads data/mosaics/<aoi>/YYYY-MM.tif or .npz (the files `reencode_aoi.py` reads). For each layout
 (whole-axis shard, shard_time=12, unsharded) with true stored values it builds a store
 from the first months, appends the next months one at a time, and records per operation: wall
 seconds and peak RSS (each operation runs in its own process), the objects and bytes written
@@ -163,8 +163,7 @@ def diff(before: dict, after: dict) -> dict:
 
 def load_month(index: int, aoi: str) -> np.ndarray:
     paths = live.mosaic_paths(MOSAICS / aoi)
-    with np.load(paths[index], allow_pickle=False) as npz:
-        return npz["bands"]
+    return live.month_arrays(paths[index])["bands"]
 
 
 def verify(store: Path, n_time: int, aoi: str) -> None:
