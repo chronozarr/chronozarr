@@ -1,0 +1,54 @@
+{
+ "tag": "c1m3g-baseline-r0",
+ "timestamp": "2026-10-10T15:46:46+00:00",
+ "bench_args": [
+  "--workload",
+  "lab-ucayali-x2",
+  "--config",
+  "baseline",
+  "--rep",
+  "0"
+ ],
+ "workload": "lab-ucayali-x2",
+ "config": "baseline",
+ "rep": 0,
+ "lab": null,
+ "warm": false,
+ "container": {
+  "cpus": "1",
+  "memory": "3g",
+  "memory_swap": "3g",
+  "nofile": null,
+  "exit_code": 137,
+  "oom_killed": true,
+  "cgroup": {
+   "memory.peak": "3221225472",
+   "memory.max": "3221225472",
+   "memory.events": {
+    "low": "0",
+    "high": "0",
+    "max": "139",
+    "oom": "2",
+    "oom_kill": "1",
+    "oom_group_kill": "0"
+   },
+   "cpu.max": {
+    "100000": "100000"
+   },
+   "cpu.stat": {
+    "usage_usec": "2397484",
+    "user_usec": "2134002",
+    "system_usec": "263481",
+    "nice_usec": "0",
+    "nr_periods": "25",
+    "nr_throttled": "17",
+    "throttled_usec": "3996300",
+    "nr_bursts": "0",
+    "burst_usec": "0"
+   }
+  }
+ },
+ "ok": false,
+ "stderr_tail": "/opt/venv/lib/python3.13/site-packages/rasterio/warp.py:385: NotGeoreferencedWarning: Dataset has no geotransform, gcps, or rpcs. The identity matrix will be returned.\n  dest = _reproject(\n/opt/venv/lib/python3.13/site-packages/rasterio/warp.py:385: NotGeoreferencedWarning: Dataset has no geotransform, gcps, or rpcs. The identity matrix will be returned.\n  dest = _reproject(\nKilled",
+ "bench_record": null
+}

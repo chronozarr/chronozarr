@@ -1,0 +1,60 @@
+{
+ "tag": "fix-1c2g",
+ "timestamp": "2026-10-10T16:05:02+00:00",
+ "bench_args": [
+  "--workload",
+  "lab-ucayali-x2",
+  "--config",
+  "auto",
+  "--lab",
+  "0,0,0",
+  "--rep",
+  "0"
+ ],
+ "workload": "lab-ucayali-x2",
+ "config": "auto",
+ "rep": 0,
+ "lab": {
+  "latency_ms": 0.0,
+  "bandwidth_mbps": 0.0,
+  "fail_rate": 0.0
+ },
+ "warm": false,
+ "container": {
+  "cpus": "1",
+  "memory": "2g",
+  "memory_swap": "2g",
+  "nofile": null,
+  "exit_code": 137,
+  "oom_killed": true,
+  "cgroup": {
+   "memory.peak": "2147672064",
+   "memory.max": "2147483648",
+   "memory.events": {
+    "low": "0",
+    "high": "0",
+    "max": "606",
+    "oom": "1",
+    "oom_kill": "1",
+    "oom_group_kill": "0"
+   },
+   "cpu.max": {
+    "100000": "100000"
+   },
+   "cpu.stat": {
+    "usage_usec": "11937023",
+    "user_usec": "10259149",
+    "system_usec": "1677874",
+    "nice_usec": "0",
+    "nr_periods": "121",
+    "nr_throttled": "114",
+    "throttled_usec": "47083176",
+    "nr_bursts": "0",
+    "burst_usec": "0"
+   }
+  }
+ },
+ "ok": false,
+ "stderr_tail": "2024-07 needs about 2.26 GB (20 scenes) and the budget is 1.05 GB. It is read alone; if less memory than that is actually free, the process may be killed. Raise --memory if the machine has it, or use a smaller AOI\nKilled",
+ "bench_record": null
+}
