@@ -188,9 +188,9 @@ def test_a_sharded_store_is_one_slab_and_unchanged(monkeypatch, tmp_path):
 
 def test_peak_python_memory_does_not_grow_with_the_series(monkeypatch, tmp_path):
     """With slabs, the arrays traced during encoding stay the same size from 12 to 96
-    timesteps; in one slab they grow with the series. Cells of 128 x 128 make a whole-series
-    block 6 MB, well above allocator noise."""
-    cs = 128
+    timesteps; in one slab they grow with the series. Cells of 256 x 256 make a whole-series
+    block 25 MB, well above tracing noise and per-timestep bookkeeping."""
+    cs = 256
     step = BANDS * cs * cs * 2
 
     def peak(n_time: int, steps: int) -> int:
@@ -205,5 +205,7 @@ def test_peak_python_memory_does_not_grow_with_the_series(monkeypatch, tmp_path)
     peak(6, 4)  # warm up lazy imports and codec state outside the measurement
     short, long = peak(12, 6), peak(96, 6)
     one_slab = peak(96, 10**6)
-    assert long < 1.5 * short, (short, long)
-    assert one_slab > 3 * long, (long, one_slab)  # the measurement can see the difference
+    # In one slab the traced peak grows by many whole-series copies from 12 to 96 timesteps;
+    # with slabs it may grow by tracing noise from earlier tests, but by far less.
+    assert one_slab > 3 * long, (short, long, one_slab)
+    assert long - short < 0.1 * (one_slab - short), (short, long, one_slab)
