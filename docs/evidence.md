@@ -655,6 +655,15 @@ The DNS failures were then reproduced and instrumented on a small scale (SCL rea
 
 **Encode.** On the 117 Ucayali months on disk (legacy `.npz`), PR #90's encode stacked all months: 30.5 s and 10.2 GB peak RSS. The lazy reader took 56.6 s and 3.3 GB, of which 29.9 s copied the legacy months to temporary GeoTIFFs one at a time (months written by the new pipeline skip that). The two stores are equal in every value of every level, time step, band and coverage. What remained is chronozarr's own encoder, which held a cell of every time step in flight; #99 walks unsharded stores in time slabs of about 64 MiB per cell. With it, the same 117 months encode at 1.34 GB peak RSS (32.6 s for the encode step), and the stores from PR #90, from the lazy reader and from the lazy reader with slabs are byte-identical in all 11,574 files.
 
+### Integration check (2026-10-12)
+
+`main` (82b4e6b) with #99, #97 (containing #95 and #90) and #96 merged, no conflicts in any order. CI on that tree (branch `integ/final-merge-check`) passed every job, and locally the `unit` tests passed on Python 3.13 (1186, rasterio 1.5) and 3.11 (1185 plus 1 skipped, rasterio 1.4.4).
+
+- Real data (`bench/s2-ingest/e2e_check.py`, two months across the UTM 18/19 boundary, all 11 scenes warped): the whole grid equals 512-row strips at another concurrency (bands, counts, month digest, carry-forward chain); no pixel counts a scene that an SCL-only pyproj count excludes (10 of 1.24 million count fewer, where a band is 0); stores encoded in default, one and one-timestep time slabs are byte-identical, with coverage equal to the counts.
+- Lab server, against #90 (`eb61343`), median of 3: native workloads bit-exact; 20 scenes 1.60 s against 2.87 s (2.45 against 3.29 GB), 4 months 3.02 against 5.86 s, 5 km box 0.30 against 0.32 s; with 2 % random 503s every run bit-exact with no scene failed; the all-warped month 6.37 against 3.98 s, the cost of exact SCL inclusion.
+- Docker: 2 CPUs and 2 GB, 3 strips, 7.3 s, peak RSS 0.89 GiB of a 1.44 GiB budget (#90 refuses); 1 CPU and 1.5 GB, 6 strips, 16.4 s, 0.70 of 1.06 GiB; warp month with 2 CPUs, 22.2 s, 0.92 of 1.46 GiB; 4 months with 1 CPU, 30.5 s, 1.17 of 1.46 GiB.
+- Encoding 1024 x 1024 x 4 GeoTIFF months through the lazy reader, peak RSS at 60, 120 and 240 months: 626, 654 and 825 MiB in time slabs; 889, 1668 and 2693 MiB in one slab; 921, 1572 and 2838 MiB sharded (`shard_time` 12), so sharded encoding still grows with the length of the series.
+
 ### Tried and not kept
 
 - `GDAL_NUM_THREADS` of 2 or more on a partial window: GDAL fetches the needed tiles in one multi-range batch, 22 % fewer bytes (486 against 595 MB, 184 against 386 requests on the 6-scene Yukon month) but 30 to 45 % longer wall time at 8 concurrent reads on the home link. GDAL stays at its default of 1.
