@@ -207,5 +207,7 @@ def test_peak_python_memory_does_not_grow_with_the_series(monkeypatch, tmp_path)
     one_slab = peak(96, 10**6)
     # In one slab the traced peak grows by many whole-series copies from 12 to 96 timesteps;
     # with slabs it may grow by tracing noise from earlier tests, but by far less.
-    assert one_slab > 3 * long, (short, long, one_slab)
+    # Peaks include whatever earlier tests left traced, so compare growth, not levels: one slab
+    # holds at least the 84 extra timesteps of a cell, slabs a small fraction of that.
+    assert one_slab - short > 84 * step, (short, long, one_slab)
     assert long - short < 0.1 * (one_slab - short), (short, long, one_slab)
