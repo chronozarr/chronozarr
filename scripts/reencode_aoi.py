@@ -1,6 +1,6 @@
 """Re-encode one AOI's monthly mosaics as a chronozarr store, streaming one month at a time.
 
-Reads data/mosaics/<aoi>/YYYY-MM.npz (bands, transform, epsg, band_names) and writes
+Reads data/mosaics/<aoi>/YYYY-MM.tif or .npz (bands, transform, epsg, band_names) and writes
 data/stores/<aoi>/<store-name>/. Months are read lazily and handed to `chronozarr.encode` as an
 iterable, so peak memory does not grow with the number of months. Prints wall time per phase.
 
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import sys
 import time
 from collections import deque
 from collections.abc import Iterator
@@ -22,10 +23,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from numpy.lib.npyio import NpzFile
 
 import chronozarr
 from chronozarr.schema import Band
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples" / "sentinel2_pc"))
+from months import month_arrays, month_files
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
@@ -66,14 +69,14 @@ class Grid:
 
 
 def mosaic_paths(mosaic_dir: Path, months: int | None = None) -> list[Path]:
-    """Sorted YYYY-MM.npz files of an AOI, optionally only the first `months`."""
-    paths = sorted(mosaic_dir.glob("*.npz"))
+    """The monthly files of an AOI in time order, optionally only the first `months`."""
+    paths = month_files(mosaic_dir)
     if not paths:
-        raise SystemExit(f"no .npz mosaics in {mosaic_dir}; run the ingest first")
+        raise SystemExit(f"no mosaics in {mosaic_dir}; run the ingest first")
     return paths[:months] if months else paths
 
 
-def grid_of(npz: NpzFile) -> Grid:
+def grid_of(npz: dict) -> Grid:
     n_bands, height, width = npz["bands"].shape
     return Grid(
         shape=(int(n_bands), int(height), int(width)),
@@ -84,8 +87,7 @@ def grid_of(npz: NpzFile) -> Grid:
 
 
 def read_grid(path: Path) -> Grid:
-    with np.load(path, allow_pickle=False) as npz:
-        return grid_of(npz)
+    return grid_of(month_arrays(path))
 
 
 def mosaic_times(paths: list[Path]) -> np.ndarray:
@@ -109,10 +111,10 @@ def iter_mosaics(paths: list[Path], grid: Grid, lookahead: int = 4) -> Iterator[
     """Yield each month's (band, y, x) uint16 array in order, decompressing a few months ahead."""
 
     def load(path: Path) -> np.ndarray:
-        with np.load(path, allow_pickle=False) as npz:
-            if grid_of(npz) != grid:
-                raise SystemExit(f"{path} has a different grid, CRS or bands than {paths[0]}")
-            return npz["bands"]
+        npz = month_arrays(path)
+        if grid_of(npz) != grid:
+            raise SystemExit(f"{path} has a different grid, CRS or bands than {paths[0]}")
+        return npz["bands"]
 
     with ThreadPoolExecutor(max_workers=lookahead) as pool:
         pending: deque[Future[np.ndarray]] = deque()

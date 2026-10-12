@@ -74,6 +74,16 @@ out="$(mktemp)"
 err="$(mktemp)"
 
 limits=(--cpus "$cpus" --memory "$memory" --memory-swap "$memory")
+# A git worktree's .git is a file naming the main repository's git directory, and its mirror may
+# be a link to the main checkout's: mount both read-only at their own paths.
+mounts=(-v "$repo:/repo:ro" -v "$repo/data/bench:/repo/data/bench")
+if [[ -L "$repo/data/bench/mirror" ]]; then
+  mounts+=(-v "$(cd "$repo/data/bench/mirror" && pwd -P):/repo/data/bench/mirror:ro")
+fi
+if [[ -f "$repo/.git" ]]; then
+  common="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)"
+  mounts+=(-v "$common:$common:ro")
+fi
 if [[ -n "$nofile" ]]; then
   limits+=(--ulimit "nofile=$nofile:$nofile")
 fi
@@ -97,7 +107,7 @@ set +e
 docker run --name "$name" "${limits[@]}" \
   -e "SCRIPT=$script" -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
   ${envs[@]+"${envs[@]}"} \
-  -v "$repo:/repo:ro" -v "$repo/data/bench:/repo/data/bench" \
+  "${mounts[@]}" \
   "$IMAGE" sh -c "$inner" sh "$@" >"$out" 2>"$err"
 rc=$?
 set -e

@@ -1,0 +1,60 @@
+{
+ "tag": "final-c1m1500-warp",
+ "timestamp": "2026-10-11T03:24:38+00:00",
+ "bench_args": [
+  "--workload",
+  "lab-ucayali-x2-warp",
+  "--config",
+  "auto",
+  "--lab",
+  "0,0,0",
+  "--rep",
+  "0"
+ ],
+ "workload": "lab-ucayali-x2-warp",
+ "config": "auto",
+ "rep": 0,
+ "lab": {
+  "latency_ms": 0.0,
+  "bandwidth_mbps": 0.0,
+  "fail_rate": 0.0
+ },
+ "warm": false,
+ "container": {
+  "cpus": "1",
+  "memory": "1500m",
+  "memory_swap": "1500m",
+  "nofile": null,
+  "exit_code": 1,
+  "oom_killed": false,
+  "cgroup": {
+   "memory.peak": "90738688",
+   "memory.max": "1572864000",
+   "memory.events": {
+    "low": "0",
+    "high": "0",
+    "max": "0",
+    "oom": "0",
+    "oom_kill": "0",
+    "oom_group_kill": "0"
+   },
+   "cpu.max": {
+    "100000": "100000"
+   },
+   "cpu.stat": {
+    "usage_usec": "1250676",
+    "user_usec": "1200569",
+    "system_usec": "50107",
+    "nice_usec": "0",
+    "nr_periods": "13",
+    "nr_throttled": "4",
+    "throttled_usec": "2328781",
+    "nr_bursts": "0",
+    "burst_usec": "0"
+   }
+  }
+ },
+ "ok": false,
+ "stderr_tail": "  File \"/repo/examples/sentinel2_pc/bench.py\", line 780, in execute\n    finish = runner(out_dir)\n  File \"/repo/examples/sentinel2_pc/bench.py\", line 714, in run\n    mosaic.build_monthly_mosaics(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        scenes,\n        ^^^^^^^\n    ...<8 lines>...\n        strip_rows=strip_rows,\n        ^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/repo/examples/sentinel2_pc/mosaic.py\", line 1058, in build_monthly_mosaics\n    plan = plan_window(\n        {m: scenes_by_month[m] for m in todo}, settings, height, width, strip_rows, warp\n    )\n  File \"/repo/examples/sentinel2_pc/mosaic.py\", line 621, in plan_window\n    raise error(smallest, \"its smallest strip\")\nmosaic.MemoryBudgetError: 2024-07 has 20 scenes and its smallest strip (2812 x 512 pixels) needs about 1.09 GiB, more than the memory budget of 1.06 GiB (75% of 1.4 GiB (cgroup memory limit)). Nothing was downloaded.\n  strip buffers (20 scenes x 4 bands): 0.26 GiB\n  process and GDAL cache: 0.57 GiB\n  1 CPU workers' temporaries: 0.01 GiB\n  16 concurrent reads at 0.014 GiB (warped): 0.22 GiB\n  finished strips kept for carry-forward and writing: 0.03 GiB\nOptions: if this much memory is free, pass --memory with at least 1.1GB (the default budget is half of the available memory, or three quarters of a cgroup or SLURM limit); lower --max-requests or --cpu-workers; or split the AOI into narrower ones (a strip spans the AOI's full width).",
+ "bench_record": null
+}
