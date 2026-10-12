@@ -373,3 +373,50 @@ def test_a_multiple_of_the_true_scene_count_is_refused():
     np.testing.assert_array_equal(ingest.counts_from_fraction(fraction, 2), [0, 1, 2, 1, 0])
     with pytest.raises(ValueError, match="cannot be told apart from 2"):
         ingest.counts_from_fraction(fraction, 4)
+
+
+def test_strips_time_slabs_and_coverage_counts_together(tmp_path, monkeypatch):
+    """Months composited in strips, encoded in time slabs of one and of many timesteps: the
+    stores are byte-identical, and coverage is each month's valid-scene count."""
+    import hashlib
+
+    import chronozarr
+    from chronozarr import _writer
+
+    if not hasattr(_writer, "SLAB_BYTES"):
+        pytest.skip("needs time-slab encoding (#99)")
+    monkeypatch.setattr(mosaic, "CELL", 32)
+    _, by_month = build_case(tmp_path)
+    out = tmp_path / "mosaics"
+    outputs = run(by_month, out)  # keep_going: February lost a scene
+    mosaic.build_monthly_mosaics(
+        by_month,
+        BBOX,
+        EPSG,
+        tmp_path / "strips",
+        settings=settings(),
+        sign=str,
+        keep_going=True,
+        strip_rows=32,
+    )
+
+    def tree(root: Path) -> str:
+        h = hashlib.sha256()
+        for p in sorted(root.rglob("*")):
+            if p.is_file():
+                h.update(str(p.relative_to(root)).encode())
+                h.update(p.read_bytes())
+        return h.hexdigest()
+
+    hashes = {}
+    for source in ("mosaics", "strips"):
+        for slab in (1, _writer.SLAB_BYTES):
+            monkeypatch.setattr(_writer, "SLAB_BYTES", slab)
+            store = tmp_path / f"store-{source}-{slab}"
+            ingest.encode(tmp_path / source, store, keep_going=True)
+            hashes[source, slab] = tree(store)
+    assert len(set(hashes.values())) == 1, hashes
+    store = chronozarr.open_store(tmp_path / f"store-mosaics-{_writer.SLAB_BYTES}")
+    for t, key in enumerate(sorted(outputs)):
+        count = mosaic.load_mosaic(outputs[key])["valid_count"]
+        np.testing.assert_array_equal(store.read_coverage(t), np.minimum(count, 255))
