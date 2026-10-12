@@ -268,3 +268,21 @@ def test_start_concurrency_and_workers_follow_cpus(cpus, start, workers):
     assert (s.requests, s.cpu_workers) == (start, workers)
     worker_reason = next(r for r in s.reasons if r.startswith("cpu_workers"))
     assert ("less one" in worker_reason) == (cpus > 2)
+
+
+def test_cgroup_page_cache_is_not_counted_as_used(tmp_path, monkeypatch):
+    """memory.current includes reclaimable page cache; subtracting only the rest keeps files
+    written earlier in the container from shrinking the budget, and the limit never goes
+    negative."""
+    monkeypatch.setattr(perf, "CGROUP", tmp_path)
+    (tmp_path / "memory.max").write_text(str(4 * GIB))
+    (tmp_path / "memory.current").write_text(str(3 * GIB))
+    (tmp_path / "memory.stat").write_text(f"anon 1\ninactive_file {int(2.5 * GIB)}\nfile 9\n")
+    for name in ("SLURM_MEM_PER_NODE", "SLURM_MEM_PER_CPU"):
+        monkeypatch.delenv(name, raising=False)
+    _, _, limit, source = perf.detect_memory()
+    assert source == "cgroup memory limit" and limit == int(3.5 * GIB)
+    (tmp_path / "memory.current").write_text(str(5 * GIB))
+    (tmp_path / "memory.stat").write_text("inactive_file 0\n")
+    _, _, limit, _ = perf.detect_memory()
+    assert limit == 0

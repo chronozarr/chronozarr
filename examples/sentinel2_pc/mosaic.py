@@ -90,13 +90,17 @@ RESOLVE_RETRY_SECONDS = 31.0
 
 _clear_cache_function: Callable[[bytes], None] | None = None
 _clear_cache_searched = False
+_clear_cache_lock = threading.Lock()
 
 
 def _gdal_clear_cache_function() -> Callable[[bytes], None] | None:
     """GDAL's VSICurlPartialClearCache from the libgdal that rasterio loaded, or None."""
+    with _clear_cache_lock:  # threads that fail together must all see the result
+        return _find_clear_cache_function() if not _clear_cache_searched else _clear_cache_function
+
+
+def _find_clear_cache_function() -> Callable[[bytes], None] | None:
     global _clear_cache_function, _clear_cache_searched
-    if _clear_cache_searched:
-        return _clear_cache_function
     _clear_cache_searched = True
     package = Path(rasterio.__file__).parent
     candidates: list[str | None] = [None]  # None: symbols already visible in this process
@@ -717,7 +721,8 @@ def build_monthly_mosaics(
                     wait_s,
                     e,
                 )
-                time.sleep(wait_s)
+                if stop.wait(wait_s):  # an interrupt or error elsewhere ends the wait
+                    raise RuntimeError("cancelled") from e
                 continue
             limiter.throttled(throttle.events)
             limiter.record(True, pixels * out.itemsize)
