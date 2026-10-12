@@ -95,7 +95,8 @@ EOF
 # 2. download 2019-03 to 2026-03; 2019-02 is only the carry-forward source
 uv sync --extra ingest
 uv run python examples/sentinel2_pc/ingest.py --aoi lake_mead \
-    --start 2019-02-01 --end 2026-03-31 --out-dir "$R" --diagnostics
+    --start 2019-02-01 --end 2026-03-31 --out-dir "$R" --diagnostics \
+    --scenes-searched bench/s2-ingest/audit-lake_mead.json
 
 # 3. check: audit the new files against the scenes (SCL only), expect 0 missing
 uv run python examples/sentinel2_pc/audit_scenes.py --aoi lake_mead --out-dir "$R" \
@@ -110,6 +111,7 @@ Notes.
 
 - `--start 2019-02-01` is deliberate. Only months inside the search range count as carry-forward sources, so starting at 2019-03 would leave the first month with no previous month and zero where the old files carried values.
 - `--end 2026-03-31` keeps the range of the old files; the default end (2026-04-01) adds a one-day 2026-04.
+- With the pipeline of PRs #95 and #97, new months are written as `YYYY-MM.tif` next to the seeded `.npz` months, and every reader (the encode step, `audit_scenes.py`, the water-mask builder and checker) reads both. The seeded months predate `scenes_searched`, so encoding refuses them unless `--scenes-searched` supplies n; the Lake Mead audit's n is the smallest count consistent with the stored coverage for all 42 seed months (checked read-only 2026-10-12), so their coverage counts are rebuilt exactly. Without it, `--no-coverage` writes the store without coverage.
 - `ingest.py` also encodes `$R/stores/lake_mead/chronozarr` (an imagery store that does not exist today). Interrupt after the download if it is not wanted; with `--keep-going` absent the run stops at the first unreadable scene and can be re-run to resume.
 - `check_water_stack.py` has no root option (it reads `data/` only), so it cannot check the store in `$R`. Run it as `check_water_stack.py --aoi lake_mead --month 2023-06` after the approved swap, without `--boa-offset-from`.
 - After step 2, compare the new files with the stored ones: months 2019-03 onward should differ (offset), and 2015-08 to 2019-02 are the copied originals. A B04 median of June 2022 near 2,880 (stored: 3,882) confirms the correction. Step 3 should report no missing scene; the first rebuilt month records the SHA-256 of the seeded 2019-02 bands in `carried_from`.
