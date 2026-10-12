@@ -6,7 +6,7 @@ encode in default, one and one-timestep time slabs (needs #99) -> store.
 
 The box straddles the UTM 18/19 boundary at 72 W on EPSG:32719, so scenes from zone 18 are
 warped. Valid-scene counts are compared with an SCL-only count computed with pyproj, which
-must never be lower (a pipeline count can be lower where a band is 0, never higher).
+the pipeline's count must never exceed (it can be lower where a band is 0).
 """
 
 import hashlib
@@ -50,7 +50,8 @@ for name, kw in (
     runs[name] = {m: mosaic.load_mosaic(p) for m, p in outs.items()}
     print(
         name,
-        f"{time.perf_counter() - t:.1f}s strips/month={rep.windows} reads={rep.reads} native={rep.reads_native} retries={rep.read_retries} failed={rep.scenes_failed}",
+        f"{time.perf_counter() - t:.1f}s strips/month={rep.windows} reads={rep.reads} "
+        f"native={rep.reads_native} retries={rep.read_retries} failed={rep.scenes_failed}",
     )
 for m in runs["whole"]:
     a, b = runs["whole"][m], runs["strips"][m]
@@ -87,7 +88,9 @@ for m, scenes in by_month.items():
     k = runs["whole"][m]["valid_count"].astype(np.int32)
     print(
         m,
-        f"pixels with count > SCL-only reference: {int((k > ref).sum())}; count < reference (a band is 0): {int((k < ref).sum())} of {k.size}; mean count {k.mean():.2f}, max {k.max()}",
+        f"pixels with count > SCL-only reference: {int((k > ref).sum())}; "
+        f"count < reference (a band is 0): {int((k < ref).sum())} of {k.size}; "
+        f"mean count {k.mean():.2f}, max {k.max()}",
     )
 
 
