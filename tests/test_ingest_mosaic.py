@@ -1116,3 +1116,31 @@ def test_an_interrupt_does_not_wait_out_a_retry(tmp_path, no_backoff, monkeypatc
             sign=str,
         )
     assert time.perf_counter() - t0 < 5
+
+
+def test_months_record_the_software_and_a_resume_on_other_versions_warns(
+    tmp_path, no_backoff, monkeypatch, caplog
+):
+    """Warped pixels depend on the rasterio version (rasterio before 1.5 cannot pass the band
+    warp tolerance), so each month records it, and resuming with other versions says so."""
+    import stat
+
+    _, by_month = build_case(tmp_path)
+    out = tmp_path / "out"
+    mosaic.build_monthly_mosaics(
+        {"2024-01": by_month["2024-01"]}, BBOX, EPSG, out, settings=settings(), sign=str
+    )
+    january = mosaic.month_record(out / "2024-01.tif")
+    assert january["software"] == mosaic.software()
+    assert stat.S_IMODE((out / "2024-01.tif").stat().st_mode) & 0o044  # readable by others
+    monkeypatch.setattr(mosaic, "software", lambda: {"rasterio": "9.9", "gdal": "9.9"})
+    with caplog.at_level("WARNING", logger="mosaic"):
+        mosaic.build_monthly_mosaics(
+            {"2024-01": by_month["2024-01"], "2024-03": by_month["2024-03"]},
+            BBOX,
+            EPSG,
+            out,
+            settings=settings(),
+            sign=str,
+        )
+    assert "2024-01.tif was written with" in caplog.text

@@ -39,6 +39,7 @@ from pathlib import Path
 import numpy as np
 import rasterio
 from catalog import REQUIRED_BANDS, SceneRef
+from months import month_path
 from performance import AdaptiveLimiter, Settings
 from rasterio.crs import CRS  # ty: ignore[unresolved-import]  (compiled module, no stubs)
 from rasterio.transform import Affine, from_bounds
@@ -739,15 +740,6 @@ MONTH_FORMAT = "chronozarr-s2-month/1"
 COUNT_BAND = "valid_count"
 
 
-def month_path(directory: Path, key: str) -> Path | None:
-    """The saved file of month `key` in `directory`, GeoTIFF or legacy .npz, or None."""
-    for suffix in (".tif", ".npz"):
-        path = directory / f"{key}{suffix}"
-        if path.exists():
-            return path
-    return None
-
-
 def _cell_digests(bands: np.ndarray, r0: int, c0: int) -> dict[tuple[int, int], bytes]:
     """SHA-256 of each CELL x CELL cell of `bands` (n_bands, h, w) placed at grid (r0, c0)."""
     _, h, w = bands.shape
@@ -818,8 +810,13 @@ class _MonthWriter:
         """Close, record the month, rename into place; returns the month's bands_sha256."""
         digest = _combine(self.digests)
         tags = {k: json.dumps(v) for k, v in record.items()}
-        self.dataset.update_tags(format=MONTH_FORMAT, bands_sha256=digest, **tags)
+        self.dataset.update_tags(
+            format=MONTH_FORMAT, bands_sha256=digest, software=json.dumps(software()), **tags
+        )
         self.dataset.close()
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(self.tmp, 0o666 & ~umask)  # mkstemp creates 0600; a month is an ordinary file
         os.replace(self.tmp, self.path)
         return digest
 
@@ -827,6 +824,13 @@ class _MonthWriter:
         if not self.dataset.closed:
             self.dataset.close()
         self.tmp.unlink(missing_ok=True)
+
+
+def software() -> dict[str, str]:
+    """Versions that decide warped pixel values, recorded with every month: rasterio before 1.5
+    cannot pass the band warp tolerance to GDAL (see BAND_WARP_TOLERANCE), so warped months from
+    two environments differ slightly. Native-grid months are equal on every version."""
+    return {"rasterio": rasterio.__version__, "gdal": rasterio.__gdal_version__}
 
 
 def save_month(
@@ -873,6 +877,7 @@ def month_record(path: Path) -> dict:
             raise ValueError(f"{path} is not a monthly mosaic ({MONTH_FORMAT})")
         record: dict = {k: json.loads(tags[k]) for k in RECORD_KEYS}
         record["bands_sha256"] = tags["bands_sha256"]
+        record["software"] = json.loads(tags["software"]) if "software" in tags else None
         record["transform"] = src.transform
         record["epsg"] = src.crs.to_epsg()
         record["shape"] = (src.count - 1, src.height, src.width)
@@ -920,6 +925,7 @@ def load_mosaic(path: Path) -> dict:
                 if "carried_from" in data
                 else None,
                 "bands_sha256": bands_sha256(bands),
+                "software": None,
             }
         return loaded
     record = month_record(path)
@@ -1153,6 +1159,15 @@ def build_monthly_mosaics(
             logger.info("Skipping %s (already exists)", m)
     todo = [m for m in months if m not in outputs]
     report.months, report.months_skipped = len(months), len(months) - len(todo)
+    earlier = [outputs[m] for m in months if m in outputs and outputs[m].suffix == ".tif"]
+    if todo and earlier and month_record(earlier[-1]).get("software") != software():
+        logger.warning(
+            "%s was written with %s, this run uses %s: warped scenes can differ slightly "
+            "between them (native-grid months are equal)",
+            earlier[-1].name,
+            month_record(earlier[-1]).get("software"),
+            software(),
+        )
     if not todo:
         return dict(sorted(outputs.items()))
     warp = any(s.epsg != target_epsg for m in todo for s in scenes_by_month[m])
