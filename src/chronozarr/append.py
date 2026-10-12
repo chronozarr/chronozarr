@@ -491,7 +491,6 @@ def _write(
     pyramid = _Pyramid(
         target.shapes,
         cs,
-        n_time=prepared.n_time,
         n_band=prepared.n_band,
         dtype=prepared.dtype,
         nodata=target.meta.nodata,
@@ -510,7 +509,7 @@ def _write(
         )
 
     try:
-        pyramid.walk(submit)
+        pyramid.walk(submit, 0, prepared.n_time)
         writer.results()
     except BaseException:
         writer.shutdown()

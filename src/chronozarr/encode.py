@@ -26,9 +26,9 @@ from chronozarr._writer import (
     Block,
     _ArraySource,
     _CellWriter,
+    _comparison_terms,
     _iso_times,
     _LevelArrays,
-    _mean_comparison,
     _prepare_input,
     _put_coord,
     _Pyramid,
@@ -36,6 +36,8 @@ from chronozarr._writer import (
     _resolve_nodata,
     _resolve_transform,
     _shard_bytes,
+    _slab_bounds,
+    _slab_steps,
     _Source,
     _spill_timesteps,
     _write_time_coord,
@@ -83,7 +85,7 @@ class EncodeReport:
 class _CellResult:
     encode_s: float
     write_s: float
-    abs_delta_sum: float
+    abs_delta_terms: list[float]  # exact sum per comparison timestep, in timestep order
     n_delta_values: int
 
 
@@ -93,26 +95,32 @@ def _encode_cell(
     ys: slice,
     xs: slice,
     *,
+    t0: int,
     reference: Mapping[int, int],
     shard_time: int,
     want_volatility: bool,
 ) -> _CellResult:
-    """Encode one cell (every timestep) and write it, one time shard at a time."""
+    """Encode one cell over a time slab starting at timestep `t0` and write it.
+
+    `reference` maps slab-local timesteps to slab-local comparison frames. Writes go one time
+    shard at a time; a sharded store is a single slab starting at 0, so shards stay whole.
+    """
     started = time.perf_counter()
     out = block.data
-    total, count = _mean_comparison(block.data, reference) if want_volatility else (0.0, 0)
+    terms, count = _comparison_terms(out, reference) if want_volatility else ([], 0)
     encoded = time.perf_counter()
 
-    n_time = block.data.shape[0]
-    for t0 in range(0, n_time, shard_time):
-        window = slice(t0, min(t0 + shard_time, n_time))
-        arrays.data[window, :, ys, xs] = out[window]
+    n_time = out.shape[0]
+    for w0 in range(0, n_time, shard_time):
+        window = slice(w0, min(w0 + shard_time, n_time))
+        stored = slice(t0 + window.start, t0 + window.stop)
+        arrays.data[stored, :, ys, xs] = out[window]
         if arrays.mask is not None and block.mask is not None:
-            arrays.mask[window, ys, xs] = block.mask[window]
+            arrays.mask[stored, ys, xs] = block.mask[window]
         if arrays.coverage is not None and block.coverage is not None:
-            arrays.coverage[window, ys, xs] = block.coverage[window]
+            arrays.coverage[stored, ys, xs] = block.coverage[window]
     written = time.perf_counter()
-    return _CellResult(encoded - started, written - encoded, total, count)
+    return _CellResult(encoded - started, written - encoded, terms, count)
 
 
 # --- Store writing ----------------------------------------------------------------------------
@@ -240,34 +248,49 @@ def _write_store(
     pyramid = _Pyramid(
         layout.shapes,
         cs,
-        n_time=layout.n_time,
         n_band=layout.n_band,
         dtype=layout.dtype,
         nodata=layout.nodata,
         source=source,
         compute=compute,
     )
+    if layout.shard:
+        # A shard is one object holding shard_time timesteps; writing it in pieces would rewrite
+        # it, so a sharded store is one slab and memory grows with the series (see encode()).
+        slabs = [(0, layout.n_time)]
+    else:
+        steps = _slab_steps(layout.n_band, layout.dtype.itemsize, cs)
+        slabs = _slab_bounds(layout.n_time, steps, whole_groups=layout.volatility)
 
-    def submit(k: int, row: int, col: int, block: Block) -> None:
-        ys = slice(row * cs, row * cs + block.height)
-        xs = slice(col * cs, col * cs + block.width)
-        writer.submit(
-            k,
-            row,
-            col,
-            lambda: _encode_cell(
-                block,
-                arrays[k],
-                ys,
-                xs,
-                reference=reference,
-                shard_time=layout.shard_time,
-                want_volatility=layout.volatility and k == 0,
-            ),
-        )
+    def run_slab(t0: int, t1: int) -> None:
+        local = {t - t0: c - t0 for t, c in reference.items() if t0 <= t < t1}
+        if layout.volatility and not all(0 <= c < t1 - t0 for c in local.values()):
+            raise AssertionError(f"slab {t0}..{t1} splits a volatility comparison group")
+
+        def submit(k: int, row: int, col: int, block: Block) -> None:
+            ys = slice(row * cs, row * cs + block.height)
+            xs = slice(col * cs, col * cs + block.width)
+            writer.submit(
+                k,
+                row,
+                col,
+                lambda: _encode_cell(
+                    block,
+                    arrays[k],
+                    ys,
+                    xs,
+                    t0=t0,
+                    reference=local,
+                    shard_time=layout.shard_time,
+                    want_volatility=layout.volatility and k == 0,
+                ),
+            )
+
+        pyramid.walk(submit, t0, t1)
 
     try:
-        pyramid.walk(submit)
+        for t0, t1 in slabs:
+            run_slab(t0, t1)
         results = writer.results()
     except BaseException:
         writer.shutdown()
@@ -278,11 +301,21 @@ def _write_store(
     downsample_s = pyramid.downsample_s
 
     per_level: dict[int, list[_CellResult]] = {k: [] for k in range(len(layout.shapes))}
-    for k, row, col, result in results:
+    cells: dict[int, set[tuple[int, int]]] = {k: set() for k in range(len(layout.shapes))}
+    terms: dict[tuple[int, int], list[float]] = {}
+    counts: dict[tuple[int, int], int] = {}
+    for k, row, col, result in results:  # slab by slab, so each cell's terms are in time order
         per_level[k].append(result)
-        if k == 0 and result.n_delta_values:
-            mean_abs = result.abs_delta_sum / result.n_delta_values
-            volatility[row, col] = min(max(mean_abs / VOLATILITY_SCALE, 0.0), 1.0)
+        cells[k].add((row, col))
+        if k == 0:
+            terms.setdefault((row, col), []).extend(result.abs_delta_terms)
+            counts[row, col] = counts.get((row, col), 0) + result.n_delta_values
+    for (row, col), cell_terms in terms.items():
+        if counts[row, col]:
+            total = 0.0
+            for term in cell_terms:
+                total += term
+            volatility[row, col] = min(max(total / counts[row, col] / VOLATILITY_SCALE, 0.0), 1.0)
 
     if layout.volatility:
         vol = root.create_array(
@@ -332,7 +365,7 @@ def _write_store(
             LevelReport(
                 level=k,
                 shape=summaries[k].shape,
-                n_cells=len(per_level[k]),
+                n_cells=len(cells[k]),
                 downsample_s=downsample_s[k],
                 encode_s=sum(r.encode_s for r in per_level[k]),
                 write_s=sum(r.write_s for r in per_level[k]),
@@ -422,6 +455,12 @@ def encode(
         workers: Cells encoded concurrently (each holds about two copies of a cell in memory;
             zarr compresses a cell's chunks in parallel). Default 4.
         spill_dir: Directory for the temp files of iterable input. Default: next to `out`.
+
+    Memory: an unsharded store is encoded in time slabs of about 64 MiB per cell (a few dozen
+    timesteps of a 4-band 512 px cell), so peak memory does not grow with the number of
+    timesteps. A sharded store is one slab, because a shard is written whole: memory grows with
+    the number of timesteps, about 15 MB per timestep for four 512 px bands at the default
+    `workers`.
 
     Removes the partially written store if encoding fails.
     """
