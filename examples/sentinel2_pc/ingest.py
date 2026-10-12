@@ -350,25 +350,35 @@ def open_mosaic_stack(
         yield MosaicStack(data, coverage, incomplete)
 
 
+def _reproduces(values: np.ndarray, n: int) -> bool:
+    """Whether every stored value is float32(k / n) for a whole k, as mosaic.py computed it."""
+    in_range = (values >= 0) & (values <= 1)  # False for NaN
+    counts = np.rint(np.where(in_range, values, 0).astype(np.float64) * n)
+    return bool((in_range & (counts.astype(np.uint16).astype(np.float32) / n == values)).all())
+
+
 def counts_from_fraction(coverage: np.ndarray, n: int) -> np.ndarray:
     """Valid-scene counts k from a stored fraction float32(k / n), or ValueError.
 
     k = rint(coverage * n) is accepted only if float32(k / n), computed as mosaic.py did
-    (`count.astype(np.float32) / n`), reproduces every stored value bit for bit, so a wrong n
-    is caught unless it is a multiple of the true one. When every stored value is 0 or 1 and
-    n > 1 the check cannot tell n apart from any other, so that is refused too.
+    (`count.astype(np.float32) / n`), reproduces every stored value bit for bit, and n is the
+    smallest scene count that does. Any multiple of the true n also reproduces the values
+    (with every k scaled), so a larger n cannot be told apart from it and is refused; a month
+    whose values are all 0 or 1 confirms only n = 1. A refused month can still be encoded
+    without coverage (--no-coverage); no count is guessed.
     """
     if not 1 <= n <= np.iinfo(np.uint16).max:
         raise ValueError(f"n={n} is not a scene count")
     values = np.unique(coverage)
-    in_range = (values >= 0) & (values <= 1)  # False for NaN
-    counts = np.rint(np.where(in_range, values, 0).astype(np.float64) * n)
-    exact = counts.astype(np.uint16).astype(np.float32) / n == values
-    if not (in_range & exact).all():
-        worst = float(values[~(in_range & exact)][0])
-        raise ValueError(f"coverage {worst!r} is not float32(k / {n}) for any whole k")
-    if n > 1 and np.isin(values, (0.0, 1.0)).all():
-        raise ValueError(f"coverage is only 0 and 1, which cannot confirm n={n}")
+    if not _reproduces(values, n):
+        bad = [v for v in values if not _reproduces(np.array([v]), n)]
+        raise ValueError(f"coverage {float(bad[0])!r} is not float32(k / {n}) for any whole k")
+    smallest = next(m for m in range(1, n + 1) if _reproduces(values, m))
+    if smallest != n:
+        raise ValueError(
+            f"the stored values are also exactly k / {smallest}, so n={n} cannot be told apart "
+            f"from {smallest} (any multiple of the true n fits); refused"
+        )
     return np.rint(coverage.astype(np.float64) * n).astype(np.uint16)
 
 

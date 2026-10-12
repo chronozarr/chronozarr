@@ -322,7 +322,7 @@ def test_a_month_of_only_zero_and_one_confirms_n_only_when_n_is_1(tmp_path):
     """Nothing in 0 / 1 distinguishes n=3 from n=1: a count of 3 would be invented, so it is
     refused; with n=1 the fraction is the count."""
     flags = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float32)
-    with pytest.raises(ValueError, match="only 0 and 1"):
+    with pytest.raises(ValueError, match="told apart from 1"):
         ingest.counts_from_fraction(flags, 3)
     np.testing.assert_array_equal(ingest.counts_from_fraction(flags, 1), flags.astype(np.uint16))
 
@@ -333,7 +333,7 @@ def test_a_month_of_only_zero_and_one_confirms_n_only_when_n_is_1(tmp_path):
     binary = np.zeros(bands.shape[1:], dtype=np.float32)
     binary[0, 0] = 1.0
     write_legacy(out / "2024-01.npz", grid, bands, binary)
-    with pytest.raises(SystemExit, match="only 0 and 1, which cannot confirm n=3"):
+    with pytest.raises(SystemExit, match="n=3 cannot be told apart from 1"):
         ingest.open_mosaic_stack(out, scenes_searched={"2024-01": 3}).__enter__()
     with ingest.open_mosaic_stack(out, scenes_searched={"2024-01": 1}) as stack:
         assert stack.coverage is not None
@@ -364,3 +364,12 @@ def test_the_scenes_searched_file_takes_a_plain_mapping_or_the_audit_report(tmp_
         bad.write_text(text)
         with pytest.raises(SystemExit):
             ingest.read_scenes_searched(bad)
+
+
+def test_a_multiple_of_the_true_scene_count_is_refused():
+    """Fractions of 2 scenes are also exact fractions of 4 with every count doubled; only the
+    smallest n that reproduces them is accepted, so counts are never scaled up."""
+    fraction = np.array([0, 1, 2, 1, 0], dtype=np.float32) / 2
+    np.testing.assert_array_equal(ingest.counts_from_fraction(fraction, 2), [0, 1, 2, 1, 0])
+    with pytest.raises(ValueError, match="cannot be told apart from 2"):
+        ingest.counts_from_fraction(fraction, 4)

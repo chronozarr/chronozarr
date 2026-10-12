@@ -2,12 +2,8 @@
  "totals": {
   "months": 117,
   "bit_exact": 117,
-  "failing": 0,
-  "ambiguous_binary_only": 7,
-  "ambiguous_months_with_n_above_1": 0,
-  "n_audit_equals_smallest_consistent_n": 117,
-  "max_residual": 3.5762786865234375e-07,
-  "note": "ambiguous: stored values are only 0 and 1, so the data alone cannot determine n; the audit n (catalog) is the only evidence. For every month n is also determined only up to multiples by the data; n_audit equals the smallest consistent n in every month."
+  "audit_n_is_smallest": 117,
+  "only_0_and_1": 7
  },
  "months": [
   {
@@ -78,7 +74,7 @@
    "n_audit": 3,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 5.960464477539063e-08,
+   "max_residual": 0.0,
    "n_min_consistent": 3,
    "max_k": 3
   },
@@ -150,7 +146,7 @@
    "n_audit": 3,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 5.960464477539063e-08,
+   "max_residual": 0.0,
    "n_min_consistent": 3,
    "max_k": 3
   },
@@ -177,7 +173,7 @@
    "n_audit": 6,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 6,
    "max_k": 6
   },
@@ -186,7 +182,7 @@
    "n_audit": 5,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 5,
    "max_k": 5
   },
@@ -195,7 +191,7 @@
    "n_audit": 5,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 5,
    "max_k": 5
   },
@@ -204,7 +200,7 @@
    "n_audit": 3,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 5.960464477539063e-08,
+   "max_residual": 0.0,
    "n_min_consistent": 3,
    "max_k": 3
   },
@@ -222,7 +218,7 @@
    "n_audit": 6,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 6,
    "max_k": 5
   },
@@ -231,7 +227,7 @@
    "n_audit": 7,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.7881393432617188e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 7,
    "max_k": 7
   },
@@ -249,7 +245,7 @@
    "n_audit": 7,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.7881393432617188e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 7,
    "max_k": 7
   },
@@ -258,7 +254,7 @@
    "n_audit": 12,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 12,
    "max_k": 12
   },
@@ -276,7 +272,7 @@
    "n_audit": 7,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.7881393432617188e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 7,
    "max_k": 7
   },
@@ -285,7 +281,7 @@
    "n_audit": 9,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 9,
    "max_k": 9
   },
@@ -303,7 +299,7 @@
    "n_audit": 6,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 6,
    "max_k": 6
   },
@@ -312,7 +308,7 @@
    "n_audit": 3,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 5.960464477539063e-08,
+   "max_residual": 0.0,
    "n_min_consistent": 3,
    "max_k": 3
   },
@@ -321,7 +317,7 @@
    "n_audit": 6,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 6,
    "max_k": 6
   },
@@ -330,7 +326,7 @@
    "n_audit": 9,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 9,
    "max_k": 9
   },
@@ -348,7 +344,7 @@
    "n_audit": 12,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 12,
    "max_k": 12
   },
@@ -357,7 +353,7 @@
    "n_audit": 10,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 10,
    "max_k": 10
   },
@@ -366,7 +362,7 @@
    "n_audit": 9,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 9,
    "max_k": 9
   },
@@ -375,7 +371,7 @@
    "n_audit": 10,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 10,
    "max_k": 10
   },
@@ -384,7 +380,7 @@
    "n_audit": 3,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 5.960464477539063e-08,
+   "max_residual": 0.0,
    "n_min_consistent": 3,
    "max_k": 3
   },
@@ -393,7 +389,7 @@
    "n_audit": 7,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.7881393432617188e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 7,
    "max_k": 7
   },
@@ -402,7 +398,7 @@
    "n_audit": 5,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 5,
    "max_k": 5
   },
@@ -429,7 +425,7 @@
    "n_audit": 7,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.7881393432617188e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 7,
    "max_k": 7
   },
@@ -438,7 +434,7 @@
    "n_audit": 5,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 5,
    "max_k": 5
   },
@@ -447,7 +443,7 @@
    "n_audit": 7,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.7881393432617188e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 7,
    "max_k": 7
   },
@@ -456,7 +452,7 @@
    "n_audit": 10,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 10,
    "max_k": 9
   },
@@ -474,7 +470,7 @@
    "n_audit": 11,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.980232238769531e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 11,
    "max_k": 11
   },
@@ -492,7 +488,7 @@
    "n_audit": 9,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 9,
    "max_k": 9
   },
@@ -501,7 +497,7 @@
    "n_audit": 3,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 5.960464477539063e-08,
+   "max_residual": 0.0,
    "n_min_consistent": 3,
    "max_k": 3
   },
@@ -510,7 +506,7 @@
    "n_audit": 5,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 5,
    "max_k": 5
   },
@@ -537,7 +533,7 @@
    "n_audit": 5,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 5,
    "max_k": 5
   },
@@ -546,7 +542,7 @@
    "n_audit": 6,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 6,
    "max_k": 6
   },
@@ -555,7 +551,7 @@
    "n_audit": 10,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 10,
    "max_k": 10
   },
@@ -573,7 +569,7 @@
    "n_audit": 6,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 6,
    "max_k": 6
   },
@@ -591,7 +587,7 @@
    "n_audit": 11,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.980232238769531e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 11,
    "max_k": 11
   },
@@ -600,7 +596,7 @@
    "n_audit": 9,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 9,
    "max_k": 9
   },
@@ -609,7 +605,7 @@
    "n_audit": 6,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 6,
    "max_k": 5
   },
@@ -618,7 +614,7 @@
    "n_audit": 12,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 12,
    "max_k": 12
   },
@@ -645,7 +641,7 @@
    "n_audit": 7,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.7881393432617188e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 7,
    "max_k": 5
   },
@@ -672,7 +668,7 @@
    "n_audit": 11,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.980232238769531e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 11,
    "max_k": 10
   },
@@ -681,7 +677,7 @@
    "n_audit": 11,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.980232238769531e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 11,
    "max_k": 11
   },
@@ -690,7 +686,7 @@
    "n_audit": 12,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 12,
    "max_k": 12
   },
@@ -699,7 +695,7 @@
    "n_audit": 5,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 5,
    "max_k": 5
   },
@@ -708,7 +704,7 @@
    "n_audit": 6,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 6,
    "max_k": 6
   },
@@ -717,7 +713,7 @@
    "n_audit": 3,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 5.960464477539063e-08,
+   "max_residual": 0.0,
    "n_min_consistent": 3,
    "max_k": 3
   },
@@ -753,7 +749,7 @@
    "n_audit": 7,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.7881393432617188e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 7,
    "max_k": 7
   },
@@ -771,7 +767,7 @@
    "n_audit": 9,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 9,
    "max_k": 9
   },
@@ -780,7 +776,7 @@
    "n_audit": 7,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.7881393432617188e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 7,
    "max_k": 6
   },
@@ -789,7 +785,7 @@
    "n_audit": 6,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 6,
    "max_k": 6
   },
@@ -798,7 +794,7 @@
    "n_audit": 12,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 12,
    "max_k": 12
   },
@@ -807,7 +803,7 @@
    "n_audit": 9,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 9,
    "max_k": 9
   },
@@ -834,7 +830,7 @@
    "n_audit": 6,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 6,
    "max_k": 5
   },
@@ -843,7 +839,7 @@
    "n_audit": 3,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 5.960464477539063e-08,
+   "max_residual": 0.0,
    "n_min_consistent": 3,
    "max_k": 3
   },
@@ -852,7 +848,7 @@
    "n_audit": 6,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 6,
    "max_k": 6
   },
@@ -870,7 +866,7 @@
    "n_audit": 5,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 5,
    "max_k": 4
   },
@@ -879,7 +875,7 @@
    "n_audit": 12,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 12,
    "max_k": 12
   },
@@ -888,7 +884,7 @@
    "n_audit": 10,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 10,
    "max_k": 10
   },
@@ -897,7 +893,7 @@
    "n_audit": 12,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 12,
    "max_k": 12
   },
@@ -906,7 +902,7 @@
    "n_audit": 6,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 6,
    "max_k": 5
   },
@@ -915,7 +911,7 @@
    "n_audit": 11,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.980232238769531e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 11,
    "max_k": 10
   },
@@ -924,7 +920,7 @@
    "n_audit": 5,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.1920928955078125e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 5,
    "max_k": 4
   },
@@ -942,7 +938,7 @@
    "n_audit": 7,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 1.7881393432617188e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 7,
    "max_k": 7
   },
@@ -987,7 +983,7 @@
    "n_audit": 12,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 12,
    "max_k": 11
   },
@@ -996,7 +992,7 @@
    "n_audit": 11,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.980232238769531e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 11,
    "max_k": 11
   },
@@ -1014,7 +1010,7 @@
    "n_audit": 11,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.980232238769531e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 11,
    "max_k": 10
   },
@@ -1023,7 +1019,7 @@
    "n_audit": 13,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 3.5762786865234375e-07,
+   "max_residual": 4.76837158203125e-07,
    "n_min_consistent": 13,
    "max_k": 12
   },
@@ -1041,7 +1037,7 @@
    "n_audit": 9,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 2.384185791015625e-07,
+   "max_residual": 0.0,
    "n_min_consistent": 9,
    "max_k": 9
   },
@@ -1050,7 +1046,7 @@
    "n_audit": 3,
    "bit_exact_reconstruction": true,
    "ambiguous": false,
-   "max_residual": 5.960464477539063e-08,
+   "max_residual": 0.0,
    "n_min_consistent": 3,
    "max_k": 3
   },
