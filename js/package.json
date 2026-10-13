@@ -1,6 +1,6 @@
 {
   "name": "chronozarr",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Read chronozarr v0.3 stores in the browser and Node, draw them on MapLibre GL JS, and self-host the chronozarr viewer",
   "homepage": "https://chronozarr.org/reference/javascript",
   "keywords": [

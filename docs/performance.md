@@ -137,7 +137,7 @@ Result:
 |---|---|---|
 | All months stacked in memory (PR #90 ingest) | 10.2 GB | 30.5 s |
 | Months read lazily, one 512 x 512 cell of every month at a time (PR #95) | 3.3 GB | 56.6 s, of which 29.9 s is the one-time copy of legacy `.npz` months to GeoTIFF |
-| Lazy read and time slabs of about 64 MiB per cell (PR #99, on main after 0.4.0) | 1.34 GB | encode step 32.6 s (26.7 s before slabs) |
+| Lazy read and time slabs of about 64 MiB per cell (PR #99, package 0.4.1) | 1.34 GB | encode step 32.6 s (26.7 s before slabs) |
 
 The three stores are byte-identical (11,574 files). Synthetic, 2048 x 2048 x 4 uint16, lazy input: 1,282 MB at 32 timesteps, 1,305 MB at 128 and 1,310 MB at 256 with slabs, against 1,285, 4,139 and 7,926 MB before. Through the GeoTIFF lazy reader, 1024 x 1024 x 4:
 
@@ -149,7 +149,7 @@ The three stores are byte-identical (11,574 files). Synthetic, 2048 x 2048 x 4 u
 
 Method: Fresh process per run, peak RSS, one run per cell. Source: the descriptions of the merged pull requests #95 and #99 and [spatial strips](evidence.md#spatial-strips).
 
-What this does not show: Memory with slabs still grows slowly with the series, about 1 MiB per month here against 10 MiB in one slab. Sharded stores and `append` still grow with the series. The slab code is on `main` after the 0.4.0 release and is not in the published 0.4.0 package. The raw run output is not kept in the repository and no script reproduces the tables; the unit tests check byte identity and, with a Python allocation tracer, the growth.
+What this does not show: Memory with slabs still grows slowly with the series, about 1 MiB per month here against 10 MiB in one slab. Sharded stores and `append` still grow with the series. The slab code ships in package 0.4.1; package 0.4.0 holds every timestep of a cell at once. The raw run output is not kept in the repository and no script reproduces the tables; the unit tests check byte identity and, with a Python allocation tracer, the growth.
 
 ### Ingest: spatial strips
 

@@ -13,13 +13,13 @@ chronozarr turns a georeferenced raster time series into an interactive dataset 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then the `chronozarr` command:
 
 ```bash
-uv tool install --python 3.13 'chronozarr[geo]==0.4.0'
+uv tool install --python 3.13 'chronozarr[geo]==0.4.1'
 ```
 
 chronozarr supports Python 3.11 and newer. `--python 3.13` makes uv use 3.13 even when an older Python comes first on your computer. With pip, in an environment with Python 3.11 or newer:
 
 ```bash
-python -m pip install 'chronozarr[geo]==0.4.0'
+python -m pip install 'chronozarr[geo]==0.4.1'
 ```
 
 Use a folder with one GeoTIFF per date, with the date in each file name, such as `ndvi_2024-01.tif`. All files share one grid. To try it without your own files, export twelve months of the public demo as GeoTIFFs:
@@ -63,14 +63,14 @@ A store is a Zarr v3 group, so xarray, zarr-python and GDAL 3.13 also read it wi
 ## JavaScript
 
 ```bash
-npm install chronozarr@0.4.0
+npm install chronozarr@0.4.1
 ```
 
 The npm package has a DOM-free reader, a MapLibre layer, a GeoLibre plugin and the full viewer for self-hosting. See the [JavaScript reader](https://chronozarr.org/reference/javascript).
 
 ## Versions
 
-The Python and npm packages are 0.4.0. The store format specification is v0.3.0, a draft. A package upgrade does not change existing v0.3 stores. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. The main branch has changes made after 0.4.0; [Changes on main since 0.4.0](https://github.com/chronozarr/chronozarr/blob/main/docs/unreleased.md) says which release brings each.
+The Python and npm packages are 0.4.1. The store format specification is v0.3.0, a draft. A package upgrade does not change existing v0.3 stores. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. [Release notes for 0.4.1](https://github.com/chronozarr/chronozarr/blob/main/docs/release-0.4.1.md).
 
 ## Documentation
 
