@@ -15,3 +15,12 @@
   Access-Control-Allow-Origin: *
 /geolibre/*
   Access-Control-Allow-Origin: *
+
+/*.md
+  Content-Type: text/markdown; charset=utf-8
+/*/*.md
+  Content-Type: text/markdown; charset=utf-8
+/llms.txt
+  Content-Type: text/plain; charset=utf-8
+/llms-full.txt
+  Content-Type: text/plain; charset=utf-8

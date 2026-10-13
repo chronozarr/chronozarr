@@ -85,6 +85,7 @@ The Python and npm packages are 0.4.1. The store format specification is v0.3.0,
 | Format rules | [Specification](https://chronozarr.org/specification) |
 | Measured speed, memory and correctness | [Performance and evidence](https://chronozarr.org/performance) |
 | Problems and fixes | [Troubleshooting](https://chronozarr.org/troubleshooting) |
+| Instructions for coding agents, and these docs as plain text | [Agent skill](https://github.com/chronozarr/chronozarr/blob/main/skills/chronozarr/SKILL.md), [llms.txt](https://chronozarr.org/llms.txt) |
 
 The pages are written in [`docs/`](https://github.com/chronozarr/chronozarr/tree/main/docs) and published to chronozarr.org. To contribute, see [CONTRIBUTING.md](https://github.com/chronozarr/chronozarr/blob/main/CONTRIBUTING.md).
 

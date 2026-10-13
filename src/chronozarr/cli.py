@@ -18,7 +18,7 @@ import numpy as np
 import xarray as xr
 
 from chronozarr import schema
-from chronozarr._convert_discover import is_discovery_source
+from chronozarr._convert_discover import TIFF_SUFFIXES, is_discovery_source
 from chronozarr._convert_source import UndeclaredNaNError
 from chronozarr._install import extra_hint
 from chronozarr.append import append, is_store
@@ -84,7 +84,7 @@ def _read_geotiffs(pattern: str, crs: str | None) -> _GeotiffStack:
     scale, offset, units, nodata and masks follow its fidelity rules (`convert --help`). Every
     file must be on one grid; nothing is resampled. `crs` stands in for a file that has none.
     """
-    paths = glob.glob(pattern)
+    paths = [pattern] if Path(pattern).is_file() else glob.glob(pattern)
     if not paths:
         raise click.ClickException(f"no files match '{pattern}'")
     entries = [Entry(path, time) for time, path in sorted((_time_from_name(p), p) for p in paths)]
@@ -425,11 +425,12 @@ def append_command(
     """Append the timesteps of INPUT to the end of the chronozarr store STORE, in place.
 
     INPUT is a chronozarr store (for example one month written by `convert`), a Zarr store or
-    NetCDF file with dims (time, band, y, x), or a quoted glob of GeoTIFFs, one per timestep with
-    the date in the file name. Its grid, bands, dtype, CRS and nodata must match STORE, and its
-    times must come after the store's last one. GeoTIFFs must also mark invalid pixels as the
-    store does: the nodata they declare (or none) is the store's, and they give a mask (an alpha
-    band, an internal mask or a nodata of NaN) only if the store has one.
+    NetCDF file with dims (time, band, y, x), or one GeoTIFF (.tif, .tiff) or a quoted glob of
+    them, one per timestep with the date in the file name. Its grid, bands, dtype, CRS and
+    nodata must match STORE, and its times must come after the store's last one. GeoTIFFs must
+    also mark invalid pixels as the store does: the nodata they declare (or none) is the
+    store's, and they give a mask (an alpha band, an internal mask or a nodata of NaN) only if
+    the store has one.
 
     Only the shards (or chunks, for an unsharded store) that gain a timestep are written, plus
     the metadata; every other object keeps its bytes. An unsharded store (the encoder default)
@@ -441,7 +442,9 @@ def append_command(
             if crs is not None or variable is not None:
                 raise click.UsageError("--crs and --variable do not apply to a chronozarr store")
             report = append(store, Path(input), workers=workers)
-        elif any(ch in input for ch in _GLOB_CHARS):
+        elif any(ch in input for ch in _GLOB_CHARS) or (
+            Path(input).is_file() and input.lower().endswith(TIFF_SUFFIXES)
+        ):
             stack = _read_geotiffs(input, crs)
             _check_validity_matches_store(store, stack)
             report = append(store, stack.data, workers=workers, bands=stack.bands, mask=stack.mask)

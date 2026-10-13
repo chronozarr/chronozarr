@@ -50,18 +50,32 @@ const titles = Object.fromEntries(Object.keys(sources).map((source) => [source, 
 // of the page it opens.
 const PATH_LABEL = /^`?(?:\.\.\/)*(?:[\w.-]+\/)*[\w.-]+\.md(?:#[\w-]+)?`?$/;
 
-// Every .md page is synced (site/.gitignore); index.mdx is the only hand-written page. Clear the synced
-// pages first, so a page dropped from `sources` stops being published.
-const pages = resolve(repo, 'site/docs/pages');
-for (const directory of ['guides', 'reference']) {
-  rmSync(resolve(pages, directory), { recursive: true, force: true });
+const siteUrl = 'https://chronozarr.org';
+// llms.txt (llmstxt.org) lists the pages in the sidebar's order, each as raw Markdown. Every key of `sources`
+// appears once; the build fails otherwise. Agents may skip the "Optional" section.
+const llmsSections = [
+  ['Start here', ['docs/what-is.md', 'docs/quickstart.md', 'docs/viewer.md']],
+  ['Create and share', ['docs/convert.md', 'docs/preview.md', 'docs/share.md', 'docs/publish.md', 'docs/analyze.md']],
+  ['Guides and examples', [
+    'docs/sentinel2.md', 'examples/bring_your_data/README.md', 'docs/examples.md', 'docs/png-frames.md', 'docs/append.md',
+    'docs/embedding.md', 'docs/notebooks.md', 'docs/private.md', 'docs/hosting.md', 'docs/hosting-providers.md',
+    'docs/hosting-requirements.md', 'docs/viewer-distribution.md',
+  ]],
+  ['Reference', [
+    'docs/cli.md', 'docs/python.md', 'js/README.md', 'js/maplibre/README.md', 'spec/CHRONOZARR.md', 'docs/how-it-works.md',
+    'docs/performance.md', 'docs/troubleshooting.md',
+  ]],
+  ['Optional', ['docs/evidence.md', 'docs/format-comparison.md']],
+];
+const listed = llmsSections.flatMap(([, entries]) => entries);
+const unlisted = Object.keys(sources).filter((source) => !listed.includes(source));
+if (unlisted.length || listed.length !== Object.keys(sources).length) {
+  throw new Error(`llmsSections must list every key of sources exactly once; unlisted: ${unlisted.join(', ') || 'none'}`);
 }
-for (const name of readdirSync(pages)) {
-  if (name.endsWith('.md')) rmSync(resolve(pages, name));
-}
-for (const [source, { route, title, description }] of Object.entries(sources)) {
-  let text = readFileSync(resolve(repo, source), 'utf8');
-  text = text.replace(/(!?)\[([^\]]*)\]\(([^)]+)\)/g, (match, bang, label, href) => {
+
+/** Repository links in `text` made into links to published pages (`linkTo(route)`) or to GitHub. */
+function rewriteLinks(text, source, linkTo) {
+  return text.replace(/(!?)\[([^\]]*)\]\(([^)]+)\)/g, (match, bang, label, href) => {
     // A GitHub link to a published document (npm renders js/README.md, so it links absolutely) opens the page.
     const github = /^https:\/\/github\.com\/chronozarr\/chronozarr\/blob\/main\/([^#]+)(#.*)?$/.exec(href);
     if (github && sources[github[1]]) href = `/${github[1]}${github[2] ?? ''}`;
@@ -70,25 +84,67 @@ for (const [source, { route, title, description }] of Object.entries(sources)) {
     const target = path.startsWith('/') ? path.slice(1) : relative(repo, resolve(repo, dirname(source), path));
     const isDirectory = existsSync(resolve(repo, target)) && statSync(resolve(repo, target)).isDirectory();
     const link = sources[target]
-      ? `/${sources[target].route}`
+      ? linkTo(sources[target].route)
       : `https://github.com/chronozarr/chronozarr/${isDirectory ? 'tree' : 'blob'}/main/${target}`;
     const shown = !bang && sources[target] && PATH_LABEL.test(label) ? titles[target] : label;
     return `${bang}[${shown}](${link}${anchor ? `#${anchor}` : ''})`;
   });
+}
+
+function writeSiteFile(path, text) {
+  const output = resolve(repo, path);
+  mkdirSync(dirname(output), { recursive: true });
+  writeFileSync(output, text);
+}
+
+// Every .md page is synced (site/.gitignore); index.mdx is the only hand-written page. The raw Markdown copies,
+// llms.txt and llms-full.txt in public/ are synced too. Clear them first, so a page dropped from `sources` stops
+// being published.
+for (const directory of ['pages', 'public']) {
+  const root = resolve(repo, 'site/docs', directory);
+  for (const sub of ['guides', 'reference']) rmSync(resolve(root, sub), { recursive: true, force: true });
+  for (const name of readdirSync(root)) {
+    if (name.endsWith('.md') || name === 'llms.txt' || name === 'llms-full.txt') rmSync(resolve(root, name));
+  }
+}
+const raw = {};
+for (const [source, { route, title, description }] of Object.entries(sources)) {
+  let text = readFileSync(resolve(repo, source), 'utf8');
   if (title) text = text.replace(/^# .+$/m, `# ${title}`);
   // The README opens with repository status badges. A docs page does not show them.
   text = text.replace(/^\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\)[ \t]*\n/gm, '');
+  text = text.replace(/<!--[\s\S]*?-->/g, '');
+  // The raw Markdown copy, for agents: absolute links to the other raw pages, no MDX escaping.
+  raw[source] = rewriteLinks(text, source, (target) => `${siteUrl}/${target}.md`);
+  writeSiteFile(`site/docs/public/${route}.md`, raw[source]);
   // Vocs parses Markdown as MDX: protect literal prose braces/angles, while
   // preserving fenced and inline code verbatim. No authored source is changed.
-  text = text.replace(/<!--[\s\S]*?-->/g, '');
-  text = text.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`+[^`]*`+)/g)
+  text = rewriteLinks(text, source, (target) => `/${target}`)
+    .split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`+[^`]*`+)/g)
     .map(part => part.startsWith('`') || part.startsWith('~~~') ? part
       : part.replaceAll('<', '&lt;').replaceAll('{', '&#123;').replaceAll('}', '&#125;'))
     .join('');
   // JSON strings are valid YAML scalars, so a title or description needs no further quoting.
   const frontmatter = `---\ntitle: ${JSON.stringify(titles[source])}\ndescription: ${JSON.stringify(description)}\n---\n\n`;
-  const output = resolve(repo, `site/docs/pages/${route}.md`);
-  mkdirSync(dirname(output), { recursive: true });
-  writeFileSync(output, frontmatter + text);
+  writeSiteFile(`site/docs/pages/${route}.md`, frontmatter + text);
 }
-console.log(`Synced ${Object.keys(sources).length} source documents.`);
+
+let llms = `# chronozarr
+
+> chronozarr turns a raster time series into static files that a browser plays from a link and Python reads with the stored values. A store is a Zarr v3 group with a multiscale pyramid in the native projection, served by any static host: no server, no tile service.
+
+Each page below is raw Markdown. ${siteUrl}/llms-full.txt joins them in this order.
+`;
+for (const [heading, entries] of llmsSections) {
+  llms += `\n## ${heading}\n\n`;
+  if (heading === 'Start here') {
+    llms += `- [Live demo](${siteUrl}/demo/): 117 monthly Sentinel-2 composites of the Ucayali River, read from a bucket in the browser.\n`;
+    llms += '- [Agent skill](https://github.com/chronozarr/chronozarr/blob/main/skills/chronozarr/SKILL.md): Instructions for coding agents that convert, view, publish or read chronozarr stores.\n';
+  }
+  for (const source of entries) llms += `- [${titles[source]}](${siteUrl}/${sources[source].route}.md): ${sources[source].description}\n`;
+}
+writeSiteFile('site/docs/public/llms.txt', llms);
+writeSiteFile('site/docs/public/llms-full.txt', listed
+  .map((source) => `${'='.repeat(72)}\nSource: ${siteUrl}/${sources[source].route}.md\n${'='.repeat(72)}\n\n${raw[source].trim()}\n`)
+  .join('\n'));
+console.log(`Synced ${Object.keys(sources).length} source documents, their raw Markdown, llms.txt and llms-full.txt.`);

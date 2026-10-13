@@ -5,3 +5,8 @@ docs/pages/*.md
 docs/pages/guides/
 docs/pages/reference/
 .wrangler/
+docs/public/llms.txt
+docs/public/llms-full.txt
+docs/public/*.md
+docs/public/guides/
+docs/public/reference/

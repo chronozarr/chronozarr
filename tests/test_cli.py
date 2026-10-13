@@ -333,6 +333,39 @@ def test_append_float32_geotiffs_with_nan_nodata_continues_the_mask(tmp_path):
     assert _run("validate", str(out)).exit_code == 0
 
 
+def test_append_a_single_geotiff_path(tmp_path):
+    frames = _random_frames("uint16")
+    out = _encode_first_two(tmp_path, frames)
+    later = _write_geotiffs(tmp_path / "later", _DATES[2:], frames[2:])
+    single = later.replace("*.tif", f"{_DATES[2]}.tif")
+    result = _run("append", str(out), single)
+    assert result.exit_code == 0, result.output
+
+    store = chronozarr.open_store(out)
+    assert len(store.times) == 3
+    assert np.array_equal(store.read(2), frames[2])
+    assert _run("validate", str(out)).exit_code == 0
+
+
+@pytest.mark.parametrize(
+    ("name", "message"),
+    [("scene.tif", "cannot find a date"), ("missing_2024-03.TIFF", "does not exist")],
+)
+def test_append_a_single_geotiff_path_fails_naming_the_file(tmp_path, name, message):
+    frames = _random_frames("uint16")
+    out = _encode_first_two(tmp_path, frames)
+    if name == "scene.tif":
+        _write_geotiffs(tmp_path / "later", ["scene"], frames[2:])
+    path = str(tmp_path / "later" / name)
+    before = _tree(out)
+    result = CliRunner().invoke(main, ["append", str(out), path])
+    assert result.exit_code == 1, result.output
+    assert message in result.output
+    assert name in result.output
+    assert "No group found" not in result.output
+    assert _tree(out) == before
+
+
 def _tree(path):
     """Every file under `path` with its bytes."""
     return {p.relative_to(path): p.read_bytes() for p in sorted(path.rglob("*")) if p.is_file()}
