@@ -1,7 +1,7 @@
 [project]
 name = "chronozarr"
-version = "0.4.0"
-description = "Zarr v3 convention and reader for raster time series with true stored values"
+version = "0.4.1"
+description = "Turn a raster time series into static files that a browser plays and Python reads with the stored values"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -39,7 +39,8 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://chronozarr.org"
-Documentation = "https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md"
+Documentation = "https://chronozarr.org/quickstart"
+Specification = "https://chronozarr.org/specification"
 Repository = "https://github.com/chronozarr/chronozarr"
 Issues = "https://github.com/chronozarr/chronozarr/issues"
 

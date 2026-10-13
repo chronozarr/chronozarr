@@ -16,7 +16,8 @@
     "zarr-layer:summary": "node zarr-layer/summarize.mjs",
     "cog:session": "node cog/session.mjs",
     "cog:report": "node cog/report.mjs",
-    "cog:decode": "node cog/decode-bench.mjs"
+    "cog:decode": "node cog/decode-bench.mjs",
+    "live:open": "node live/measure.mjs open-warm 10 && node live/measure.mjs open-cold 10"
   },
   "dependencies": {
     "@carbonplan/zarr-layer": "0.10.0",

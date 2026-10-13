@@ -195,6 +195,31 @@ def test_list_errors_say_which_permission_is_missing():
             adapter.list_objects("p")
 
 
+def test_a_refused_upload_names_the_missing_permission(tmp_path):
+    adapter = S3Adapter("bucket", region="eu-west-1")
+    chunk = tmp_path / "chunk"
+    chunk.write_bytes(b"x")
+    with Stubber(adapter.client) as stubber:
+        stubber.add_client_error("put_object", **client_error("AccessDenied"))
+        with pytest.raises(PublishError, match=r"access denied.*s3:PutObject"):
+            adapter.put_object("p/c/0", chunk, cache_control="no-cache", content_type="x")
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "advice"),
+    [(None, "aws configure"), ("https://acct.r2.cloudflarestorage.com", "R2 API token")],
+)
+def test_missing_credentials_say_how_to_provide_them(monkeypatch, endpoint, advice):
+    # No keys, no config files, no instance metadata: boto3 fails while signing, before a request.
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
+    adapter = S3Adapter("bucket", region="eu-west-1", endpoint_url=endpoint)
+    with pytest.raises(PublishError, match=r"no credentials found") as raised:
+        adapter.list_objects("p")
+    assert advice in str(raised.value)
+    assert "--profile" in str(raised.value)
+
+
 def test_rejected_credentials_do_not_echo_the_service_message():
     adapter = S3Adapter("bucket", region="eu-west-1")
     with Stubber(adapter.client) as stubber:

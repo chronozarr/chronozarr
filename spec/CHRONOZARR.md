@@ -321,7 +321,7 @@ Lengths MUST be updated when append rewrites an object. An unchanged shard retai
 
 ### 7.3 Codec subset
 
-Codec algorithms, configuration semantics and binary representations follow [bytes](https://zarr-specs.readthedocs.io/en/latest/v3/codecs/bytes/), [zstd](https://zarr-specs.readthedocs.io/en/latest/v3/codecs/zstd/), [gzip](https://zarr-specs.readthedocs.io/en/latest/v3/codecs/gzip/) and [blosc](https://zarr-specs.readthedocs.io/en/latest/v3/codecs/blosc/). This profile restricts the choices:
+Codec algorithms, configuration semantics and binary representations follow [bytes](https://zarr-specs.readthedocs.io/en/latest/v3/codecs/bytes/), [zstd](https://github.com/zarr-developers/zarr-extensions/tree/main/codecs/zstd), [gzip](https://zarr-specs.readthedocs.io/en/latest/v3/codecs/gzip/) and [blosc](https://zarr-specs.readthedocs.io/en/latest/v3/codecs/blosc/). This profile restricts the choices:
 
 | Compressor | Profile configuration |
 |---|---|

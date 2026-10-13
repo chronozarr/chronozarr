@@ -163,8 +163,10 @@ def test_geotiff_input_without_rasterio_names_the_geo_extra(tmp_path, monkeypatc
     monkeypatch.setitem(sys.modules, "rasterio", None)  # makes `import rasterio` raise ImportError
     result = CliRunner().invoke(main, ["encode", str(tmp_path / "*.tif"), str(tmp_path / "o")])
     assert result.exit_code == 1
+    # An installed package has no project to sync: the hint names the installed routes too.
+    assert "uv tool install --python 3.13 'chronozarr[geo]'" in result.output
+    assert "uv add 'chronozarr[geo]'" in result.output
     assert "uv sync --extra geo" in result.output
-    assert "chronozarr[geo]" in result.output
 
 
 _DATES = ("S2_20240115", "S2_20240215", "S2_20240315")

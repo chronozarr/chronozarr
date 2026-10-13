@@ -89,6 +89,30 @@ export async function probeReachable(url, { fetch = globalThis.fetch, timeoutMs 
   }
 }
 
+function readsThisComputerFromAfar(url, page) {
+  try {
+    return isLoopback(new URL(url, page?.href).hostname) && !isLoopback(new URL(page?.href ?? '').hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a store that a link asked for (?store=) and that failed to open gives way to the first catalog store. Only an
+ * address on the catalog's own host does: an old demo link whose prefix has moved. Any other store keeps its error on
+ * screen, so a link to someone's data never shows the demo in its place.
+ * @param {string} url
+ * @param {{url: string}[]} catalog
+ */
+export function fallsBackToCatalog(url, catalog) {
+  if (catalog.length === 0 || catalog[0].url === url) return false;
+  try {
+    return new URL(url).origin === new URL(catalog[0].url).origin;
+  } catch {
+    return false;
+  }
+}
+
 function hostOf(url) {
   try {
     return new URL(url, globalThis.location?.href).host || 'the host';
@@ -105,12 +129,30 @@ function hostOf(url) {
  * @param {{url: string}} target
  * @param {{reachable?: (url: string) => Promise<boolean>}} [deps]
  */
-export async function explainOpenError(error, target, { reachable = probeReachable } = {}) {
+export async function explainOpenError(error, target, { reachable = probeReachable, page = globalThis.location } = {}) {
   if (error instanceof StoreOpenError) return error;
   const host = hostOf(target.url);
   const message = redactText(error?.message ?? String(error));
   const status = error?.status;
   if (error?.name === 'FetchError' && status === undefined) {
+    // A page on the internet reading a store on this computer: the browser's own rules, or a stopped server, are the
+    // likely causes. A no-cors probe of a loopback address is blocked the same way, so it cannot tell them apart.
+    // A quick tunnel that has stopped answers with Cloudflare's error page, which carries no CORS header, so it would
+    // read as a CORS problem. For the person who got the link, the cause is that the sharing ended.
+    if (/\.trycloudflare\.com$/i.test(hostOf(target.url).split(':')[0])) {
+      return new StoreOpenError(
+        'share_stopped',
+        'Shared link not available',
+        `This store was shared from someone's computer through a temporary link (${host}). The link works only while they keep sharing it, so it may have stopped. Ask the sender for a new link.`,
+      );
+    }
+    if (readsThisComputerFromAfar(target.url, page)) {
+      return new StoreOpenError(
+        'local_blocked',
+        'Store on this computer not reachable',
+        `The browser could not read ${host}. Check that the command that serves it (chronozarr preview, share or view) is still running. Chrome asks whether this page may reach devices on your local network: allow it. Safari blocks a secure page from reading http://127.0.0.1: use Chrome or Firefox, or a self-hosted viewer (--viewer-dir).`,
+      );
+    }
     if (await reachable(target.url)) {
       return new StoreOpenError(
         'cors_blocked',
@@ -153,7 +195,7 @@ export async function validateStore(input, { open = readerOpenStore, reachable =
   } catch (error) {
     store?.close();
     if (isAbort(error)) throw error;
-    throw await explainOpenError(error, target, { reachable });
+    throw await explainOpenError(error, target, { reachable, page });
   }
   return { ...target, store };
 }

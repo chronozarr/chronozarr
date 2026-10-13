@@ -96,7 +96,7 @@ Some warm stepping and jumping samples are incomplete. Their medians do not esta
 
 ## Viewer measurements
 
-The tables in this section were measured on earlier format versions. They are kept as dated measurements.
+Most tables in this section were measured on earlier format versions. They are kept as dated measurements, and each gives its date.
 
 ### Cold open and warm switch
 
@@ -110,6 +110,17 @@ Viewer on the v0.1 Sahara store (128 months, 4 bands, 6 x 6 cells at LOD 0, 3.9 
 | Warm switch wire bytes and requests | 0 / 0 | 0 / 0 |
 | Product switch | about 1 ms | under 1 ms |
 | Decode per 2 MB chunk | 4.6 ms | 10 ms under load (4.5 ms idle) |
+
+### Cold open of the live store (2026-10-12)
+
+The deployed viewer at chronozarr.org/demo/ opened the public store `ucayali_santa_maria_v03` (v0.3, unsharded, 117 timesteps) ten times with the CDN cache as it was, and ten times with a cold CDN cache. The cold series adds a unique `?cb=` query to the store address, so every object is a miss. Headless Playwright Chromium, Metal, 1440 x 900 at device pixel ratio 2, a new browser for every run, the HTTP cache disabled. Apple M3 Max laptop, home connection. Script: `bench/live/measure.mjs` (`npm run live:open` in `bench/`).
+
+| CDN cache | Root metadata read | First whole frame, after the metadata | First whole frame, from the start of the open | Frame at the requested level |
+|---|---:|---:|---:|---:|
+| As found (mostly HIT) | 113 ms | 343 ms (218 to 508) | 477 ms (319 to 726) | 744 ms (539 to 1046) |
+| Cold (every object a MISS) | 223 ms | 404 ms (370 to 506) | 656 ms (548 to 758) | 981 ms (788 to 1109) |
+
+Medians, with the range in brackets. Each open read 11 requests and 11.0 MB: the metadata and nine level-1 chunks. The laptop ran on battery, which capped animation frames at 30 Hz, so each paint can be up to 33 ms late. The load average was 8 to 10 on 16 cores. Page, script and codec-module load are not included.
 
 ### Scrub latency
 
@@ -376,7 +387,7 @@ The demo catalog lists two v0.3 stores on `data.chronozarr.org`, in the R2 bucke
 - `ucayali_santa_maria_v03`: 117 monthly Sentinel-2 composites, unsharded, 5,893 objects, 6,451,772,327 bytes.
 - `ucayali_santa_maria/png-v03`: the PNG frames demo, sharded, 35 objects, 112,879,724 bytes.
 
-The R2 bucket uses `deploy/r2-cors.json` and the Cache Rule in [hosting.md](hosting.md#32-cloudflare-r2).
+The R2 bucket uses `deploy/r2-cors.json` and the Cache Rule in [hosting-providers.md](hosting-providers.md#cloudflare-r2).
 
 History of the imagery store:
 
@@ -410,9 +421,15 @@ Publishing through wrangler starts in about 2 seconds per object. At 4 parallel 
 
 ## Hosting observations
 
+### Which recipes were run
+
+As of 2026-10-12. Cloudflare R2 with a custom domain hosts the public demo, and Source Cooperative was tried as below. The Amazon S3 (public bucket and CloudFront), Google Cloud Storage and Azure recipes follow the providers' documentation and the messages of the `publish` adapters. They have not been run against live accounts.
+
+`chronozarr publish` 0.4.0 was run against a local S3 emulator (moto behind a TLS proxy that applies S3's CORS rules) on 2026-10-12: upload in four phases, resume after a failure, `--apply-cors`, `--update` after an append, the doctor checks and the viewer link. When the proxy answered `403` for an object that does not exist, as S3 does for a reader without `s3:ListBucket`, `doctor` failed the store at the validate step and no link was printed. This is why the S3 recipes grant `s3:ListBucket`.
+
 ### Doctor
 
-The `doctor` checklist in [hosting.md](hosting.md#1-checklist) was read from `src/chronozarr/doctor.py` on 2026-10-01. If that file changes, the file is the authority.
+The `doctor` checklist in [hosting-requirements.md](hosting-requirements.md#checklist) was read from `src/chronozarr/doctor.py` on 2026-10-01. If that file changes, the file is the authority.
 
 ### Cache copies per requesting site
 
@@ -492,6 +509,38 @@ The same mismatch can occur for up to the short lifetime when a CDN holds an old
 - In an unsharded store, that object is the chunk of timestep 0. It is immutable for good.
 - In a sharded store, it is time shard 0. It is immutable once a second time shard exists.
 - While a sharded store has one time shard, that object is the trailing shard with `max-age=300`. Doctor warns on a versioned prefix. The warning is expected then.
+
+## Newcomer trial (2026-10-12)
+
+Simulated by agents that read only the published documentation and the command help, on one laptop (Apple M3 Max, macOS) and a home connection, with the chronozarr 0.4.0 wheel built from the `v0.4.0` tag (identical, file for file, to the wheel on PyPI). The machine's uv configuration excludes packages released in the last 7 days, so the documented `uv add 'chronozarr[geo]==0.4.0'` could not resolve there; a user without that setting is not affected. No outside person took part: see [Colleague trial](colleague-trial.md) for the protocol that remains to be run.
+
+| Workflow | Steps | Machine time | Manual configuration | Recipient needs | Docs predicted it |
+|---|---|---|---|---|---|
+| A. Dated GeoTIFFs to a local preview (12 files, 4 bands, 1500 x 1200) | install, `convert --dry-run`, `convert`, `preview` | install 3 s (cold uv cache); first command after an install 12 to 24 s; dry run 2.1 s; convert 2.8 s; preview 1.4 s; first frame 1.1 to 1.5 s | Chrome's local network permission for chronozarr.org | n/a | Yes, apart from the first-command delay and the browser permission |
+| B. Same store, temporary link | `share`, Copy link, open on a second browser | link after 100 s (0.4.0), 33 s (main after 0.4.0, [Temporary sharing](#temporary-sharing)) | `cloudflared` installed | A browser | Partly: 0.4.0 showed no address for 75 s |
+| C. Store to S3-compatible storage | `publish --dry-run`, `publish --apply-cors`, `append`, `publish --update` | publish 1.9 to 2.7 s for 46 MB on a local emulator | Bucket, credentials, public read | A browser | Yes for the emulator. Live AWS, R2, GCS and Azure not run |
+| D. Read values in Python | `open_zarr`, `engine="chronozarr"`, `open_store` | under 2 s | none | n/a | Yes; the `open_zarr` route does not apply scale or mask |
+| E. Sentinel-2 for a 5 km box, 3 months | `ingest.py --bbox ... --name ...`, `validate`, `preview` | 11.7 s, 0.43 GB | Repository checkout, `uv sync --extra ingest` | n/a | Yes, with the `--bbox` flag on main after 0.4.0 |
+
+Values: the level-0 arrays read through `open_zarr`, the xarray backend and `open_store` equal the source GeoTIFFs bit for bit (uint16 and float32 stores), and the stores written on Python 3.11 and 3.13 are byte-identical. A copied viewer link restored the timestep, product, band, display range, zoom and centre in a new browser context.
+
+Problems found, and what changed on main after 0.4.0 (PR #100): a failed `?store=` link showed the demo store with no error (fixed in the viewer); `preview` and `share` printed a traceback for every cancelled read (fixed); `share` showed no address while it waited and cached a failed lookup (fixed); missing-extra messages named `uv sync`, which works only in a checkout (fixed); publish printed public-access advice for any failure (fixed); month names in file names could not be read and the fix pointed to `--date-pattern` (the message now gives the manifest route). Not changed: every command takes about 1.4 s to start, because the package imports xarray and pandas at once.
+
+## Temporary sharing
+
+### Time to a link (2026-10-12)
+
+`chronozarr share` on a 12-month, 40 MB store, with cloudflared 2026.10.0, on a laptop and a home connection. The time is from the start of the command. "Record published" is the first answer from the authoritative nameserver of trycloudflare.com (`dig @kevin.ns.cloudflare.com`, polled every second).
+
+| Code | Address printed | Record published | Address works | Link printed |
+|---|---:|---:|---:|---:|
+| 0.4.0, newcomer trial (2 runs) | not printed | not measured | 80 s | 100 s |
+| first lookup at once (2 runs) | 5 s | 7 s | 80 s | 92 s |
+| first lookup after 15 s (2 runs) | 5 s | 7 s | 21 s | 33 s |
+
+trycloudflare.com has a negative TTL of 60 s (SOA minimum). A lookup made before the record exists is cached as "no such host" for that time by the resolver of the computer that shares, so the address works there only after the cache entry expires. Waiting 15 s before the first lookup avoids it. If the first lookup still finds nothing, the wait is as before. A recipient on another network has not looked the address up, so their resolver has no such entry.
+
+In every run the recipient read `zarr.json` through the address (200, `Access-Control-Allow-Origin: *`), Ctrl-C printed `stopped` with exit status 0, no cloudflared process remained, and the address then answered HTTP 530.
 
 ## Local preview and remote notebooks
 

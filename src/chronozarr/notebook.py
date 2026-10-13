@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from chronozarr._install import extra_hint
 from chronozarr.view import VIEWER_URL, local_access
 
 
@@ -39,9 +40,7 @@ def player(
     try:
         from chronozarr.widget import Player
     except ImportError as exc:
-        raise ImportError(
-            "chronozarr.player needs anywidget: install 'chronozarr[notebook]'"
-        ) from exc
+        raise ImportError(f"chronozarr.player needs anywidget: {extra_hint('notebook')}") from exc
     text = str(store)
     access = None
     if text.startswith(("https://", "http://")):

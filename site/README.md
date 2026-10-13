@@ -33,19 +33,32 @@ rename; `scripts/check-vocs-classes.mjs` runs after every build and fails it whe
 in `styles.css` is absent from the built CSS. The fonts load from Google Fonts with system
 fallbacks.
 
-The homepage opens with a false-color plate of the Ucayali River (August 2025, pyramid
-level 0) over a filmstrip of every August from 2016 to 2025, then four measured figures
-and three routes into the documentation. The docs use Vocs navigation, code blocks,
-search, light/dark themes, and mobile menus. The format specification is labeled v0.3 Draft.
+The homepage says what a store does for a scientist, with three routes in (the live demo, the
+quickstart and sharing) under the introduction. The false-color plate of the Ucayali River (August
+2025, pyramid level 0) links to the same view in the viewer, over a filmstrip of every August from
+2016 to 2025. Below are what a store does, the three commands, the two ways to share and four
+measured figures, one each for viewer speed, value correctness, ingest speed and memory. Every
+figure is traced in `docs/performance.md`. The docs use Vocs navigation, code blocks, search,
+light and dark themes, and mobile menus.
 
-The repository Markdown is the source of the documentation. `npm run sync-content`
-copies the documents listed in `scripts/sync-content.mjs` into `docs/pages` before
-dev and build. The root `README.md` becomes `/getting-started`, and `../docs`,
-`../js`, `../spec` and `../examples/bring_your_data` supply the other pages.
-Edit those source documents rather than the ignored generated pages. The importer
-adapts relative links, removes the README badges and escapes literal MDX prose
-syntax. It preserves code blocks. The landing page, `docs/pages/index.mdx`, is the
-only hand-written page. Keep its introduction equal to the opening of the README.
+The repository Markdown is the source of the documentation. `npm run sync-content` copies the
+documents listed in `scripts/sync-content.mjs` into `docs/pages` before dev and build, with the
+route, title and description of each. The README is not published: it is the landing page on
+GitHub and PyPI, and `tests/test_docs.py` checks that its quickstart commands appear in
+`docs/quickstart.md`. Edit the source documents rather than the ignored generated pages. The
+importer adapts relative links (and GitHub links to published documents), names a link labelled
+with a file path after its page, removes the README badges and escapes literal MDX prose syntax.
+It preserves code blocks. The landing page, `docs/pages/index.mdx`, is the only hand-written page.
+
+Addresses that chronozarr.org has published keep working. `redirects.json` maps moved paths (the
+Worker imports it). `legacy-anchors.json` maps moved sections: a fragment never reaches the
+server, so an inline script in `vocs.config.tsx` sends `/page#old-section` on in the browser.
+`published-anchors.json` lists every route and section deployed on 2026-10-12.
+`scripts/check-links.mjs` runs after every build and fails it when a link on a page, a redirect,
+an old anchor or a published address leads to a page or section that the build lacks.
+`scripts/make-sitemap.mjs` writes `sitemap.xml`, and `docs/public/404.html` is served for unknown
+paths. `scripts/check-worker.mjs` runs the Worker against stand-in assets: every redirect, and the
+`Cache-Control: no-transform` that keeps Cloudflare's Web Analytics beacon off the viewer page.
 
 The homepage images are WebP: the plate at 2759 px (about 970 KiB, served to 2x screens
 through `srcset`) and at 1380 px (about 300 KiB), plus ten 260 px thumbnails of about
@@ -68,8 +81,8 @@ Verified 2026-10-02 (America/New_York):
 - Unknown live paths return 404; www returns 301 to the apex while preserving path.
 - The package versions recorded by this historical deployment check were PyPI and npm chronozarr 0.2.1.
 
-The current Python and npm package release is 0.4.0; see
-[`docs/release-0.4.0.md`](../docs/release-0.4.0.md) for its release status.
+The current Python and npm package release is 0.4.1; see
+[`docs/release-0.4.1.md`](../docs/release-0.4.1.md) for its release status.
 
 Live: https://chronozarr.org
 Fallback: https://chronozarr-docs.jake-gearon.workers.dev

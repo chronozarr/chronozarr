@@ -1,6 +1,6 @@
 # Notebook player
 
-`chronozarr.player` shows a chronozarr store in a notebook widget with a time slider and a play button. You can set the timestep, the product and the speed from Python, and you can read the pixel that you clicked. The `chronozarr` 0.4.0 release on PyPI includes the player. You need a trusted local Jupyter notebook, VS Code notebook or compatible anywidget host. The host must allow an iframe and serve the notebook over HTTP or HTTPS.
+`chronozarr.player` shows a chronozarr store in a notebook widget with a time slider and a play button. You can set the timestep, the product and the speed from Python, and you can read the pixel that you clicked. The `chronozarr` releases on PyPI include the player since 0.4.0. You need a trusted local Jupyter notebook, VS Code notebook or compatible anywidget host. The host must allow an iframe and serve the notebook over HTTP or HTTPS.
 
 ## Run it
 
@@ -31,7 +31,7 @@
 
 The widget shows only the play button and the time slider. Pass `controls=True` to add the date, product and speed menus. The attributes `times`, `products`, `bands` and `ready` arrive after the viewer opens the store. `ready` does not mean that every image chunk has painted. During playback `t` is the requested timestep, and the values in `click` belong to the painted timestep. The browser sends its state to the kernel at most ten times per second.
 
-The viewer runs in an iframe, and the widget accepts messages only from its exact origin and window. By default the iframe loads the viewer from `https://chronozarr.org/demo/`. Set `viewer=` to use a self-hosted viewer, and make the store send CORS headers that allow its origin. A local store path works as the first argument. The player serves it with the same range and CORS server as `chronozarr.view`. The browser may ask for local-network permission. A remote kernel needs `viewer_dir=`, `base_url=` or port forwarding. If the widget cannot open the store, its `hint` attribute says what the server has seen and what to try. See [Remote notebooks](../../docs/python.md#remote-notebooks).
+The viewer runs in an iframe, and the widget accepts messages only from its exact origin and window. By default the iframe loads the viewer from `https://chronozarr.org/demo/`. Set `viewer=` to use a self-hosted viewer, and make the store send CORS headers that allow its origin. A local store path works as the first argument. The player serves it with the same range and CORS server as `chronozarr.view`. The browser may ask for local-network permission. A remote kernel needs `viewer_dir=`, `base_url=` or port forwarding. If the widget cannot open the store, its `hint` attribute says what the server has seen and what to try. See [Remote notebooks](../../docs/notebooks.md#remote-notebooks).
 
 ## Check it in a browser
 

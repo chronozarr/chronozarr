@@ -116,7 +116,8 @@ def _cors_check(label: str, probe: Probe, origin: str) -> Check | None:
         "fail",
         f"Access-Control-Allow-Origin is {got!r} for Origin {origin}",
         "Allow the viewer origin: set `Access-Control-Allow-Origin: *` on the bucket or CDN "
-        "(R2: `npx wrangler r2 bucket cors set <bucket> --file deploy/r2-cors.json`). "
+        "(R2: `npx wrangler r2 bucket cors set <bucket> --file r2-cors.json`, with the rule at "
+        "https://chronozarr.org/guides/hosting-providers#cloudflare-r2). "
         "Browsers block every read of this store until this is fixed.",
     )
 

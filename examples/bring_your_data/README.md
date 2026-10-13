@@ -10,7 +10,7 @@ Run this command from the repository root.
 uv sync --extra geo
 ```
 
-This checkout uses the 0.4.0 source version from the repository. For a standalone install, use `python -m pip install --upgrade "chronozarr[geo]==0.4.0"` instead. Python 3.11 or newer is required.
+This checkout uses the 0.4.1 source version from the repository. For a standalone install, use `python -m pip install --upgrade "chronozarr[geo]==0.4.1"` instead. Python 3.11 or newer is required.
 
 The bundle script below needs this checkout because it copies the viewer from `js/`; it needs no npm install or build. To copy the viewer from the npm package instead, see [self-host the packaged viewer](../../docs/viewer-distribution.md).
 
@@ -61,7 +61,7 @@ For another filename pattern, pass `--date-pattern`, for example `--date-pattern
    uv run chronozarr preview /tmp/my-series
    ```
 
-   The preview serves the store on localhost and opens the viewer. Press Ctrl-C to stop it before starting another command in the same terminal. To share a temporary view from your laptop, use `uv run chronozarr share /tmp/my-series`; it needs `cloudflared`, and the terminal and laptop must stay running while the recipient uses the link. The requested data is transferred from your laptop to the recipient's browser. In the viewer, choose the intended view and use `Copy link` to share it. The recipient needs only a modern browser. See the [sharing walkthrough](../../docs/python.md#share-a-store-through-a-tunnel) for setup and public-link limits.
+   The preview serves the store on localhost and opens the viewer. Press Ctrl-C to stop it before starting another command in the same terminal. To share a temporary view from your laptop, use `uv run chronozarr share /tmp/my-series`; it needs `cloudflared`, and the terminal and laptop must stay running while the recipient uses the link. The requested data is transferred from your laptop to the recipient's browser. In the viewer, choose the intended view and use `Copy link` to share it. The recipient needs only a modern browser. See the [sharing walkthrough](../../docs/share.md) for setup and public-link limits.
 
 ## 4. Read a pixel's history
 

@@ -1,0 +1,62 @@
+{
+  "/quickstart": {
+    "how-it-works": "/how-it-works",
+    "1-put-dated-geotiffs-in-a-directory": "/quickstart#2-get-a-dated-raster-series",
+    "2-convert-and-check-the-store": "/quickstart#3-convert",
+    "3-open-and-share-the-first-view": "/quickstart#4-look-at-it-on-your-computer",
+    "read-a-store-without-chronozarr": "/how-it-works#read-a-store-without-chronozarr",
+    "commands": "/reference/cli",
+    "javascript": "/reference/javascript",
+    "documentation": "/what-is-chronozarr#next-steps",
+    "status": "/what-is-chronozarr#versions",
+    "license": "https://github.com/chronozarr/chronozarr/blob/main/LICENSE"
+  },
+  "/guides/hosting": {
+    "send-a-local-store-today": "/guides/share",
+    "1-checklist": "/guides/hosting-requirements#checklist",
+    "2-immutable-prefixes-and-upload-order": "/guides/hosting-requirements#immutable-prefixes-and-upload-order",
+    "immutable-prefixes": "/guides/hosting-requirements#immutable-prefixes",
+    "metadata-last": "/guides/hosting-requirements#metadata-last",
+    "chronozarr-publish": "/guides/publish",
+    "the-upload-script": "/guides/hosting-providers#the-upload-script",
+    "the-r2-upload-script": "/guides/hosting-providers#the-r2-upload-script",
+    "3-recipes": "/guides/hosting-providers",
+    "31-amazon-s3-with-cloudfront": "/guides/hosting-providers#amazon-s3-with-cloudfront",
+    "32-cloudflare-r2": "/guides/hosting-providers#cloudflare-r2",
+    "cache-rule": "/guides/hosting-providers#cache-rule",
+    "timing-allow-origin": "/guides/hosting-providers#timing-allow-origin",
+    "object-size-and-miss-cost": "/guides/hosting-providers#object-size-and-miss-cost",
+    "one-cached-copy-per-requesting-site": "/guides/hosting-providers#one-cached-copy-per-requesting-site",
+    "r2dev": "/guides/hosting-providers#r2dev",
+    "33-google-cloud-storage": "/guides/hosting-providers#google-cloud-storage",
+    "34-source-cooperative": "/guides/hosting-providers#source-cooperative",
+    "route-1-the-web-ui": "/guides/hosting-providers#route-1-the-web-ui",
+    "route-2-an-s3-client-through-the-proxy": "/guides/hosting-providers#route-2-an-s3-client-through-the-proxy",
+    "4-verifying-by-hand": "/guides/hosting-requirements#verifying-by-hand",
+    "5-pitfalls": "/guides/hosting-requirements#pitfalls",
+    "compression-in-front-of-the-store": "/guides/hosting-requirements#compression-in-front-of-the-store",
+    "fallback-pages": "/guides/hosting-requirements#fallback-pages",
+    "rewriting-a-prefix": "/guides/hosting-requirements#rewriting-a-prefix",
+    "local-testing": "/guides/hosting-requirements#local-testing",
+    "shard-size": "/guides/hosting-requirements#shard-size",
+    "6-the-live-store": "/guides/append#the-live-store",
+    "7-appending-to-a-live-store": "/guides/append#appending-to-a-live-store",
+    "choose-a-layout": "/guides/append#choose-a-layout",
+    "procedure": "/guides/append#procedure",
+    "publishing-an-append": "/guides/append#publishing-an-append",
+    "cache-classes": "/guides/append#cache-classes",
+    "cloudflare": "/guides/append#cloudflare",
+    "open-viewers": "/guides/append#open-viewers",
+    "doctor-on-an-appended-store": "/guides/append#doctor-on-an-appended-store"
+  },
+  "/reference/python": {
+    "preview-from-the-command-line": "/guides/preview",
+    "share-a-store-through-a-tunnel": "/guides/share",
+    "show-a-store-in-a-notebook": "/guides/notebooks",
+    "remote-notebooks": "/guides/notebooks#remote-notebooks",
+    "jupyterhub-and-jupyter-server-proxy": "/guides/notebooks#jupyterhub-and-jupyter-server-proxy"
+  },
+  "/guides/publish": {
+    "chronozarr-publish": "/guides/publish#publish"
+  }
+}

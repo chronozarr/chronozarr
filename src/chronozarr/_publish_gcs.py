@@ -20,6 +20,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, NoReturn
 
+from chronozarr._install import extra_hint
 from chronozarr.publish import PublishError, RemoteObject
 
 PUBLIC_HOST = "https://storage.googleapis.com"
@@ -27,7 +28,7 @@ UPLOAD_TIMEOUT_S = 300
 DOWNLOAD_TIMEOUT_S = 120
 
 # GCS has one `responseHeader` list, used for both Access-Control-Allow-Headers and
-# Access-Control-Expose-Headers (docs/hosting.md section 3.3).
+# Access-Control-Expose-Headers (docs/hosting-providers.md, Google Cloud Storage).
 VIEWER_CORS_RULE: dict[str, Any] = {
     "origin": ["*"],
     "method": ["GET", "HEAD"],
@@ -62,8 +63,7 @@ class GcsAdapter:
             from google.cloud import storage
         except ImportError as exc:
             raise PublishError(
-                "publishing to gs:// needs google-cloud-storage: run "
-                "`uv sync --extra publish-gcs` (or `pip install 'chronozarr[publish-gcs]'`)."
+                f"publishing to gs:// needs google-cloud-storage: {extra_hint('publish-gcs')}."
             ) from exc
         self.bucket_name = bucket
         try:
@@ -146,7 +146,8 @@ class GcsAdapter:
             "the store needs a Cloud CDN backend bucket behind an external HTTPS load balancer, "
             "whose URL you pass as --public-url. Use storage.googleapis.com URLs: "
             "storage.cloud.google.com authenticates with cookies and does not answer CORS. "
-            "docs/hosting.md section 3.3 has the commands."
+            "https://chronozarr.org/guides/hosting-providers#google-cloud-storage has the "
+            "commands."
         )
 
     def _iterate(self, action: str, items: Any) -> Any:

@@ -37,8 +37,8 @@ or at a CDN:
 ```html
 <script type="importmap">
 { "imports": {
-  "chronozarr": "https://cdn.jsdelivr.net/npm/chronozarr@0.4.0/chronozarr/decoder.js",
-  "chronozarr/maplibre": "https://cdn.jsdelivr.net/npm/chronozarr@0.4.0/maplibre/layer.js"
+  "chronozarr": "https://cdn.jsdelivr.net/npm/chronozarr@0.4.1/chronozarr/decoder.js",
+  "chronozarr/maplibre": "https://cdn.jsdelivr.net/npm/chronozarr@0.4.1/maplibre/layer.js"
 } }
 </script>
 ```
@@ -94,7 +94,7 @@ store.close(); // aborts in-flight requests and releases the decode workers
 | `maxRequests` | 12 | The cap on concurrent requests to the store. |
 | `retryDelaysMs` | `[200, 600, 1500]` | The delay before each retry of a failed request. |
 
-The host must send CORS headers. A sharded store also needs byte-range requests, and an unsharded store needs only `GET`. `chronozarr doctor <url>` from the Python package checks the host. The [hosting guide](https://github.com/chronozarr/chronozarr/blob/main/docs/hosting.md) has the details.
+The host must send CORS headers. A sharded store also needs byte-range requests, and an unsharded store needs only `GET`. `chronozarr doctor <url>` from the Python package checks the host. The [hosting requirements](https://github.com/chronozarr/chronozarr/blob/main/docs/hosting-requirements.md) has the details.
 
 ## Draw a store on a MapLibre map
 
