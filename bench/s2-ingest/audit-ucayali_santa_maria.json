@@ -1,0 +1,1107 @@
+{
+ "2015-11": {
+  "n": 2,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2016-04": {
+  "n": 2,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2016-05": {
+  "n": 2,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2016-06": {
+  "n": 4,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2016-07": {
+  "n": 2,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2016-08": {
+  "n": 4,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2016-09": {
+  "n": 2,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2016-10": {
+  "n": 3,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2016-11": {
+  "n": 4,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2016-12": {
+  "n": 1,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": [
+   [
+    "S2A_MSIL2A_20161202T151702_R125_T18MVS_20210213T172111",
+    348,
+    0
+   ]
+  ]
+ },
+ "2017-01": {
+  "n": 1,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2017-02": {
+  "n": 2,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2017-03": {
+  "n": 1,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2017-05": {
+  "n": 1,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2017-07": {
+  "n": 4,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2017-08": {
+  "n": 3,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2017-09": {
+  "n": 4,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2017-10": {
+  "n": 4,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2017-11": {
+  "n": 6,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2017-12": {
+  "n": 5,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2018-01": {
+  "n": 5,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2018-02": {
+  "n": 3,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2018-03": {
+  "n": 1,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2018-04": {
+  "n": 6,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2018-05": {
+  "n": 7,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2018-06": {
+  "n": 8,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2018-07": {
+  "n": 7,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2018-08": {
+  "n": 12,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2018-09": {
+  "n": 8,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [
+   "S2B_MSIL2A_20180918T151659_R125_T18MWS_20201009T023352"
+  ],
+  "small_scenes_with_shortfall": []
+ },
+ "2018-10": {
+  "n": 7,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2018-11": {
+  "n": 9,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2018-12": {
+  "n": 4,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2019-01": {
+  "n": 6,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2019-02": {
+  "n": 3,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2019-03": {
+  "n": 6,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2019-04": {
+  "n": 9,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2019-05": {
+  "n": 8,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2019-06": {
+  "n": 12,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2019-07": {
+  "n": 10,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2019-08": {
+  "n": 9,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2019-09": {
+  "n": 10,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2019-10": {
+  "n": 3,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2019-11": {
+  "n": 7,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2019-12": {
+  "n": 5,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2020-01": {
+  "n": 8,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2020-02": {
+  "n": 8,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2020-03": {
+  "n": 7,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2020-04": {
+  "n": 5,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2020-05": {
+  "n": 7,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2020-06": {
+  "n": 10,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [
+   "S2A_MSIL2A_20200614T151711_R125_T18MVS_20200827T083258"
+  ],
+  "small_scenes_with_shortfall": []
+ },
+ "2020-07": {
+  "n": 8,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2020-08": {
+  "n": 11,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2020-09": {
+  "n": 8,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2020-10": {
+  "n": 9,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2020-11": {
+  "n": 3,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2020-12": {
+  "n": 5,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2021-01": {
+  "n": 2,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2021-02": {
+  "n": 2,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2021-03": {
+  "n": 5,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2021-04": {
+  "n": 6,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2021-05": {
+  "n": 10,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2021-06": {
+  "n": 8,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": [
+   [
+    "S2A_MSIL2A_20210629T151711_R125_T18MVS_20210630T185207",
+    152,
+    0
+   ]
+  ]
+ },
+ "2021-07": {
+  "n": 6,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2021-08": {
+  "n": 8,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2021-09": {
+  "n": 11,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2021-10": {
+  "n": 9,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2021-11": {
+  "n": 6,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [
+   "S2B_MSIL2A_20211101T151709_R125_T18MWS_20211106T164237"
+  ],
+  "small_scenes_with_shortfall": []
+ },
+ "2021-12": {
+  "n": 12,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 7,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2022-01": {
+  "n": 2,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2022-03": {
+  "n": 1,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 6,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2022-04": {
+  "n": 7,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 79,
+  "excess_px": 0,
+  "scenes_without_valid_px": [
+   "S2B_MSIL2A_20220430T151659_R125_T18MWS_20220501T091717"
+  ],
+  "small_scenes_with_shortfall": [
+   [
+    "S2B_MSIL2A_20220430T151659_R125_T18MVS_20220501T073226",
+    24,
+    0
+   ]
+  ]
+ },
+ "2022-05": {
+  "n": 8,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 7,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2022-06": {
+  "n": 8,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 16,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2022-07": {
+  "n": 11,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2022-08": {
+  "n": 11,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 107,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2022-09": {
+  "n": 12,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 261,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2022-10": {
+  "n": 5,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 10,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2022-11": {
+  "n": 6,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2022-12": {
+  "n": 3,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2023-01": {
+  "n": 4,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2023-02": {
+  "n": 2,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2023-03": {
+  "n": 4,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2023-04": {
+  "n": 7,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2023-05": {
+  "n": 8,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 52,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2023-06": {
+  "n": 9,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 19,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2023-07": {
+  "n": 7,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [
+   "S2A_MSIL2A_20230729T151711_R125_T18MWS_20240906T113635"
+  ],
+  "small_scenes_with_shortfall": []
+ },
+ "2023-08": {
+  "n": 6,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2023-09": {
+  "n": 12,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 227,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2023-10": {
+  "n": 9,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 56,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2023-11": {
+  "n": 4,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 16,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2023-12": {
+  "n": 2,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 13,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2024-01": {
+  "n": 6,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2024-02": {
+  "n": 3,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 8,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2024-03": {
+  "n": 6,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 31,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2024-04": {
+  "n": 8,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 179,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2024-05": {
+  "n": 5,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 2,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": [
+   [
+    "S2B_MSIL2A_20240509T151719_R125_T18MWS_20240509T204551",
+    560,
+    0
+   ]
+  ]
+ },
+ "2024-06": {
+  "n": 12,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2024-07": {
+  "n": 10,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 111,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": [
+   [
+    "S2B_MSIL2A_20240708T151719_R125_T18MWS_20240708T214024",
+    424,
+    0
+   ]
+  ]
+ },
+ "2024-08": {
+  "n": 12,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 694,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2024-09": {
+  "n": 6,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 303,
+  "excess_px": 0,
+  "scenes_without_valid_px": [
+   "S2A_MSIL2A_20240901T151721_R125_T18MVS_20240901T230705"
+  ],
+  "small_scenes_with_shortfall": []
+ },
+ "2024-10": {
+  "n": 11,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 1,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": [
+   [
+    "S2A_MSIL2A_20241011T151721_R125_T18MVS_20241011T205413",
+    240,
+    0
+   ]
+  ]
+ },
+ "2024-11": {
+  "n": 5,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 16,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2024-12": {
+  "n": 4,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 3,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2025-01": {
+  "n": 7,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 22,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2025-02": {
+  "n": 2,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 41,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2025-03": {
+  "n": 1,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2025-04": {
+  "n": 4,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2025-05": {
+  "n": 8,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 8,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2025-06": {
+  "n": 12,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 13,
+  "excess_px": 0,
+  "scenes_without_valid_px": [
+   "S2C_MSIL2A_20250618T151741_R125_T18MWS_20250618T214116"
+  ],
+  "small_scenes_with_shortfall": []
+ },
+ "2025-07": {
+  "n": 11,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 0,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2025-08": {
+  "n": 16,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 348,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2025-09": {
+  "n": 11,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 186,
+  "excess_px": 0,
+  "scenes_without_valid_px": [
+   "S2B_MSIL2A_20250921T151719_R125_T18MWS_20250921T203358"
+  ],
+  "small_scenes_with_shortfall": []
+ },
+ "2025-10": {
+  "n": 13,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 181,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2025-11": {
+  "n": 8,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 15,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2025-12": {
+  "n": 9,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 157,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2026-01": {
+  "n": 3,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 7,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ },
+ "2026-02": {
+  "n": 2,
+  "missing": [],
+  "missing_valid_px": [],
+  "unexplained_shortfall_px": 56,
+  "excess_px": 0,
+  "scenes_without_valid_px": [],
+  "small_scenes_with_shortfall": []
+ }
+}

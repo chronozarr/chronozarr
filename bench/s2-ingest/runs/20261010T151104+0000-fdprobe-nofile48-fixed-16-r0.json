@@ -1,0 +1,173 @@
+{
+ "tag": "fdprobe-nofile48-fixed-16-r0",
+ "timestamp": "2026-10-10T15:11:04+00:00",
+ "bench_args": [
+  "--workload",
+  "lab-ucayali-x2",
+  "--config",
+  "fixed-16",
+  "--rep",
+  "0"
+ ],
+ "workload": "lab-ucayali-x2",
+ "config": "fixed-16",
+ "rep": 0,
+ "lab": null,
+ "warm": false,
+ "container": {
+  "cpus": "4",
+  "memory": "4g",
+  "memory_swap": "4g",
+  "nofile": "48",
+  "exit_code": 0,
+  "oom_killed": false,
+  "cgroup": {
+   "memory.peak": "2716286976",
+   "memory.max": "4294967296",
+   "memory.events": {
+    "low": "0",
+    "high": "0",
+    "max": "0",
+    "oom": "0",
+    "oom_kill": "0",
+    "oom_group_kill": "0"
+   },
+   "cpu.max": {
+    "400000": "100000"
+   },
+   "cpu.stat": {
+    "usage_usec": "15281476",
+    "user_usec": "12979860",
+    "system_usec": "2301615",
+    "nice_usec": "0",
+    "nr_periods": "661",
+    "nr_throttled": "6",
+    "throttled_usec": "1162782",
+    "nr_bursts": "0",
+    "burst_usec": "0"
+   }
+  }
+ },
+ "ok": true,
+ "stderr_tail": "",
+ "bench_record": {
+  "ok": true,
+  "workload": "lab-ucayali-x2",
+  "config": "fixed-16",
+  "rep": 0,
+  "git_sha": "01185cd",
+  "git_dirty": true,
+  "baseline_ref": null,
+  "timestamp": "2026-10-10T15:11:04+00:00",
+  "machine": {
+   "platform": "Linux-6.12.76-linuxkit-aarch64-with-glibc2.41",
+   "machine": "aarch64",
+   "processor": "",
+   "python": "3.13.16",
+   "resources": {
+    "cpus": 4,
+    "cpu_source": "cgroup CPU quota",
+    "memory_total": 8216215552,
+    "memory_available": 7352803328,
+    "memory_limit": 4244979712,
+    "memory_source": "cgroup memory limit",
+    "open_files": 48
+   }
+  },
+  "lab": null,
+  "warm": false,
+  "wall_seconds": 64.651,
+  "first_month_seconds": 64.646,
+  "cpu_seconds": 11.51,
+  "peak_rss_bytes": 2531446784,
+  "gdal_network": {
+   "get_requests": 553,
+   "head_requests": 100,
+   "downloaded_bytes": 914699933
+  },
+  "lab_server": {
+   "requests": {
+    "HEAD": 100,
+    "GET": 998
+   },
+   "status": {
+    "200": 100,
+    "206": 998
+   },
+   "bytes_sent": 941050579,
+   "bursts": 0,
+   "config": {
+    "latency_ms": 0.0,
+    "bandwidth_mbps": 0.0,
+    "fail_rate": 0.0,
+    "fail_after": 0,
+    "fail_for": 5.0,
+    "max_inflight": 0,
+    "fail_first": 0,
+    "seed": 0
+   }
+  },
+  "nic_rx_bytes": 482,
+  "month_sha256": {
+   "2024-07": "495d6657e2921b5beace3f3c856883c82d0d07e05fdb762492cb7885ba2e75dd"
+  },
+  "output_pixels": 30514540,
+  "output_bytes": 61029080,
+  "useful_MBps": 0.944,
+  "Mpx_per_s": 0.472,
+  "settings": {
+   "adaptive": false,
+   "requests": 6,
+   "max_requests": 6,
+   "cpu_workers": 3,
+   "memory_budget": 2122489856,
+   "gdal_cache": 132655616,
+   "reasons": [
+    "4 usable CPUs (cgroup CPU quota)",
+    "cpu_workers=3: usable CPUs less one for the scheduler",
+    "max_requests=6: open-file limit 48 allows about 8 descriptors per read",
+    "requests=6: set by user",
+    "adaptation off: request concurrency stays fixed",
+    "memory_budget=2.0 GiB: 50% of 4.0 GiB (cgroup memory limit)",
+    "gdal_cache=126 MiB: 1/16 of the budget, 64-512 MiB"
+   ]
+  },
+  "run_summary": {
+   "wall_seconds": 64.647,
+   "first_month_seconds": 64.646,
+   "months": 1,
+   "months_skipped": 0,
+   "scenes": 20,
+   "scenes_no_valid": 0,
+   "scenes_failed": 0,
+   "reads": 100,
+   "reads_native": 100,
+   "read_retries": 0,
+   "http_throttled": 0,
+   "pixel_fraction_read": 0.6236,
+   "stage_thread_seconds": {
+    "read": 77.94,
+    "mask": 2.12,
+    "median": 0.58,
+    "write": 0.83
+   },
+   "cpu_seconds": 11.51,
+   "cpu_utilisation": 0.045,
+   "request_slot_occupancy": 0.201,
+   "mean_request_limit": 6.0,
+   "final_request_limit": 6,
+   "limiter_events": [
+    {
+     "t": 0.0,
+     "limit": 6,
+     "rate_MBps": null,
+     "reason": "start"
+    }
+   ],
+   "months_over_budget": [],
+   "months_all_failed": [],
+   "bottleneck": "neither saturated (request slots busy 20%, CPU 4%): latency, few scenes per month, or a small AOI"
+  },
+  "peak_open_fds": 48
+ }
+}

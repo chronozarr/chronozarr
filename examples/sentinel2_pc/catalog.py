@@ -2,7 +2,7 @@
 
 Handles:
 - STAC search by AOI bbox + date range
-- unsigned asset hrefs (signed at read time in mosaic.py)
+- unsigned asset hrefs, signed at read time with sign_href
 - Filtering to required bands (B02/B03/B04/B08 + SCL)
 """
 
@@ -13,6 +13,7 @@ import warnings
 from dataclasses import dataclass, field
 from datetime import date
 
+import planetary_computer as pc
 import pystac
 from pystac_client import Client
 from pystac_client.warnings import DoesNotConformTo
@@ -58,6 +59,15 @@ class SceneRef:
         return -1000 if self.processing_baseline >= 4.0 else 0
 
 
+def sign_href(href: str) -> str:
+    """A readable URL for a Planetary Computer asset href.
+
+    planetary_computer caches the SAS token per storage container and fetches a new one shortly
+    before it expires, so calling this right before every open keeps long runs authorized.
+    """
+    return pc.sign(href)
+
+
 def search_scenes(
     bbox: tuple[float, float, float, float],
     start: str | date,
@@ -76,9 +86,8 @@ def search_scenes(
         List of SceneRef sorted by datetime ascending.
     """
     # Hrefs stay unsigned here. Planetary Computer SAS tokens expire in about an hour, so
-    # mosaic.py signs each href right before opening it (planetary_computer caches and
-    # refreshes tokens per container). Signing at search time broke every month after the
-    # first hour of a full-archive run with HTTP 403.
+    # mosaic.py signs each href with sign_href right before opening it. Signing at search time
+    # broke every month after the first hour of a full-archive run with HTTP 403.
     client = Client.open(PC_STAC_URL)
 
     datetime_str = f"{start}/{end}"

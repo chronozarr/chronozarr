@@ -34,7 +34,7 @@ _R = TypeVar("_R")
 
 @dataclass
 class Block:
-    """One spatial window across every timestep: data (T, B, h, w), planes (T, h, w)."""
+    """One spatial window across a run of timesteps: data (T, B, h, w), planes (T, h, w)."""
 
     data: np.ndarray
     mask: np.ndarray | None = None
@@ -280,7 +280,9 @@ def _resolve_nodata(
 
 
 class _Source(Protocol):
-    def read_cell(self, row: int, col: int) -> Block: ...
+    def read_cell(self, row: int, col: int, t0: int, t1: int) -> Block:
+        """Timesteps t0..t1 (end exclusive) of one cell."""
+        ...
 
 
 def _plane(array: np.ndarray, name: str, *, binary: bool) -> np.ndarray:
@@ -294,7 +296,7 @@ def _plane(array: np.ndarray, name: str, *, binary: bool) -> np.ndarray:
 
 
 class _ArraySource:
-    """Cells of a DataArray (numpy or dask) read one window at a time."""
+    """Cells of a DataArray (numpy or dask) read one (time, y, x) window at a time."""
 
     def __init__(
         self,
@@ -305,8 +307,9 @@ class _ArraySource:
     ) -> None:
         self.data, self.mask, self.coverage, self.cs = data, mask, coverage, chunk_size
 
-    def read_cell(self, row: int, col: int) -> Block:
+    def read_cell(self, row: int, col: int, t0: int, t1: int) -> Block:
         window = {
+            "time": slice(t0, t1),
             "y": slice(row * self.cs, (row + 1) * self.cs),
             "x": slice(col * self.cs, (col + 1) * self.cs),
         }
@@ -385,17 +388,26 @@ class _SpillSource:
         cells = [(r, c) for r in range(self.rows) for c in range(self.cols)]
         list(pool.map(one, cells))
 
-    def read_cell(self, row: int, col: int) -> Block:
+    def _read(
+        self, kind: str, row: int, col: int, dtype: np.dtype, step: int, t0: int, t1: int
+    ) -> np.ndarray:
+        """Timesteps t0..t1 of one variable of a cell; `step` values per timestep."""
+        offset = t0 * step * dtype.itemsize
+        return np.fromfile(
+            self._path(kind, row, col), dtype=dtype, count=(t1 - t0) * step, offset=offset
+        )
+
+    def read_cell(self, row: int, col: int, t0: int, t1: int) -> Block:
         ys, xs = self._window(row, col)
         h, w = ys.stop - ys.start, xs.stop - xs.start
-        data = np.fromfile(self._path("d", row, col), dtype=self.dtype)
-        block = Block(data.reshape(self.n_time, self.n_band, h, w))
+        n = t1 - t0
+        data = self._read("d", row, col, self.dtype, self.n_band * h * w, t0, t1)
+        block = Block(data.reshape(n, self.n_band, h, w))
+        plane = np.dtype(np.uint8)
         if self.has_mask:
-            mask = np.fromfile(self._path("m", row, col), dtype=np.uint8)
-            block.mask = mask.reshape(self.n_time, h, w)
+            block.mask = self._read("m", row, col, plane, h * w, t0, t1).reshape(n, h, w)
         if self.has_coverage:
-            coverage = np.fromfile(self._path("v", row, col), dtype=np.uint8)
-            block.coverage = coverage.reshape(self.n_time, h, w)
+            block.coverage = self._read("v", row, col, plane, h * w, t0, t1).reshape(n, h, w)
         return block
 
 
@@ -448,7 +460,8 @@ class _Pyramid:
 
     A level-0 cell is read from `source`; a cell of level k is assembled from the four cells of
     level k-1 beneath it, so a level-0 cell is read, handed to `submit`, downsampled into its
-    parent and dropped. `n_time` is the number of timesteps `source` holds.
+    parent and dropped. A walk covers one run of timesteps (a time slab), so the blocks it holds
+    are as long as the slab, not as long as the series.
     """
 
     def __init__(
@@ -456,7 +469,6 @@ class _Pyramid:
         shapes: Sequence[tuple[int, int]],
         chunk_size: int,
         *,
-        n_time: int,
         n_band: int,
         dtype: np.dtype,
         nodata: int | float | None,
@@ -464,33 +476,52 @@ class _Pyramid:
         compute: ThreadPoolExecutor,
     ) -> None:
         self.shapes, self.cs = list(shapes), chunk_size
-        self.n_time, self.n_band, self.dtype, self.nodata = n_time, n_band, dtype, nodata
+        self.n_band, self.dtype, self.nodata = n_band, dtype, nodata
         self.source, self.compute = source, compute
         self.grids = [schema.grid_shape(h, w, chunk_size) for h, w in self.shapes]
         self.downsample_s = [0.0] * len(self.shapes)  # per level, summed over cells
 
-    def walk(self, submit: Callable[[int, int, int, Block], None]) -> None:
-        """Call `submit(level, row, col, block)` for every cell, children before parents."""
+    def walk(self, submit: Callable[[int, int, int, Block], None], t0: int, t1: int) -> None:
+        """Call `submit(level, row, col, block)` for every cell, children before parents.
+
+        Blocks hold timesteps t0..t1 (end exclusive) of the source.
+        """
         top = len(self.shapes) - 1
         for row in range(self.grids[top][0]):
             for col in range(self.grids[top][1]):
-                self._produce(top, row, col, submit)
+                self._produce(top, row, col, submit, t0, t1)
 
     def _produce(
-        self, k: int, row: int, col: int, submit: Callable[[int, int, int, Block], None]
+        self,
+        k: int,
+        row: int,
+        col: int,
+        submit: Callable[[int, int, int, Block], None],
+        t0: int,
+        t1: int,
     ) -> Block:
         """Level-k cell (row, col): read at level 0, else assembled from its four children."""
-        block = self.source.read_cell(row, col) if k == 0 else self._assemble(k, row, col, submit)
+        if k == 0:
+            block = self.source.read_cell(row, col, t0, t1)
+        else:
+            block = self._assemble(k, row, col, submit, t0, t1)
         submit(k, row, col, block)
         return block
 
     def _assemble(
-        self, k: int, row: int, col: int, submit: Callable[[int, int, int, Block], None]
+        self,
+        k: int,
+        row: int,
+        col: int,
+        submit: Callable[[int, int, int, Block], None],
+        t0: int,
+        t1: int,
     ) -> Block:
         cs = self.cs
+        n_time = t1 - t0
         height, width = self.shapes[k]
         h, w = min(cs, height - row * cs), min(cs, width - col * cs)
-        parent = Block(np.empty((self.n_time, self.n_band, h, w), dtype=self.dtype))
+        parent = Block(np.empty((n_time, self.n_band, h, w), dtype=self.dtype))
         half = cs // 2
         filled = 0
         for i in (0, 1):
@@ -498,15 +529,15 @@ class _Pyramid:
                 child_row, child_col = 2 * row + i, 2 * col + j
                 if child_row >= self.grids[k - 1][0] or child_col >= self.grids[k - 1][1]:
                     continue
-                child = self._produce(k - 1, child_row, child_col, submit)
+                child = self._produce(k - 1, child_row, child_col, submit, t0, t1)
                 started = time.perf_counter()
                 small = downsample_block(child, self.nodata, self.compute)
                 ys = slice(i * half, i * half + small.height)
                 xs = slice(j * half, j * half + small.width)
                 if parent.mask is None and small.mask is not None:
-                    parent.mask = np.empty((self.n_time, h, w), dtype=np.uint8)
+                    parent.mask = np.empty((n_time, h, w), dtype=np.uint8)
                 if parent.coverage is None and small.coverage is not None:
-                    parent.coverage = np.empty((self.n_time, h, w), dtype=np.uint8)
+                    parent.coverage = np.empty((n_time, h, w), dtype=np.uint8)
                 parent.data[:, :, ys, xs] = small.data
                 if small.mask is not None and parent.mask is not None:
                     parent.mask[:, ys, xs] = small.mask
@@ -744,19 +775,68 @@ def _spill_timesteps(
     return spill
 
 
-def _mean_comparison(block: np.ndarray, reference: Mapping[int, int]) -> tuple[float, int]:
-    """Sum of exact absolute differences over the nominal comparison timesteps."""
+def _comparison_terms(block: np.ndarray, reference: Mapping[int, int]) -> tuple[list[float], int]:
+    """Exact absolute-difference sum per nominal comparison timestep, and the value count.
+
+    Terms come in schedule order (comparison frame ascending, then timestep ascending), which is
+    timestep order. Every index in `reference` must address `block`.
+    """
     wide = np.float64 if block.dtype.kind == "f" else np.int32
     by_comparison: dict[int, list[int]] = {}
     for t, comparison in reference.items():
         by_comparison.setdefault(comparison, []).append(t)
-    total = 0.0
+    terms: list[float] = []
     count = 0
     for comparison, steps in by_comparison.items():
         base = block[comparison].astype(wide)
         for t in steps:
             diff = block[t].astype(wide)
             diff -= base
-            total += float(np.abs(diff).sum(dtype=np.float64))
+            terms.append(float(np.abs(diff).sum(dtype=np.float64)))
             count += diff.size
+    return terms, count
+
+
+def _mean_comparison(block: np.ndarray, reference: Mapping[int, int]) -> tuple[float, int]:
+    """Sum of exact absolute differences over the nominal comparison timesteps."""
+    terms, count = _comparison_terms(block, reference)
+    total = 0.0
+    for term in terms:
+        total += term
     return total, count
+
+
+# --- Time slabs ----------------------------------------------------------------------
+
+SLAB_BYTES = 64 * 2**20  # target size of one cell's data over one slab
+_GROUP_START = 4  # comparison group of reference frame 6k begins at 6k - 2, i.e. 4 mod 6
+_GROUP_PERIOD = 6
+
+
+def _slab_steps(n_band: int, itemsize: int, chunk_size: int) -> int:
+    """Timesteps whose level-0 cell data fit in SLAB_BYTES (at least 1)."""
+    return max(1, SLAB_BYTES // (n_band * chunk_size * chunk_size * itemsize))
+
+
+def _slab_bounds(n_time: int, steps: int, *, whole_groups: bool) -> list[tuple[int, int]]:
+    """Consecutive (t0, t1) runs covering 0..n_time, each at most `steps` long.
+
+    With `whole_groups` every run holds each volatility comparison group completely: reference
+    frame 6k compares timesteps 6k-2 .. 6k+3 (schema.comparison_schedule, interval 6), so runs
+    after the first begin at a timestep that is 4 mod 6, and a run may be shorter than `steps`
+    (never shorter than 1) to get there; the last reference frame also compares every later
+    timestep, so the final run absorbs them.
+    """
+    bounds: list[tuple[int, int]] = []
+    t0 = 0
+    while t0 < n_time:
+        t1 = min(t0 + steps, n_time)
+        if whole_groups and t1 < n_time:
+            aligned = t1 - (t1 - _GROUP_START) % _GROUP_PERIOD
+            if aligned <= t0:
+                aligned = t0 + ((_GROUP_START - t0) % _GROUP_PERIOD or _GROUP_PERIOD)
+            # the last reference frame also compares every later timestep
+            t1 = aligned if aligned + _GROUP_PERIOD - _GROUP_START < n_time else n_time
+        bounds.append((t0, t1))
+        t0 = t1
+    return bounds

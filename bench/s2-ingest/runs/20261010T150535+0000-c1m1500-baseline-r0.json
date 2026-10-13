@@ -1,0 +1,54 @@
+{
+ "tag": "c1m1500-baseline-r0",
+ "timestamp": "2026-10-10T15:05:35+00:00",
+ "bench_args": [
+  "--workload",
+  "lab-ucayali-x2",
+  "--config",
+  "baseline",
+  "--rep",
+  "0"
+ ],
+ "workload": "lab-ucayali-x2",
+ "config": "baseline",
+ "rep": 0,
+ "lab": null,
+ "warm": false,
+ "container": {
+  "cpus": "1",
+  "memory": "1500m",
+  "memory_swap": "1500m",
+  "nofile": null,
+  "exit_code": 137,
+  "oom_killed": true,
+  "cgroup": {
+   "memory.peak": "1572864000",
+   "memory.max": "1572864000",
+   "memory.events": {
+    "low": "0",
+    "high": "0",
+    "max": "61",
+    "oom": "1",
+    "oom_kill": "1",
+    "oom_group_kill": "0"
+   },
+   "cpu.max": {
+    "100000": "100000"
+   },
+   "cpu.stat": {
+    "usage_usec": "1237854",
+    "user_usec": "1162863",
+    "system_usec": "74991",
+    "nice_usec": "0",
+    "nr_periods": "13",
+    "nr_throttled": "5",
+    "throttled_usec": "1041167",
+    "nr_bursts": "0",
+    "burst_usec": "0"
+   }
+  }
+ },
+ "ok": false,
+ "stderr_tail": "Killed",
+ "bench_record": null
+}

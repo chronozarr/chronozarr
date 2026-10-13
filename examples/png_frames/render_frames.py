@@ -2,8 +2,9 @@
 
 Earth Engine thumbnails, QGIS "Save as image", matplotlib and drone pipelines all produce the same
 thing: one georeferenced PNG per date and no GeoTIFF. These frames are rendered from the monthly
-Sentinel-2 mosaics in data/mosaics/<aoi>/YYYY-MM.npz (the ingest in examples/sentinel2_pc) so that
-`chronozarr convert` has something real to read. Nothing here is part of the format.
+Sentinel-2 mosaics in data/mosaics/<aoi>/YYYY-MM.tif or .npz (the ingest in
+examples/sentinel2_pc) so that `chronozarr convert` has something real to read. Nothing here
+is part of the format.
 
 Each frame is a SIZE x SIZE pixel window of a mosaic, written as
 
@@ -36,6 +37,9 @@ import numpy as np
 import rasterio
 from rasterio.errors import NotGeoreferencedWarning
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sentinel2_pc"))
+from months import month_arrays, month_path
+
 ROOT = Path(__file__).resolve().parents[2]
 RED, GREEN, BLUE = 2, 1, 0  # band indexes of B04, B03, B02 in the mosaics (B02, B03, B04, B08)
 LOW_PERCENTILE, HIGH_PERCENTILE = 2.0, 98.0
@@ -62,24 +66,24 @@ def month_names(start: str, count: int) -> list[str]:
 
 
 def read_window(path: Path, row0: int, col0: int, size: int) -> Window:
-    with np.load(path) as mosaic:
-        bands = mosaic["bands"]
-        coverage = mosaic["coverage"]
-        a, b, c, d, e, f = (float(v) for v in mosaic["transform"])
-        height, width = coverage.shape
-        if row0 + size > height or col0 + size > width:
-            raise ValueError(
-                f"{path}: the {size} px window at ({row0}, {col0}) leaves the "
-                f"{height} x {width} px mosaic"
-            )
-        rows, cols = slice(row0, row0 + size), slice(col0, col0 + size)
-        rgb = np.stack([bands[RED][rows, cols], bands[GREEN][rows, cols], bands[BLUE][rows, cols]])
-        return Window(
-            rgb,
-            coverage[rows, cols] > 0,
-            (a, b, c + col0 * a, d, e, f + row0 * e),
-            int(mosaic["epsg"]),
+    mosaic = month_arrays(path)
+    bands = mosaic["bands"]
+    coverage = mosaic["coverage"]
+    a, b, c, d, e, f = (float(v) for v in mosaic["transform"])
+    height, width = coverage.shape
+    if row0 + size > height or col0 + size > width:
+        raise ValueError(
+            f"{path}: the {size} px window at ({row0}, {col0}) leaves the "
+            f"{height} x {width} px mosaic"
         )
+    rows, cols = slice(row0, row0 + size), slice(col0, col0 + size)
+    rgb = np.stack([bands[RED][rows, cols], bands[GREEN][rows, cols], bands[BLUE][rows, cols]])
+    return Window(
+        rgb,
+        coverage[rows, cols] > 0,
+        (a, b, c + col0 * a, d, e, f + row0 * e),
+        int(mosaic["epsg"]),
+    )
 
 
 def stretch_limits(windows: list[Window]) -> tuple[int, int]:
@@ -142,13 +146,14 @@ def main() -> int:
 
     months = month_names(args.start, args.months)
     mosaics = ROOT / "data/mosaics" / args.aoi
-    missing = [m for m in months if not (mosaics / f"{m}.npz").is_file()]
+    found = {m: month_path(mosaics, m) for m in months}
+    missing = [m for m, path in found.items() if path is None]
     if missing:
         sys.exit(f"{mosaics} has no mosaic for {len(missing)} of {len(months)} months: {missing}")
     if args.out.exists():
         sys.exit(f"{args.out} exists; move it away or pass another --out")
 
-    windows = [read_window(mosaics / f"{m}.npz", args.row0, args.col0, args.size) for m in months]
+    windows = [read_window(found[m], args.row0, args.col0, args.size) for m in months]  # ty: ignore[invalid-argument-type]
     low, high = stretch_limits(windows)
     print(f"stretch: DN {low}..{high} to 0..255, p2 and p98 of valid R, G, B over all months")
 

@@ -1,0 +1,60 @@
+{
+ "tag": "mm-auto-3g",
+ "timestamp": "2026-10-10T16:21:51+00:00",
+ "bench_args": [
+  "--workload",
+  "lab-ucayali-4mo",
+  "--config",
+  "auto",
+  "--lab",
+  "0,0,0",
+  "--rep",
+  "0"
+ ],
+ "workload": "lab-ucayali-4mo",
+ "config": "auto",
+ "rep": 0,
+ "lab": {
+  "latency_ms": 0.0,
+  "bandwidth_mbps": 0.0,
+  "fail_rate": 0.0
+ },
+ "warm": false,
+ "container": {
+  "cpus": "2",
+  "memory": "3g",
+  "memory_swap": "3g",
+  "nofile": null,
+  "exit_code": 1,
+  "oom_killed": false,
+  "cgroup": {
+   "memory.peak": "181731328",
+   "memory.max": "3221225472",
+   "memory.events": {
+    "low": "0",
+    "high": "0",
+    "max": "0",
+    "oom": "0",
+    "oom_kill": "0",
+    "oom_group_kill": "0"
+   },
+   "cpu.max": {
+    "200000": "100000"
+   },
+   "cpu.stat": {
+    "usage_usec": "1503454",
+    "user_usec": "1406424",
+    "system_usec": "97030",
+    "nice_usec": "0",
+    "nr_periods": "18",
+    "nr_throttled": "1",
+    "throttled_usec": "1315134",
+    "nr_bursts": "0",
+    "burst_usec": "0"
+   }
+  }
+ },
+ "ok": false,
+ "stderr_tail": "  File \"/repo/examples/sentinel2_pc/bench.py\", line 718, in execute\n    finish = runner(out_dir)\n  File \"/repo/examples/sentinel2_pc/bench.py\", line 660, in run\n    mosaic.build_monthly_mosaics(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        scenes,\n        ^^^^^^^\n    ...<7 lines>...\n        limiter=limiter,\n        ^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/repo/examples/sentinel2_pc/mosaic.py\", line 666, in build_monthly_mosaics\n    check_memory({m: scenes_by_month[m] for m in todo}, settings, height, width)\n    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/repo/examples/sentinel2_pc/mosaic.py\", line 555, in check_memory\n    raise MemoryBudgetError(\n    ...<12 lines>...\n    )\nmosaic.MemoryBudgetError: 2024-07 has 10 scenes on a 2759 x 2765 grid and needs about 1.74 GiB, more than the memory budget of 1.46 GiB (50% of 2.9 GiB (cgroup memory limit)). Nothing was downloaded.\n  month buffers (10 scenes x 4 bands): 0.75 GiB\n  process and GDAL cache: 0.59 GiB\n  16 concurrent reads at 0.014 GiB: 0.23 GiB\n  finished months kept for carry-forward and writing: 0.17 GiB\nOptions: if this much memory is free, pass --memory with at least 1.7GB (the default budget is half of the available memory); lower --max-requests; or split the AOI or date range. A month is held in memory whole, so a large AOI with many scenes per month needs it all at once.",
+ "bench_record": null
+}
