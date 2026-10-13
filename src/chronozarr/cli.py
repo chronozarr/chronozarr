@@ -1217,8 +1217,9 @@ def link_command(
     """
     if not is_url(store_url):
         raise click.ClickException(
-            f"{store_url} is not an http(s) URL. A link needs the hosted store; to look at a "
-            "local one, use chronozarr.view() or chronozarr.player() in a notebook"
+            f"{store_url} is not an http(s) URL. A link needs a hosted store. For a local one, "
+            f"run `chronozarr preview {store_url}`, or `chronozarr share {store_url}` for a "
+            "temporary link; in a notebook, use chronozarr.view()"
         )
     low_high = _parse_numbers(limits, 2, "--range", float)
     with _command_errors():
@@ -1257,3 +1258,8 @@ def link_command(
                     "would be ignored; choose a band whose values are not reflectance-like"
                 )
         click.echo(viewer_url(store_url, viewer, t=t, product=product, band=band, range=low_high))
+    click.echo(
+        "checked: the store opens and the view applies to it. Not checked: whether a browser may "
+        f"read it (CORS); run `chronozarr doctor {store_url}`.",
+        err=True,
+    )

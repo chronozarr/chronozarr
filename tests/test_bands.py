@@ -404,7 +404,7 @@ def test_link_prints_a_checked_url(hosted):
         "100,5000",
         "--time",
         "2",
-    ).output.strip()
+    ).stdout.strip()
     params = parse_qs(urlsplit(url).query)
     assert (params["p"], params["b"], params["r"], params["t"]) == (
         ["band"],
@@ -412,9 +412,9 @@ def test_link_prints_a_checked_url(hosted):
         ["100,5000"],
         ["2"],
     )
-    assert _run("link", hosted, "--product", "ndvi").output.startswith(
-        "https://chronozarr.org/demo/"
-    )
+    plain = _run("link", hosted, "--product", "ndvi")
+    assert plain.stdout.startswith("https://chronozarr.org/demo/")
+    assert f"chronozarr doctor {hosted}" in plain.stderr, "the browser read is left to doctor"
 
 
 @pytest.mark.parametrize(
@@ -435,4 +435,6 @@ def test_link_refuses_what_the_viewer_would_ignore(hosted, args, message):
 
 
 def test_link_needs_a_hosted_store(tmp_path):
-    assert "not an http(s) URL" in _run("link", str(tmp_path), ok=False).output
+    refused = _run("link", str(tmp_path), ok=False).output
+    assert "not an http(s) URL" in refused
+    assert f"chronozarr preview {tmp_path}" in refused
