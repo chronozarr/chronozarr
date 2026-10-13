@@ -28,7 +28,10 @@ from chronozarr.store import HttpStore, object_url
 from chronozarr.view import StoreServer, local_access, viewer_url
 
 # Keep the scheme split across source tokens: tests scan source text for shipped data-store URLs.
-_QUICK_TUNNEL = re.compile("https" + r"://[a-z0-9-]+\.trycloudflare\.com\b", re.IGNORECASE)
+# cloudflared's own error lines name its API host (api.trycloudflare.com), which is never a tunnel.
+_QUICK_TUNNEL = re.compile(
+    "https" + r"://(?!api\.)[a-z0-9-]+\.trycloudflare\.com\b", re.IGNORECASE
+)
 _START_TIMEOUT_SECONDS = 30.0
 # Cloudflare's quick-tunnel banner explicitly notes that a new hostname can take time to become
 # reachable. Keep polling long enough for its public DNS record to propagate before rejecting a
@@ -149,13 +152,27 @@ def _direct_get(url: str, *, timeout: float = 10.0) -> bytes:
 
 
 def _wait_for_public_store(
-    store_url: str, expected_root: bytes, *, timeout: float = _READY_TIMEOUT_SECONDS
+    store_url: str,
+    expected_root: bytes,
+    *,
+    timeout: float = _READY_TIMEOUT_SECONDS,
+    tunnel: _Tunnel | None = None,
 ) -> None:
-    """Wait until the public route serves precisely the root we bound the tunnel to."""
+    """Wait until the public route serves precisely the root we bound the tunnel to.
+
+    Stops early, with cloudflared's last lines, when `tunnel` exits: no address will appear then.
+    """
     deadline = time.monotonic() + timeout
     last_error = "no response"
     root_url = object_url(store_url, "zarr.json")
     while time.monotonic() < deadline:
+        if tunnel is not None and (status := tunnel.process.poll()) is not None:
+            detail = "\n".join(tunnel.logs.recent())
+            suffix = f" Output: {detail}" if detail else ""
+            raise OSError(
+                f"cloudflared exited (exit {status}) before {store_url} could be reached; check "
+                f"this computer's network connection and try again.{suffix}"
+            )
         try:
             if _direct_get(root_url) == expected_root:
                 return
@@ -271,10 +288,17 @@ def share(
         access = local_access(
             store, port=server.port, base_url=public_root, viewer=viewer, viewer_dir=viewer_dir
         )
-        echo("waiting for public access (allowing up to 90 seconds for DNS readiness)...")
-        _wait_for_public_store(access.store_url, (server.store / "zarr.json").read_bytes())
+        echo(
+            f"waiting for {public_root} to work; a new address usually takes about a minute "
+            "(at most 90 seconds)..."
+        )
+        _wait_for_public_store(
+            access.store_url, (server.store / "zarr.json").read_bytes(), tunnel=tunnel
+        )
         echo("checking browser access...")
-        checks = diagnose(access.store_url)
+        # The store is the local one, already checked when it was written: through the tunnel,
+        # check what a browser needs and decode one cell per level, without whole timesteps.
+        checks = diagnose(access.store_url, full_read_limit_mb=0)
         if not _doctor_passes(checks):
             failed = "; ".join(f"{c.name}: {c.detail}" for c in checks if c.status == "fail")
             raise OSError(f"the tunnel did not pass chronozarr doctor: {failed}")
@@ -298,6 +322,10 @@ def share(
             f"for {measurement.overview_cells} cell(s), assuming similar cell-read sizes"
         )
         echo(f"open: {target}")
+        echo(
+            "The link works while this command runs and this computer stays on and online. "
+            "Every view is sent from this computer over its upload connection."
+        )
         echo("anyone who can open this link can read this store; press Ctrl-C to stop sharing")
         if open_browser and not webbrowser.open(target):
             echo("could not open a browser here; open the URL above in one.")

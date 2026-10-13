@@ -75,7 +75,7 @@ def _ready_share(monkeypatch, process: FakeProcess):
     monkeypatch.setattr(
         share_module,
         "diagnose",
-        lambda _: [Check("root zarr.json", "ok", "public route works")],
+        lambda _, **kwargs: [Check("root zarr.json", "ok", "public route works")],
     )
     monkeypatch.setattr(
         share_module,
@@ -119,7 +119,8 @@ def test_share_reports_stages_before_their_corresponding_work(store, monkeypatch
     stages = [
         "starting local server and quick tunnel...",
         "waiting for Cloudflare to assign a public address...",
-        "waiting for public access (allowing up to 90 seconds for DNS readiness)...",
+        "waiting for https://bright-sea.trycloudflare.com to work; a new address usually takes "
+        "about a minute (at most 90 seconds)...",
         "checking browser access...",
         "measuring first transfer...",
     ]
@@ -148,6 +149,8 @@ def test_share_reports_stages_before_their_corresponding_work(store, monkeypatch
 
     def check_doctor(*args, **kwargs):
         assert stages[3] in lines
+        # Through the tunnel, decode a cell per level but read no whole timestep.
+        assert kwargs.get("full_read_limit_mb") == 0
         return [Check("root zarr.json", "ok", "public route works")]
 
     def check_measurement(*args, **kwargs):
@@ -192,7 +195,7 @@ def test_share_does_not_print_a_link_when_doctor_fails(store, monkeypatch):
     monkeypatch.setattr(
         share_module,
         "diagnose",
-        lambda _: [Check("CORS", "fail", "blocked by the tunnel")],
+        lambda _, **kwargs: [Check("CORS", "fail", "blocked by the tunnel")],
     )
     lines: list[str] = []
 
@@ -321,6 +324,33 @@ def test_measurement_derives_levels_from_arrays_when_the_optional_mirror_is_abse
     measurement = share_module._first_chunk_measurement(server.url)
 
     assert measurement.overview_cells == 1
+
+
+def test_the_api_host_in_a_cloudflared_error_is_not_taken_for_the_tunnel():
+    logs = share_module._TunnelLogs()
+    logs.add(
+        'ERR Failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel": '
+        "dial tcp: no such host"
+    )
+    assert logs.url() is None
+    logs.add("INF |  https://bright-sea.trycloudflare.com  |")
+    assert logs.url() == "https://bright-sea.trycloudflare.com"
+
+
+def test_waiting_for_the_public_address_stops_when_cloudflared_exits(monkeypatch):
+    process = FakeProcess()
+    process.returncode = 1
+    tunnel = share_module._Tunnel(process, share_module._TunnelLogs())
+    tunnel.logs.add("ERR failed to connect to the edge")
+    monkeypatch.setattr(
+        share_module, "_direct_get", lambda *a, **k: (_ for _ in ()).throw(OSError("dns"))
+    )
+    with pytest.raises(
+        OSError, match=r"cloudflared exited \(exit 1\).*failed to connect to the edge"
+    ):
+        share_module._wait_for_public_store(
+            "https://x.trycloudflare.com/s", b"root", tunnel=tunnel
+        )
 
 
 def test_tunnel_logs_keep_only_a_bounded_diagnostic_tail():
