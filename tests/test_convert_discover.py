@@ -388,7 +388,7 @@ def test_a_directory_converts_without_a_manifest_and_is_bit_exact(tmp_path, seri
     out = tmp_path / "store"
     report = convert(series, out, **OPTIONS)
     assert report.plan.discovered
-    assert report.plan.source.kind == "manifest of COGs"
+    assert report.plan.source.kind == "dated GeoTIFFs"
     assert np.array_equal(stored(out), truth)
     store = chronozarr.open_store(out)
     assert [str(t)[:7] for t in store.times] == MONTHS

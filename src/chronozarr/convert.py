@@ -405,6 +405,9 @@ def plan_conversion(
             chunk_size=chunk_size,
             bounds=frame_bounds,
         )
+        if discovered and source.kind == CogManifestSource.kind:
+            # The plan's first line names what the user gave: files found by name, not a manifest.
+            source.kind = "dated GeoTIFFs"
     else:
         from chronozarr._convert_legacy import LegacySource, legacy_metadata
 
