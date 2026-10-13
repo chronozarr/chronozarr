@@ -6,3 +6,9 @@ docs/pages/specification.md
 docs/pages/guides/
 docs/pages/reference/
 .wrangler/
+docs/public/llms.txt
+docs/public/llms-full.txt
+docs/public/getting-started.md
+docs/public/specification.md
+docs/public/guides/
+docs/public/reference/
