@@ -170,6 +170,7 @@ There is no build step and no runtime dependency. Examples are in [js/README.md]
 | More examples: Sentinel-2 ingest, water masks, notebooks, SWOT, NISAR | [examples](examples/) |
 | Comparison with PMTiles, Mapbox raster-array and zarr-layer | [docs/format-comparison.md](docs/format-comparison.md) |
 | Measurements and tested reader versions | [docs/evidence.md](docs/evidence.md) |
+| Instructions for coding agents (Agent Skills format) and the docs as plain text | [skills/chronozarr/SKILL.md](skills/chronozarr/SKILL.md), [chronozarr.org/llms.txt](https://chronozarr.org/llms.txt) |
 
 ## Status
 
