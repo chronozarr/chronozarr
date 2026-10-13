@@ -259,7 +259,7 @@ class _Server(ThreadingHTTPServer):
     def handle_error(self, request: Any, client_address: Any) -> None:
         """Stay quiet when the browser hangs up: the viewer cancels reads it no longer needs
         while you scrub, so a closed connection is normal. Anything else is still printed."""
-        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+        if isinstance(sys.exc_info()[1], ConnectionError):  # broken pipe, reset, aborted
             return
         super().handle_error(request, client_address)
 

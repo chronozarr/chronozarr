@@ -597,7 +597,7 @@ def test_preview_with_base_url_warns_that_the_link_is_readable(store, monkeypatc
     )
 
 
-@pytest.mark.parametrize("error", [BrokenPipeError, ConnectionResetError])
+@pytest.mark.parametrize("error", [BrokenPipeError, ConnectionResetError, ConnectionAbortedError])
 def test_a_browser_that_hangs_up_prints_no_traceback(error, capsys):
     server = view_module._Server(("127.0.0.1", 0), view_module.StoreRequestHandler)
     try:

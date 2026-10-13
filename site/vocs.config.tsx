@@ -35,10 +35,11 @@ export default defineConfig({
         href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&family=IBM+Plex+Mono:wght@400;500&display=swap"
       />
       {/* Old section anchors: a fragment never reaches the server, so the Worker's path redirects cannot
-          move it. This sends /page#old-anchor to the section's new address. Map: legacy-anchors.json. */}
+          move it. This sends /page#old-anchor to the section's new address. Map: legacy-anchors.json. Only the
+          map's own keys count (not #constructor), and a malformed fragment is left alone. */}
       <script
         dangerouslySetInnerHTML={{
-          __html: `(function(){var m=${JSON.stringify(legacyAnchors)};function go(){var p=m[location.pathname.replace(/\\/$/,'')];var t=p&&p[decodeURIComponent(location.hash.slice(1))];if(t)location.replace(t)}go();addEventListener('hashchange',go)})()`,
+          __html: `(function(){var m=${JSON.stringify(legacyAnchors)};var own=function(o,k){return o&&Object.prototype.hasOwnProperty.call(o,k)?o[k]:null};function go(){try{var t=own(own(m,location.pathname.replace(/\\/$/,'')),decodeURIComponent(location.hash.slice(1)));if(typeof t==='string')location.replace(t)}catch(e){}}go();addEventListener('hashchange',go)})()`,
         }}
       />
     </>
