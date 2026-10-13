@@ -20,4 +20,4 @@ By default the viewer loads from `https://chronozarr.org/demo/`. That needs inte
 
 The server answers byte ranges and CORS. It sends `Cache-Control: no-cache` and answers a revalidation with `304`, so a reload re-reads only the objects that changed. `chronozarr doctor` warns on `no-cache`. The warning does not apply to a preview, where you may re-encode the store in place.
 
-To show the store to someone on another machine, see [Share a local store instantly](share.md).
+To show the store to someone on another machine, see [Share a temporary link](share.md).

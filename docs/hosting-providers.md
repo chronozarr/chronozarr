@@ -27,7 +27,7 @@ Keep the bucket private. CloudFront reads it through an origin access control (O
    - Cache policy: `CachingOptimized`. The cache key has no headers and no query strings.
    - Response headers policy: the custom policy from step 4.
 
-3. Attach this bucket policy. It allows only that distribution. Fill in the account id and the distribution id. The second statement lets S3 answer `404` for a file that does not exist. Without it, S3 answers `403`, and `chronozarr doctor` fails the store.
+3. Attach this bucket policy. It allows only that distribution. Fill in the account id and the distribution id. The second statement lets S3 answer `404` for a file that does not exist. Without it, S3 answers `403`, and `chronozarr doctor` fails the store. It also lets anyone with the distribution's address list the names of the objects in the bucket, at the address's root. Keep only public stores in this bucket, or set a default root object on the distribution.
 
    ```json
    {
@@ -154,11 +154,11 @@ The store URL is `https://BUCKET.s3.REGION.amazonaws.com/my_store-v1`. `publish`
    ```bash
    BUCKET=my-chronozarr-stores
    npx wrangler r2 bucket create "$BUCKET" --location enam
-   npx wrangler r2 bucket cors set "$BUCKET" --file deploy/r2-cors.json --force
+   npx wrangler r2 bucket cors set "$BUCKET" --file r2-cors.json --force
    npx wrangler r2 bucket domain add "$BUCKET" --domain data.example.com --zone-id <zone id>
    ```
 
-   `deploy/r2-cors.json` uses wrangler's rule format. The S3 CORS array format does not work here:
+   Save the rule below as `r2-cors.json` (the repository keeps it as `deploy/r2-cors.json`). It uses wrangler's rule format. The S3 CORS array format does not work here:
 
    ```json
    {
@@ -226,7 +226,7 @@ The public development URL (`wrangler r2 bucket dev-url enable`) is rate limited
    ```bash
    BUCKET=my-chronozarr-stores
    gcloud storage buckets create "gs://$BUCKET" --location=US --uniform-bucket-level-access
-   gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" --member=allUsers --role=roles/storage.objectViewer
+   gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" --member=allUsers --role=roles/storage.objectViewer   # anyone can read and list the objects
    gcloud storage buckets update "gs://$BUCKET" --cors-file=gcs-cors.json
    ```
 

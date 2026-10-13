@@ -62,7 +62,7 @@ A plain Zarr reader opens a level without chronozarr and returns the stored valu
 | Task | Page |
 |------|------|
 | Preview on your computer | [Preview a store](preview.md) |
-| Send a temporary link | [Share a local store instantly](share.md) |
+| Send a temporary link | [Share a temporary link](share.md) |
 | Look at a store in Jupyter or VS Code | [Explore a store in a notebook](notebooks.md) |
 
 ## Band roles and the first view

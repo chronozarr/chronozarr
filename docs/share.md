@@ -36,22 +36,21 @@ chronozarr does not install it for you. If it is missing, `share` says so and st
    chronozarr share my_store
    ```
 
-   The command prints each stage. The link usually appears after about half a minute. The command waits up to 90 seconds for a new public address to work:
+   The command prints each stage. With package 0.4.0 the link appears after about a minute and a half, most of it spent waiting for the new public address to work. The command waits up to 90 seconds for it:
 
    ```text
    starting local server and quick tunnel...
    waiting for Cloudflare to assign a public address...
-   waiting for https://bright-sea-example.trycloudflare.com to work; a new address usually takes 15 to 30 seconds (at most 90)...
+   waiting for public access (allowing up to 90 seconds for DNS readiness)...
    checking browser access...
    measuring first transfer...
    sharing my_store through https://bright-sea-example.trycloudflare.com (byte ranges and CORS verified)
    tunnel throughput: first level-0 chunk 1.38 MB in 0.27 s (5.03 MB/s, 1 data request(s)); estimated overview step 0.27 s for 1 cell(s), assuming similar cell-read sizes
    open: https://chronozarr.org/demo/?store=https%3A%2F%2Fbright-sea-example.trycloudflare.com%2Fmy_store
-   The link works while this command runs and this computer stays on and online. Every view is sent from this computer over its upload connection.
    anyone who can open this link can read this store; press Ctrl-C to stop sharing
    ```
 
-   The `tunnel throughput` line times one chunk through the tunnel. It shows how fast a recipient's views will load. Package 0.4.0 prints the address only when it works, and takes about a minute and a half ([measurement](evidence.md#time-to-a-link-2026-10-12)).
+   The `tunnel throughput` line times one chunk through the tunnel. It shows how fast a recipient's views will load. The next release prints the address while it waits and gives the link after about half a minute ([measurement](evidence.md#time-to-a-link-2026-10-12)).
 
 2. The viewer opens. Choose the date, the product and the part of the map that you want to show.
 
@@ -65,7 +64,7 @@ Each run makes a new address. A link from an earlier run does not work again.
 
 ## What happens
 
-1. `share` serves the store from your computer on `127.0.0.1`. It serves only the store folder.
+1. `share` serves the store from your computer on `127.0.0.1`. It serves only the store folder, and the viewer folder when you pass `--viewer-dir`.
 2. `cloudflared` gives that server a public https address on `trycloudflare.com`.
 3. `share` reads the store through that address, as a browser would, and prints the link only when the read works.
 
@@ -89,7 +88,7 @@ A tunnel targets a port, not a program. `share` starts its own server and checks
 | Symptom | Cause and fix |
 |---|---|
 | `cloudflared is required ... but was not found` | Install it (see above) and run the command again |
-| `cloudflared exited ... before ... could be reached` | cloudflared could not reach Cloudflare. Check your network connection, or a firewall that blocks outgoing connections, and run the command again |
+| `cloudflared exited ...` | cloudflared could not reach Cloudflare. Check your network connection, or a firewall that blocks outgoing connections, and run the command again |
 | `the tunnel did not serve this store within 90 seconds` | The new address did not start working in time. Run the command again |
 | The recipient sees `Shared link not available` | Sharing stopped, or the computer slept or went offline. Start `share` again and send the new link |
 | Scrubbing is slow for the recipient | Every read passes through your upload connection. [Publish](publish.md) the store for more than a few viewers |

@@ -98,7 +98,7 @@ Method: Unit tests run on every change (`uv run pytest -q -m unit`, `cd js && no
 
 What this does not show: Pixel comparisons between the JavaScript reader and Python cover a sample of pixels, not every value. The real-data conversion checks predate the v0.3 writer. The published store's `coverage` is a 0/1 flag until it is re-encoded with the count writer. "True values" means unquantized stored numbers: level 0 is the source data, and coarser levels are means. When this page was drafted, `tests/test_roundtrip.py`, `tests/test_encode_slabs.py` and `tests/test_xarray_compat.py` were run (128 passed, 2026-10-12). The other tests listed were read, not run.
 
-## 3. Ingestion throughput (Sentinel-2 example)
+## 3. Ingestion throughput (Sentinel-2 example in the repository)
 
 What was measured: Wall time to build monthly median composites from Planetary Computer, with the new download pipeline against the previous one (`mosaic.py` at commit `01185cd`).
 
@@ -137,7 +137,7 @@ Result:
 |---|---|---|
 | All months stacked in memory (PR #90 ingest) | 10.2 GB | 30.5 s |
 | Months read lazily, one 512 x 512 cell of every month at a time (PR #95) | 3.3 GB | 56.6 s, of which 29.9 s is the one-time copy of legacy `.npz` months to GeoTIFF |
-| Lazy read and time slabs of about 64 MiB per cell (PR #99) | 1.34 GB | encode step 32.6 s (26.7 s before slabs) |
+| Lazy read and time slabs of about 64 MiB per cell (PR #99, on main after 0.4.0) | 1.34 GB | encode step 32.6 s (26.7 s before slabs) |
 
 The three stores are byte-identical (11,574 files). Synthetic, 2048 x 2048 x 4 uint16, lazy input: 1,282 MB at 32 timesteps, 1,305 MB at 128 and 1,310 MB at 256 with slabs, against 1,285, 4,139 and 7,926 MB before. Through the GeoTIFF lazy reader, 1024 x 1024 x 4:
 

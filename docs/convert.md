@@ -1,6 +1,6 @@
 # Convert your data
 
-`chronozarr convert SOURCE OUT` writes a store from rasters that you already have. It reads one timestep at a time and encodes one 512 by 512 cell at a time, so it never holds the whole series in memory.
+`chronozarr convert SOURCE OUT` writes a store from rasters that you already have. It reads one timestep at a time and encodes a few 512 by 512 cells at a time, so the files never have to fit in memory together. With package 0.4.0 the memory of the encode step still grows with the number of timesteps; the next release keeps it nearly flat ([memory](performance.md#encoder-time-slabs)).
 
 | Your data | Section |
 |---|---|

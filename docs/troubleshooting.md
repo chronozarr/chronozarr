@@ -8,7 +8,7 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 |---|---|
 | `No solution found when resolving dependencies` and `Python>=3.11` | uv chose an older Python that comes first on your computer. Add `--python 3.13` to `uv tool install` or `uv init` |
 | `chronozarr: command not found` after `uv tool install` | uv's tool folder is not on your `PATH`. Run `uv tool update-shell`, then open a new terminal |
-| `this command needs rasterio` | The `geo` extra is missing. The message gives the command for your kind of install. With `uv tool install`, list every extra you use at once, such as `'chronozarr[geo,publish]'` |
+| `this command needs rasterio` | The `geo` extra is missing. Install it the way you installed chronozarr: `uv tool install --python 3.13 'chronozarr[geo]'`, listing every extra you use at once, such as `'chronozarr[geo,publish]'`; `uv add 'chronozarr[geo]'` in a uv project; or pip with `'chronozarr[geo]'` |
 | `chronozarr --version` prints an older version | An older install comes first on your `PATH`, or a pinned environment is active. Check `which chronozarr` |
 | The first command after an install takes 10 to 25 seconds | On macOS the system checks new program files once. Later commands start in about a second |
 
@@ -60,7 +60,7 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 | Symptom | Cause and fix |
 |---|---|
 | `cloudflared` not found | Install it from [Cloudflare's download page](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/). On macOS: `brew install cloudflared` |
-| `cloudflared exited` while waiting | cloudflared could not reach Cloudflare. Check the network connection or firewall, and run the command again |
+| `cloudflared exited ...` | cloudflared could not reach Cloudflare. Check the network connection or firewall, and run the command again |
 | `the tunnel did not serve this store within 90 seconds` | The new address did not start working in time. Run the command again |
 | The recipient sees nothing | Sharing stopped, or your computer slept or went offline. The link works only while `share` runs |
 | Scrubbing is slow for the recipient | Every view travels over your upload connection. For many viewers, [publish](publish.md) the store |
@@ -70,7 +70,8 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 | Symptom | Cause and fix |
 |---|---|
 | `access denied` | The credentials cannot write to the bucket. The message names the permission they need |
-| The objects are stored, but `doctor` gets 403 or 404 at the public URL | The bucket is not public. Publishing never changes public access. Make the bucket readable, or put a CDN in front of it and pass its address as `--public-url` |
+| The objects are stored, but `doctor` gets 403 at the public URL | The bucket is not public. Publishing never changes public access. Make the bucket readable, or put a CDN in front of it and pass its address as `--public-url` |
+| `doctor` gets 404 for the root `zarr.json` | The public URL does not point at the store. It must be the folder that holds the root `zarr.json` |
 | `CORS` fails | Rerun with `--apply-cors`, or add the rule from the [hosting recipes](hosting-providers.md) |
 | The prefix already holds other objects | Each version of a store needs a new prefix. See [Immutable prefixes](hosting-requirements.md#immutable-prefixes-and-upload-order) |
 | The upload stopped | Run the same command again. It skips the objects already stored |

@@ -2,7 +2,7 @@
 
 [Open the live demo](https://chronozarr.org/demo/). It loads 117 monthly Sentinel-2 composites of the Ucayali River in Peru, November 2015 to February 2026. The store is in a public storage bucket. The viewer reads it directly, with no server in between.
 
-This page describes the viewer. Every store that you preview, share or publish opens in the same viewer.
+This page describes the viewer. Every store that you preview, share or publish opens in the same viewer. It describes the viewer at chronozarr.org/demo/. A viewer folder copied from npm package 0.4.0 (see [Self-host the viewer](viewer-distribution.md)) lacks the start rule below and the messages for a stopped share or a blocked local store; those come with the next npm release.
 
 ## Where it starts
 

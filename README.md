@@ -16,6 +16,12 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then the 
 uv tool install --python 3.13 'chronozarr[geo]==0.4.0'
 ```
 
+chronozarr supports Python 3.11 and newer. `--python 3.13` makes uv use 3.13 even when an older Python comes first on your computer. With pip, in an environment with Python 3.11 or newer:
+
+```bash
+python -m pip install 'chronozarr[geo]==0.4.0'
+```
+
 Use a folder with one GeoTIFF per date, with the date in each file name, such as `ndvi_2024-01.tif`. All files share one grid. To try it without your own files, export twelve months of the public demo as GeoTIFFs:
 
 ```bash
@@ -72,7 +78,7 @@ The Python and npm packages are 0.4.0. The store format specification is v0.3.0,
 |---|---|
 | What chronozarr is, and how it compares | [What is chronozarr?](https://chronozarr.org/what-is-chronozarr) |
 | Every input type | [Convert your data](https://chronozarr.org/guides/convert) |
-| Sentinel-2 for your own area and dates | [Sentinel-2 for your area](https://chronozarr.org/guides/sentinel-2) |
+| Sentinel-2 for your own area and dates (a repository checkout) | [Sentinel-2 for your area](https://chronozarr.org/guides/sentinel-2) |
 | SWOT, NISAR and model output | [Examples](https://chronozarr.org/guides/examples) |
 | Every command | [Command line](https://chronozarr.org/reference/cli) |
 | Python functions | [Python API](https://chronozarr.org/reference/python) |

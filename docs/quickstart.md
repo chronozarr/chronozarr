@@ -11,7 +11,7 @@ chronozarr --version
 
 The first command puts the `chronozarr` command on your `PATH`. `--python 3.13` makes uv use Python 3.13 even when an older Python comes first on your computer. uv downloads Python 3.13 if it is not installed. The second command prints `chronozarr, version 0.4.0`. On macOS the first command after an install can take 10 to 25 seconds while the system checks the new files; later commands start in about a second.
 
-The `geo` extra adds GeoTIFF support. To install with pip instead, use an environment with Python 3.11 or later:
+chronozarr supports Python 3.11 and newer; this page uses 3.13. The `geo` extra adds GeoTIFF support. To install with pip instead, use an environment with Python 3.11 or newer, such as a virtual environment or a conda environment:
 
 ```bash
 python -m pip install 'chronozarr[geo]==0.4.0'
@@ -49,6 +49,7 @@ chronozarr convert sample my_store --dry-run
 ```
 
 ```text
+source:     manifest of COGs, 12 timesteps (2024-01-01 .. 2024-12-01)
 files:      12, dated from their names
   2024-01-01  sample/L2_2024-01-01.tif
   ...
@@ -60,10 +61,11 @@ validity:   nodata 0 sentinel, no mask
 resampling: none needed, every source is on the target grid
 raw size:   0.05 GB (4 MB per timestep; memory about 11 MB while staging)
 output:     about 0.04 GB in 2 levels (zstd 5 ratio 0.70 on 3 sampled cells)
+time:       read about 0.03 s per timestep (0.3 s sequential, less with --read-ahead), encode about 0.3 s
 dry run: nothing was written
 ```
 
-Check the dates, the grid, the bands and the scaling. They become the store.
+Check the dates, the grid, the bands and the scaling. They become the store. The next release names this source `dated GeoTIFFs` on the first line.
 
 If a file has no date, another grid or other band metadata, the dry run lists every problem by file, with a fix for each. See [Convert your data](convert.md) and [Troubleshooting](troubleshooting.md#conversion).
 
@@ -89,7 +91,7 @@ chronozarr preview my_store
 
 ```text
 serving my_store at http://127.0.0.1:56925/my_store (byte ranges and CORS, 127.0.0.1 only)
-viewer: https://chronozarr.org/demo/ (loaded from the internet; the store itself is read from this machine).
+viewer: https://chronozarr.org/demo/ (loaded from the internet; the store itself is read from this machine). For offline use see --viewer-dir and docs/viewer-distribution.md.
 open: https://chronozarr.org/demo/?store=http%3A%2F%2F127.0.0.1%3A56925%2Fmy_store
 press Ctrl-C to stop
 ```
@@ -112,7 +114,7 @@ The [viewer guide](viewer.md) lists every control. Press Ctrl-C in the terminal 
 chronozarr share my_store
 ```
 
-The command prints its progress and then a viewer link. The link appears after about half a minute; with package 0.4.0, after about a minute and a half. In the viewer, choose the date, product and view that you want to show. Click Copy link and send the link. The recipient needs only a web browser.
+The command prints its progress and then a viewer link. With package 0.4.0 the link appears after about a minute and a half. In the viewer, choose the date, product and view that you want to show. Click Copy link and send the link. The recipient needs only a web browser.
 
 Before you send the link, know these limits:
 
