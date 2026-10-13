@@ -10,7 +10,7 @@ import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js
 import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrubLevel, planScrubLoads, readyRun, savesData, scrubLevels, scrubNeed, stepsAhead } from './scrub.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
-import { bindOpenStoreForm, checkUniformChunks, explainOpenError } from './open-store.js';
+import { bindOpenStoreForm, checkUniformChunks, explainOpenError, fallsBackToCatalog } from './open-store.js';
 import { bindCopyLink } from './copy-link.js';
 import { redactText, redactUrl } from '../chronozarr/redact.js';
 import { toggleExportPanel } from './export.js';
@@ -2319,7 +2319,8 @@ async function main() {
 
   const requested = new URLSearchParams(location.search).get('store');
   if (requested) {
-    open(new URL(requested, location.href).href, { viewSearch: initialSearch });
+    const url = new URL(requested, location.href).href;
+    open(url, { viewSearch: initialSearch, fallback: fallsBackToCatalog(url, catalog) });
   } else if (catalog.length > 0) open(catalog[0].url, { viewSearch: initialSearch });
   else {
     $('error-title').textContent = 'No store selected';

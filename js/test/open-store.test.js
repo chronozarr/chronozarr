@@ -8,7 +8,7 @@ import { openStore } from '../chronozarr/decoder.js';
 import { FetchError } from '../chronozarr/http.js';
 import { redactText, redactUrl } from '../chronozarr/redact.js';
 import { buildSyntheticStore } from '../support/synthetic-store.js';
-import { StoreOpenError, bindOpenStoreForm, checkUniformChunks, explainOpenError, parseStoreUrl, submitStoreUrl, validateStore } from '../demo/open-store.js';
+import { StoreOpenError, bindOpenStoreForm, checkUniformChunks, explainOpenError, fallsBackToCatalog, parseStoreUrl, submitStoreUrl, validateStore } from '../demo/open-store.js';
 
 const SECRET = 'SECRET-SIGNATURE';
 const PAGE = { href: 'https://chronozarr.org/demo/', protocol: 'https:' };
@@ -112,6 +112,33 @@ test('a host that cannot be reached at all is reported as unreachable, not as CO
   assert.equal(error.code, 'unreachable');
   assert.deepEqual(probed, [`https://data.example.org/store?sig=${SECRET}`], 'the probe is given the readable URL; only messages are redacted');
   assert.doesNotMatch(error.text, new RegExp(SECRET));
+});
+
+test('a store on this computer that the hosted viewer cannot read names the local causes, not CORS or certificates', async () => {
+  const failed = new FetchError({ url: 'http://127.0.0.1:8765/my_store/zarr.json', method: 'GET', cause: new TypeError('Failed to fetch'), attempts: 1 });
+  const error = await explainOpenError(failed, { url: 'http://127.0.0.1:8765/my_store' }, { reachable: never, page: PAGE });
+  assert.equal(error.code, 'local_blocked');
+  assert.match(error.message, /127\.0\.0\.1:8765/);
+  assert.match(error.message, /still running/);
+  assert.match(error.message, /local network/);
+  assert.match(error.message, /Safari/);
+  assert.doesNotMatch(error.message, /certificate|Access-Control/);
+});
+
+test('a viewer served from this computer reads a local store like any other host', async () => {
+  const failed = new FetchError({ url: 'http://127.0.0.1:8765/my_store/zarr.json', method: 'GET', cause: new TypeError('Failed to fetch'), attempts: 1 });
+  const error = await explainOpenError(failed, { url: 'http://127.0.0.1:8765/my_store' }, { reachable: async () => false, page: LOCAL_PAGE });
+  assert.equal(error.code, 'unreachable');
+});
+
+test('only a link to the catalog host falls back to the demo; a link to anyone else\'s store keeps its error', () => {
+  const catalog = [{ url: 'https://data.chronozarr.org/ucayali_santa_maria_v03' }];
+  assert.equal(fallsBackToCatalog('https://data.chronozarr.org/ucayali_santa_maria/chronozarr-4', catalog), true, 'an old demo prefix');
+  assert.equal(fallsBackToCatalog('https://abc-def.trycloudflare.com/my_store', catalog), false, 'a shared store whose tunnel stopped');
+  assert.equal(fallsBackToCatalog('http://127.0.0.1:8765/my_store', catalog), false, 'a preview the browser could not read');
+  assert.equal(fallsBackToCatalog('https://data.chronozarr.org/ucayali_santa_maria_v03', catalog), false, 'the demo itself');
+  assert.equal(fallsBackToCatalog('https://data.chronozarr.org/x', []), false, 'no catalog');
+  assert.equal(fallsBackToCatalog('not a url', catalog), false);
 });
 
 test('HTTP answers are told apart: access denied, not found, server error, anything else', async () => {
