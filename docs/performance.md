@@ -23,9 +23,9 @@ The numbers come from the store's root `zarr.json` on 2026-10-12 and from the lo
 
 ### Time to the first frame
 
-**What was measured.** Time from opening the store in a fresh browser to the first frame that covers the whole view (at any pyramid level), and to the frame at the level the view asks for. The browser cache is empty or disabled in every run.
+What was measured: Time from opening the store in a fresh browser to the first frame that covers the whole view (at any pyramid level), and to the frame at the level the view asks for. The browser cache is empty or disabled in every run.
 
-**Result.**
+Result:
 
 | Series | n | Whole view, after the root metadata has loaded (median, range) | Whole view, from the start of the open (median, range) | Frame at the requested level (median, range) |
 |---|---|---|---|---|
@@ -38,25 +38,25 @@ The first frame downloads 11 requests and 11 MB (level 1, nine chunks, plus meta
 
 An earlier figure of 390 ms (cold CDN, 2026-10-01) was one run in an application browser pane on a previous store, with the clock starting after the metadata read. It is consistent with the 404 ms above and is not used here.
 
-**Method.** The 2026-10-08 runs come from a scrub A/B harness (`harness/scrub_ab.mjs`, raw records `scrub_ready_ahead_ab.json` and `scrub_ready_ahead_ab_rerun.json`, both in the gitignored `data/spike/scrub_ready_ahead/`): Playwright Chromium with Metal graphics, 1440 x 900 at device pixel ratio 2, the live store over the real network, a new browser per run, animation-frame median 16.7 ms. 77,498 of 77,774 counted responses were CDN hits. The 2026-10-12 runs use `bench/live/measure.mjs` (same browser setup, current deployed viewer, which was byte-identical to `main` that day). Raw runs: [cold open of the live store](evidence.md#cold-open-of-the-live-store-2026-10-12). The cold-CDN series adds a unique `?cb=` query to the store address, so every object is a cache miss (403 of 403). The laptop ran on battery at 14 %, which capped animation frames at 30 Hz, and the load average was 8 to 10 on 16 cores. Each reported paint can therefore be late by up to 33 ms.
+Method: The 2026-10-08 runs come from a scrub A/B harness (`harness/scrub_ab.mjs`, raw records `scrub_ready_ahead_ab.json` and `scrub_ready_ahead_ab_rerun.json`, both in the gitignored `data/spike/scrub_ready_ahead/`): Playwright Chromium with Metal graphics, 1440 x 900 at device pixel ratio 2, the live store over the real network, a new browser per run, animation-frame median 16.7 ms. 77,498 of 77,774 counted responses were CDN hits. The 2026-10-12 runs use `bench/live/measure.mjs` (same browser setup, current deployed viewer, which was byte-identical to `main` that day). Raw runs: [cold open of the live store](evidence.md#cold-open-of-the-live-store-2026-10-12). The cold-CDN series adds a unique `?cb=` query to the store address, so every object is a cache miss (403 of 403). The laptop ran on battery at 14 %, which capped animation frames at 30 Hz, and the load average was 8 to 10 on 16 cores. Each reported paint can therefore be late by up to 33 ms.
 
-**What this does not show.** Page, script and codec-module load are not in these times. One machine, one network, one CDN location (the Newark edge answered). No phone, no slow link, no other browser. The cold-CDN series is a synthetic miss, not a first visitor. The viewer changed after 2026-10-08 in ways that should not touch the open path, but only the 2026-10-12 series was taken on the deployed build.
+What this does not show: Page, script and codec-module load are not in these times. One machine, one network, one CDN location (the Newark edge answered). No phone, no slow link, no other browser. The cold-CDN series is a synthetic miss, not a first visitor. The viewer changed after 2026-10-08 in ways that should not touch the open path, but only the 2026-10-12 series was taken on the deployed build.
 
 ### Decoding one chunk
 
-**What was measured.** Time to decompress one stored chunk, 4 bands x 512 x 512 uint16 = 2,097,152 bytes (2 MiB) raw, 1.3 to 1.4 MB compressed, with zstd level 5 through zarrita's WebAssembly codec.
+What was measured: Time to decompress one stored chunk, 4 bands x 512 x 512 uint16 = 2,097,152 bytes (2 MiB) raw, 1.3 to 1.4 MB compressed, with zstd level 5 through zarrita's WebAssembly codec.
 
-**Result.** 4.4 ms per chunk on one thread (median of 80 repeats, p95 4.6 to 4.9 ms), identical in five interleaved runs of two reader versions. Eight chunks decode in 9.6 ms on the worker pool, against 36.2 ms on the main thread. An earlier test with a busy main thread gave 10 ms.
+Result: 4.4 ms per chunk on one thread (median of 80 repeats, p95 4.6 to 4.9 ms), identical in five interleaved runs of two reader versions. Eight chunks decode in 9.6 ms on the worker pool, against 36.2 ms on the main thread. An earlier test with a busy main thread gave 10 ms.
 
-**Method.** `chronozarr.bench()` replays recorded chunk bytes with no network. Headless Chrome 154, 1280 x 900, device pixel ratio 1, local server, 2026-10-03. Raw record: `data/spike/js_v03_bench.json`. Codec comparison on a Sahara chunk, 2026-09-29: zstd (WASM) 4.5 ms, native gzip 6.7 ms, pure-JavaScript zstd 14.1 ms. See [codec decode](evidence.md#codec-decode) and [v0.3 against v0.2](evidence.md#v03-against-v02).
+Method: `chronozarr.bench()` replays recorded chunk bytes with no network. Headless Chrome 154, 1280 x 900, device pixel ratio 1, local server, 2026-10-03. Raw record: `data/spike/js_v03_bench.json`. Codec comparison on a Sahara chunk, 2026-09-29: zstd (WASM) 4.5 ms, native gzip 6.7 ms, pure-JavaScript zstd 14.1 ms. See [codec decode](evidence.md#codec-decode) and [v0.3 against v0.2](evidence.md#v03-against-v02).
 
-**What this does not show.** The test decodes one chunk repeatedly with warm CPU caches. It does not time the chunk population (compressed sizes run from 63 KB to 1.8 MB), GPU upload, or other CPUs.
+What this does not show: The test decodes one chunk repeatedly with warm CPU caches. It does not time the chunk population (compressed sizes run from 63 KB to 1.8 MB), GPU upload, or other CPUs.
 
 ### Stepping and playback
 
-**What was measured.** The rate at which the viewer steps through the 117 timesteps with the series already in memory, and how it behaves when it is not.
+What was measured: The rate at which the viewer steps through the 117 timesteps with the series already in memory, and how it behaves when it is not.
 
-**Result.**
+Result:
 
 | View | State | Steps per second | Source |
 |---|---|---|---|
@@ -69,9 +69,9 @@ An earlier figure of 390 ms (cold CDN, 2026-10-01) was one run in an application
 
 The viewer clamps its speed to the display's refresh rate, so 60 steps per second needs a display of 60 Hz or more. Since 2026-10-01 it also shows each frame whole or not at all, buffers two seconds before it starts, and drops to a coarser level when the loop does not fit in memory (cache cap 1.5 GiB, or 768 MiB on machines with under 8 GB). With a view that does not fit, 10 steps per second were achieved on the natural link and 7.8 at 50 Mbit/s and 40 ms (2026-10-01, [whole frames](evidence.md#whole-frames-and-buffered-playback)).
 
-**Method.** `chronozarr.playBench({ stepsPerSecond, loops, lod, warm })` in the viewer console; headless Chromium, 1440 x 900 at pixel ratio 2. See [playback](evidence.md#playback).
+Method: `chronozarr.playBench({ stepsPerSecond, loops, lod, warm })` in the viewer console; headless Chromium, 1440 x 900 at pixel ratio 2. See [playback](evidence.md#playback).
 
-**What this does not show.** The 60-per-second rows are one run each from before the whole-frame, cache and v0.3 changes. They have not been repeated on a 60 Hz display since. "No downloads" holds during the loop, not during the prefetch before it. The warm step times come from a local server, so they exclude network and CDN effects, and some of the sampled frames in that benchmark were incomplete (the jump series had 26 to 28 of 30; the step series 0 to 1).
+What this does not show: The 60-per-second rows are one run each from before the whole-frame, cache and v0.3 changes. They have not been repeated on a 60 Hz display since. "No downloads" holds during the loop, not during the prefetch before it. The warm step times come from a local server, so they exclude network and CDN effects, and some of the sampled frames in that benchmark were incomplete (the jump series had 26 to 28 of 30; the step series 0 to 1).
 
 ### Comparison with other readers
 
@@ -79,7 +79,7 @@ No head-to-head timings are published. A local benchmark of this viewer, CarbonP
 
 ## 2. Scientific correctness of stored values
 
-**What was checked.** Whether the numbers a reader returns equal the numbers that were written, and whether changes to the writer or ingest code change any stored value.
+What was checked: Whether the numbers a reader returns equal the numbers that were written, and whether changes to the writer or ingest code change any stored value.
 
 | Check | Result | Backing |
 |---|---|---|
@@ -94,15 +94,15 @@ No head-to-head timings are published. A local benchmark of this viewer, CarbonP
 | Time-slab encode against single-pass encode | byte-identical in 14 test stores and in the 117-month store (11,574 files) | `tests/test_encode_slabs.py`, [integration check](evidence.md#integration-check-2026-10-12) |
 | Coverage counts rebuilt from legacy fractions | accepted only if every value reproduces bit for bit with the smallest scene count | `tests/test_ingest_encode.py`; all 117 Ucayali months pass |
 
-**Method.** Unit tests run on every change (`uv run pytest -q -m unit`, `cd js && node --test`). Real-data checks compare SHA-256 hashes or every value with an independent read (zarr-python, rasterio, pyproj).
+Method: Unit tests run on every change (`uv run pytest -q -m unit`, `cd js && node --test`). Real-data checks compare SHA-256 hashes or every value with an independent read (zarr-python, rasterio, pyproj).
 
-**What this does not show.** Pixel comparisons between the JavaScript reader and Python cover a sample of pixels, not every value. The real-data conversion checks predate the v0.3 writer. The published store's `coverage` is a 0/1 flag until it is re-encoded with the count writer. "True values" means unquantized stored numbers: level 0 is the source data, and coarser levels are means. When this page was drafted, `tests/test_roundtrip.py`, `tests/test_encode_slabs.py` and `tests/test_xarray_compat.py` were run (128 passed, 2026-10-12). The other tests listed were read, not run.
+What this does not show: Pixel comparisons between the JavaScript reader and Python cover a sample of pixels, not every value. The real-data conversion checks predate the v0.3 writer. The published store's `coverage` is a 0/1 flag until it is re-encoded with the count writer. "True values" means unquantized stored numbers: level 0 is the source data, and coarser levels are means. When this page was drafted, `tests/test_roundtrip.py`, `tests/test_encode_slabs.py` and `tests/test_xarray_compat.py` were run (128 passed, 2026-10-12). The other tests listed were read, not run.
 
 ## 3. Ingestion throughput (Sentinel-2 example)
 
-**What was measured.** Wall time to build monthly median composites from Planetary Computer, with the new download pipeline against the previous one (`mosaic.py` at commit `01185cd`).
+What was measured: Wall time to build monthly median composites from Planetary Computer, with the new download pipeline against the previous one (`mosaic.py` at commit `01185cd`).
 
-**Result.** Median of 3 interleaved runs per cell, 2026-10-10:
+Result: Median of 3 interleaved runs per cell, 2026-10-10:
 
 | Workload (scenes) | Previous | New default | Speed-up | Peak process memory, previous to new |
 |---|---|---|---|---|
@@ -114,9 +114,9 @@ No head-to-head timings are published. A local benchmark of this viewer, CarbonP
 
 Every output month was bit-identical to the previous pipeline's. Against a local server with no traffic shaping, the 20-scene Ucayali month took 2.3 s against 18.1 s (7.9 times; 16.9 to 4.3 GB). With a 10 MB/s cap the gain is 1.3 times (88 s against 115 s). Peak memory fell 3.2 to 4.4 times on the four full-size workloads.
 
-**Method.** Frozen scene lists, a fresh process per run, configurations interleaved in random order, requests and bytes from GDAL's own network counters, peak memory from `ru_maxrss`. "New default" is `auto` or `fixed-16`, which are the same when no read fails; Lake Mead and Yukon were run with `fixed-16`. Hardware as above, GDAL 3.12.1 through rasterio 1.5.0, Python 3.13. See [method](evidence.md#method), [Planetary Computer over a home connection](evidence.md#planetary-computer-over-a-home-connection) and [local server with traffic shaping](evidence.md#local-server-with-traffic-shaping).
+Method: Frozen scene lists, a fresh process per run, configurations interleaved in random order, requests and bytes from GDAL's own network counters, peak memory from `ru_maxrss`. "New default" is `auto` or `fixed-16`, which are the same when no read fails; Lake Mead and Yukon were run with `fixed-16`. Hardware as above, GDAL 3.12.1 through rasterio 1.5.0, Python 3.13. See [method](evidence.md#method), [Planetary Computer over a home connection](evidence.md#planetary-computer-over-a-home-connection) and [local server with traffic shaping](evidence.md#local-server-with-traffic-shaping).
 
-**What this does not show.**
+What this does not show:
 - Three runs per cell. The `auto` run on Ucayali had an upper quartile of 36.2 s. No confidence intervals.
 - The 4.7 times case is a 5 km box that downloads 52 MB.
 - The home link delivered 12 to 18 MB/s at any concurrency, and Planetary Computer throughput varied between sessions by more than the lower bound. Fourteen later runs of the 1-month workload ranged from 11 s to 55 s, and the slowest hit DNS failures.
@@ -129,9 +129,9 @@ Every output month was bit-identical to the previous pipeline's. Against a local
 
 ### Encoder: time slabs
 
-**What was measured.** Peak resident memory of the encode step for the 117 Ucayali months (4 x 2765 x 2759), and of synthetic series of different length.
+What was measured: Peak resident memory of the encode step for the 117 Ucayali months (4 x 2765 x 2759), and of synthetic series of different length.
 
-**Result.**
+Result:
 
 | Encode path | Peak memory | Time |
 |---|---|---|
@@ -147,15 +147,15 @@ The three stores are byte-identical (11,574 files). Synthetic, 2048 x 2048 x 4 u
 | 120 | 654 MiB | 1,668 MiB | 1,572 MiB |
 | 240 | 825 MiB | 2,693 MiB | 2,838 MiB |
 
-**Method.** Fresh process per run, peak RSS, one run per cell. Source: the descriptions of the merged pull requests #95 and #99 and [spatial strips](evidence.md#spatial-strips).
+Method: Fresh process per run, peak RSS, one run per cell. Source: the descriptions of the merged pull requests #95 and #99 and [spatial strips](evidence.md#spatial-strips).
 
-**What this does not show.** Memory with slabs still grows slowly with the series, about 1 MiB per month here against 10 MiB in one slab. Sharded stores and `append` still grow with the series. The slab code is on `main` after the 0.4.0 release and is not in the published 0.4.0 package. The raw run output is not kept in the repository and no script reproduces the tables; the unit tests check byte identity and, with a Python allocation tracer, the growth.
+What this does not show: Memory with slabs still grows slowly with the series, about 1 MiB per month here against 10 MiB in one slab. Sharded stores and `append` still grow with the series. The slab code is on `main` after the 0.4.0 release and is not in the published 0.4.0 package. The raw run output is not kept in the repository and no script reproduces the tables; the unit tests check byte identity and, with a Python allocation tracer, the growth.
 
 ### Ingest: spatial strips
 
-**What was measured.** Whether the download pipeline completes a month under a hard memory limit, by compositing it in full-width strips of the grid.
+What was measured: Whether the download pipeline completes a month under a hard memory limit, by compositing it in full-width strips of the grid.
 
-**Result.** The workload is one month of 20 scenes (10 real scenes, each listed under two addresses), 2765 x 2759 pixels, 4 bands, served from a local mirror.
+Result: The workload is one month of 20 scenes (10 real scenes, each listed under two addresses), 2765 x 2759 pixels, 4 bands, served from a local mirror.
 
 | Container limit | Previous path | Strips |
 |---|---|---|
@@ -167,9 +167,9 @@ The three stores are byte-identical (11,574 files). Synthetic, 2048 x 2048 x 4 u
 
 Strips cost bytes: a source block cut by a strip edge is read once per strip, 18 % more bytes at 1024 rows and 55 % more at 512 rows. On an uncapped link, strips of 1024 rows cost no measurable time. The memory estimate was 7 to 45 % above the measured process peak in every run. Output hashes equalled the whole-grid result's in every record.
 
-**Method.** `bench/s2-ingest/constrained.sh`: Docker Desktop VM on the laptop (Linux aarch64, 7.65 GiB), swap off, `--cpus` and `--memory` set per run. See [spatial strips](evidence.md#spatial-strips) and `bench/s2-ingest/portability.md`.
+Method: `bench/s2-ingest/constrained.sh`: Docker Desktop VM on the laptop (Linux aarch64, 7.65 GiB), swap off, `--cpus` and `--memory` set per run. See [spatial strips](evidence.md#spatial-strips) and `bench/s2-ingest/portability.md`.
 
-**What this does not show.** Docker on one laptop only. A local server, not Planetary Computer, under a memory cap. No x86 Linux, SLURM node or cloud VM. A strip spans the full width of the grid, so a very wide area on a small budget must be split by the user. The encode step was not run under the same limits.
+What this does not show: Docker on one laptop only. A local server, not Planetary Computer, under a memory cap. No x86 Linux, SLURM node or cloud VM. A strip spans the full width of the grid, so a very wide area on a small budget must be split by the user. The encode step was not run under the same limits.
 
 ## How to reproduce
 
