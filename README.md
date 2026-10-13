@@ -70,7 +70,7 @@ The npm package has a DOM-free reader, a MapLibre layer, a GeoLibre plugin and t
 
 ## Versions
 
-The Python and npm packages are 0.4.0. The store format specification is v0.3.0, a draft. A package upgrade does not change existing v0.3 stores. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`.
+The Python and npm packages are 0.4.0. The store format specification is v0.3.0, a draft. A package upgrade does not change existing v0.3 stores. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. The main branch has changes made after 0.4.0; [Changes on main since 0.4.0](https://github.com/chronozarr/chronozarr/blob/main/docs/unreleased.md) says which release brings each.
 
 ## Documentation
 

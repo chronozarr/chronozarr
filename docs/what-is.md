@@ -43,7 +43,7 @@ There are two version numbers:
 | Python package and npm package `chronozarr` | 0.4.0 | The software that writes, checks, serves and reads stores |
 | Store format specification | v0.3.0, draft | The layout of the files in a store |
 
-A package release does not change the stores that you already wrote. Package 0.4.0 reads and writes v0.3 stores. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`.
+A package release does not change the stores that you already wrote. Package 0.4.0 reads and writes v0.3 stores. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. Changes made on the main branch after 0.4.0 reach you with the next release; [Changes on main since 0.4.0](unreleased.md) lists them.
 
 ## Next steps
 
