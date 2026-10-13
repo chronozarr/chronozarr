@@ -4,7 +4,7 @@ This example builds a chronozarr store of monthly Sentinel-2 median composites f
 
 ## Run it
 
-Run the commands from the repository root. The AOIs are the keys under `aois:` in `aois.yaml`: `nile_delta`, `rondonia_brazil`, `lake_mead`, `mekong_delta` and `ucayali_santa_maria`.
+Run the commands from the repository root.
 
 1. Install the extra.
 
@@ -12,9 +12,27 @@ Run the commands from the repository root. The AOIs are the keys under `aois:` i
    uv sync --extra ingest
    ```
 
-2. Run one of these commands. The last two read the monthly files from an earlier download. Use them when those files exist and the store does not.
+2. Choose the area of interest (AOI), one of three ways.
+
+   | Flag | AOI |
+   |---|---|
+   | `--bbox W S E N --name NAME` | the box west, south, east, north in degrees (WGS84), named `NAME`. `--bbox -106.71,35.06,-106.66,35.11` also works |
+   | `--aoi-file FILE.geojson [--name NAME]` | the bounding box of every coordinate in a GeoJSON file (longitude, latitude), named after the file unless `--name` is given. Pixels of the box that lie outside a polygon are kept |
+   | `--aoi KEY` | a key under `aois:` in `aois.yaml`: `nile_delta`, `rondonia_brazil`, `lake_mead`, `mekong_delta`, `ucayali_santa_maria` or `yukon_ykd` |
+
+   For `--bbox` and `--aoi-file`, `aois.yaml` needs no edit. The UTM zone is the standard zone of the box's centre, which is how the `aois.yaml` entries were chosen (`tests/test_ingest_aoi.py` checks it for each). The grid is the box snapped outwards to whole 10 m pixels. A box that crosses a zone boundary gets the zone of its centre, and scenes from the other zone are warped. A box that crosses the antimeridian, or reaches beyond 80 S or 84 N, is refused: split it. `NAME` may use letters, digits, `_`, `-` and `.`, and names `<out-dir>/mosaics/NAME`, `<out-dir>/stores/NAME` and the STAC id.
+
+3. Run one of these commands. The last two read the monthly files from an earlier download. Use them when those files exist and the store does not.
 
    ```bash
+   # your own box, three months into a scratch directory (about 5 km by 5 km)
+   uv run python examples/sentinel2_pc/ingest.py --bbox -106.71 35.06 -106.66 35.11 \
+       --name rio_grande --start 2024-06-01 --end 2024-08-31 --out-dir /tmp/ingest_smoke
+
+   # the bounding box of a GeoJSON polygon, named after the file (reach.geojson -> reach)
+   uv run python examples/sentinel2_pc/ingest.py --aoi-file reach.geojson \
+       --start 2024-06-01 --end 2024-08-31
+
    # full archive (2015-07 to 2026-04) for one AOI, download + encode
    uv run python examples/sentinel2_pc/ingest.py --aoi ucayali_santa_maria
 
@@ -29,13 +47,15 @@ Run the commands from the repository root. The AOIs are the keys under `aois:` i
    uv run python examples/sentinel2_pc/ingest.py --aoi ucayali_santa_maria --skip-download --stac
    ```
 
-3. Check the store.
+4. Check the store.
 
    ```bash
    uv run chronozarr doctor data/stores/ucayali_santa_maria/chronozarr
    ```
 
-`--start` and `--end` change the date range, and `--out-dir` changes the root of `mosaics/` and `stores/`.
+`--start` and `--end` change the date range, and `--out-dir` changes the root of `mosaics/` and `stores/`. Both dates are inclusive. Begin on the first day of a month and end on the last day of one: a month at either end that the range covers only in part is composited from the scenes inside the range, yet stored and carried forward like a whole month, and the run logs a warning that names it. The default `--end 2026-04-01` is such a case: an April 2026 month, if one appears, holds only scenes from April 1.
+
+A month's files are skipped when they exist, so a directory left by another box under the same `NAME` would be encoded as the new AOI. The run stops before it searches when the first month's grid differs from the AOI's, and says to pick another `--name` or `--out-dir`. A search that finds no scenes stops with the box and the dates it searched.
 
 ## Performance settings
 

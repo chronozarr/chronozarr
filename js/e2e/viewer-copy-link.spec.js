@@ -26,8 +26,9 @@ test('copies the current redacted view and that link restores it', async ({ page
   const button = page.locator('#copy-link');
   await expect(button).toBeEnabled();
   await button.press('Enter');
-  await expect(button).toHaveText('Link copied');
-  await expect(page.locator('#copy-link-status')).toHaveText('Link copied.');
+  // The test store is on 127.0.0.1, so the copy says that the link opens only on this computer.
+  await expect(button).toHaveText('Copied (local only)');
+  await expect(page.locator('#copy-link-status')).toContainText('only on this computer');
   const copied = await page.evaluate(() => document.documentElement.dataset.copiedLink);
   expect(copied).not.toContain('SECRET');
   const params = new URL(copied).searchParams;

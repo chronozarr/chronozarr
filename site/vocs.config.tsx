@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { defineConfig } from 'vocs'
+import legacyAnchors from './legacy-anchors.json'
 
 // Visual direction: a 1960s to 70s corporate annual report. Grotesk type (Archivo stands in
 // for Univers), cool neutrals, one steel-blue accent, hairline rules and no rounded corners.
@@ -18,8 +19,11 @@ const steelHover = { light: '#174d74', dark: '#b3d7f3' }
 
 export default defineConfig({
   title: 'chronozarr',
-  description: 'chronozarr turns a raster time series into static files that you can put in a storage bucket.',
+  description:
+    'Turn a georeferenced raster time series into an interactive dataset that anyone can open with a link, with the stored values intact.',
   iconUrl: '/favicon.svg',
+  // No "Ask in ChatGPT" button on the pages: it sends readers to a third-party service.
+  aiCta: false,
   // A function, not a bare element: Vocs 1.4.1 reads a bare element as a path-to-element map
   // (`typeof === 'object'`), finds no key matching the URL, and renders nothing.
   head: () => (
@@ -29,6 +33,14 @@ export default defineConfig({
       <link
         rel="stylesheet"
         href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      />
+      {/* Old section anchors: a fragment never reaches the server, so the Worker's path redirects cannot
+          move it. This sends /page#old-anchor to the section's new address. Map: legacy-anchors.json. Only the
+          map's own keys count (not #constructor), and a malformed fragment is left alone. */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `(function(){var m=${JSON.stringify(legacyAnchors)};var own=function(o,k){return o&&Object.prototype.hasOwnProperty.call(o,k)?o[k]:null};function go(){try{var t=own(own(m,location.pathname.replace(/\\/$/,'')),decodeURIComponent(location.hash.slice(1)));if(typeof t==='string')location.replace(t)}catch(e){}}go();addEventListener('hashchange',go)})()`,
+        }}
       />
     </>
   ),
@@ -79,7 +91,8 @@ export default defineConfig({
     },
   },
   topNav: [
-    { text: 'Docs', link: '/getting-started' },
+    { text: 'Quickstart', link: '/quickstart' },
+    { text: 'Docs', link: '/what-is-chronozarr' },
     { text: 'Specification', link: '/specification' },
     // Absolute so Vocs does not route it client-side: /demo/ is a static page, not a Vocs route.
     { text: 'Demo', link: 'https://chronozarr.org/demo/' },
@@ -87,24 +100,43 @@ export default defineConfig({
   socials: [{ icon: 'github', link: 'https://github.com/chronozarr/chronozarr' }],
   sidebar: [
     { text: 'Start here', items: [
-      { text: 'Getting started', link: '/getting-started' },
-      { text: 'How it works', link: '/getting-started#how-it-works' },
+      { text: 'What is chronozarr?', link: '/what-is-chronozarr' },
+      { text: 'Quickstart', link: '/quickstart' },
+      { text: 'Explore the live demo', link: '/viewer' },
     ] },
-    { text: 'Use chronozarr', items: [
-      { text: 'Bring your own data', link: '/guides/bring-your-data' },
-      { text: 'Hosting recipes', link: '/guides/hosting' },
+    { text: 'Create and share', items: [
+      { text: 'Convert your data', link: '/guides/convert' },
+      { text: 'Preview on your computer', link: '/guides/preview' },
+      { text: 'Share a temporary link', link: '/guides/share' },
+      { text: 'Publish a permanent link', link: '/guides/publish' },
+      { text: 'Analyze in Python', link: '/guides/analyze' },
+    ] },
+    { text: 'Guides and examples', items: [
+      { text: 'Sentinel-2 for your area', link: '/guides/sentinel-2' },
+      { text: 'Your own data, end to end', link: '/guides/bring-your-data' },
+      { text: 'SWOT, NISAR and other examples', link: '/guides/examples' },
+      { text: 'PNG frames', link: '/guides/png-frames' },
       { text: 'Append timesteps', link: '/guides/append' },
       { text: 'Embed the viewer', link: '/guides/embedding' },
+      { text: 'Notebooks and remote machines', link: '/guides/notebooks' },
       { text: 'Private stores', link: '/guides/private' },
-      { text: 'Self-host the packaged viewer', link: '/guides/viewer-distribution' },
-      { text: 'PNG frames', link: '/guides/png-frames' },
+      { text: 'Advanced hosting', collapsed: true, items: [
+        { text: 'Overview', link: '/guides/hosting' },
+        { text: 'Hosting recipes', link: '/guides/hosting-providers' },
+        { text: 'Requirements and checks', link: '/guides/hosting-requirements' },
+        { text: 'Self-host the viewer', link: '/guides/viewer-distribution' },
+      ] },
     ] },
     { text: 'Reference', items: [
-      { text: 'Specification v0.3 (draft)', link: '/specification' },
+      { text: 'Command line', link: '/reference/cli' },
       { text: 'Python API', link: '/reference/python' },
-      { text: 'Command line', link: '/getting-started#commands' },
       { text: 'JavaScript reader', link: '/reference/javascript' },
       { text: 'MapLibre layer', link: '/reference/maplibre' },
+      { text: 'Specification v0.3 (draft)', link: '/specification' },
+      { text: 'How it works', link: '/how-it-works' },
+      { text: 'Performance and evidence', link: '/performance' },
+      { text: 'Measurement log', link: '/reference/evidence' },
+      { text: 'Troubleshooting', link: '/troubleshooting' },
       { text: 'Format comparison', link: '/guides/format-comparison' },
     ] },
   ],

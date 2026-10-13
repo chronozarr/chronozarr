@@ -20,6 +20,7 @@ import xarray as xr
 from chronozarr import schema
 from chronozarr._convert_discover import is_discovery_source
 from chronozarr._convert_source import UndeclaredNaNError
+from chronozarr._install import extra_hint
 from chronozarr.append import append, is_store
 from chronozarr.bands import (
     assign_roles,
@@ -47,6 +48,7 @@ from chronozarr.stac import write_stac
 from chronozarr.store import redact_url
 from chronozarr.view import VIEWER_URL, preview, preview_command, viewer_url
 
+_REFUSED = re.compile(r"\bHTTP 40[13]\b")
 _DATE_IN_NAME = re.compile(r"(?<!\d)(\d{4})-?(\d{2})(?:-?(\d{2}))?(?!\d)")
 _GLOB_CHARS = "*?["
 _READ_ROWS = 512  # rows read at a time from a GeoTIFF; not the store chunk size
@@ -248,8 +250,7 @@ def _command_errors() -> Iterator[None]:
     except ImportError as exc:
         if exc.name == "rasterio":
             raise click.ClickException(
-                "this command needs rasterio: run `uv sync --extra geo` "
-                "(or `pip install 'chronozarr[geo]'`)"
+                f"this command needs rasterio: {extra_hint('geo')}"
             ) from exc
         raise
     except (ValueError, OSError, SchemaError) as exc:
@@ -1089,7 +1090,9 @@ def publish_command(
     for note in result.notes:
         click.echo(f"\n{note}")
     if result.link is None:
-        if any(not c.name.startswith("CORS") for c in failures(result.checks)):
+        # The provider's public-access advice answers a refused read only. A wrong address (404),
+        # a host that is down or a store that does not decode has its own fix line above.
+        if any(_REFUSED.search(c.detail) for c in failures(result.checks)):
             click.echo(f"\n{adapter.access_help()}")
         click.echo(
             "\nnot verified: the objects are stored but the hosted store failed the checks "
@@ -1151,10 +1154,10 @@ def _print_bands(bands: tuple[Band, ...]) -> None:
                 "NAME=ROLE and clear or reassign the others",
                 err=True,
             )
-    click.echo("products:")
+    click.echo("products (the first column is the id for `chronozarr link --product`):")
     for status in product_status(bands):
         detail = "available" if status.available else f"needs {', '.join(status.missing)}"
-        click.echo(f"  {status.name.ljust(12)}  {detail}")
+        click.echo(f"  {status.id.ljust(11)}  {status.name.ljust(12)}  {detail}")
 
 
 @main.command("bands")
@@ -1214,8 +1217,9 @@ def link_command(
     """
     if not is_url(store_url):
         raise click.ClickException(
-            f"{store_url} is not an http(s) URL. A link needs the hosted store; to look at a "
-            "local one, use chronozarr.view() or chronozarr.player() in a notebook"
+            f"{store_url} is not an http(s) URL. A link needs a hosted store. For a local one, "
+            f"run `chronozarr preview {store_url}`, or `chronozarr share {store_url}` for a "
+            "temporary link; in a notebook, use chronozarr.view()"
         )
     low_high = _parse_numbers(limits, 2, "--range", float)
     with _command_errors():
@@ -1254,3 +1258,8 @@ def link_command(
                     "would be ignored; choose a band whose values are not reflectance-like"
                 )
         click.echo(viewer_url(store_url, viewer, t=t, product=product, band=band, range=low_high))
+    click.echo(
+        "checked: the store opens and the view applies to it. Not checked: whether a browser may "
+        f"read it (CORS); run `chronozarr doctor {store_url}`.",
+        err=True,
+    )

@@ -1,7 +1,8 @@
 {
   "name": "chronozarr",
   "version": "0.4.0",
-  "description": "Browser and Node reader for chronozarr v0.3 true-value stores, plus a MapLibre GL JS custom layer",
+  "description": "Read chronozarr v0.3 stores in the browser and Node, draw them on MapLibre GL JS, and self-host the chronozarr viewer",
+  "homepage": "https://chronozarr.org/reference/javascript",
   "keywords": [
     "chronozarr",
     "zarr",

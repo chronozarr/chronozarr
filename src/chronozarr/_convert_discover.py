@@ -23,6 +23,7 @@ import numpy as np
 from chronozarr._convert_manifest import Entry
 from chronozarr._convert_preflight import Problem
 from chronozarr._convert_xarray import NETCDF_SUFFIXES
+from chronozarr._install import extra_hint
 
 TIFF_SUFFIXES = (".tif", ".tiff")
 GLOB_CHARS = "*?["
@@ -45,7 +46,9 @@ _DIRECTIVES = {
 
 DATE_HELP = (
     "name the date YYYYMMDD, YYYY-MM-DD or YYYY-MM, or pass --date-pattern with the text around "
-    "the date (for example 'ndvi_%Y%m%d'), or write a manifest"
+    "the date (for example 'ndvi_%Y%m%d'). A date with a month name, such as Jan2024, needs a "
+    "manifest: a CSV with the columns uri,datetime and one row per file, such as "
+    "'scene_Jan2024.tif,2024-01-01'"
 )
 
 
@@ -143,8 +146,8 @@ def _list_s3_keys(bucket: str, prefix: str) -> list[str]:
         from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
     except ImportError as exc:
         raise ValueError(
-            "listing an S3 prefix needs boto3: run `uv sync --extra s3` "
-            "(or `pip install 'chronozarr[s3]'`), or write a manifest of s3:// URIs instead"
+            f"listing an S3 prefix needs boto3: {extra_hint('s3')}; or write a manifest of s3:// "
+            "URIs instead"
         ) from exc
     unsigned = os.environ.get("AWS_NO_SIGN_REQUEST", "").upper() in ("YES", "TRUE", "ON", "1")
     where = f"s3://{bucket}/{prefix}"

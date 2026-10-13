@@ -1,4 +1,8 @@
-r"""Ingest one AOI from aois.yaml: Sentinel-2 monthly mosaics -> chronozarr store.
+r"""Ingest one AOI: Sentinel-2 monthly mosaics -> chronozarr store.
+
+The AOI is a name from aois.yaml (--aoi), a bounding box (--bbox) or the bounding box of a
+GeoJSON file (--aoi-file); the last two need no edit to aois.yaml and take the UTM zone of the
+box's centre (aoi_input.py).
 
 Phase 1 (download) searches Planetary Computer for Sentinel-2 L2A scenes, masks clouds with
 the SCL band, and writes one monthly median composite per month to
@@ -13,6 +17,10 @@ and provenance recorded in the store. With --stac it also writes a static STAC C
 Item to <out-dir>/stores/<aoi>/stac/.
 
 Usage:
+    uv run python examples/sentinel2_pc/ingest.py --bbox -106.71 35.06 -106.66 35.11 \
+        --name rio_grande --start 2024-06-01 --end 2024-08-31
+    uv run python examples/sentinel2_pc/ingest.py --aoi-file reach.geojson \
+        --start 2024-06-01 --end 2024-08-31
     uv run python examples/sentinel2_pc/ingest.py --aoi nile_delta
     uv run python examples/sentinel2_pc/ingest.py --aoi nile_delta --skip-download
     uv run python examples/sentinel2_pc/ingest.py --aoi nile_delta \
@@ -38,11 +46,14 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 import tempfile
 import time
+from calendar import monthrange
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import months
@@ -50,6 +61,7 @@ import numpy as np
 import rasterio
 import xarray as xr
 import yaml
+from aoi_input import bbox_aoi, geojson_aoi, parse_bbox
 from catalog import PC_STAC_URL, S2_COLLECTION, search_scenes_by_month, sign_href
 from mosaic import (
     RECORD_KEYS,
@@ -58,6 +70,7 @@ from mosaic import (
     RunReport,
     SceneReadError,
     build_monthly_mosaics,
+    compute_target_grid,
     load_mosaic,
     month_record,
     run_summary,
@@ -114,6 +127,50 @@ def load_aoi_config(aoi_name: str) -> dict:
     return aoi
 
 
+def check_dates(start: str, end: str) -> list[str]:
+    """The months at the ends of a date range that it covers only in part.
+
+    The composite of such a month is built from the scenes inside the range only, but it is
+    stored and carried forward like a whole month. Raises ValueError for a date that is not
+    YYYY-MM-DD or a range that ends before it starts.
+    """
+    try:
+        first, last = date.fromisoformat(start), date.fromisoformat(end)
+    except ValueError as e:
+        raise ValueError(f"--start {start} --end {end}: dates must be YYYY-MM-DD ({e})") from e
+    if last < first:
+        raise ValueError(f"--end {end} is before --start {start}")
+    partial = []
+    if first.day != 1:
+        partial.append(f"{first:%Y-%m} (from {first})")
+    if last.day != monthrange(last.year, last.month)[1]:
+        partial.append(f"{last:%Y-%m} (until {last})")
+    return partial
+
+
+def check_existing_grid(mosaic_dir: Path, aoi: dict) -> None:
+    """Exit if the monthly files already in `mosaic_dir` are not on this AOI's grid.
+
+    A month that exists is skipped, so a directory left by another bounding box under the same
+    name would otherwise be encoded as this AOI. Only GeoTIFF months are checked; every month of
+    a store must share the grid of the first (checked when encoding).
+    """
+    existing = sorted(mosaic_dir.glob("*.tif"))
+    if not existing:
+        return
+    transform, height, width = compute_target_grid(tuple(aoi["bbox"]), aoi["epsg"])
+    record = month_record(existing[0])
+    have = (record["epsg"], tuple(record["transform"])[:6], tuple(record["shape"][1:]))
+    want = (aoi["epsg"], tuple(transform)[:6], (height, width))
+    if have != want:
+        raise SystemExit(
+            f"{existing[0]} is on a different grid (EPSG:{have[0]}, {have[2][1]} x {have[2][0]} "
+            f"pixels) than the AOI {aoi['name']} (EPSG:{want[0]}, {want[2][1]} x {want[2][0]} "
+            f"pixels, bbox {aoi['bbox']}). Months that exist are skipped, not rebuilt. Use "
+            f"another --name or --out-dir, or delete {mosaic_dir} to start over."
+        )
+
+
 def download_mosaics(
     aoi: dict,
     start: str,
@@ -132,6 +189,12 @@ def download_mosaics(
 
     by_month = search_scenes_by_month(bbox, start, end, max_cloud_pct=80.0)
     logger.info("Scene search: %.1fs", time.perf_counter() - t0)
+    if not by_month:
+        raise ValueError(
+            f"no Sentinel-2 L2A scenes with eo:cloud_cover < 80 intersect bbox {list(bbox)} "
+            f"from {start} to {end}. Check that the bbox is west south east north in degrees "
+            "and that the dates cover acquisitions"
+        )
     report = RunReport()
     limiter = AdaptiveLimiter(settings.requests, settings.max_requests, adaptive=settings.adaptive)
     cpu0 = time.process_time()
@@ -552,11 +615,65 @@ def emit_stac(store_dir: Path, aoi_name: str) -> Path:
     return stac_dir
 
 
+def fold_bbox_value(argv: list[str]) -> list[str]:
+    """`--bbox -106.7,35.0,-106.6,35.1` as `--bbox=-106.7,35.0,-106.6,35.1`.
+
+    argparse reads a value that starts with '-' and is not a plain number as another option,
+    which every longitude west of Greenwich does when the four numbers are written as one.
+    """
+    folded: list[str] = []
+    for arg in argv:
+        if folded and folded[-1] == "--bbox" and arg.startswith("-") and "," in arg:
+            folded[-1] = f"--bbox={arg}"
+        else:
+            folded.append(arg)
+    return folded
+
+
+def resolve_aoi(args: argparse.Namespace) -> dict:
+    """The AOI that --aoi, --bbox or --aoi-file defines; ValueError says what is wrong."""
+    if args.aoi:
+        if args.name:
+            raise ValueError(
+                "--name goes with --bbox or --aoi-file; an --aoi is named by aois.yaml"
+            )
+        return load_aoi_config(args.aoi)
+    if args.bbox:
+        if not args.name:
+            raise ValueError(
+                "--bbox needs --name, which names <out-dir>/mosaics/<name> and "
+                "<out-dir>/stores/<name>"
+            )
+        return bbox_aoi(args.name, parse_bbox(args.bbox))
+    return geojson_aoi(args.aoi_file, args.name)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Ingest one AOI: Sentinel-2 monthly mosaics to a chronozarr store"
     )
-    parser.add_argument("--aoi", required=True, help="AOI name from aois.yaml")
+    where = parser.add_mutually_exclusive_group(required=True)
+    where.add_argument("--aoi", help="AOI name from aois.yaml")
+    where.add_argument(
+        "--bbox",
+        nargs="+",
+        metavar="DEG",
+        help="west south east north in degrees (WGS84), as four numbers or one comma-separated "
+        "value: --bbox -106.71 35.06 -106.66 35.11 or --bbox -106.71,35.06,-106.66,35.11. "
+        "Needs --name",
+    )
+    where.add_argument(
+        "--aoi-file",
+        type=Path,
+        metavar="GEOJSON",
+        help="GeoJSON file (longitude, latitude); the AOI is the bounding box of its geometry, "
+        "so pixels of a polygon's box outside the polygon are kept",
+    )
+    parser.add_argument(
+        "--name",
+        help="name of a --bbox or --aoi-file AOI: the directories <out-dir>/mosaics/<name> and "
+        "<out-dir>/stores/<name> (default for --aoi-file: the file name without its extension)",
+    )
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument(
         "--stac",
@@ -632,11 +749,15 @@ def main() -> None:
         default=DEFAULT_OUT_DIR,
         help="Root for mosaics/ and stores/ (default: <repo>/data)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(fold_bbox_value(sys.argv[1:]))
 
-    aoi = load_aoi_config(args.aoi)
-    mosaic_dir = args.out_dir / "mosaics" / args.aoi
-    store_dir = args.out_dir / "stores" / args.aoi / "chronozarr"
+    try:
+        aoi = resolve_aoi(args)
+        partial_months = check_dates(args.start, args.end)
+    except ValueError as e:
+        parser.error(str(e))
+    mosaic_dir = args.out_dir / "mosaics" / aoi["name"]
+    store_dir = args.out_dir / "stores" / aoi["name"] / "chronozarr"
 
     if store_dir.exists() and any(store_dir.iterdir()):
         raise SystemExit(
@@ -644,6 +765,14 @@ def main() -> None:
         )
 
     if not args.skip_download:
+        check_existing_grid(mosaic_dir, aoi)
+        if partial_months:
+            logger.warning(
+                "The date range covers %s only in part. Each is composited from the scenes "
+                "inside the range, yet stored and carried forward like a whole month. Start on "
+                "the 1st and end on the last day of a month for whole-month composites.",
+                " and ".join(partial_months),
+            )
         resources = detect_resources()
         for name in ("requests", "max_requests", "cpu_workers"):
             value = getattr(args, name)
@@ -685,8 +814,8 @@ def main() -> None:
         no_coverage=args.no_coverage,
     )
     if args.stac:
-        emit_stac(store_dir, args.aoi)
-    logger.info("Done: %s", args.aoi)
+        emit_stac(store_dir, aoi["name"])
+    logger.info("Done: %s", aoi["name"])
 
 
 if __name__ == "__main__":

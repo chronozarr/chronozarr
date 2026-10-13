@@ -89,6 +89,35 @@ test.describe('a store that does not open', () => {
   });
 });
 
+test.describe('a ?store= link that does not open', () => {
+  // The viewer reports the failed open on the console; the store it would have fallen back to never loads.
+  test.use({ expectedErrors: /Failed to load resource|blocked by CORS policy|request failed, giving up|loadStore\(/ });
+
+  test('to someone\'s store keeps its error on screen and never shows the catalog store in its place', async ({ page, servers, storeUrl }) => {
+    const demo = await storeUrl('u16_plain');
+    await page.route('**/catalog.json', (route) => route.fulfill({ json: [{ name: 'Demo', url: demo }] }));
+    // Another host than the catalog's, as a shared link whose tunnel has stopped.
+    const gone = `${servers.appUrl}/no_such_store/`;
+    const before = servers.data.requests.length; // the servers live as long as the worker
+    await page.goto(`${servers.appUrl}/demo/index.html?store=${encodeURIComponent(gone)}`);
+    await expect(page.locator('#error-overlay')).toHaveClass(/visible/);
+    await expect(page.locator('#error-title')).toHaveText('Could not open store');
+    await expect(page.locator('#error-message')).toContainText('Store not found');
+    await page.evaluate(() => window.chronozarr.ready);
+    expect(await page.evaluate(() => window.chronozarr.viewer.store ?? null), 'no store replaced the requested one').toBeNull();
+    expect(servers.data.requests.slice(before).filter((r) => r.path.includes('u16_plain')), 'the catalog store is never read').toEqual([]);
+    await expect(page.locator('#error-overlay')).toHaveClass(/visible/);
+  });
+
+  test('to an old address on the catalog host still opens the catalog store', async ({ page, servers, storeUrl }) => {
+    const demo = await storeUrl('u16_plain');
+    await page.route('**/catalog.json', (route) => route.fulfill({ json: [{ name: 'Demo', url: demo }] }));
+    const moved = `${servers.dataUrl}/an_old_prefix/`;
+    await page.goto(`${servers.appUrl}/demo/index.html?store=${encodeURIComponent(moved)}`);
+    await page.waitForFunction((url) => window.chronozarr?.viewer?.store?.url === url, demo);
+  });
+});
+
 test('a URL with a login is refused without a request, and nothing of it is shown', async ({ page, servers, storeUrl }) => {
   await openViewer(page, servers, await storeUrl('u16_sharded'));
   await snapshot(page);

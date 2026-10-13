@@ -1,25 +1,34 @@
 ---
 layout: landing
-title: Raster time series, stored as static objects.
+title: Raster time series anyone can explore from a link.
 ---
 
 export const years = [2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
+export const demo = 'https://chronozarr.org/demo/'
+export const plateView = 'https://chronozarr.org/demo/?t=110&p=false_color'
 
 <div className="cz-home">
 
 <header className="cz-grid cz-hero">
-  <p className="cz-label">Format revision 0.3 · October 2026</p>
+  <p className="cz-label">chronozarr 0.4.0 · store format v0.3</p>
 
-  <h1>Raster time series, stored as static objects.</h1>
+  <h1>Raster time series anyone can explore from a link.</h1>
 
-  <p className="cz-intro">chronozarr turns a raster time series into static files that you can put in a storage bucket. Anyone with the link can then open the series in a web browser and play or scrub through it like a video. Clicking a pixel shows its values over time. The same files open in Python with the exact values you wrote.</p>
+  <p className="cz-intro">chronozarr converts dated GeoTIFFs, Zarr or NetCDF into a folder of static files. In a web browser the series plays like a video. You zoom, pan and click a pixel to see its values over time. In Python the same files return the exact numbers you stored. No tile server runs anywhere.</p>
+
+  <nav className="cz-actions" aria-label="Start">
+    <a className="cz-cta cz-cta-primary" href={demo}>Open the live demo</a>
+    <a className="cz-cta" href="/quickstart">Convert my data</a>
+    <a className="cz-cta" href="/guides/share">Share a dataset</a>
+  </nav>
 </header>
 
 <figure aria-label="Figure 1">
-  <div className="cz-plate">
+  <a className="cz-plate" href={plateView} aria-label="Open this view in the live viewer">
     <img src="/ucayali-plate-2025-1380.webp" srcSet="/ucayali-plate-2025-1380.webp 1380w, /ucayali-plate-2025.webp 2759w" sizes="(min-width: 1296px) 1200px, 92vw" width="2759" height="1655" alt="Ucayali River, Peru, August 2025. False-color composite: near infrared, red, green." fetchPriority="high" />
     <span className="cz-date">2025-08 · B08 B04 B03</span>
-  </div>
+    <span className="cz-open">Open in the viewer</span>
+  </a>
   <div className="cz-strip">
     {years.map(year => (
       <div className="cz-thumb" key={year}>
@@ -30,27 +39,52 @@ export const years = [2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025
   </div>
   <figcaption className="cz-grid cz-caption">
     <span className="cz-label cz-label-ink">Figure 1</span>
-    <p>Ucayali River, Peru. Sentinel-2 monthly composite, August 2025, pyramid level 0, native 10 m. False color: near infrared, red, green. Vegetation red, water dark, bare sand white. Below, the same window every August, 2016 to 2025, level 3. Fixed display stretch. Public demo store.</p>
+    <p>Ucayali River, Peru. Sentinel-2 monthly composite, August 2025, pyramid level 0, native 10 m. False color: near infrared, red, green. Vegetation red, water dark, bare sand white. Below, the same window every August, 2016 to 2025, level 3. Fixed display stretch. The public demo holds all 117 months from November 2015.</p>
   </figcaption>
 </figure>
+
+<section className="cz-grid cz-section cz-rule" aria-label="What a store does">
+  <p className="cz-label">What a store does</p>
+  <ol className="cz-capabilities">
+    <li><h2>Plays like a video</h2><p>Scrub or play years of observations. The viewer loads the timesteps around the current one in the background.</p></li>
+    <li><h2>Zooms and pans</h2><p>A pyramid of coarser levels keeps a view of the whole area to a few downloads. Level 0 is your data at full resolution.</p></li>
+    <li><h2>Shows pixel values</h2><p>Click a pixel to chart its values over time, in physical units. Products such as NDVI are computed from the stored bands.</p></li>
+    <li><h2>Shares the view</h2><p>A link holds the date, the product, the display range, the zoom and the map centre. The recipient needs only a browser.</p></li>
+    <li><h2>Keeps the numbers</h2><p>xarray, zarr-python and GDAL read the same files and return the stored values. The viewer draws the same values.</p></li>
+    <li><h2>Needs no server</h2><p>A store is static files. Serve it from your computer for a temporary link, or from your own cloud storage for a permanent one.</p></li>
+  </ol>
+</section>
+
+<section className="cz-grid cz-section cz-rule" aria-label="Three commands">
+  <p className="cz-label">Three commands</p>
+  <div className="cz-commands">
+    <pre><code>{`chronozarr convert rasters/ my_store
+chronozarr preview my_store
+chronozarr share my_store`}</code></pre>
+  </div>
+  <div className="cz-commands-notes">
+    <p><code>convert</code> reads one GeoTIFF per date and checks every file before it writes. <code>preview</code> opens the store in your browser. <code>share</code> prints a temporary link for a colleague.</p>
+    <a href="/quickstart">Quickstart, with a sample dataset</a>
+  </div>
+</section>
+
+<section className="cz-grid cz-routes cz-rule" aria-label="Two ways to share">
+  <p className="cz-label">Two ways to share</p>
+  <div className="cz-route cz-route-wide"><h2>Temporary link</h2><p><code>chronozarr share</code> serves the store from your computer through a Cloudflare quick tunnel. The link works while the command runs and your computer is on. Each view is sent over your upload connection. Anyone with the link can read the store. No account is needed.</p><a href="/guides/share">Share a temporary link</a></div>
+  <div className="cz-route cz-route-wide"><h2>Permanent link</h2><p><code>chronozarr publish</code> uploads the store to Amazon S3, Cloudflare R2, Google Cloud Storage or Azure, in your own account. It checks the hosted copy and prints the link. You pay your provider for storage and downloads. chronozarr.org serves the viewer page and stores no data.</p><a href="/guides/publish">Publish a permanent link</a></div>
+</section>
 
 <section className="cz-grid cz-section cz-rule" aria-label="Measured">
   <p className="cz-label">Measured</p>
   <div className="cz-specs">
-    <div className="cz-spec"><p className="cz-num">390<small>ms</small></p><p className="cz-what">Cold open</p><p className="cz-note">First whole frame, live store, cold edge cache.</p></div>
-    <div className="cz-spec"><p className="cz-num">4.5<small>ms</small></p><p className="cz-what">Decode per 2 MB chunk</p><p className="cz-note">zstd level 5 in the browser.</p></div>
-    <div className="cz-spec"><p className="cz-num">117</p><p className="cz-what">Monthly composites</p><p className="cz-note">2015 to 2026, in the public demo.</p></div>
-    <div className="cz-spec"><p className="cz-num">60<small>/s</small></p><p className="cz-what">Playback, warm</p><p className="cz-note">Timesteps per second through a loaded series. Zero bytes over the wire.</p></div>
+    <div className="cz-spec"><p className="cz-num">0.48<small>s</small></p><p className="cz-what">Viewer: first whole frame</p><p className="cz-note">The public demo in a new browser, from the start of the open. Median of 10.</p></div>
+    <div className="cz-spec"><p className="cz-num">117<small>/117</small></p><p className="cz-what">Values: months identical</p><p className="cz-note">Every level-0 value of the demo store equals the composite it was written from. Checked before upload; uploads matched by checksum.</p></div>
+    <div className="cz-spec"><p className="cz-num">1.9–4.7<small>×</small></p><p className="cz-what">Ingest: faster</p><p className="cz-note">The repository's Sentinel-2 example, against its previous pipeline, on five Planetary Computer workloads.</p></div>
+    <div className="cz-spec"><p className="cz-num">1.5<small>GB</small></p><p className="cz-what">Memory: one container</p><p className="cz-note">The repository's Sentinel-2 example composited a 20-scene month in strips with 1 CPU and 1.5 GB. 0.74 GiB peak.</p></div>
   </div>
+  <p className="cz-measured-note">Measured on one laptop and one home connection, October 2026. <a href="/performance">Methods, conditions and limits</a>.</p>
 </section>
 
-<section className="cz-grid cz-routes cz-rule" aria-label="Three routes">
-  <p className="cz-label">Three routes</p>
-  <div className="cz-route"><h2>Create a store</h2><p>Start with xarray, a NetCDF file, or a directory of dated GeoTIFFs. Encode the time axis and pyramid once.</p><a href="/getting-started#quickstart">Make your first store</a></div>
-  <div className="cz-route"><h2>Publish it</h2><p>Upload static objects to a bucket. Check CORS, byte ranges, and decoding with the doctor command.</p><a href="/guides/hosting">Set up hosting</a></div>
-  <div className="cz-route"><h2>Use it anywhere</h2><p>Analyze in Python, fetch cells in JavaScript, add a MapLibre layer, or embed the viewer.</p><a href="/getting-started#documentation">Browse the documentation</a></div>
-</section>
-
-<p className="cz-colophon cz-rule">chronozarr is an open format. Zarr v3. zarr-conventions multiscales, proj, spatial v0.1. True stored values at every level.</p>
+<p className="cz-colophon cz-rule">chronozarr is an open format and open-source software. Python and npm packages 0.4.0. Store format specification v0.3, a draft: Zarr v3 with the zarr-conventions multiscales, proj and spatial v0.1. A package upgrade leaves existing v0.3 stores unchanged.</p>
 
 </div>

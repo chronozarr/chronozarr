@@ -682,6 +682,31 @@ def test_cli_failed_verification_exits_1_and_prints_no_link(store, tmp_path, mon
     assert len(fake.puts) > 0
 
 
+class ForbiddenHandler(StoreRequestHandler):
+    def send_head(self):
+        self.send_error(403)
+        return None
+
+
+@pytest.mark.parametrize(
+    ("handler", "advised"), [(ForbiddenHandler, True), (StoreRequestHandler, False)]
+)
+def test_cli_gives_public_access_advice_only_for_a_refused_read(
+    store, tmp_path, monkeypatch, handler, advised
+):
+    bucket = tmp_path / "bucket"
+    (bucket / "store-v1").mkdir(parents=True)
+    fake = FakeAdapter(bucket)
+    monkeypatch.setattr(adapters_module, "open_adapter", lambda destination, **options: fake)
+    # The wrong folder answers 404: the public URL names a prefix that holds no store.
+    served = bucket / "store-v1" if handler is ForbiddenHandler else tmp_path / "elsewhere"
+    served.mkdir(exist_ok=True)
+    with serving(handler, served) as url:
+        result = run(str(store), "--destination", "s3://bucket/store-v1", "--public-url", url)
+    assert result.exit_code == 1
+    assert ("make the bucket readable" in result.output) is advised, result.output
+
+
 def test_cli_explains_a_missing_public_url_and_rejects_an_s3_one(store, cli_adapter):
     missing = CliRunner().invoke(
         main, ["publish", str(store), "--destination", "s3://bucket/store-v1"]
