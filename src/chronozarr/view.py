@@ -43,6 +43,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, BinaryIO, ClassVar, Literal
 
+from chronozarr._install import extra_hint
+
 VIEWER_URL = "https://chronozarr.org/demo/"
 # The server mounts a self-hosted viewer folder under this path, next to the store.
 VIEWER_MOUNT = "_viewer"
@@ -562,7 +564,7 @@ class LocalAccess:
         else:
             advice = [
                 "The browser must run on the machine that runs this kernel. For a remote "
-                "kernel, container or VS Code remote, see "
+                "kernel, container or VS Code remote, see 'Remote notebooks' at "
                 "https://chronozarr.org/guides/notebooks#remote-notebooks.",
             ]
         if self.viewer_source == "hosted":
@@ -661,9 +663,7 @@ def view(
     try:
         ipython_display = importlib.import_module("IPython.display")  # optional extra
     except ImportError as exc:
-        raise ImportError(
-            "chronozarr.view needs IPython: run `uv add 'chronozarr[notebook]'`"
-        ) from exc
+        raise ImportError(f"chronozarr.view needs IPython: {extra_hint('notebook')}") from exc
     text = str(store)
     if text.startswith(("http://", "https://")):
         if base_url is not None or viewer_dir is not None:

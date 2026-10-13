@@ -17,6 +17,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
+from chronozarr._install import extra_hint
 from chronozarr.publish import PublishError, RemoteObject
 
 R2_SUFFIX = ".r2.cloudflarestorage.com"
@@ -64,8 +65,7 @@ class S3Adapter:
             from botocore.exceptions import ProfileNotFound
         except ImportError as exc:
             raise PublishError(
-                "publishing to s3:// needs boto3: run `uv sync --extra publish` "
-                "(or `pip install 'chronozarr[publish]'`)."
+                f"publishing to s3:// needs boto3: {extra_hint('publish')}."
             ) from exc
         self.bucket = bucket
         self.endpoint_url = endpoint_url

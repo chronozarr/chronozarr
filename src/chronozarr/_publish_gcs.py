@@ -20,6 +20,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, NoReturn
 
+from chronozarr._install import extra_hint
 from chronozarr.publish import PublishError, RemoteObject
 
 PUBLIC_HOST = "https://storage.googleapis.com"
@@ -62,8 +63,7 @@ class GcsAdapter:
             from google.cloud import storage
         except ImportError as exc:
             raise PublishError(
-                "publishing to gs:// needs google-cloud-storage: run "
-                "`uv sync --extra publish-gcs` (or `pip install 'chronozarr[publish-gcs]'`)."
+                f"publishing to gs:// needs google-cloud-storage: {extra_hint('publish-gcs')}."
             ) from exc
         self.bucket_name = bucket
         try:

@@ -20,6 +20,7 @@ import xarray as xr
 from chronozarr import schema
 from chronozarr._convert_discover import is_discovery_source
 from chronozarr._convert_source import UndeclaredNaNError
+from chronozarr._install import extra_hint
 from chronozarr.append import append, is_store
 from chronozarr.bands import (
     assign_roles,
@@ -248,8 +249,7 @@ def _command_errors() -> Iterator[None]:
     except ImportError as exc:
         if exc.name == "rasterio":
             raise click.ClickException(
-                "this command needs rasterio: run `uv sync --extra geo` "
-                "(or `pip install 'chronozarr[geo]'`)"
+                f"this command needs rasterio: {extra_hint('geo')}"
             ) from exc
         raise
     except (ValueError, OSError, SchemaError) as exc:

@@ -29,6 +29,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, NoReturn
 
+from chronozarr._install import extra_hint
 from chronozarr.publish import PublishError, RemoteObject
 
 CONNECTION_STRING_ENV = "AZURE_STORAGE_CONNECTION_STRING"
@@ -69,8 +70,8 @@ class AzureAdapter:
             from azure.storage.blob import BlobServiceClient
         except ImportError as exc:
             raise PublishError(
-                "publishing to az:// needs azure-storage-blob and azure-identity: run "
-                "`uv sync --extra publish-azure` (or `pip install 'chronozarr[publish-azure]'`)."
+                "publishing to az:// needs azure-storage-blob and azure-identity: "
+                f"{extra_hint('publish-azure')}."
             ) from exc
         container, _, _ = prefix.partition("/")
         if not _ACCOUNT.match(account) or not _CONTAINER.match(container):
