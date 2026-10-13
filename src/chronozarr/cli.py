@@ -48,6 +48,7 @@ from chronozarr.stac import write_stac
 from chronozarr.store import redact_url
 from chronozarr.view import VIEWER_URL, preview, preview_command, viewer_url
 
+_REFUSED = re.compile(r"\bHTTP 40[13]\b")
 _DATE_IN_NAME = re.compile(r"(?<!\d)(\d{4})-?(\d{2})(?:-?(\d{2}))?(?!\d)")
 _GLOB_CHARS = "*?["
 _READ_ROWS = 512  # rows read at a time from a GeoTIFF; not the store chunk size
@@ -1089,7 +1090,9 @@ def publish_command(
     for note in result.notes:
         click.echo(f"\n{note}")
     if result.link is None:
-        if any(not c.name.startswith("CORS") for c in failures(result.checks)):
+        # The provider's public-access advice answers a refused read only. A wrong address (404),
+        # a host that is down or a store that does not decode has its own fix line above.
+        if any(_REFUSED.search(c.detail) for c in failures(result.checks)):
             click.echo(f"\n{adapter.access_help()}")
         click.echo(
             "\nnot verified: the objects are stored but the hosted store failed the checks "

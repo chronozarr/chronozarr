@@ -134,7 +134,9 @@ class S3Adapter:
 
     def put_object(self, key: str, path: Path, *, cache_control: str, content_type: str) -> None:
         with path.open("rb") as body:
-            self.client.put_object(
+            self._call(
+                "put",
+                self.client.put_object,
                 Bucket=self.bucket,
                 Key=key,
                 Body=body,
@@ -203,7 +205,7 @@ class S3Adapter:
         except ClientError as exc:
             raise self._translate(action, exc) from exc
         except BotoCoreError as exc:
-            raise PublishError(f"{self.label} {action} failed: {exc}") from exc
+            raise self._boto_failure(action, exc) from exc
 
     def _call(self, action: str, method: Any, **kwargs: Any) -> Any:
         from botocore.exceptions import BotoCoreError, ClientError
@@ -213,7 +215,22 @@ class S3Adapter:
         except ClientError as exc:
             raise self._translate(action, exc) from exc
         except BotoCoreError as exc:
-            raise PublishError(f"{self.label} {action} failed: {exc}") from exc
+            raise self._boto_failure(action, exc) from exc
+
+    def _boto_failure(self, action: str, exc: Exception) -> PublishError:
+        """A failure before S3 answered. Missing credentials are the common first one."""
+        from botocore.exceptions import NoCredentialsError
+
+        if isinstance(exc, NoCredentialsError):
+            how = (
+                "Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY to an R2 API token, or pass "
+                "--profile."
+                if self.is_r2
+                else "Run `aws configure` or `aws sso login`, set AWS_ACCESS_KEY_ID and "
+                "AWS_SECRET_ACCESS_KEY, or pass --profile."
+            )
+            return PublishError(f"no credentials found for {self.endpoint_description()}. {how}")
+        return PublishError(f"{self.label} {action} failed: {exc}")
 
     def _translate(self, action: str, exc: Any) -> S3Error:
         code = str(exc.response.get("Error", {}).get("Code", ""))
