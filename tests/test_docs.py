@@ -98,7 +98,8 @@ def test_install_pins_match_the_release() -> None:
     ]
     npm = json.loads((REPO / "js/package.json").read_text(encoding="utf-8"))["version"]
     assert npm == version, "pyproject.toml and js/package.json must release the same version"
-    pin = re.compile(r"chronozarr(?:\[[^\]]*\])?(?:==|@)(\d+\.\d+\.\d+)")
+    # Install pins, and the `chronozarr --version` output that the quickstart shows.
+    pin = re.compile(r"chronozarr(?:\[[^\]]*\])?(?:==|@|, version )(\d+\.\d+\.\d+)")
     # The evidence log and release notes record the versions that were measured or released.
     records = {"evidence.md", *(p.name for p in USER_DOCS if p.name.startswith("release-"))}
     for path in (p for p in USER_DOCS if p.name not in records):
