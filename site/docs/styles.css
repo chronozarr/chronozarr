@@ -64,8 +64,28 @@
 .cz-intro { grid-column: 1 / -1; font-size: 1.125rem; line-height: 1.55; max-width: 62ch; color: var(--vocs-color_text2); }
 @media (min-width: 900px) { .cz-intro { grid-column: 4 / span 7; } }
 
+/* the three routes in: square, hairline, one filled */
+.cz-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 12px; }
+@media (min-width: 900px) { .cz-actions { grid-column: 4 / span 9; } }
+.cz-cta {
+  display: inline-flex; align-items: center; min-height: 44px; padding: 0 20px;
+  border: 1px solid var(--vocs-color_text); color: var(--vocs-color_text); text-decoration: none;
+  font-family: var(--vocs-fontFamily_mono); font-size: 0.75rem; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase;
+}
+.cz-cta::after { content: '\2192'; margin-left: 10px; font-family: var(--vocs-fontFamily_default); letter-spacing: 0; }
+.cz-cta:hover { border-color: var(--vocs-color_textAccent); color: var(--vocs-color_textAccent); }
+.cz-cta-primary { background: var(--vocs-color_backgroundAccent); border-color: var(--vocs-color_backgroundAccent); color: var(--vocs-color_backgroundAccentText); }
+.cz-cta-primary:hover { background: var(--vocs-color_backgroundAccentHover); border-color: var(--vocs-color_backgroundAccentHover); color: var(--vocs-color_backgroundAccentText); }
+@media (max-width: 500px) { .cz-cta { flex: 1 1 100%; justify-content: space-between; } }
+
 /* figure: plate and filmstrip */
-.cz-plate { position: relative; background: var(--vocs-color_border); }
+.cz-plate { position: relative; display: block; background: var(--vocs-color_border); }
+.cz-plate .cz-open {
+  position: absolute; right: 14px; bottom: 12px; padding: 6px 10px; background: rgba(11, 13, 17, 0.72); color: #fff;
+  font-family: var(--vocs-fontFamily_mono); font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase;
+}
+.cz-plate .cz-open::after { content: ' \2192'; }
+.cz-plate:hover .cz-open { background: var(--vocs-color_backgroundAccent); color: var(--vocs-color_backgroundAccentText); }
 .cz-plate img { display: block; width: 100%; height: auto; aspect-ratio: 5 / 3; object-fit: cover; }
 .cz-plate .cz-date, .cz-thumb .cz-year {
   position: absolute; font-family: var(--vocs-fontFamily_mono); font-size: 0.6875rem; font-weight: 500;
@@ -95,11 +115,37 @@
 @media (max-width: 900px) { .cz-specs { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cz-spec { border-bottom: 1px solid var(--vocs-color_border); } }
 @media (max-width: 500px) { .cz-specs { grid-template-columns: minmax(0, 1fr); } }
 
-/* three routes */
+/* what a store does: a numbered list of six */
+.cz-capabilities {
+  grid-column: 1 / -1; list-style: none; margin: 0; padding: 0; counter-reset: cz-cap;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 24px; row-gap: 32px;
+}
+.cz-capabilities li { counter-increment: cz-cap; display: grid; row-gap: 8px; align-content: start; border-top: 1px solid var(--vocs-color_border); padding-top: 12px; }
+.cz-capabilities li::before { content: counter(cz-cap, decimal-leading-zero); font-family: var(--vocs-fontFamily_mono); font-size: 0.6875rem; color: var(--vocs-color_textAccent); letter-spacing: 0.12em; }
+.cz-capabilities h2 { font-size: 1.125rem; font-weight: 600; letter-spacing: -0.01em; }
+.cz-capabilities p { font-size: 0.9375rem; line-height: 1.55; color: var(--vocs-color_text2); max-width: 38ch; }
+@media (max-width: 900px) { .cz-capabilities { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 500px) { .cz-capabilities { grid-template-columns: minmax(0, 1fr); } }
+
+/* three commands */
+.cz-commands { grid-column: 1 / -1; min-width: 0; }
+.cz-commands pre {
+  margin: 0; padding: 20px 24px; overflow-x: auto; border: 1px solid var(--vocs-color_border); background: var(--vocs-color_background2);
+  font-family: var(--vocs-fontFamily_mono); font-size: 0.9375rem; line-height: 1.8;
+}
+.cz-commands-notes { grid-column: 1 / -1; display: grid; row-gap: 12px; align-content: start; }
+.cz-commands-notes p { font-size: 0.9375rem; line-height: 1.55; color: var(--vocs-color_text2); max-width: 46ch; }
+@media (min-width: 900px) { .cz-commands { grid-column: 1 / span 7; } .cz-commands-notes { grid-column: 8 / span 5; } }
+.cz-home code { font-family: var(--vocs-fontFamily_mono); font-size: 0.9em; }
+.cz-commands-notes a, .cz-measured-note a { color: var(--vocs-color_textAccent); text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; }
+.cz-measured-note { grid-column: 1 / -1; font-size: 0.875rem; color: var(--vocs-color_text2); }
+
+/* routes */
 .cz-routes { row-gap: 28px; }
 .cz-routes > .cz-label { grid-column: 1 / -1; }
 .cz-route { grid-column: span 12; display: grid; row-gap: 12px; align-content: start; }
-@media (min-width: 700px) { .cz-route { grid-column: span 4; } }
+@media (min-width: 700px) { .cz-route { grid-column: span 4; } .cz-route-wide { grid-column: span 6; } }
+.cz-route-wide p { max-width: 52ch; }
 .cz-route h2 { font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; }
 .cz-route p { font-size: 0.9375rem; line-height: 1.55; color: var(--vocs-color_text2); max-width: 36ch; }
 .cz-route a { color: var(--vocs-color_textAccent); text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; font-size: 0.9375rem; }
@@ -110,10 +156,12 @@
 .cz-colophon { font-family: var(--vocs-fontFamily_mono); font-size: 0.75rem; line-height: 1.7; color: var(--vocs-color_text3); max-width: 70ch; }
 
 /* ---------- accessibility fixes to Vocs 1.4.1 ---------- */
-/* Code tokens of the light theme under 4.5:1 on the code background (the github-light colours Vocs ships). */
+/* Code tokens of the light theme under 4.5:1 on the code background #eceef2 (the github-light colours Vocs ships).
+   Replacements: red 4.7:1, orange 5.3:1, green 4.7:1, comment grey 5.5:1. */
 :root:not(.dark) pre.shiki span[style*="color:#D73A49" i] { color: #cb2431 !important; }
-:root:not(.dark) pre.shiki span[style*="color:#E36209" i] { color: #b94d00 !important; }
+:root:not(.dark) pre.shiki span[style*="color:#E36209" i] { color: #a34400 !important; }
 :root:not(.dark) pre.shiki span[style*="color:#22863A" i] { color: #1d7a34 !important; }
+:root:not(.dark) pre.shiki span[style*="color:#6A737D" i] { color: #57606a !important; }
 /* A finger: the header, menu, sidebar, footer and copy controls are 16 to 32 px; make them 44 px. The header rows are 48 px, so they keep their height.
    `:root` raises the specificity above the Vocs rules, which are loaded after this file. */
 @media (pointer: coarse) {
