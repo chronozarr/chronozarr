@@ -8,12 +8,15 @@ import {
   PROBE_MAX_NEED,
   SCRUB_WINDOW_MS,
   ScrubSpeed,
+  chooseScrub,
   chooseScrubLevel,
+  nextPumpBatch,
   planScrubLoads,
   readyRun,
   savesData,
   scrubLevels,
   scrubNeed,
+  scrubPumpRequests,
   stepsAhead,
 } from '../demo/scrub.js';
 
@@ -320,4 +323,89 @@ test('savesData: data saving or a slow link saves data; a fast link, an unknown 
   assert.equal(savesData({}), false);
   assert.equal(savesData(undefined), false);
   assert.equal(savesData(null), false);
+});
+
+// The viewer's per-step decision and its pump wiring, as pure functions (viewer.js #scrubLod, #loadAheadOfScrub and #runBufferPump call these).
+const decide = (options) => chooseScrub({ speed: 1000 / 150, t: 30, direction: 1, count: 117, baseLod: 1, deepestLod: 3, cellCount: (lod) => OVERVIEW_CELLS[lod], saving: false, ready: () => 0, ...options });
+
+test('chooseScrub: the speed gives the lookahead, and the level is the sharpest that holds it', () => {
+  const asked = [];
+  const ready = (lod, need) => {
+    asked.push([lod, need]);
+    return { 1: 7, 2: 7, 3: 7 }[lod];
+  };
+  const choice = decide({ ready });
+  assert.deepEqual(choice, { lod: 1, levels: [1, 2, 3], need: 7 }, '6.7 steps/s for a second: 7 timesteps ahead');
+  assert.ok(asked.length > 0 && asked.every(([, need]) => need === 7), 'each level is asked how many it holds for that lookahead');
+  assert.equal(decide({ ready: (lod) => ({ 1: 2, 2: 7, 3: 7 })[lod] }).lod, 2, 'level 1 has only two ahead: below a third of the lookahead');
+  assert.equal(decide({ ready: (lod) => ({ 1: 2, 2: 6, 3: 7 })[lod] }).lod, 3);
+});
+
+test('chooseScrub: the level held by the step before is kept between the marks, and left when it runs low', () => {
+  const ready = (table) => (lod) => table[lod] ?? 0;
+  assert.equal(decide({ held: 2, ready: ready({ 1: 6, 2: 3 }) }).lod, 2, 'level 1 is a step short and level 2 has a third: nothing changes');
+  assert.equal(decide({ held: 2, ready: ready({ 1: 7, 2: 3 }) }).lod, 1, 'level 1 holds all of it: a step up');
+  assert.equal(decide({ held: 2, ready: ready({ 1: 0, 2: 2, 3: 9 }) }).lod, 3, 'level 2 ran low');
+});
+
+test('chooseScrub: the lookahead is what is left in the direction of the scrub', () => {
+  assert.equal(decide({ speed: 25, t: 114, direction: 1 }).need, 2);
+  assert.equal(decide({ speed: 25, t: 114, direction: -1 }).need, 25, 'turned round at the end of the axis: the whole second is ahead of it again');
+  assert.equal(decide({ speed: 25, t: 3, direction: -1 }).need, 3);
+  assert.equal(decide({ speed: 25, t: 3, direction: 1 }).need, 25);
+});
+
+test('chooseScrub: a scrub that saves data takes the deepest level whatever is in memory, and does not ask', () => {
+  const choice = decide({ saving: true, ready: () => assert.fail('a scrub that saves data does not look at what is loaded') });
+  assert.deepEqual(choice, { lod: 3, levels: [1, 2, 3], need: 7 }, 'the lookahead is still the speed of the scrub: the pumps load that many ahead');
+  assert.equal(decide({ saving: true, deepestLod: 2, ready: () => assert.fail('not asked') }).lod, 2, 'never coarser than deepestLod');
+  assert.equal(decide({ saving: true, baseLod: 0, deepestLod: 1, cellCount: (lod) => ({ 0: 4, 1: 4 })[lod], ready: () => assert.fail('not asked') }).lod, 0, 'zoomed in there is no cheaper level: the normal one');
+  assert.equal(decide({ saving: false, ready: () => 99 }).lod, 1, 'without data saving the same scrub keeps the normal level');
+});
+
+/** What the pumps are asked for at t = 30 going forward, with the level in use `lod` holding everything it is asked to. */
+const pumps = (options) => scrubPumpRequests({ saving: false, t: 30, direction: 1, count: 117, levels: overview(), lod: 3, need: 5, isReady: inMemory({ 3: [30, 30 + FILL_LOOKAHEADS * 5] }), ...options });
+
+test('scrubPumpRequests: the level in use is filled ahead, and the next sharper level is probed once it has all it is asked to hold', () => {
+  assert.deepEqual(pumps(), { fill: [30, ...Array.from({ length: FILL_LOOKAHEADS * 5 }, (_, i) => 31 + i)], probe: { lod: 2, steps: [31, 32, 33, 34, 35] } });
+  const loading = pumps({ isReady: inMemory({ 3: [30, 30 + FILL_LOOKAHEADS * 5 - 1] }) });
+  assert.equal(loading.probe, null, 'something of the level in use is still to load: the probe stops');
+  assert.equal(loading.fill.length, 1 + FILL_LOOKAHEADS * 5);
+});
+
+test('scrubPumpRequests: a scrub that saves data fills the level in use and never probes', () => {
+  const saving = pumps({ saving: true });
+  assert.equal(saving.probe, null, 'the plan has a probe and data saving drops it');
+  assert.equal(saving.fill.length, 1 + FILL_LOOKAHEADS * 5);
+  assert.notEqual(pumps({ saving: false }).probe, null);
+});
+
+test('scrubPumpRequests: a scrub with one level to choose from is left to the prefetch window', () => {
+  assert.equal(pumps({ levels: [0], lod: 0 }), null, 'zoomed in: no coarser level has fewer cells');
+  assert.equal(pumps({ levels: [0], lod: 0, saving: true }), null);
+});
+
+test('scrubPumpRequests: follows the direction of the scrub, so a turn replaces what the pumps wait for', () => {
+  const forward = pumps({ t: 60, isReady: () => true });
+  const back = pumps({ t: 60, direction: -1, isReady: () => true });
+  assert.deepEqual(forward.fill.slice(0, 3), [60, 61, 62]);
+  assert.deepEqual(back.fill.slice(0, 3), [60, 59, 58]);
+  assert.deepEqual(forward.probe.steps, [61, 62, 63, 64, 65]);
+  assert.deepEqual(back.probe.steps, [59, 58, 57, 56, 55]);
+});
+
+test('nextPumpBatch: the first timesteps of the list that are not in memory, nearest first, a few at a time', () => {
+  const have = new Set([31, 32, 34]);
+  const next = (options) => nextPumpBatch({ wanted: [30, 31, 32, 33, 34, 35, 36, 37], isReady: (step) => have.has(step), previous: '', size: 3, ...options });
+  assert.deepEqual(next(), { batch: [30, 33, 35], key: '30,33,35', done: false });
+  assert.deepEqual(next({ size: 2 }).batch, [30, 33]);
+  assert.deepEqual(next({ wanted: [37, 36, 35, 34, 33] }).batch, [37, 36, 35], 'a list the scrub replaced (it turned round) is followed in its own order');
+});
+
+test('nextPumpBatch: done when everything wanted is in memory, or when the cache gave back the batch just loaded', () => {
+  assert.equal(nextPumpBatch({ wanted: [30, 31], isReady: () => true, previous: '', size: 3 }).done, true);
+  assert.equal(nextPumpBatch({ wanted: [], isReady: () => false, previous: '', size: 3 }).done, true, 'nothing wanted');
+  const stuck = nextPumpBatch({ wanted: [30, 31, 32, 33], isReady: () => false, previous: '30,31,32', size: 3 });
+  assert.equal(stuck.done, true, 'the same batch twice: it is not staying in memory, so loading it again would never end');
+  assert.equal(nextPumpBatch({ wanted: [30, 31, 32, 33], isReady: (step) => step < 32, previous: '30,31,32', size: 3 }).done, false, 'the next batch is another one');
 });

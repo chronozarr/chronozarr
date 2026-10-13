@@ -7,7 +7,7 @@ import { ASSUMED_BANDWIDTH, ancestorCells, planCoarseStages, stageLeadMs } from 
 import { chooseFrame } from './frames.js';
 import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, chooseMovieLevel, describeReason, linkAllows, snapSpeed, wireRatio } from './playback.js';
 import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js';
-import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrubLevel, planScrubLoads, readyRun, savesData, scrubLevels, scrubNeed, stepsAhead } from './scrub.js';
+import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrub, nextPumpBatch, readyRun, savesData, scrubPumpRequests, stepsAhead } from './scrub.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
 import { toggleExportPanel } from './export.js';
@@ -968,10 +968,9 @@ class Viewer {
       let previous = '';
       while (!signal.aborted) {
         const lod = pump.lod ?? this.#targetLod();
-        const batch = pump.wanted.filter((t) => !this.#frameReady(lod, t)).slice(0, BUFFER_BATCH);
-        const key = batch.join(',');
         // The same batch again means the cache cannot keep what was loaded: stop rather than load it forever.
-        if (batch.length === 0 || key === previous) break;
+        const { batch, key, done } = nextPumpBatch({ wanted: pump.wanted, isReady: (t) => this.#frameReady(lod, t), previous, size: BUFFER_BATCH });
+        if (done) break;
         previous = key;
         await Promise.all(batch.map((t) => this.#loadTimestep(lod, t, signal)));
       }
@@ -1124,10 +1123,19 @@ class Viewer {
     const saving = savesData(globalThis.navigator?.connection);
     const key = `${this.#scrub.latestAt}|${baseLod}|${deepestLod}|${this.#visibleCells(baseLod).length}|${saving}`;
     if (this.#scrubMemo?.key !== key) {
-      const levels = scrubLevels({ baseLod, deepestLod, cellCount: (lod) => this.#visibleCells(lod).length });
-      const need = scrubNeed({ speed, t: this.t, direction: this.#direction, count: this.store.times.length });
-      const lod = saving ? levels.at(-1) : chooseScrubLevel({ levels, held: this.#scrubMemo?.lod, need, ready: (candidate) => this.#readyAhead(candidate, need) });
-      this.#scrubMemo = { key, lod, baseLod, levels, need, saving };
+      const choice = chooseScrub({
+        speed,
+        t: this.t,
+        direction: this.#direction,
+        count: this.store.times.length,
+        baseLod,
+        deepestLod,
+        cellCount: (lod) => this.#visibleCells(lod).length,
+        saving,
+        held: this.#scrubMemo?.lod,
+        ready: (candidate, need) => this.#readyAhead(candidate, need),
+      });
+      this.#scrubMemo = { key, baseLod, saving, ...choice };
     }
     return this.#scrubMemo.lod;
   }
@@ -1146,10 +1154,10 @@ class Viewer {
    */
   #loadAheadOfScrub() {
     const { lod, levels, need, saving } = this.#scrubMemo;
-    if (levels.length < 2) return;
-    const { primary, probe } = planScrubLoads({ t: this.t, direction: this.#direction, count: this.store.times.length, levels, lod, need, isReady: (candidate, step) => this.#frameReady(candidate, step) });
-    this.#fillBuffer(primary.steps);
-    if (probe && !saving) this.#fillBuffer(probe.steps, { lod: probe.lod });
+    const requests = scrubPumpRequests({ saving, t: this.t, direction: this.#direction, count: this.store.times.length, levels, lod, need, isReady: (candidate, step) => this.#frameReady(candidate, step) });
+    if (requests === null) return;
+    this.#fillBuffer(requests.fill);
+    if (requests.probe) this.#fillBuffer(requests.probe.steps, { lod: requests.probe.lod });
     else this.#stopProbe();
   }
 
