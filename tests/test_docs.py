@@ -163,3 +163,19 @@ def test_every_site_source_exists() -> None:
     assert sources
     for source, _ in sources:
         assert (REPO / source).is_file(), f"site/scripts/sync-content.mjs lists missing {source}"
+
+
+def test_the_agent_skill_cites_pages_and_options_that_exist() -> None:
+    """SKILL.md names Markdown routes and CLI options in prose and tables, not only in code."""
+    skill = (REPO / "skills/chronozarr/SKILL.md").read_text(encoding="utf-8")
+    sync = (REPO / "site/scripts/sync-content.mjs").read_text(encoding="utf-8")
+    routes = {route for _, route in SITE_SOURCES.findall(sync)}
+    for route in re.findall(r"`/([\w/-]+)\.md(?:#[\w-]+)?`", skill):
+        assert route in routes, f"SKILL.md cites /{route}.md; the site publishes no such page"
+    for span in re.findall(r"`(chronozarr [^`]+)`", skill):
+        words = span.split()
+        if len(words) < 2 or words[1] not in main.commands:
+            continue
+        known = _options(main.commands[words[1]])
+        unknown = sorted(set(re.findall(r"(?<![\w-])--[\w-]+", span)) - known)
+        assert not unknown, f"SKILL.md: `chronozarr {words[1]}` has no option {unknown}"
