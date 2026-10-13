@@ -27,7 +27,7 @@ UPLOAD_TIMEOUT_S = 300
 DOWNLOAD_TIMEOUT_S = 120
 
 # GCS has one `responseHeader` list, used for both Access-Control-Allow-Headers and
-# Access-Control-Expose-Headers (docs/hosting.md section 3.3).
+# Access-Control-Expose-Headers (docs/hosting-providers.md, Google Cloud Storage).
 VIEWER_CORS_RULE: dict[str, Any] = {
     "origin": ["*"],
     "method": ["GET", "HEAD"],
@@ -146,7 +146,7 @@ class GcsAdapter:
             "the store needs a Cloud CDN backend bucket behind an external HTTPS load balancer, "
             "whose URL you pass as --public-url. Use storage.googleapis.com URLs: "
             "storage.cloud.google.com authenticates with cookies and does not answer CORS. "
-            "docs/hosting.md section 3.3 has the commands."
+            "docs/hosting-providers.md (Google Cloud Storage) has the commands."
         )
 
     def _iterate(self, action: str, items: Any) -> Any:
