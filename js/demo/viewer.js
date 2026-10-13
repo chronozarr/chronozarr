@@ -2233,7 +2233,23 @@ class Viewer {
     empty.style.display = info ? 'none' : 'flex';
     content.style.display = info ? 'block' : 'none';
     if (!info) return;
-    content.innerHTML = sidebarHtml(info, this.#formatTime(info.t));
+    content.innerHTML = sidebarHtml(info, this.#formatTime(info.t), this.store);
+    const copy = content.querySelector('#copy-coordinates');
+    if (copy) copy.addEventListener('click', async () => {
+      const tuple = content.querySelector('#coordinate-tuple');
+      const status = content.querySelector('#coordinate-copy-status');
+      try {
+        await navigator.clipboard.writeText(tuple.textContent);
+        status.textContent = 'Copied';
+      } catch {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(tuple);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        status.textContent = 'Select and copy the coordinates manually.';
+      }
+    });
     this.#renderChart();
   }
 }

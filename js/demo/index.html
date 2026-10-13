@@ -363,6 +363,14 @@
     padding: 3px 0;
   }
   .meta-row .label { color: var(--text-2); }
+  .coordinate-location { padding: 3px 0; }
+  .coordinate-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-2); font-size: 13px; }
+  .coordinate-heading button { display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 12px; line-height: 1; color: var(--text-2); background: transparent; border: 1px solid transparent; border-radius: 4px; padding: 5px 6px; margin-right: -6px; cursor: pointer; }
+  .coordinate-heading button:hover { color: var(--text); background: var(--bg); border-color: var(--border); }
+  .coordinate-heading button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .coordinate-tuple { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1.5; overflow-wrap: anywhere; }
+  .coordinate-copy-status { color: var(--text-2); font-size: 12px; margin-top: 4px; }
+  .coordinate-copy-status:empty { display: none; }
   .meta-row .value {
     color: var(--text);
     font-weight: 500;
@@ -863,6 +871,7 @@
     select, .stretch input { font-size: 16px; }
     /* Two quick taps on a step button must step twice, not zoom the page. */
     button { touch-action: manipulation; }
+    .coordinate-heading button { min-height: 44px; min-width: 44px; }
     .stretch input { width: 92px; }
     select, .stretch input, .stretch button, .products button { min-height: 44px; }
     .play-btn, .month-nav button, .inspector-close, html[data-embed] .inspector-close { width: 44px; height: 44px; }

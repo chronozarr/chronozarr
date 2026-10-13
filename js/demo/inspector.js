@@ -1,4 +1,16 @@
 // Pure formatting of decoded pixel values for the inspector.
+import { createProjection, pixelToCrs } from '../maplibre/projection.js';
+
+/** WGS84 coordinates at the center of the selected level-0 pixel. */
+export function pixelLocation(pixel, store) {
+  if (!store?.transform || !store.crs) return null;
+  try {
+    const [lon, lat] = createProjection(store.crs).toLonLat(...pixelToCrs(store.transform, pixel.x + 0.5, pixel.y + 0.5));
+    return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
+  } catch {
+    return null;
+  }
+}
 const ndviColor = (v) => (v === null ? 'var(--text-3)' : v > 0.3 ? 'var(--green)' : v > 0 ? 'var(--amber)' : 'var(--red)');
 const ndwiColor = (v) => (v === null ? 'var(--text-3)' : v > 0 ? 'var(--accent)' : 'var(--text-2)');
 
@@ -21,7 +33,7 @@ export function formatValue(value) {
   return value.toFixed(magnitude >= 1000 ? 1 : magnitude >= 10 ? 2 : 3);
 }
 
-export function sidebarHtml(info, timeLabel) {
+export function sidebarHtml(info, timeLabel, store) {
   const indices = [];
   if (info.hasNdvi) indices.push(metricHtml('NDVI', info.ndvi, ndviColor(info.ndvi)));
   if (info.hasNdwi) {
@@ -44,11 +56,17 @@ export function sidebarHtml(info, timeLabel) {
   const scaled = info.valid && info.bands.some((b) => b.value !== b.stored);
   const status = info.valid ? '' : row('Status', `<span class="no-data">No data</span> · ${info.masked ? 'masked out' : 'at the nodata value'}`);
   const observed = info.observed === null || info.observed === undefined ? '' : row('Observed by', info.observed === 0 ? 'no scene (gap-filled)' : `${info.observed} scene${info.observed === 1 ? '' : 's'}`);
+  const location = pixelLocation(info.pixel, store);
+  const tuple = location ? `(${location.lat.toFixed(6)}, ${location.lon.toFixed(6)})` : null;
   return `
     <div class="sidebar-section">
       <div class="section-label">Location</div>
       <div class="meta-row"><span class="label">Time</span><span class="value">${timeLabel}</span></div>
-      ${row('Pixel (x, y)', `${info.pixel.x}, ${info.pixel.y}`)}
+      <div class="coordinate-location">
+        <div class="coordinate-heading"><span>Latitude, longitude</span>${tuple ? '<button type="button" id="copy-coordinates" aria-label="Copy latitude and longitude"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5V3A1.5 1.5 0 0 0 9 1.5H3A1.5 1.5 0 0 0 1.5 3v6A1.5 1.5 0 0 0 3 10.5h.5"/></svg><span>Copy</span></button>' : ''}</div>
+        <div class="mono coordinate-tuple" id="coordinate-tuple">${tuple ?? 'Unavailable'}</div>
+      </div>
+      <div id="coordinate-copy-status" class="coordinate-copy-status" role="status"></div>
       ${row('Level', info.lod === 0 ? '0 (full resolution)' : `${info.lod} (${2 ** info.lod}× coarser)`)}
       ${status}
       ${observed}
