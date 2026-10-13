@@ -36,12 +36,12 @@ chronozarr does not install it for you. If it is missing, `share` says so and st
    chronozarr share my_store
    ```
 
-   The command prints each stage. A new public address usually takes about a minute to work, and the command waits up to 90 seconds for it:
+   The command prints each stage. The link usually appears after about half a minute. The command waits up to 90 seconds for a new public address to work:
 
    ```text
    starting local server and quick tunnel...
    waiting for Cloudflare to assign a public address...
-   waiting for https://bright-sea-example.trycloudflare.com to work; a new address usually takes about a minute (at most 90 seconds)...
+   waiting for https://bright-sea-example.trycloudflare.com to work; a new address usually takes 15 to 30 seconds (at most 90)...
    checking browser access...
    measuring first transfer...
    sharing my_store through https://bright-sea-example.trycloudflare.com (byte ranges and CORS verified)
@@ -51,7 +51,7 @@ chronozarr does not install it for you. If it is missing, `share` says so and st
    anyone who can open this link can read this store; press Ctrl-C to stop sharing
    ```
 
-   The `tunnel throughput` line times one chunk through the tunnel. It shows how fast a recipient's views will load.
+   The `tunnel throughput` line times one chunk through the tunnel. It shows how fast a recipient's views will load. Package 0.4.0 prints the address only when it works, and takes about a minute and a half ([measurement](evidence.md#time-to-a-link-2026-10-12)).
 
 2. The viewer opens. Choose the date, the product and the part of the map that you want to show.
 

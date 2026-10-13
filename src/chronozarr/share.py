@@ -37,6 +37,11 @@ _START_TIMEOUT_SECONDS = 30.0
 # reachable. Keep polling long enough for its public DNS record to propagate before rejecting a
 # tunnel that cloudflared has already connected.
 _READY_TIMEOUT_SECONDS = 90.0
+# Do not look up a new address before Cloudflare has published it. A lookup that finds nothing is
+# cached by the resolver for the 60 s negative TTL of trycloudflare.com, and the browser on this
+# computer shares that cache. On 2026-10-12 the record was on Cloudflare's nameservers 2 s after
+# cloudflared printed the address, but a lookup at once made the address work here only after 75 s.
+_FIRST_LOOKUP_SECONDS = 15.0
 _POLL_SECONDS = 0.2
 _TUNNEL_LOG_LINES = 32
 
@@ -157,12 +162,15 @@ def _wait_for_public_store(
     *,
     timeout: float = _READY_TIMEOUT_SECONDS,
     tunnel: _Tunnel | None = None,
+    first_lookup: float = 0.0,
 ) -> None:
     """Wait until the public route serves precisely the root we bound the tunnel to.
 
-    Stops early, with cloudflared's last lines, when `tunnel` exits: no address will appear then.
+    The first request, and with it the first DNS lookup, waits `first_lookup` seconds. Stops early,
+    with cloudflared's last lines, when `tunnel` exits: no address will appear then.
     """
-    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    deadline = started + timeout
     last_error = "no response"
     root_url = object_url(store_url, "zarr.json")
     while time.monotonic() < deadline:
@@ -173,6 +181,9 @@ def _wait_for_public_store(
                 f"cloudflared exited (exit {status}) before {store_url} could be reached; check "
                 f"this computer's network connection and try again.{suffix}"
             )
+        if time.monotonic() - started < first_lookup:
+            time.sleep(_POLL_SECONDS)
+            continue
         try:
             if _direct_get(root_url) == expected_root:
                 return
@@ -289,11 +300,14 @@ def share(
             store, port=server.port, base_url=public_root, viewer=viewer, viewer_dir=viewer_dir
         )
         echo(
-            f"waiting for {public_root} to work; a new address usually takes about a minute "
-            "(at most 90 seconds)..."
+            f"waiting for {public_root} to work; a new address usually takes 15 to 30 seconds "
+            "(at most 90)..."
         )
         _wait_for_public_store(
-            access.store_url, (server.store / "zarr.json").read_bytes(), tunnel=tunnel
+            access.store_url,
+            (server.store / "zarr.json").read_bytes(),
+            tunnel=tunnel,
+            first_lookup=_FIRST_LOOKUP_SECONDS,
         )
         echo("checking browser access...")
         # The store is the local one, already checked when it was written: through the tunnel,

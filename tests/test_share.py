@@ -122,7 +122,7 @@ def test_share_reports_stages_before_their_corresponding_work(store, monkeypatch
         "starting local server and quick tunnel...",
         "waiting for Cloudflare to assign a public address...",
         "waiting for https://bright-sea.trycloudflare.com to work; a new address usually takes "
-        "about a minute (at most 90 seconds)...",
+        "15 to 30 seconds (at most 90)...",
         "checking browser access...",
         "measuring first transfer...",
     ]
@@ -285,6 +285,28 @@ def test_public_tunnel_readiness_allows_delayed_dns_propagation(monkeypatch):
     share_module._wait_for_public_store("https://delayed.trycloudflare.com/store", expected)
 
     assert now[0] >= 31
+
+
+def test_the_first_lookup_waits_so_a_missing_record_is_not_cached(monkeypatch):
+    now = [0.0]
+    asked_at: list[float] = []
+    expected = b"synthetic root"
+
+    def direct_get(*args, **kwargs):
+        asked_at.append(now[0])
+        return expected
+
+    monkeypatch.setattr(share_module, "_direct_get", direct_get)
+    monkeypatch.setattr(share_module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        share_module.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
+    )
+
+    share_module._wait_for_public_store(
+        "https://new.trycloudflare.com/store", expected, first_lookup=15.0
+    )
+
+    assert asked_at and asked_at[0] >= 15.0, "no lookup before the address is likely published"
 
 
 def test_first_chunk_measurement_uses_an_isolated_synthetic_store(tmp_path):

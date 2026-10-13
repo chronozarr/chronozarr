@@ -112,7 +112,7 @@ The [viewer guide](viewer.md) lists every control. Press Ctrl-C in the terminal 
 chronozarr share my_store
 ```
 
-The command prints its progress and then a viewer link. A new public address usually takes about a minute to work, so the link appears after one to two minutes. In the viewer, choose the date, product and view that you want to show. Click Copy link and send the link. The recipient needs only a web browser.
+The command prints its progress and then a viewer link. The link appears after about half a minute; with package 0.4.0, after about a minute and a half. In the viewer, choose the date, product and view that you want to show. Click Copy link and send the link. The recipient needs only a web browser.
 
 Before you send the link, know these limits:
 

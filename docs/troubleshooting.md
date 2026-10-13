@@ -61,7 +61,7 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 |---|---|
 | `cloudflared` not found | Install it from [Cloudflare's download page](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/). On macOS: `brew install cloudflared` |
 | `cloudflared exited` while waiting | cloudflared could not reach Cloudflare. Check the network connection or firewall, and run the command again |
-| `the tunnel did not serve this store within 90 seconds` | A new tunnel address can take more than a minute to work. Run the command again |
+| `the tunnel did not serve this store within 90 seconds` | The new address did not start working in time. Run the command again |
 | The recipient sees nothing | Sharing stopped, or your computer slept or went offline. The link works only while `share` runs |
 | Scrubbing is slow for the recipient | Every view travels over your upload connection. For many viewers, [publish](publish.md) the store |
 

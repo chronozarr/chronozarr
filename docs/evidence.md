@@ -510,6 +510,22 @@ The same mismatch can occur for up to the short lifetime when a CDN holds an old
 - In a sharded store, it is time shard 0. It is immutable once a second time shard exists.
 - While a sharded store has one time shard, that object is the trailing shard with `max-age=300`. Doctor warns on a versioned prefix. The warning is expected then.
 
+## Temporary sharing
+
+### Time to a link (2026-10-12)
+
+`chronozarr share` on a 12-month, 40 MB store, with cloudflared 2026.10.0, on a laptop and a home connection. The time is from the start of the command. "Record published" is the first answer from the authoritative nameserver of trycloudflare.com (`dig @kevin.ns.cloudflare.com`, polled every second).
+
+| Code | Address printed | Record published | Address works | Link printed |
+|---|---:|---:|---:|---:|
+| 0.4.0, newcomer trial (2 runs) | not printed | not measured | 80 s | 100 s |
+| first lookup at once (2 runs) | 5 s | 7 s | 80 s | 92 s |
+| first lookup after 15 s (2 runs) | 5 s | 7 s | 21 s | 33 s |
+
+trycloudflare.com has a negative TTL of 60 s (SOA minimum). A lookup made before the record exists is cached as "no such host" for that time by the resolver of the computer that shares, so the address works there only after the cache entry expires. Waiting 15 s before the first lookup avoids it. If the first lookup still finds nothing, the wait is as before. A recipient on another network has not looked the address up, so their resolver has no such entry.
+
+In every run the recipient read `zarr.json` through the address (200, `Access-Control-Allow-Origin: *`), Ctrl-C printed `stopped` with exit status 0, no cloudflared process remained, and the address then answered HTTP 530.
+
 ## Local preview and remote notebooks
 
 Checked on 2026-10-09 on macOS with Python 3.11 and a synthetic store of 6 timesteps, 2 bands and 200 by 220 pixels.

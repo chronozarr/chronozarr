@@ -129,7 +129,7 @@ The objects stay in the bucket, no link is printed, and the exit status is 1. Fi
 | `root zarr.json ... HTTP 404` | The public URL does not point at the store. It must be the folder that holds the root `zarr.json` |
 | `CORS on zarr.json` and two more CORS lines fail | The bucket has no CORS rule for the viewer. Add `--apply-cors`. Behind a CDN, set CORS on the CDN |
 | `validate` fails with HTTP 403 | The host answers `403` for a file that does not exist. On S3, grant `s3:ListBucket` as in the recipes, so it answers `404` |
-| `Unable to locate credentials`, or access denied | The credentials are missing or cannot write to the bucket. See step 2 |
+| `no credentials found`, `Unable to locate credentials`, or access denied | The credentials are missing or cannot write to the bucket. See step 2 |
 | `bucket ... was not found` | Create the bucket first, or check its name and `--endpoint-url` |
 | `--public-url is required` | The destination is an R2 or other S3-compatible endpoint. Give the custom domain or `r2.dev` address |
 
