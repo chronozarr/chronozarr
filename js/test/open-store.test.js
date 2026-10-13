@@ -125,6 +125,14 @@ test('a store on this computer that the hosted viewer cannot read names the loca
   assert.doesNotMatch(error.message, /certificate|Access-Control/);
 });
 
+test('a temporary share link that has stopped tells the recipient to ask for a new link, not to fix CORS', async () => {
+  const failed = new FetchError({ url: 'https://bright-sea.trycloudflare.com/my_store/zarr.json', method: 'GET', cause: new TypeError('Failed to fetch'), attempts: 3 });
+  const error = await explainOpenError(failed, { url: 'https://bright-sea.trycloudflare.com/my_store' }, { reachable: never, page: PAGE });
+  assert.equal(error.code, 'share_stopped');
+  assert.match(error.message, /Ask the sender for a new link/);
+  assert.doesNotMatch(error.message, /Access-Control/);
+});
+
 test('a viewer served from this computer reads a local store like any other host', async () => {
   const failed = new FetchError({ url: 'http://127.0.0.1:8765/my_store/zarr.json', method: 'GET', cause: new TypeError('Failed to fetch'), attempts: 1 });
   const error = await explainOpenError(failed, { url: 'http://127.0.0.1:8765/my_store' }, { reachable: async () => false, page: LOCAL_PAGE });

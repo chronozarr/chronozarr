@@ -137,6 +137,15 @@ export async function explainOpenError(error, target, { reachable = probeReachab
   if (error?.name === 'FetchError' && status === undefined) {
     // A page on the internet reading a store on this computer: the browser's own rules, or a stopped server, are the
     // likely causes. A no-cors probe of a loopback address is blocked the same way, so it cannot tell them apart.
+    // A quick tunnel that has stopped answers with Cloudflare's error page, which carries no CORS header, so it would
+    // read as a CORS problem. For the person who got the link, the cause is that the sharing ended.
+    if (/\.trycloudflare\.com$/i.test(hostOf(target.url).split(':')[0])) {
+      return new StoreOpenError(
+        'share_stopped',
+        'Shared link not available',
+        `This store was shared from someone's computer through a temporary link (${host}). The link works only while they keep sharing it, so it may have stopped. Ask the sender for a new link.`,
+      );
+    }
     if (readsThisComputerFromAfar(target.url, page)) {
       return new StoreOpenError(
         'local_blocked',
