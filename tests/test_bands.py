@@ -309,7 +309,7 @@ def test_bands_lists_roles_and_products(tmp_path):
     text = _run("bands", str(path)).output
     assert re.search(r"B04\s+-\s+red \(Sentinel-2 name\)", text)
     assert re.search(r"weird\s+-\s+-\s", text)
-    assert re.search(r"True color\s+available", text)
+    assert re.search(r"true_color\s+True color\s+available", text), "the id that link takes"
     assert re.search(r"NDVI\s+needs nir", text)
 
 

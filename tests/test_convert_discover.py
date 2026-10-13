@@ -668,3 +668,21 @@ def test_cli_encode_points_files_at_convert(tmp_path, series):
         assert f"Use `chronozarr convert {source} " in result.output
     assert not (tmp_path / "o").exists()
     assert "chronozarr convert" in run("encode", "--help").output
+
+
+def test_a_month_name_in_a_file_name_points_to_a_manifest_that_works(tmp_path, truth):
+    folder = tmp_path / "named"
+    folder.mkdir()
+    write_tif(folder / "scene_Jan2024.tif", truth[0])
+    write_tif(folder / "scene_Feb2024.tif", truth[1])
+    refused = run("convert", str(folder), str(tmp_path / "unused"), "--dry-run")
+    assert refused.exit_code == 1
+    assert "uri,datetime" in refused.output
+    # The advice, followed: one row per file, the path relative to the manifest.
+    manifest = tmp_path / "dates.csv"
+    manifest.write_text(
+        "uri,datetime\nnamed/scene_Jan2024.tif,2024-01-01\nnamed/scene_Feb2024.tif,2024-02-01\n"
+    )
+    done = run("convert", str(manifest), str(tmp_path / "store"), "--chunk-size", "16")
+    assert done.exit_code == 0, done.output
+    assert np.array_equal(stored(tmp_path / "store"), truth[:2])

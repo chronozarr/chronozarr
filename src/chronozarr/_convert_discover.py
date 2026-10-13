@@ -46,7 +46,9 @@ _DIRECTIVES = {
 
 DATE_HELP = (
     "name the date YYYYMMDD, YYYY-MM-DD or YYYY-MM, or pass --date-pattern with the text around "
-    "the date (for example 'ndvi_%Y%m%d'), or write a manifest"
+    "the date (for example 'ndvi_%Y%m%d'). A date with a month name, such as Jan2024, needs a "
+    "manifest: a CSV with the columns uri,datetime and one row per file, such as "
+    "'scene_Jan2024.tif,2024-01-01'"
 )
 
 

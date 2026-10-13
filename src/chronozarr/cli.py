@@ -1154,10 +1154,10 @@ def _print_bands(bands: tuple[Band, ...]) -> None:
                 "NAME=ROLE and clear or reassign the others",
                 err=True,
             )
-    click.echo("products:")
+    click.echo("products (the first column is the id for `chronozarr link --product`):")
     for status in product_status(bands):
         detail = "available" if status.available else f"needs {', '.join(status.missing)}"
-        click.echo(f"  {status.name.ljust(12)}  {detail}")
+        click.echo(f"  {status.id.ljust(11)}  {status.name.ljust(12)}  {detail}")
 
 
 @main.command("bands")
