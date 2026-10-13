@@ -21,7 +21,7 @@ Three facts follow:
 - The viewer is not a gate. A public store stays public if you never share the viewer link.
 - Credentials in the Python kernel do not reach the browser. A notebook that reads a bucket with your AWS keys does not let the viewer read the bucket.
 
-The browser request for the viewer page includes the query string, so `?store=` reaches the host of chronozarr.org. `site/worker.js` does not read or log it. This repository cannot show what Cloudflare logs at the edge.
+The browser request for the viewer page includes the query string, so `?store=` reaches the host of chronozarr.org. `site/worker.js` does not read or log it. This repository cannot show what Cloudflare logs at the edge. The viewer page runs no analytics script: `site/worker.js` sends it with `Cache-Control: no-transform`, so Cloudflare does not add its Web Analytics beacon.
 
 A private bucket behind a public CDN URL is a public store. The [S3 and CloudFront recipe](hosting-providers.md#amazon-s3-with-cloudfront) blocks public access to the bucket and leaves the distribution open. Anyone with the distribution URL can read the store.
 

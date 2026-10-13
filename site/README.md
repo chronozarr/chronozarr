@@ -57,7 +57,8 @@ server, so an inline script in `vocs.config.tsx` sends `/page#old-section` on in
 `scripts/check-links.mjs` runs after every build and fails it when a link on a page, a redirect,
 an old anchor or a published address leads to a page or section that the build lacks.
 `scripts/make-sitemap.mjs` writes `sitemap.xml`, and `docs/public/404.html` is served for unknown
-paths.
+paths. `scripts/check-worker.mjs` runs the Worker against stand-in assets: every redirect, and the
+`Cache-Control: no-transform` that keeps Cloudflare's Web Analytics beacon off the viewer page.
 
 The homepage images are WebP: the plate at 2759 px (about 970 KiB, served to 2x screens
 through `srcset`) and at 1380 px (about 300 KiB), plus ten 260 px thumbnails of about

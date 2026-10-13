@@ -67,6 +67,12 @@ The address uses these parameters:
 
 The map is divided into cells of 512 by 512 pixels. For each view, the browser downloads the cells on the screen, at the current timestep, at the level of detail that matches the zoom. It also downloads the timesteps around the current one in the background. Stepping through time then usually needs no new download. A link to a store gives read access to the whole store, but the browser fetches only what the view needs.
 
+## Privacy
+
+The viewer page and its scripts come from chronozarr.org. The page runs no analytics script and sets no cookies. It keeps the playback speed that you choose in your browser's local storage. The store's data travels from the store's host to your browser, and chronozarr.org receives none of it. The page address, with its `store=` value, does reach chronozarr.org's host, as any page request does. [Private stores](private.md#1-what-a-viewer-link-exposes) explains what a viewer link exposes.
+
+The documentation pages are separate from the viewer. They load their fonts from Google Fonts and use Cloudflare Web Analytics.
+
 ## Browser support
 
 The viewer needs WebGL2. Current versions of Chrome, Edge, Firefox and Safari have it. A store that you preview from your own computer is served from `http://127.0.0.1`. Safari can block that address from the https viewer page. Use Chrome or Firefox for a local preview, or see [Troubleshooting](troubleshooting.md).

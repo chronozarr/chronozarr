@@ -22,6 +22,8 @@ export default defineConfig({
   description:
     'Turn a georeferenced raster time series into an interactive dataset that anyone can open with a link, with the stored values intact.',
   iconUrl: '/favicon.svg',
+  // No "Ask in ChatGPT" button on the pages: it sends readers to a third-party service.
+  aiCta: false,
   // A function, not a bare element: Vocs 1.4.1 reads a bare element as a path-to-element map
   // (`typeof === 'object'`), finds no key matching the URL, and renders nothing.
   head: () => (
