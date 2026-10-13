@@ -9,6 +9,7 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 | `No solution found when resolving dependencies` and `Python>=3.11` | uv chose an older Python that comes first on your computer. Add `--python 3.13` to `uv tool install` or `uv init` |
 | `chronozarr: command not found` after `uv tool install` | uv's tool folder is not on your `PATH`. Run `uv tool update-shell`, then open a new terminal |
 | `this command needs rasterio` | The `geo` extra is missing. Install it the way you installed chronozarr: `uv tool install --python 3.13 'chronozarr[geo]'`, listing every extra you use at once, such as `'chronozarr[geo,publish]'`; `uv add 'chronozarr[geo]'` in a uv project; or pip with `'chronozarr[geo]'` |
+| `Connection refused` for chronozarr.org or data.chronozarr.org, or a security block page, on a university or company network or a VPN | The network's DNS filter blocks the domain. Try another network, or ask your IT team to allow chronozarr.org |
 | `chronozarr --version` prints an older version | An older install comes first on your `PATH`, or a pinned environment is active. Check `which chronozarr` |
 | The first command after an install takes 10 to 25 seconds | On macOS the system checks new program files once. Later commands start in about a second |
 

@@ -36,21 +36,22 @@ chronozarr does not install it for you. If it is missing, `share` says so and st
    chronozarr share my_store
    ```
 
-   The command prints each stage. With package 0.4.0 the link appears after about a minute and a half, most of it spent waiting for the new public address to work. The command waits up to 90 seconds for it:
+   The command prints each stage. The link usually appears after about half a minute. The command waits up to 90 seconds for a new public address to work:
 
    ```text
    starting local server and quick tunnel...
    waiting for Cloudflare to assign a public address...
-   waiting for public access (allowing up to 90 seconds for DNS readiness)...
+   waiting for https://bright-sea-example.trycloudflare.com to work; a new address usually takes 15 to 30 seconds (at most 90)...
    checking browser access...
    measuring first transfer...
    sharing my_store through https://bright-sea-example.trycloudflare.com (byte ranges and CORS verified)
-   tunnel throughput: first level-0 chunk 1.38 MB in 0.27 s (5.03 MB/s, 1 data request(s)); estimated overview step 0.27 s for 1 cell(s), assuming similar cell-read sizes
+   tunnel throughput: first level-0 chunk 1.55 MB in 0.35 s (4.40 MB/s, 1 data request(s)); estimated overview step 0.35 s for 1 cell(s), assuming similar cell-read sizes
    open: https://chronozarr.org/demo/?store=https%3A%2F%2Fbright-sea-example.trycloudflare.com%2Fmy_store
+   The link works while this command runs and this computer stays on and online. Every view is sent from this computer over its upload connection.
    anyone who can open this link can read this store; press Ctrl-C to stop sharing
    ```
 
-   The `tunnel throughput` line times one chunk through the tunnel. It shows how fast a recipient's views will load. The next release prints the address while it waits and gives the link after about half a minute ([measurement](evidence.md#time-to-a-link-2026-10-12)).
+   The `tunnel throughput` line times one chunk through the tunnel. It shows how fast a recipient's views will load. Package 0.4.0 prints the address only when it works and takes about a minute and a half ([measurement](evidence.md#time-to-a-link-2026-10-12)).
 
 2. The viewer opens. Choose the date, the product and the part of the map that you want to show.
 

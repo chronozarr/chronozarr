@@ -81,8 +81,8 @@ Verified 2026-10-02 (America/New_York):
 - Unknown live paths return 404; www returns 301 to the apex while preserving path.
 - The package versions recorded by this historical deployment check were PyPI and npm chronozarr 0.2.1.
 
-The current Python and npm package release is 0.4.0; see
-[`docs/release-0.4.0.md`](../docs/release-0.4.0.md) for its release status.
+The current Python and npm package release is 0.4.1; see
+[`docs/release-0.4.1.md`](../docs/release-0.4.1.md) for its release status.
 
 Live: https://chronozarr.org
 Fallback: https://chronozarr-docs.jake-gearon.workers.dev

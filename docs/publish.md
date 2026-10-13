@@ -27,7 +27,7 @@ For another static host, such as Source Cooperative or a university web server, 
 1. Install the extra for your provider. With `uv tool install`, list every extra that you use:
 
    ```bash
-   uv tool install --python 3.13 'chronozarr[geo,publish]==0.4.0'
+   uv tool install --python 3.13 'chronozarr[geo,publish]==0.4.1'
    ```
 
 2. Sign in to the provider. The command uses the provider's usual credentials:
