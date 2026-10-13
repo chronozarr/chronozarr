@@ -23,7 +23,7 @@ The reader and the MapLibre layer are unchanged. The viewer that `chronozarr-vie
 
 ## Website
 
-The documentation, the homepage and the hosted viewer at chronozarr.org were deployed on 2026-10-13, before this release. The viewer page there runs no analytics.
+The documentation, the homepage and the hosted viewer at chronozarr.org were deployed on 2026-10-13, before this release, and again after it with the 0.4.1 install commands. The viewer page there runs no analytics.
 
 ## Not in the packages
 
@@ -35,4 +35,12 @@ The independent trial with a person who has not used chronozarr remains to be do
 
 ## Release status
 
-Not yet released. When the `v0.4.1` tag has published both packages, record here the release commit, the tag and the versions that PyPI and npm report.
+Released on 2026-10-13 from the tag `v0.4.1`, at commit `c76960ab2bb6d913691576af0a97fb2e3792b2bf` (the merge of #101). Each registry reports 0.4.1 as its latest version, and each file there is identical to the one built and tested from the same commit before the tag.
+
+| Registry | Version | Files | SHA-256 |
+|---|---|---|---|
+| PyPI | 0.4.1 | `chronozarr-0.4.1-py3-none-any.whl` | `e5ec2167370126decf78bd24419b736d0cee5240acd651a758f9fe2198f8dd00` |
+| PyPI | 0.4.1 | `chronozarr-0.4.1.tar.gz` | `0125b7c0f88aa994b342df897bc5d4c9e8f05f4abcfe06ef22982537ce3c529c` |
+| npm | 0.4.1 (`latest`) | `chronozarr-0.4.1.tgz`, 93 files | `d280a52f13873354ad35de16876d648baccaddc5070af61fbdf66f233a7dcf6e` |
+
+Both were published by trusted publishing from GitHub Actions, with PyPI attestations and npm provenance for the `v0.4.1` tag.
