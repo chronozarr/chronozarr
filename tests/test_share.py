@@ -6,7 +6,9 @@ import importlib
 import io
 import json
 import socket
+import subprocess
 from pathlib import Path
+from typing import cast
 
 import pytest
 from click.testing import CliRunner
@@ -340,7 +342,10 @@ def test_the_api_host_in_a_cloudflared_error_is_not_taken_for_the_tunnel():
 def test_waiting_for_the_public_address_stops_when_cloudflared_exits(monkeypatch):
     process = FakeProcess()
     process.returncode = 1
-    tunnel = share_module._Tunnel(process, share_module._TunnelLogs())
+    # FakeProcess stands in for the Popen: the wait reads only poll() and the logs.
+    tunnel = share_module._Tunnel(
+        cast("subprocess.Popen[str]", process), share_module._TunnelLogs()
+    )
     tunnel.logs.add("ERR failed to connect to the edge")
     monkeypatch.setattr(
         share_module, "_direct_get", lambda *a, **k: (_ for _ in ()).throw(OSError("dns"))

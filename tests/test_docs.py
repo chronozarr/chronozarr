@@ -28,17 +28,17 @@ SITE_SOURCES = re.compile(r"^\s*'([^']+\.md)': \{ route: '([^']+)'", re.M)
 def _shell_blocks(text: str) -> list[str]:
     """The bodies of fenced code blocks tagged as shell, or untagged."""
     blocks: list[str] = []
-    body: list[str] | None = None
-    shell = False
+    body: list[str] = []
+    inside = shell = False
     for line in text.splitlines():
         fence = re.match(r"^\s*```(\S*)", line)
-        if fence and body is None:
-            body, shell = [], fence.group(1) in SHELL
+        if fence and not inside:
+            body, inside, shell = [], True, fence.group(1) in SHELL
         elif fence:
             if shell:
                 blocks.append("\n".join(body))
-            body = None
-        elif body is not None:
+            inside = False
+        elif inside:
             body.append(line)
     return blocks
 
