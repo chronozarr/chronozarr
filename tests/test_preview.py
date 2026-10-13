@@ -595,3 +595,28 @@ def test_preview_with_base_url_warns_that_the_link_is_readable(store, monkeypatc
         "anyone who can open https://x.trycloudflare.com/my%20store can read this store" in line
         for line in lines
     )
+
+
+@pytest.mark.parametrize("error", [BrokenPipeError, ConnectionResetError])
+def test_a_browser_that_hangs_up_prints_no_traceback(error, capsys):
+    server = view_module._Server(("127.0.0.1", 0), view_module.StoreRequestHandler)
+    try:
+        try:
+            raise error("the viewer cancelled a read")
+        except error:
+            server.handle_error(None, ("127.0.0.1", 50000))
+    finally:
+        server.server_close()
+    assert capsys.readouterr().err == ""
+
+
+def test_other_request_errors_are_still_printed(capsys):
+    server = view_module._Server(("127.0.0.1", 0), view_module.StoreRequestHandler)
+    try:
+        try:
+            raise ValueError("a real problem")
+        except ValueError:
+            server.handle_error(None, ("127.0.0.1", 50000))
+    finally:
+        server.server_close()
+    assert "ValueError: a real problem" in capsys.readouterr().err

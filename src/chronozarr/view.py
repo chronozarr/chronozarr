@@ -29,6 +29,7 @@ import posixpath
 import re
 import shlex
 import socket
+import sys
 import threading
 import time
 import urllib.parse
@@ -254,6 +255,13 @@ class _Server(ThreadingHTTPServer):
     # On Windows SO_REUSEADDR lets a second process bind a port that is in use, which would hide
     # a port conflict instead of reporting it.
     allow_reuse_address = os.name != "nt"
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """Stay quiet when the browser hangs up: the viewer cancels reads it no longer needs
+        while you scrub, so a closed connection is normal. Anything else is still printed."""
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
 
 
 class StoreServer:
