@@ -20,4 +20,4 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
 WORKDIR /opt/project
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
-RUN uv sync --frozen --extra ingest --extra dev
+RUN uv sync --frozen --extra ingest
