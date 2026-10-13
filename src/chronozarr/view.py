@@ -362,7 +362,7 @@ def _check_viewer_dir(viewer_dir: str | Path) -> Path:
         raise FileNotFoundError(
             f"{path} is not a viewer folder: no {_VIEWER_PAGE}. Create one with "
             "`npx --package chronozarr chronozarr-viewer <new folder>` "
-            "(see docs/viewer-distribution.md)."
+            "(see https://chronozarr.org/guides/viewer-distribution)."
         )
     return path
 
@@ -550,7 +550,8 @@ class LocalAccess:
             advice = [
                 "This is a JupyterHub server: 127.0.0.1 in your browser is not this kernel. "
                 "Serve a self-hosted viewer through jupyter-server-proxy with viewer_dir=... "
-                "(docs/viewer-distribution.md), or forward the port.",
+                "(https://chronozarr.org/guides/notebooks#jupyterhub-and-jupyter-server-proxy), "
+                "or forward the port.",
             ]
         elif kind == "ssh":
             advice = [
@@ -561,7 +562,8 @@ class LocalAccess:
         else:
             advice = [
                 "The browser must run on the machine that runs this kernel. For a remote "
-                "kernel, container or VS Code remote, see 'Remote notebooks' in docs/python.md.",
+                "kernel, container or VS Code remote, see "
+                "https://chronozarr.org/guides/notebooks#remote-notebooks.",
             ]
         if self.viewer_source == "hosted":
             advice.append(
@@ -738,7 +740,8 @@ def preview(
     if access.viewer_source == "hosted":
         echo(
             f"viewer: {access.viewer_url} (loaded from the internet; the store itself is read "
-            "from this machine). For offline use see --viewer-dir and docs/viewer-distribution.md."
+            "from this machine). For offline use see --viewer-dir and "
+            "https://chronozarr.org/guides/viewer-distribution."
         )
     elif access.viewer_source == "served":
         echo(f"viewer: {server.viewer_dir} (served locally, no internet needed)")

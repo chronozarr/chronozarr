@@ -146,7 +146,8 @@ class GcsAdapter:
             "the store needs a Cloud CDN backend bucket behind an external HTTPS load balancer, "
             "whose URL you pass as --public-url. Use storage.googleapis.com URLs: "
             "storage.cloud.google.com authenticates with cookies and does not answer CORS. "
-            "docs/hosting-providers.md (Google Cloud Storage) has the commands."
+            "https://chronozarr.org/guides/hosting-providers#google-cloud-storage has the "
+            "commands."
         )
 
     def _iterate(self, action: str, items: Any) -> Any:

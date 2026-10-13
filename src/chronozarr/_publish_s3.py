@@ -180,15 +180,16 @@ class S3Adapter:
                 "Serve the bucket through a custom domain (dashboard: R2 > bucket > Settings > "
                 "Custom Domains) or enable its public r2.dev URL, then pass that address as "
                 "--public-url. CORS on R2 can be set with a token that has bucket admin "
-                "permission: `npx wrangler r2 bucket cors set BUCKET --file deploy/r2-cors.json`. "
-                "docs/hosting-providers.md (Cloudflare R2) has the cache rules."
+                "permission: `npx wrangler r2 bucket cors set BUCKET --file r2-cors.json`. "
+                "https://chronozarr.org/guides/hosting-providers#cloudflare-r2 has that rule "
+                "and the cache rules."
             )
         return (
             "The objects are stored but browsers cannot read them from the public URL. A bucket "
             "that blocks public access serves nothing to the web: chronozarr never changes public "
             "access. Either serve the bucket through CloudFront with an origin access control "
-            "(docs/hosting-providers.md, Amazon S3 with CloudFront) and pass the distribution "
-            "URL as --public-url, or "
+            "(https://chronozarr.org/guides/hosting-providers#amazon-s3-with-cloudfront) and "
+            "pass the distribution URL as --public-url, or "
             "change the bucket's public access block and policy yourself. CORS alone does not "
             "make objects readable."
         )
@@ -230,7 +231,8 @@ class S3Adapter:
                 message += (
                     " R2 object read and write tokens cannot manage CORS; use a token with "
                     "bucket admin permission, or run `npx wrangler r2 bucket cors set BUCKET "
-                    "--file deploy/r2-cors.json`."
+                    "--file r2-cors.json` with the rule at "
+                    "https://chronozarr.org/guides/hosting-providers#cloudflare-r2."
                 )
         else:
             message = f"{action} on {where} failed with {code or 'an error'}: {exc}"
