@@ -4,6 +4,12 @@
 
 This page describes the viewer. Every store that you preview, share or publish opens in the same viewer.
 
+## Where it starts
+
+The demo opened from its plain address, `https://chronozarr.org/demo/`, starts at the latest well-covered timestep. Among the newest 24 timesteps, that is the latest in which at least half of the pixels are observed, according to the store's coverage plane, or valid, according to its mask. A store with neither plane starts at its last timestep. The public Ucayali store has neither, so it starts at its last month.
+
+Any other address starts where it says. A link with a timestep (`t`) opens at that timestep. A link with a store, a product, a zoom or a centre but no `t` opens at the first timestep, as such links always have. A store that you preview, share or publish opens at its first timestep unless its link says otherwise.
+
 ## Controls
 
 | To | Do this |

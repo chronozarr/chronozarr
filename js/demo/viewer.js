@@ -12,6 +12,7 @@ import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
 import { bindOpenStoreForm, checkUniformChunks, explainOpenError, fallsBackToCatalog } from './open-store.js';
 import { bindCopyLink } from './copy-link.js';
+import { isBareVisit, latestCoveredTime } from './start-time.js';
 import { redactText, redactUrl } from '../chronozarr/redact.js';
 import { toggleExportPanel } from './export.js';
 import { FrameMonitor, formatBytes, formatMs, formatRate, hitRate, readStats } from './perf.js';
@@ -230,8 +231,9 @@ class Viewer {
    * `coarseAfterMetadataMs`) and to the first complete frame at the target level (`firstPaintMs`).
    * @param {string} url
    * @param {{lod?:number, fetch?:typeof fetch, maxCacheBytes?:number, workers?:number, camera?:{cx:number,cy:number,scale:number},
-   *   viewSearch?:string, store?:object}} [options]  `viewSearch`: a query string whose t, p, b, z, c parameters restore the view (see permalink.js).
+   *   viewSearch?:string, store?:object, startTime?:(store:object)=>Promise<number>}} [options]  `viewSearch`: a query string whose t, p, b, z, c parameters restore the view (see permalink.js).
    *   `store`: a store the caller has opened and checked (open-store.js); it is used as is, with no second read.
+   *   `startTime`: where to start in time when `viewSearch` names no timestep (start-time.js); without it, the first timestep.
    */
   async loadStore(url, options = {}) {
     this.#playback?.pause();
@@ -255,6 +257,19 @@ class Viewer {
     if (generation !== this.#storeGeneration) {
       store.close();
       return null;
+    }
+    let startT = null;
+    if (options.startTime) {
+      try {
+        startT = await options.startTime(store);
+      } catch (error) {
+        // The start is a convenience: a failed read leaves the first timestep, and the store still opens.
+        console.warn(`start time for ${redactUrl(url)} not found, starting at the first timestep:`, redactText(error?.message ?? error));
+      }
+      if (generation !== this.#storeGeneration) {
+        store.close();
+        return null;
+      }
     }
     const openMs = performance.now() - started;
     this.#roundTripMs = openMs;
@@ -289,6 +304,7 @@ class Viewer {
       ? decodeView(options.viewSearch, { count: store.times.length, productIds: this.products.filter((p) => p.available).map((p) => p.id), bands: bandNames, transform: store.transform })
       : {};
     if (view.t !== undefined) this.t = view.t;
+    else if (startT !== null) this.t = startT;
     if (view.productId !== undefined) this.productIndex = this.products.findIndex((p) => p.id === view.productId);
     if (view.bandName !== undefined) this.bandChoice = bandNames.indexOf(view.bandName);
     if (view.range !== undefined && this.#usesLinearRange()) this.#linear = { range: view.range, manual: true };
@@ -2265,7 +2281,7 @@ async function main() {
   const select = $('catalog-select');
   const inCatalog = (url) => catalog.some((entry) => entry.url === url);
   const initialSearch = location.search;
-  const open = (url, { fallback = true, viewSearch, store } = {}) => {
+  const open = (url, { fallback = true, viewSearch, store, startTime } = {}) => {
     // A catalog store is not pinned in the URL, so an open tab follows catalog changes on reload;
     // only an external store is shareable via ?store=. The view (t, p, z, c) in the URL is restored
     // when the page first opens; opening another store starts from its default view.
@@ -2277,7 +2293,7 @@ async function main() {
     const optionFor = (value) => [...select.options].find((option) => option.value === value);
     // Labels and logs carry the address without a login or signed query (redact.js); the option's value is the URL to read.
     return (window.chronozarr.ready = viewer
-      .loadStore(url, { viewSearch, store })
+      .loadStore(url, { viewSearch, store, startTime })
       .then((result) => {
         $('copy-link').disabled = !viewer.shareUrl;
         if (!inCatalog(url) && catalog.length > 0 && !optionFor(url)) {
@@ -2292,7 +2308,7 @@ async function main() {
         optionFor(url)?.remove();
         if (fallback && catalog.length > 0 && catalog[0].url !== url) {
           console.warn(`falling back to the catalog store ${catalog[0].url}`);
-          open(catalog[0].url, { fallback: false });
+          open(catalog[0].url, { fallback: false, startTime: latestCoveredTime });
         }
       }));
   };
@@ -2313,7 +2329,7 @@ async function main() {
     select.hidden = false;
     select.addEventListener('change', () => {
       opener?.cancel();
-      open(select.value);
+      open(select.value, { startTime: latestCoveredTime });
     });
   }
 
@@ -2321,8 +2337,11 @@ async function main() {
   if (requested) {
     const url = new URL(requested, location.href).href;
     open(url, { viewSearch: initialSearch, fallback: fallsBackToCatalog(url, catalog) });
-  } else if (catalog.length > 0) open(catalog[0].url, { viewSearch: initialSearch });
-  else {
+  } else if (catalog.length > 0) {
+    // The demo opened with no store and no view in the address starts at its latest well-covered timestep; any link
+    // to a view (with a store, a timestep, a product, a zoom...) keeps meaning what it meant, t=0 when t is left out.
+    open(catalog[0].url, { viewSearch: initialSearch, startTime: isBareVisit(initialSearch) ? latestCoveredTime : undefined });
+  } else {
     $('error-title').textContent = 'No store selected';
     $('error-message').textContent = 'Open this page with ?store=<base URL of a chronozarr store>.';
     $('error-overlay').classList.add('visible');
