@@ -22,7 +22,7 @@ USER_DOCS = sorted(
     [REPO / "README.md", *(REPO / "docs").glob("*.md"), *(REPO / "examples").glob("*/README.md")]
 )
 SHELL = {"", "bash", "sh", "shell", "console"}
-SITE_SOURCES = re.compile(r"^\s*'([^']+\.md)': '([^']+)',", re.M)
+SITE_SOURCES = re.compile(r"^\s*'([^']+\.md)': \{ route: '([^']+)'", re.M)
 
 
 def _shell_blocks(text: str) -> list[str]:

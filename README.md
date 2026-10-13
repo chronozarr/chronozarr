@@ -1,77 +1,58 @@
-# From rasters to an interactive map you can share
+# chronozarr
 
 [![CI](https://github.com/chronozarr/chronozarr/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chronozarr/chronozarr/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/chronozarr)](https://pypi.org/project/chronozarr/)
 [![npm](https://img.shields.io/npm/v/chronozarr)](https://www.npmjs.com/package/chronozarr)
 
-chronozarr turns dated GeoTIFFs into a time-series viewer. Explore it on your computer, send a temporary link from your laptop, or publish it to cloud storage. Anyone with the link plays or scrubs through the series in a web browser like a video. A click on a pixel shows its values over time. The same files open in Python with the exact values you wrote.
+chronozarr turns a georeferenced raster time series into an interactive dataset that anyone can open with a link. In a web browser, the series plays or scrubs like a video. You zoom and pan the map, and a click on a pixel shows its values over time. In Python, the same files return the exact numbers you stored. No tile server runs anywhere.
 
-[Live demo](https://chronozarr.org/demo/): 117 monthly Sentinel-2 composites (2015 to 2026) of the Ucayali River in Peru, read directly from a bucket.
+[Live demo](https://chronozarr.org/demo/): 117 monthly Sentinel-2 composites of the Ucayali River in Peru, read directly from a storage bucket. Documentation: [chronozarr.org](https://chronozarr.org).
 
 ## Quickstart
 
-Four commands take a folder of dated GeoTIFFs to a link.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then the `chronozarr` command:
 
-1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then add chronozarr with GeoTIFF support to a project. chronozarr supports Python 3.11 and later.
+```bash
+uv tool install --python 3.13 'chronozarr[geo]==0.4.0'
+```
 
-   ```bash
-   uv init --python 3.13
-   uv add 'chronozarr[geo]==0.4.0'
-   ```
+Use a folder with one GeoTIFF per date, with the date in each file name, such as `ndvi_2024-01.tif`. All files share one grid. To try it without your own files, export twelve months of the public demo as GeoTIFFs:
 
-   For the command-line tool alone, use `uv tool install 'chronozarr[geo]'` and drop the `uv run` prefix below. With pip, run `python -m pip install 'chronozarr[geo]==0.4.0'` and also drop the prefix.
+```bash
+chronozarr export-cog https://data.chronozarr.org/ucayali_santa_maria_v03 sample --level 2 --times 2024-01..2024-12
+```
 
-2. Convert your rasters. Use one GeoTIFF per timestep, with one date in each file name: `20240131`, `2024-01-31` or `2024-01`. The files must share a north-up grid, band names, dtype, scale, offset, units and nodata.
+Then convert the folder, look at it, and share it:
 
-   ```text
-   rasters/
-     ndvi_2024-01.tif
-     ndvi_2024-02.tif
-     ndvi_2024-03.tif
-   ```
+```bash
+chronozarr convert sample my_store --dry-run
+chronozarr convert sample my_store
+chronozarr preview my_store
+chronozarr share my_store
+```
 
-   ```bash
-   uv run chronozarr convert "rasters/*.tif" my_store
-   ```
+The dry run checks every file and writes nothing. `convert` writes the store. `preview` opens it in your browser. `share` prints a temporary link that a colleague opens in a browser; it needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) and works only while the command runs.
 
-3. Explore on your computer. Press Ctrl-C to stop the preview before the next command.
+The [full quickstart](https://chronozarr.org/quickstart) has a sample dataset, the expected output of each command and the pip route.
 
-   ```bash
-   uv run chronozarr preview my_store
-   ```
+## Share a store
 
-4. Share a link.
+| Link | Command | Lasts | Needs |
+|---|---|---|---|
+| Temporary | `chronozarr share my_store` | While the command runs | `cloudflared`, your computer on and online |
+| Permanent | `chronozarr publish my_store --destination s3://BUCKET/PREFIX` | As long as you keep the files | Cloud storage that you control: S3, R2, Google Cloud Storage or Azure |
 
-   ```bash
-   uv run chronozarr share my_store
-   ```
+The recipient needs only a web browser. chronozarr.org serves the viewer page and stores no data. See [Share a temporary link](https://chronozarr.org/guides/share) and [Publish a permanent link](https://chronozarr.org/guides/publish).
 
-`share` needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/). It needs no bucket and no Cloudflare account. Keep the terminal open while others use the link. Anyone with the link can read the store while it runs.
+## Read the values
 
-To check the files first, add `--dry-run` to the `convert` command. It reports every problem per file and writes nothing. See [Convert your data](docs/convert.md).
+```python
+import xarray as xr
 
-## Choose how to share
+ds = xr.open_dataset("my_store", engine="chronozarr")
+```
 
-| I want to | Use |
-|-----------|-----|
-| Look at a store on my computer | `chronozarr preview`. See [Preview a store](docs/preview.md) |
-| Send someone a temporary link | `chronozarr share`. See [Share a local store instantly](docs/share.md) |
-| Make a link that lasts | `chronozarr publish`. See [Publish a store](docs/publish.md#chronozarr-publish) |
-| Show a store in my own web page | [Embed the viewer](docs/embedding.md) |
-| Keep the data private | [Private stores](docs/private.md) |
-| Work in Jupyter or VS Code | [Explore a store in a notebook](docs/notebooks.md) |
-
-## What you can do with a store
-
-| Task | How |
-|------|-----|
-| Convert a folder, glob or S3 prefix of dated GeoTIFFs | `chronozarr convert`, with date discovery and a dry run. See [Convert your data](docs/convert.md) |
-| Check a store, or a host | `chronozarr validate` and `chronozarr doctor` |
-| Add new timesteps | `chronozarr append`, then `chronozarr publish --update`. See [Append timesteps](docs/append.md) |
-| Inspect a pixel, switch to NDVI, NDWI or true color | The viewer computes products from the stored bands. See [Band roles](docs/python.md#band-roles-and-the-first-view) |
-| Send the exact view | `Copy link` in the viewer, or `chronozarr link`. The link holds time, product, zoom and centre |
-| Analyze in Python | `xr.open_dataset("my_store", engine="chronozarr")`. See [Python API](docs/python.md) |
-| Open in GDAL or QGIS | `chronozarr export-cog`. See [How it works](docs/how-it-works.md#read-a-store-without-chronozarr) |
+A store is a Zarr v3 group, so xarray, zarr-python and GDAL 3.13 also read it without chronozarr. See [Analyze a store in Python](https://chronozarr.org/guides/analyze).
 
 ## JavaScript
 
@@ -79,40 +60,28 @@ To check the files first, add `--dry-run` to the `convert` command. It reports e
 npm install chronozarr@0.4.0
 ```
 
-The package has four parts:
+The npm package has a DOM-free reader, a MapLibre layer, a GeoLibre plugin and the full viewer for self-hosting. See the [JavaScript reader](https://chronozarr.org/reference/javascript).
 
-- `chronozarr` is a DOM-free reader. It returns one cell of one timestep as a typed array.
-- `chronozarr/maplibre` is a MapLibre custom layer that draws a store.
-- `chronozarr/geolibre` is a GeoLibre plugin that adds a store as a MapLibre layer.
-- `chronozarr-viewer` copies the full viewer into a folder that you can host next to your store. See [docs/viewer-distribution.md](docs/viewer-distribution.md).
+## Versions
 
-There is no build step and no runtime dependency. Examples are in [js/README.md](js/README.md).
+The Python and npm packages are 0.4.0. The store format specification is v0.3.0, a draft. A package upgrade does not change existing v0.3 stores. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`.
 
 ## Documentation
 
-| Topic | Document |
-|-------|----------|
-| How a store is laid out, and the first store from Python | [How it works](docs/how-it-works.md) |
-| Every command | [Command line](docs/cli.md) |
-| Python functions | [docs/python.md](docs/python.md) |
-| Your own data, end to end | [examples/bring_your_data](examples/bring_your_data/README.md) |
-| Georeferenced PNG frames | [docs/png-frames.md](docs/png-frames.md) |
-| Hosting and the doctor checklist | [docs/hosting.md](docs/hosting.md) |
-| Embedding the viewer in a page | [docs/embedding.md](docs/embedding.md) |
-| Drawing a store on a MapLibre map | [js/maplibre/README.md](js/maplibre/README.md) |
-| More examples: Sentinel-2 ingest, water masks, notebooks, SWOT, NISAR | [examples](examples/) |
-| Format rules | [spec/CHRONOZARR.md](spec/CHRONOZARR.md) |
-| Comparison with PMTiles, Mapbox raster-array and zarr-layer | [docs/format-comparison.md](docs/format-comparison.md) |
-| Measurements and tested reader versions | [docs/evidence.md](docs/evidence.md) |
+| Topic | Page |
+|---|---|
+| What chronozarr is, and how it compares | [What is chronozarr?](https://chronozarr.org/what-is-chronozarr) |
+| Every input type | [Convert your data](https://chronozarr.org/guides/convert) |
+| Sentinel-2 for your own area and dates | [Sentinel-2 for your area](https://chronozarr.org/guides/sentinel-2) |
+| SWOT, NISAR and model output | [Examples](https://chronozarr.org/guides/examples) |
+| Every command | [Command line](https://chronozarr.org/reference/cli) |
+| Python functions | [Python API](https://chronozarr.org/reference/python) |
+| Format rules | [Specification](https://chronozarr.org/specification) |
+| Measured speed, memory and correctness | [Performance and evidence](https://chronozarr.org/performance) |
+| Problems and fixes | [Troubleshooting](https://chronozarr.org/troubleshooting) |
 
-## Status
-
-The released Python and npm packages are 0.4.0. The spec remains v0.3.0, a draft: package upgrades do not change existing v0.3 stores, and readers open v0.3 stores. To use a v0.2 store, convert it:
-
-```bash
-chronozarr convert OLD_STORE NEW_STORE
-```
+The pages are written in [`docs/`](https://github.com/chronozarr/chronozarr/tree/main/docs) and published to chronozarr.org. To contribute, see [CONTRIBUTING.md](https://github.com/chronozarr/chronozarr/blob/main/CONTRIBUTING.md).
 
 ## License
 
-See [LICENSE](LICENSE).
+See [LICENSE](https://github.com/chronozarr/chronozarr/blob/main/LICENSE).

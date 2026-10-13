@@ -96,7 +96,7 @@ Some warm stepping and jumping samples are incomplete. Their medians do not esta
 
 ## Viewer measurements
 
-The tables in this section were measured on earlier format versions. They are kept as dated measurements.
+Most tables in this section were measured on earlier format versions. They are kept as dated measurements, and each gives its date.
 
 ### Cold open and warm switch
 
@@ -110,6 +110,17 @@ Viewer on the v0.1 Sahara store (128 months, 4 bands, 6 x 6 cells at LOD 0, 3.9 
 | Warm switch wire bytes and requests | 0 / 0 | 0 / 0 |
 | Product switch | about 1 ms | under 1 ms |
 | Decode per 2 MB chunk | 4.6 ms | 10 ms under load (4.5 ms idle) |
+
+### Cold open of the live store (2026-10-12)
+
+The deployed viewer at chronozarr.org/demo/ opened the public store `ucayali_santa_maria_v03` (v0.3, unsharded, 117 timesteps) ten times with the CDN cache as it was, and ten times with a cold CDN cache. The cold series adds a unique `?cb=` query to the store address, so every object is a miss. Headless Playwright Chromium, Metal, 1440 x 900 at device pixel ratio 2, a new browser for every run, the HTTP cache disabled. Apple M3 Max laptop, home connection. Script: `bench/live/measure.mjs` (`npm run live:open` in `bench/`).
+
+| CDN cache | Root metadata read | First whole frame, after the metadata | First whole frame, from the start of the open | Frame at the requested level |
+|---|---:|---:|---:|---:|
+| As found (mostly HIT) | 113 ms | 343 ms (218 to 508) | 477 ms (319 to 726) | 744 ms (539 to 1046) |
+| Cold (every object a MISS) | 223 ms | 404 ms (370 to 506) | 656 ms (548 to 758) | 981 ms (788 to 1109) |
+
+Medians, with the range in brackets. Each open read 11 requests and 11.0 MB: the metadata and nine level-1 chunks. The laptop ran on battery, which capped animation frames at 30 Hz, so each paint can be up to 33 ms late. The load average was 8 to 10 on 16 cores. Page, script and codec-module load are not included.
 
 ### Scrub latency
 
@@ -409,6 +420,12 @@ Publishing times through the R2 S3 API with `scripts/r2_sync.py`:
 Publishing through wrangler starts in about 2 seconds per object. At 4 parallel uploads, the 5,893-object store takes about 50 minutes. The 17,088-object water store takes 2.4 hours. A sharded store of around 100 objects takes a minute or two.
 
 ## Hosting observations
+
+### Which recipes were run
+
+As of 2026-10-12. Cloudflare R2 with a custom domain hosts the public demo, and Source Cooperative was tried as below. The Amazon S3 (public bucket and CloudFront), Google Cloud Storage and Azure recipes follow the providers' documentation and the messages of the `publish` adapters. They have not been run against live accounts.
+
+`chronozarr publish` 0.4.0 was run against a local S3 emulator (moto behind a TLS proxy that applies S3's CORS rules) on 2026-10-12: upload in four phases, resume after a failure, `--apply-cors`, `--update` after an append, the doctor checks and the viewer link. When the proxy answered `403` for an object that does not exist, as S3 does for a reader without `s3:ListBucket`, `doctor` failed the store at the validate step and no link was printed. This is why the S3 recipes grant `s3:ListBucket`.
 
 ### Doctor
 

@@ -1,9 +1,6 @@
-// Pages removed when the docs became single-source. Each old path goes to the page that now holds its content.
-const moved = {
-  '/publishing': '/guides/publish',
-  '/integrate': '/getting-started#documentation',
-  '/examples': '/getting-started#documentation',
-};
+// Paths of pages that moved or were removed. Each old path goes to the page that now holds its content.
+// Old section anchors are mapped in the browser (legacy-anchors.json), because a fragment never reaches the server.
+import moved from './redirects.json';
 
 export default {
   async fetch(request, env) {

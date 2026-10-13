@@ -6,21 +6,7 @@ The requirements come from [spec/CHRONOZARR.md](../spec/CHRONOZARR.md) section 8
 
 ## Checklist
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and the
-standalone CLI with `uv tool install chronozarr` to use the commands in these
-pages. For a one-off command, prefix it with
-`uvx --from chronozarr chronozarr`; for example,
-`uvx --from chronozarr chronozarr doctor <store-url>`. If you need the command
-inside a project, add `chronozarr` with `uv add chronozarr` and run it with
-`uv run chronozarr ...`. With pip, install
-into your active environment with `pip install chronozarr`, then run the
-`chronozarr` command directly.
-
-For `publish`, the standalone tool and one-off forms must include the provider
-extra, such as `uv tool install 'chronozarr[publish-azure]'` or
-`uvx --from 'chronozarr[publish-azure]' chronozarr publish ...`. In a project,
-use `uv add 'chronozarr[publish-azure]'` and run commands with
-`uv run chronozarr ...`.
+Install chronozarr as in the [Quickstart](quickstart.md#1-install). For `publish`, add the extra for your provider ([Publish a permanent link](publish.md#publish)).
 
 `chronozarr doctor <store-url>` runs the HTTP checks and the decode checks against a live URL. Against a local directory, it runs only the decode checks. It sends `Origin: https://chronozarr.org`. The `--origin` option changes that header.
 
@@ -65,8 +51,8 @@ Doctor does not check the requirements below. Verify them with `curl` ([Verifyin
 | An absent key returns `404` | MUST | A missing shard, `mask` or `coverage` array is meaningful. Readers decode a missing shard as fill. A host that answers 200 with HTML breaks that. |
 | Chunk and shard responses carry no `Content-Encoding` | MUST | The shard index stores byte offsets into the stored object. A CDN that gzips or re-encodes the body moves the bytes. |
 | Shards fit the cacheable object size of the host or CDN (sharded stores) | SHOULD | Choose `shard_time` at encode time ([Shard size](#shard-size)). An unsharded store has one chunk per object. The largest object of the live store is 1.8 MB. |
-| Metadata is uploaded last | SHOULD | See [Immutable prefixes and upload order](publish.md#immutable-prefixes-and-upload-order). |
-| The prefix is never rewritten | MUST | See [Immutable prefixes and upload order](publish.md#immutable-prefixes-and-upload-order). |
+| Metadata is uploaded last | SHOULD | See [Immutable prefixes and upload order](#immutable-prefixes-and-upload-order). |
+| The prefix is never rewritten | MUST | See [Immutable prefixes and upload order](#immutable-prefixes-and-upload-order). |
 
 Preflight and range notes:
 
@@ -108,6 +94,28 @@ Expect these answers:
 - `404` for the missing key.
 
 Then run `chronozarr doctor "$URL"`.
+
+## Immutable prefixes and upload order
+
+### Immutable prefixes
+
+Never edit a store in place. Write every encode under a new prefix. Then switch the catalog or URL to the new prefix. Delete the old prefix afterwards.
+
+This rule makes `Cache-Control: public, max-age=31536000, immutable` safe. Browsers and CDNs hold any object for a year. No object at that URL ever changes.
+
+### Metadata last
+
+The root `zarr.json` marks that a store exists. Upload in three phases:
+
+1. Upload the chunk and shard objects (everything except `zarr.json`), in parallel.
+2. Upload the group and array `zarr.json` files below the root.
+3. Upload the root `zarr.json`.
+
+A reader that finds the root then finds a complete store.
+
+`chronozarr publish` splits phase 1 in two. It uploads the `time/c/0` and `volatility` chunks after the other chunks, because an append rewrites only those.
+
+Do not request the final URL before phase 3 ends. A CDN caches a `404` for seconds to minutes. A cached `404` on the root `zarr.json` makes a finished store look absent.
 
 ## Pitfalls
 

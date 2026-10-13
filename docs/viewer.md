@@ -1,0 +1,66 @@
+# Explore the live demo
+
+[Open the live demo](https://chronozarr.org/demo/). It loads 117 monthly Sentinel-2 composites of the Ucayali River in Peru, November 2015 to February 2026. The store is in a public storage bucket. The viewer reads it directly, with no server in between.
+
+This page describes the viewer. Every store that you preview, share or publish opens in the same viewer.
+
+## Controls
+
+| To | Do this |
+|---|---|
+| Play or pause | Click the play button, or press Space |
+| Step one timestep | Press the Left or Right arrow key, or click the arrows beside the date |
+| Jump to a date | Click or drag on the timeline |
+| Go to the first or last timestep | Focus the timeline, then press Home or End |
+| Change the playback speed | Drag the speed slider |
+| Zoom | Scroll, or pinch on a touch screen |
+| Pan | Drag the map |
+| See a pixel's values over time | Click the map. The inspector shows the values and a chart. Press Escape to close it |
+| Change the product | Choose it in the product list, or press 1 to 9 |
+| Change the display range of one band | Choose Single band, then set the minimum and maximum. Auto fits the range to the pixels on the screen |
+| Show where no scene was observed | Click Gaps. It hatches the pixels whose value was carried over from an earlier month. It needs a store with a coverage plane |
+| Copy a link to this view | Click Copy link |
+| Open another store | Paste its URL in the store field and click Open |
+| Save the loop as a video | Click Export, then choose WebM or GIF |
+| Show load and decode statistics | Press D |
+
+## Products
+
+The viewer computes each product on your graphics card from the stored bands. A product appears in the list when the store has the bands it needs.
+
+| Product | Bands it needs |
+|---|---|
+| True color | red, green, blue |
+| False color | near infrared, red, green |
+| NDVI | near infrared, red |
+| NDWI | green, near infrared |
+| Water | green, near infrared |
+| Single band | any one band |
+
+The store names these roles in its band metadata. `chronozarr bands STORE` lists them and sets them. See [Band roles and the first view](python.md#band-roles-and-the-first-view).
+
+## Links to a view
+
+Copy link copies the address of the current view. It holds the store, the timestep, the product, the band and its display range, the zoom and the map centre. It does not hold the playback speed or the loop setting.
+
+The address uses these parameters:
+
+| Parameter | Meaning | Example |
+|---|---|---|
+| `store` | URL of the store | `https://data.example.org/my_store` |
+| `t` | Timestep index, from 0 | `t=71` |
+| `p` | Product | `p=ndvi` |
+| `b` | Band, for Single band | `b=B08` |
+| `r` | Display range low,high in physical units, for Single band | `r=0,0.4` |
+| `z` | Zoom, in screen pixels per stored pixel | `z=2.5` |
+| `c` | Map centre x,y in the store's coordinate system | `c=684500,9123350` |
+
+`chronozarr link STORE_URL` prints the same kind of link from the command line and checks it against the store. To show the viewer inside your own page, see [Embed the viewer](embedding.md).
+
+## What the browser downloads
+
+The map is divided into cells of 512 by 512 pixels. For each view, the browser downloads the cells on the screen, at the current timestep, at the level of detail that matches the zoom. It also downloads the timesteps around the current one in the background. Stepping through time then usually needs no new download. A link to a store gives read access to the whole store, but the browser fetches only what the view needs.
+
+## Browser support
+
+The viewer needs WebGL2. Current versions of Chrome, Edge, Firefox and Safari have it. A store that you preview from your own computer is served from `http://127.0.0.1`. Safari can block that address from the https viewer page. Use Chrome or Firefox for a local preview, or see [Troubleshooting](troubleshooting.md).

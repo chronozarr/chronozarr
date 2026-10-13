@@ -127,7 +127,7 @@ Use the default unsharded layout for stores that grow.
 - Choose a finite `--shard-time` (12 for monthly data) only when object count matters more than the rewrite cost.
 - Choose the whole-axis `--shard-time` for archives that you do not append to.
 
-Costs and measurements: [evidence.md](evidence.md#appending) and [append.md](append.md).
+Costs and measurements: [measurement log](evidence.md#appending).
 
 ### Procedure
 
@@ -183,7 +183,7 @@ What `--update` writes, in order:
 | 3 | Level and array `zarr.json` | `public, max-age=300` |
 | 4 | Root `zarr.json` | `public, max-age=300` |
 
-The command refuses a prefix that is not an earlier state of the local store, and a sharded append that rewrites a trailing shard. It deletes nothing. The update is not atomic. [append.md](#publishing) lists what a reader sees between two puts, how a cache that holds the old root behaves and how to resume.
+The command refuses a prefix that is not an earlier state of the local store, and a sharded append that rewrites a trailing shard. It deletes nothing. The update is not atomic. [Publishing](#publishing) lists what a reader sees between two puts, how a cache that holds the old root behaves and how to resume.
 
 After the upload the command runs `chronozarr doctor` against the public URL and then reads the public root `zarr.json` with `Cache-Control: no-cache`. It prints the link only when the root lists the new number of timesteps. A CDN can still serve the old root for up to 300 seconds. The command then exits with status 1 and no link. The objects are stored, and the same command run later only checks.
 
@@ -209,7 +209,7 @@ Only these objects change in place. They need a short lifetime.
 | every other shard | no append rewrites it | `public, max-age=31536000, immutable` |
 | every chunk of an unsharded store | new timesteps are new keys | `public, max-age=31536000, immutable` |
 
-`chronozarr publish --update` does not rewrite the trailing-shard row. It refuses a sharded append that changes one (see [append.md](#publishing)).
+`chronozarr publish --update` does not rewrite the trailing-shard row. It refuses a sharded append that changes one (see [Publishing](#publishing)).
 
 The trailing shard of a cell is the shard that holds its last timestep. When the next shard opens, the old shard becomes immutable. It keeps `max-age=300`, because `--newer-than` does not touch it. To fix that, upload those shards once without `--newer-than`. A run without `--newer-than` sets the header of every object from the current state of the whole store.
 

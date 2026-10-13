@@ -1,6 +1,6 @@
 # Python API
 
-The `chronozarr` package writes a store, reads it and opens it in xarray. The [getting started page](../README.md) has a first run. This page lists the functions. The docstring of `chronozarr.encode` lists every option of `encode`.
+The `chronozarr` package writes a store, reads it and opens it in xarray. The [quickstart](quickstart.md) has a first run, and [Analyze a store in Python](analyze.md) has common tasks. This page lists the functions. The docstring of `chronozarr.encode` lists every option of `encode`.
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first. For a project that imports the library, add it to that project's environment with
 `uv add chronozarr` (or `uv add 'chronozarr[geo]'` for GeoTIFF and export

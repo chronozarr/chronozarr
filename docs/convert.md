@@ -1,13 +1,27 @@
 # Convert your data
 
-`convert` is the command for rasters on disk or in S3. Point it at a directory, a quoted glob or an `s3://` prefix of GeoTIFFs. Each file name holds one date: `20240131`, `2024-01-31` or `2024-01`.
+`chronozarr convert SOURCE OUT` writes a store from rasters that you already have. It reads one timestep at a time and encodes one 512 by 512 cell at a time, so it never holds the whole series in memory.
+
+| Your data | Section |
+|---|---|
+| A folder, a glob or an `s3://` prefix of GeoTIFFs with a date in each name | [From dated GeoTIFFs](#from-dated-geotiffs) |
+| COGs at URLs, with dates in a table | [From a manifest of URLs](#from-a-manifest-of-urls) |
+| A NetCDF file or a Zarr store with a time axis | [From NetCDF or Zarr](#from-netcdf-or-zarr) |
+| An xarray `DataArray` in Python | [From xarray](#from-xarray) |
+| Rendered PNG frames | [PNG frames](png-frames.md) |
+
+Every route checks all inputs before it writes anything. Nothing is resampled or rescaled unless you ask.
+
+## From dated GeoTIFFs
+
+Point `convert` at a directory, a quoted glob or an `s3://` prefix. Each file name holds one date: `20240131`, `2024-01-31` or `2024-01`.
 
 ```bash
-chronozarr convert "scenes/*.tif" my_store --dry-run   # list files and dates, check every file, write nothing
+chronozarr convert "scenes/*.tif" my_store --dry-run   # check every file, write nothing
 chronozarr convert "scenes/*.tif" my_store
 ```
 
-The dry run runs the same discovery and preflight checks as conversion, then prints each file with its date and the planned grid, bands, validity and size. It writes no store. A directory or `s3://` prefix is not searched recursively; use a glob such as `scenes/**/*.tif` for subdirectories. Listing an S3 prefix needs the `s3` extra (`uv add 'chronozarr[geo,s3]==0.4.0'`) and uses your AWS credentials.
+The dry run runs the same discovery and checks as conversion. It prints each file with its date, the grid, the bands, the scaling, the validity rule and the expected size. A directory or `s3://` prefix is not searched recursively; use a glob such as `"scenes/**/*.tif"` for subdirectories. Listing an S3 prefix needs the `s3` extra (`uv tool install --python 3.13 'chronozarr[geo,s3]==0.4.0'`) and uses your AWS credentials.
 
 A date is read from a name only when the name holds exactly one. A name with no date, with several (`20240215_2024-03`), or two files with the same date are reported, never guessed. `--date-pattern` says where the date is, for example `--date-pattern "ndvi_%Y%m%d"`. `--write-manifest found.csv` saves discovered files and dates as a manifest that `convert` reads back; it is the one output allowed with `--dry-run`.
 
@@ -25,11 +39,60 @@ scenes/readme_copy.tif
     fix: name the date YYYYMMDD, YYYY-MM-DD or YYYY-MM, or pass --date-pattern ...
 ```
 
-Nothing is resampled or rescaled unless you ask. Files on another grid fail with a suggestion to pass `--resampling`.
+Files on another grid fail with a suggestion to pass `--resampling`, which warps them to the grid of the first file.
 
-The store takes each band's description (its name), scale, offset and units from the files, so a Sentinel-2 file with a scale of 0.0001 gives reflectance. These must be identical in every file. It also takes the nodata value that the files declare; files that declare none give a store with no nodata, so a stored 0 is data. `chronozarr convert --help` lists the manifest, Zarr and NetCDF sources and the validity rules.
+The store takes each band's description (its name), scale, offset and units from the files, so a Sentinel-2 file with a scale of 0.0001 gives reflectance. These must be identical in every file. A file whose bands have no description gives bands named `1`, `2` and so on. To name them, write the files and dates to a manifest with `--write-manifest found.csv`, add a `bands` column such as `ndvi`, and convert the manifest. The store also takes the nodata value that the files declare. Files that declare none give a store with no nodata, so a stored 0 is data. `--nodata 0` sets one.
 
-`chronozarr encode "scenes/*.tif" my_store` is the in-memory route for GeoTIFFs on one grid. It reads uint8, uint16, int16 and float32 files by the same rules, holds the whole stack in memory and never resamples. It points you to `convert` for directories, S3 prefixes and manifests.
+## From a manifest of URLs
+
+A manifest lists the files and their dates. Use it when the dates are not in the file names, or when the files are at URLs.
+
+```text
+uri,datetime
+https://example.org/cogs/scene_a.tif,2024-01-15
+https://example.org/cogs/scene_b.tif,2024-02-14
+s3://my-bucket/cogs/scene_c.tif,2024-03-16T10:30:00Z
+```
+
+```bash
+chronozarr convert manifest.csv my_store
+```
+
+A CSV manifest has the columns `uri` and `datetime`, and an optional `bands` column with names separated by `;`. A JSON manifest is a list of `{"uri": ..., "datetime": ...}` objects. Relative paths are relative to the manifest. The target grid is the grid of the first file, unless you give `--crs`, `--transform` and `--shape`. Files on another grid need `--resampling`.
+
+## From NetCDF or Zarr
+
+```bash
+chronozarr convert model.nc my_store --variable tas
+chronozarr convert data.zarr my_store --variable ndvi --crs EPSG:32618
+```
+
+`--variable` names the array to convert. Its dimensions must be time, y and x, with an optional band dimension. `--dims time=NAME,y=NAME,x=NAME[,band=NAME]` names them when they are not `time`, `y`, `x` or common aliases such as `lat` and `lon`. `--crs` gives the coordinate system when the file does not declare it. The CF `scale_factor`, `add_offset` and `units` of the variable apply to every band. `--mask-var` names a variable whose nonzero values mark valid pixels.
+
+For an array that fits in memory, `chronozarr encode FILE my_store --variable NAME` is the shorter route.
+
+## From xarray
+
+In a script or notebook, write a `DataArray` with dimensions `(time, band, y, x)`:
+
+```python
+import chronozarr
+
+chronozarr.encode(da, "my_store", crs="EPSG:32618")
+```
+
+The `x` and `y` coordinates are the projected pixel centres. See [How it works](how-it-works.md#write-a-store-from-python) for a complete script, and the [Python API](python.md#write-a-store) for the options.
+
+## Band roles
+
+The viewer offers True color, False color, NDVI, NDWI and Water when it knows which band is red, green, blue and near infrared. It recognizes the names `red`, `green`, `blue` and `nir`, and the Sentinel-2 names `B02`, `B03`, `B04` and `B08`. For other names, set the roles:
+
+```bash
+chronozarr bands my_store                              # list bands, roles and products
+chronozarr bands my_store --band-role b4=red,b8=nir    # set roles
+```
+
+`convert` and `encode` take `--band-role` too. A store without roles still opens, with the Single band product. See [Band roles and the first view](python.md#band-roles-and-the-first-view).
 
 ## Check the store
 
@@ -38,24 +101,11 @@ chronozarr validate my_store
 chronozarr info my_store
 ```
 
-`validate` checks the store against the [spec](../spec/CHRONOZARR.md). `info` prints the times, bands and levels.
-
-## Read the values
-
-Read the values in Python.
-
-```python
-import chronozarr
-
-store = chronozarr.open_store("my_store")
-store.read(t=42)              # (band, y, x), exact stored values
-da = store.to_xarray(lod=0)   # xarray DataArray, loaded into memory
-```
-
-The input must be on an EPSG grid with north up. To write a store from an xarray `DataArray`, see [How it works](how-it-works.md#write-a-store-from-python).
+`validate` checks the store against the [specification](../spec/CHRONOZARR.md). `info` prints the times, bands and levels.
 
 ## Next
 
 - [Preview a store](preview.md) on your computer.
-- [Share a local store instantly](share.md).
-- [Publish to cloud storage](publish.md#chronozarr-publish).
+- [Share a temporary link](share.md).
+- [Publish a permanent link](publish.md).
+- [Analyze a store in Python](analyze.md).

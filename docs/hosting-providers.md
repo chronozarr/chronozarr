@@ -1,6 +1,8 @@
 # Hosting recipes
 
-Each recipe sets up one host for a chronozarr store: bucket, CORS, caching and the `put` function for the [upload script](publish.md#the-upload-script). `chronozarr publish` runs the upload for S3, R2, GCS and Azure, see [publish.md](publish.md#chronozarr-publish).
+Each recipe sets up one host for a chronozarr store: the bucket, public read access, CORS and caching. `chronozarr publish` then uploads the store to S3, R2, Google Cloud Storage or Azure ([Publish a permanent link](publish.md)). For another host, each recipe also gives the `put` function for the [upload script](#the-upload-script).
+
+The recipes have not all been run against live accounts. [Hosting observations](evidence.md#hosting-observations) records which ones were.
 
 ## Amazon S3 with CloudFront
 
@@ -25,7 +27,7 @@ Keep the bucket private. CloudFront reads it through an origin access control (O
    - Cache policy: `CachingOptimized`. The cache key has no headers and no query strings.
    - Response headers policy: the custom policy from step 4.
 
-3. Attach this bucket policy. It allows only that distribution. Fill in the account id and the distribution id.
+3. Attach this bucket policy. It allows only that distribution. Fill in the account id and the distribution id. The second statement lets S3 answer `404` for a file that does not exist. Without it, S3 answers `403`, and `chronozarr doctor` fails the store.
 
    ```json
    {
@@ -36,6 +38,13 @@ Keep the bucket private. CloudFront reads it through an origin access control (O
        "Principal": { "Service": "cloudfront.amazonaws.com" },
        "Action": "s3:GetObject",
        "Resource": "arn:aws:s3:::my-chronozarr-stores/*",
+       "Condition": { "StringEquals": { "AWS:SourceArn": "arn:aws:cloudfront::<account-id>:distribution/<distribution-id>" } }
+     }, {
+       "Sid": "AllowCloudFrontNotFound",
+       "Effect": "Allow",
+       "Principal": { "Service": "cloudfront.amazonaws.com" },
+       "Action": "s3:ListBucket",
+       "Resource": "arn:aws:s3:::my-chronozarr-stores",
        "Condition": { "StringEquals": { "AWS:SourceArn": "arn:aws:cloudfront::<account-id>:distribution/<distribution-id>" } }
      }]
    }
@@ -62,7 +71,7 @@ Keep the bucket private. CloudFront reads it through an origin access control (O
    }
    ```
 
-5. Upload with the [upload script](publish.md#the-upload-script). Define `put` as:
+5. Publish with `chronozarr publish my_store --destination s3://$BUCKET/PREFIX --public-url https://<distribution-domain>/PREFIX`. Or upload with the [upload script](#the-upload-script), and define `put` as:
 
    ```bash
    put() { aws s3 cp "$1" "s3://$BUCKET/$PREFIX/${1#./}" --cache-control "$CC" --only-show-errors; }
@@ -93,6 +102,49 @@ S3 CORS configuration for a public bucket:
 
 Apply it with `aws s3api put-bucket-cors --bucket "$BUCKET" --cors-configuration file://s3-cors.json`.
 
+## Amazon S3, public bucket
+
+A public bucket is the shortest route on AWS. Anyone can read every object in it, so keep it for public stores. S3 gives no custom domain and no `Timing-Allow-Origin`; use [CloudFront](#amazon-s3-with-cloudfront) for those.
+
+1. Create the bucket, and allow a public bucket policy on it.
+
+   ```bash
+   BUCKET=my-chronozarr-stores
+   REGION=us-east-1
+   aws s3api create-bucket --bucket "$BUCKET" --region "$REGION"   # outside us-east-1 add --create-bucket-configuration LocationConstraint="$REGION"
+   aws s3api put-public-access-block --bucket "$BUCKET" --public-access-block-configuration \
+     BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false
+   ```
+
+2. Attach this bucket policy with `aws s3api put-bucket-policy --bucket "$BUCKET" --policy file://public-read.json`. The first statement lets anyone read the objects. The second lets S3 answer `404` for a file that does not exist; without it, S3 answers `403` and `chronozarr doctor` fails the store. It also lets anyone list the names of the objects.
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [{
+       "Sid": "PublicRead",
+       "Effect": "Allow",
+       "Principal": "*",
+       "Action": "s3:GetObject",
+       "Resource": "arn:aws:s3:::my-chronozarr-stores/*"
+     }, {
+       "Sid": "PublicNotFound",
+       "Effect": "Allow",
+       "Principal": "*",
+       "Action": "s3:ListBucket",
+       "Resource": "arn:aws:s3:::my-chronozarr-stores"
+     }]
+   }
+   ```
+
+3. Publish. `--apply-cors` adds the CORS rule that the viewer needs.
+
+   ```bash
+   chronozarr publish my_store --destination "s3://$BUCKET/my_store-v1" --apply-cors
+   ```
+
+The store URL is `https://BUCKET.s3.REGION.amazonaws.com/my_store-v1`. `publish` derives it, checks it and prints the viewer link.
+
 ## Cloudflare R2
 
 `data.chronozarr.org` is served this way. See `deploy/README.md`.
@@ -122,7 +174,7 @@ Apply it with `aws s3api put-bucket-cors --bucket "$BUCKET" --cors-configuration
    }
    ```
 
-2. Upload with the [upload script](publish.md#the-upload-script). Define `put` as:
+2. Upload with the [upload script](#the-upload-script). Define `put` as:
 
    ```bash
    put() { npx --no-install wrangler r2 object put "$BUCKET/$PREFIX/${1#./}" --file "$1" --cache-control "$CC" --remote > /dev/null; }
@@ -189,7 +241,7 @@ The public development URL (`wrangler r2 bucket dev-url enable`) is rate limited
    }]
    ```
 
-2. Upload with the [upload script](publish.md#the-upload-script). Define `put` as:
+2. Upload with the [upload script](#the-upload-script). Define `put` as:
 
    ```bash
    put() { gcloud storage cp "$1" "gs://$BUCKET/$PREFIX/${1#./}" --cache-control="$CC" --quiet; }
@@ -204,6 +256,26 @@ Notes:
 - GCS rejects `allUsers` when the organization enforces public access prevention. Change that policy for this bucket, or put a backend bucket behind Cloud CDN.
 - You cannot set `Timing-Allow-Origin` on a bucket or an object. A backend bucket behind an external HTTPS load balancer can send it as a custom response header: `gcloud compute backend-buckets create ... --custom-response-header='Timing-Allow-Origin: *'`. The header is a MAY. Skip it unless you benchmark the viewer.
 - Do not upload objects with `Content-Encoding: gzip`. GCS applies transcoding, which changes the bytes it serves.
+
+## Azure Blob Storage
+
+1. Allow anonymous reads on the storage account, and create a container whose public access level is Blob. An organization policy can forbid both. Then put Azure Front Door in front of the container, and pass its address as `--public-url`.
+
+   ```bash
+   ACCOUNT=mystorageaccount
+   az storage account update --name "$ACCOUNT" --resource-group my-group --allow-blob-public-access true
+   az storage container create --name stores --account-name "$ACCOUNT" --public-access blob --auth-mode login
+   ```
+
+2. Sign in with `az login`, or set `AZURE_STORAGE_CONNECTION_STRING`.
+
+3. Publish. CORS for Blob storage applies to the whole storage account. `--apply-cors` adds the viewer rule after the existing rules. Azure allows five rules.
+
+   ```bash
+   chronozarr publish my_store --destination "az://$ACCOUNT/stores/my_store-v1" --apply-cors
+   ```
+
+The store URL is `https://ACCOUNT.blob.core.windows.net/stores/my_store-v1`.
 
 ## Source Cooperative
 
@@ -230,7 +302,7 @@ The UI does not order uploads, so step 4 is a separate action. A sharded store (
 
 1. Run `source-coop login` to get temporary credentials.
 2. Create an AWS profile named `source-coop`, as the Source docs describe.
-3. Upload with the [upload script](publish.md#the-upload-script). Define `put` as:
+3. Upload with the [upload script](#the-upload-script). Define `put` as:
 
    ```bash
    ACCOUNT=my-account
@@ -245,3 +317,52 @@ The UI does not order uploads, so step 4 is a separate action. A sharded store (
 The store URL is `https://data.source.coop/$ACCOUNT/$PRODUCT/$PREFIX`.
 
 Check the `cache-control` line of doctor. The proxy may not store the `--cache-control` value.
+
+## Upload without chronozarr publish
+
+`chronozarr publish` runs the upload order of [Immutable prefixes and upload order](hosting-requirements.md#immutable-prefixes-and-upload-order) for S3, R2, Google Cloud Storage and Azure. For another host, or to upload by hand, use the script below with the `put` function of your host's recipe.
+
+### The upload script
+
+The three phases work for every host. The script below runs them.
+
+1. Save the script as `upload.sh`.
+2. Define `put` from the recipe for your host above.
+3. Run `bash upload.sh`.
+
+`put FILE` uploads `./FILE`, relative to the store directory, to `$PREFIX/FILE` with `Cache-Control: $CC`.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+STORE=data/stores/my_aoi/chronozarr-2   # local store directory
+PREFIX=my_aoi/chronozarr-2              # new for every encode
+CC="public, max-age=31536000, immutable"
+
+# put() goes here, from the recipe for your host
+
+export -f put
+export STORE PREFIX CC BUCKET   # plus anything else put() reads
+cd "$STORE"
+# 1. chunk and shard objects
+find . -type f ! -name zarr.json -print0 | xargs -0 -n 1 -P 8 bash -c 'put "$1"' _
+# 2. group and array metadata below the root
+find . -type f -name zarr.json ! -path ./zarr.json -print0 | xargs -0 -n 1 -P 8 bash -c 'put "$1"' _
+# 3. root metadata, last
+put ./zarr.json
+```
+
+If an upload fails in phase 1 or 2, `xargs` exits with 123. Then `set -e` stops the script before the next phase.
+
+### The R2 upload script
+
+`scripts/upload_stores.sh` uploads to R2 in the same three phases. It stops before the next phase when an upload fails.
+
+It reads the store from `data/stores/<aoi>/$STORE`. Set `STORE=chronozarr-4` for a versioned prefix.
+
+It sets `Cache-Control` for each object:
+
+- Every chunk and shard gets `immutable`, except the objects that an append rewrites.
+- The objects that an append rewrites get `max-age=300`. The [cache classes](append.md#cache-classes) list them.
+- `--trailing-ttl SECONDS` changes the 300.
+- `--dry-run` prints the class of every object and uploads nothing.

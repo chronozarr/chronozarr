@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { defineConfig } from 'vocs'
+import legacyAnchors from './legacy-anchors.json'
 
 // Visual direction: a 1960s to 70s corporate annual report. Grotesk type (Archivo stands in
 // for Univers), cool neutrals, one steel-blue accent, hairline rules and no rounded corners.
@@ -18,7 +19,8 @@ const steelHover = { light: '#174d74', dark: '#b3d7f3' }
 
 export default defineConfig({
   title: 'chronozarr',
-  description: 'chronozarr turns a raster time series into static files that you can put in a storage bucket.',
+  description:
+    'Turn a georeferenced raster time series into an interactive dataset that anyone can open with a link, with the stored values intact.',
   iconUrl: '/favicon.svg',
   // A function, not a bare element: Vocs 1.4.1 reads a bare element as a path-to-element map
   // (`typeof === 'object'`), finds no key matching the URL, and renders nothing.
@@ -29,6 +31,13 @@ export default defineConfig({
       <link
         rel="stylesheet"
         href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      />
+      {/* Old section anchors: a fragment never reaches the server, so the Worker's path redirects cannot
+          move it. This sends /page#old-anchor to the section's new address. Map: legacy-anchors.json. */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `(function(){var m=${JSON.stringify(legacyAnchors)};function go(){var p=m[location.pathname.replace(/\\/$/,'')];var t=p&&p[decodeURIComponent(location.hash.slice(1))];if(t)location.replace(t)}go();addEventListener('hashchange',go)})()`,
+        }}
       />
     </>
   ),
@@ -79,7 +88,8 @@ export default defineConfig({
     },
   },
   topNav: [
-    { text: 'Docs', link: '/getting-started' },
+    { text: 'Quickstart', link: '/quickstart' },
+    { text: 'Docs', link: '/what-is-chronozarr' },
     { text: 'Specification', link: '/specification' },
     // Absolute so Vocs does not route it client-side: /demo/ is a static page, not a Vocs route.
     { text: 'Demo', link: 'https://chronozarr.org/demo/' },
@@ -87,36 +97,43 @@ export default defineConfig({
   socials: [{ icon: 'github', link: 'https://github.com/chronozarr/chronozarr' }],
   sidebar: [
     { text: 'Start here', items: [
-      { text: 'Getting started', link: '/getting-started' },
-      { text: 'Live demo', link: 'https://chronozarr.org/demo/' },
+      { text: 'What is chronozarr?', link: '/what-is-chronozarr' },
+      { text: 'Quickstart', link: '/quickstart' },
+      { text: 'Explore the live demo', link: '/viewer' },
     ] },
-    { text: 'Create and explore', items: [
+    { text: 'Create and share', items: [
       { text: 'Convert your data', link: '/guides/convert' },
-      { text: 'Preview locally', link: '/guides/preview' },
-      { text: 'Explore in a notebook', link: '/guides/notebooks' },
-      { text: 'Bring your own data (full example)', link: '/guides/bring-your-data' },
-      { text: 'PNG frames', link: '/guides/png-frames' },
+      { text: 'Preview on your computer', link: '/guides/preview' },
+      { text: 'Share a temporary link', link: '/guides/share' },
+      { text: 'Publish a permanent link', link: '/guides/publish' },
+      { text: 'Analyze in Python', link: '/guides/analyze' },
     ] },
-    { text: 'Share and publish', items: [
-      { text: 'Share a local store instantly', link: '/guides/share' },
-      { text: 'Hosting overview', link: '/guides/hosting' },
-      { text: 'Publish a store', link: '/guides/publish' },
-      { text: 'Hosting recipes', link: '/guides/hosting-providers' },
-      { text: 'Hosting requirements and troubleshooting', link: '/guides/hosting-requirements' },
+    { text: 'Guides and examples', items: [
+      { text: 'Sentinel-2 for your area', link: '/guides/sentinel-2' },
+      { text: 'Your own data, end to end', link: '/guides/bring-your-data' },
+      { text: 'SWOT, NISAR and other examples', link: '/guides/examples' },
+      { text: 'PNG frames', link: '/guides/png-frames' },
       { text: 'Append timesteps', link: '/guides/append' },
       { text: 'Embed the viewer', link: '/guides/embedding' },
-      { text: 'Self-host the packaged viewer', link: '/guides/viewer-distribution' },
+      { text: 'Notebooks and remote machines', link: '/guides/notebooks' },
       { text: 'Private stores', link: '/guides/private' },
+      { text: 'Advanced hosting', collapsed: true, items: [
+        { text: 'Overview', link: '/guides/hosting' },
+        { text: 'Hosting recipes', link: '/guides/hosting-providers' },
+        { text: 'Requirements and checks', link: '/guides/hosting-requirements' },
+        { text: 'Self-host the viewer', link: '/guides/viewer-distribution' },
+      ] },
     ] },
-    { text: 'Integrations', items: [
-      { text: 'Python and xarray', link: '/reference/python' },
+    { text: 'Reference', items: [
+      { text: 'Command line', link: '/reference/cli' },
+      { text: 'Python API', link: '/reference/python' },
       { text: 'JavaScript reader', link: '/reference/javascript' },
       { text: 'MapLibre layer', link: '/reference/maplibre' },
-    ] },
-    { text: 'Reference and internals', items: [
-      { text: 'Command line', link: '/reference/cli' },
-      { text: 'How it works', link: '/how-it-works' },
       { text: 'Specification v0.3 (draft)', link: '/specification' },
+      { text: 'How it works', link: '/how-it-works' },
+      { text: 'Performance and evidence', link: '/performance' },
+      { text: 'Measurement log', link: '/reference/evidence' },
+      { text: 'Troubleshooting', link: '/troubleshooting' },
       { text: 'Format comparison', link: '/guides/format-comparison' },
     ] },
   ],
