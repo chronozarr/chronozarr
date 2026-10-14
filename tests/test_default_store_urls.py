@@ -10,7 +10,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_HOST = "data.chronozarr.org"
-V03_PREFIXES = ("/ucayali_santa_maria_v03", "/ucayali_santa_maria/png-v03")
+V03_PREFIXES = (
+    "/ucayali_santa_maria_v03",
+    "/ucayali_santa_maria/png-v03",
+    "/colorado_yuma/nisar-gcov-v2",
+)
 SCANNED_SUFFIXES = {".py", ".js", ".mjs", ".html", ".json", ".md"}
 SKIPPED_DIRS = {"node_modules", "vendor", "test", "e2e", "support", "__pycache__"}
 URL_PATTERN = re.compile(r"https?://[^\s'\"`)<>\\,]+")

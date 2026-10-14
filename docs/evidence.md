@@ -292,6 +292,20 @@ The two `.npz` extracts carry no product ID. The README names the only granules 
 - The extract arrays were not compared with the granules, because the download needs an Earthdata login. The match rests on the date and the footprint.
 - `extract_window.py` was run on synthetic HDF5 files that have the group and dataset names of the GCOV grid. It was not run on a real granule.
 
+### NISAR time series (2026-10-14)
+
+`examples/nisar/ingest.py` built `colorado_yuma/nisar-gcov-v1` on 2026-10-14 from the ASF DAAC with an Earthdata login; the manifest is `examples/nisar/colorado_yuma.scenes.json`.
+
+- asf_search (14.0.3) over the box -114.82 32.50 -114.42 32.90 returned 62 standard-production GCOV scenes; track 5 ascending frame 18 holds 28 `NISAR_L2_GCOV_PROVISIONAL_V1` dates from 2025-10-29 to 2026-10-12, 12 days apart with one gap (2026-08-01), all product version 1.0.11, release P05023. One date (2026-09-06) exists as product counters 001 and 002; 002 was taken. Most other tracks sampled start on 2026-06-17 with 8 or 9 dates.
+- The granules are 34488 by 33912 px on a 10 m EPSG:32612 grid; HHHH and HVHV are float32 in 512 by 512 gzip chunks, mask uint8. The window of the box is 3904 by 4566 px.
+- Reading HHHH, HVHV and mask of the window from one granule by HTTP range requests (fsspec `blockcache`, 16 MB blocks, h5py) took 55 to 73 s per granule with six granules read at once; 28 granules in about 6 minutes. fsspec's `background` cache hung one granule per run for minutes at no CPU, on two runs; the synchronous cache did not.
+- Two dates cover part of the box: 2025-10-29 is a partial frame (48.1 % valid) and 2025-11-22 has unfocused samples over the west (50.9 %). The other 26 are 100 % valid.
+- Encode: 28 timesteps, 5 levels, 1,956,965,558 bytes in 5,558 objects, 13 s after the reads. A second run from scratch reproduced every object byte for byte. `chronozarr doctor` on the local store: 6 ok, 0 failures.
+- The local viewer opened the store at once, showed HH and HV with the automatic 2nd to 98th percentile stretch (HH -22.0 to -5.8 dB, HV -24.9 to -13.0 dB on the first date) and the pixel chart over all 28 dates.
+- `scripts/r2_sync.py` uploaded the 5,558 objects in 58 s (96 objects/s). The bucket then held 11,486 objects, 8.52 GB.
+- The published store is `nisar-gcov-v2`, the same build with `--start 2025-12-01`: the two half-covered dates left out, 26 timesteps, 1,885,027,649 bytes in 5,308 objects, `doctor` 6 ok, every date at least 99.99 % valid. `nisar-gcov-v1` (28 dates) was uploaded first, checked live as below, and deleted from the bucket the same day, because a re-encode changes every chunk key and the v1 chunks had already passed through the edge with immutable headers.
+- Live, through a pinned Cloudflare edge address (this network's DNS filter blocks the host): root `zarr.json` 200 with `access-control-allow-origin: *` and `max-age=300`, a level-0 data chunk answered a 1 KB range with 206 and `max-age=31536000, immutable`, a mask chunk 200, the time coordinate `max-age=300`. Playwright (chromium) opened `chronozarr.org/demo/?store=...` on the store in 2.2 s with no console error and no failed request, and switched the band to HV.
+
 ### SWOT raster example
 
 The two NetCDF files in the author's directory have the MD5 checksums that CMR lists for `SWOT_L2_HR_Raster_100m_D` (`dd574a747bd9e09d97a4e4f5e70d289e` for 2025-11-14 and `ba558cc86cd6c7622ccb2e50f4938854` for 2026-07-12). This query returns both granules:

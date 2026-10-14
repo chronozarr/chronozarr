@@ -6,5 +6,9 @@
   {
     "name": "PNG frames demo (RGB + alpha, 2019\u20132021)",
     "url": "https://data.chronozarr.org/ucayali_santa_maria/png-v03"
+  },
+  {
+    "name": "NISAR L-band backscatter, Lower Colorado at Yuma (HH, HV, 2025\u20132026)",
+    "url": "https://data.chronozarr.org/colorado_yuma/nisar-gcov-v2"
   }
 ]

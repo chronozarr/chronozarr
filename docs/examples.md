@@ -8,7 +8,7 @@ A store holds any raster time series on one north-up grid in an EPSG coordinate 
 |---|---|---|---|
 | Sentinel-2 monthly composites | Planetary Computer, public | Nothing beyond the repository. See [Sentinel-2 for your area](sentinel2.md) | [sentinel2_pc](../examples/sentinel2_pc/README.md) |
 | SWOT water surface elevation | Two SWOT L2 HR Raster 100 m NetCDF files, Roanoke region, about 60 MB each | A free NASA Earthdata login to download them from PO.DAAC | [swot_raster](../examples/swot_raster/README.md) |
-| NISAR backscatter | Two NISAR L2 GCOV windows, HH and HV, in linear power and dB | A free NASA Earthdata login, and two granules from ASF DAAC | [nisar](../examples/nisar/README.md) |
+| NISAR backscatter | A year of NISAR L2 GCOV HH and HV over one box, read from the ASF DAAC granules by HTTP range requests; also a two-date notebook demo | A free NASA Earthdata login | [nisar](../examples/nisar/README.md) |
 | SWOT intensity | Geocoded SWOT amplitude of Wax Lake | Inputs from a private project. The README names the public source granules | [swot_intensity](../examples/swot_intensity/README.md) |
 | Water masks | NDWI and water fraction derived from the Sentinel-2 composites | The output of the Sentinel-2 example | [water_masks](../examples/water_masks/README.md) |
 | PNG frames | 36 monthly true-color PNG frames with world files | The output of the Sentinel-2 example | [png_frames](../examples/png_frames/README.md) |
