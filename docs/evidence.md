@@ -279,18 +279,7 @@ World files and `.aux.xml` files next to `http(s)` PNGs were checked against a l
 
 ## NISAR and SWOT example data
 
-On 2026-10-09 the source files of `examples/nisar`, `examples/swot_raster` and `examples/swot_intensity` were matched to public granules. The CMR queries read metadata only. No Earthdata login was used and no granule was downloaded.
-
-### NISAR example
-
-The two `.npz` extracts carry no product ID. The README names the only granules that CMR returns for the window on the two dates.
-
-- The window is x 512270 to 523430 m and y 888070 to 904510 m in EPSG:32618. Its centre is at -74.84 degrees longitude and 8.11 degrees latitude.
-- A query of `NISAR_L2_GCOV_PROVISIONAL_V1` at that point on 2026-06-22 and on 2026-08-21 returned one granule for each date. The same query of `NISAR_L2_GCOV_BETA_V1` with the window box returned none.
-- Both granules are track 119, frame 6, ascending, mode 2005, dual-polarization HH and HV, product version 1.0.11. They are cycles 23 and 28, 60 days apart.
-- Both footprints contain the four corners of the window.
-- The extract arrays were not compared with the granules, because the download needs an Earthdata login. The match rests on the date and the footprint.
-- `extract_window.py` was run on synthetic HDF5 files that have the group and dataset names of the GCOV grid. It was not run on a real granule.
+On 2026-10-09 the source files of `examples/swot_raster` and `examples/swot_intensity` were matched to public granules. The CMR queries read metadata only. No Earthdata login was used and no granule was downloaded. The NISAR example reads its granules from the archive directly; its record follows.
 
 ### NISAR time series (2026-10-14)
 
