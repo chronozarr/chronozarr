@@ -6,7 +6,7 @@
       -114.42,
       32.9
     ],
-    "start": "2025-10-01",
+    "start": "2025-12-01",
     "end": "2026-10-14",
     "collection": "NISAR_L2_GCOV_PROVISIONAL_V1"
   },
@@ -40,92 +40,6 @@
   },
   "access_date": "2026-10-14",
   "scenes": [
-    {
-      "granule": "NISAR_L2_PR_GCOV_004_005_A_018_4005_DHDH_A_20251029T125111_20251029T125131_P05023_N_P_J_001",
-      "start": "2025-10-29T12:51:11Z",
-      "url": "https://nisar.asf.earthdatacloud.nasa.gov/NISAR/NISAR_L2_GCOV_PROVISIONAL_V1/NISAR_L2_PR_GCOV_004_005_A_018_4005_DHDH_A_20251029T125111_20251029T125131_P05023_N_P_J_001/NISAR_L2_PR_GCOV_004_005_A_018_4005_DHDH_A_20251029T125111_20251029T125131_P05023_N_P_J_001.h5",
-      "md5": null,
-      "collection": "NISAR_L2_GCOV_PROVISIONAL_V1",
-      "cycle": 4,
-      "track": 5,
-      "direction": "A",
-      "frame": 18,
-      "mode": "4005",
-      "pol": "DHDH",
-      "counter": 1,
-      "full_frame": false,
-      "identification": {
-        "absoluteOrbitNumber": 1315,
-        "compositeReleaseId": "P05023",
-        "frameNumber": 18,
-        "isFullFrame": "False",
-        "orbitPassDirection": "Ascending",
-        "processingDateTime": "2026-08-07T10:14:54",
-        "productVersion": "1.0.11",
-        "trackNumber": 5,
-        "zeroDopplerStartTime": "2025-10-29T12:51:11.000000000",
-        "zeroDopplerEndTime": "2025-10-29T12:51:31.999342105"
-      },
-      "npz_sha256": "ec33e452d87429ca9f137944180615ae7d2d0ac4bd369802eacad90a5856ce38",
-      "valid_fraction": 0.4811439843138522,
-      "subswaths": [
-        1
-      ],
-      "read_seconds": 72.2,
-      "HH_dB_p2_p50_p98": [
-        -23.99,
-        -17.91,
-        -2.56
-      ],
-      "HV_dB_p2_p50_p98": [
-        -27.47,
-        -22.63,
-        -10.12
-      ]
-    },
-    {
-      "granule": "NISAR_L2_PR_GCOV_006_005_A_018_4005_DHDH_A_20251122T125112_20251122T125147_P05023_N_F_J_001",
-      "start": "2025-11-22T12:51:12Z",
-      "url": "https://nisar.asf.earthdatacloud.nasa.gov/NISAR/NISAR_L2_GCOV_PROVISIONAL_V1/NISAR_L2_PR_GCOV_006_005_A_018_4005_DHDH_A_20251122T125112_20251122T125147_P05023_N_F_J_001/NISAR_L2_PR_GCOV_006_005_A_018_4005_DHDH_A_20251122T125112_20251122T125147_P05023_N_F_J_001.h5",
-      "md5": null,
-      "collection": "NISAR_L2_GCOV_PROVISIONAL_V1",
-      "cycle": 6,
-      "track": 5,
-      "direction": "A",
-      "frame": 18,
-      "mode": "4005",
-      "pol": "DHDH",
-      "counter": 1,
-      "full_frame": true,
-      "identification": {
-        "absoluteOrbitNumber": 1661,
-        "compositeReleaseId": "P05023",
-        "frameNumber": 18,
-        "isFullFrame": "True",
-        "orbitPassDirection": "Ascending",
-        "processingDateTime": "2026-08-07T11:58:06",
-        "productVersion": "1.0.11",
-        "trackNumber": 5,
-        "zeroDopplerStartTime": "2025-11-22T12:51:12.000000000",
-        "zeroDopplerEndTime": "2025-11-22T12:51:47.999342105"
-      },
-      "npz_sha256": "07a246b9b7924b2f1aa8f8d7988dc98e1729bf4417dcdaadf97f7512c8564685",
-      "valid_fraction": 0.5094840225867603,
-      "subswaths": [
-        1
-      ],
-      "read_seconds": 65.8,
-      "HH_dB_p2_p50_p98": [
-        -22.04,
-        -14.92,
-        -1.25
-      ],
-      "HV_dB_p2_p50_p98": [
-        -27.35,
-        -21.76,
-        -9.33
-      ]
-    },
     {
       "granule": "NISAR_L2_PR_GCOV_007_005_A_018_4005_DHDH_A_20251204T125112_20251204T125147_P05023_N_F_J_001",
       "start": "2025-12-04T12:51:12Z",
@@ -1246,11 +1160,11 @@
     }
   ],
   "store": {
-    "timesteps": 28,
+    "timesteps": 26,
     "dropped": [],
     "levels": 5,
-    "files": 5558,
-    "bytes": 1956965558,
-    "url": "https://data.chronozarr.org/colorado_yuma/nisar-gcov-v1"
+    "files": 5308,
+    "bytes": 1885027649,
+    "url": "https://data.chronozarr.org/colorado_yuma/nisar-gcov-v2"
   }
 }

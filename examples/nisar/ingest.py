@@ -32,11 +32,12 @@ Usage:
     uv run --extra nisar python examples/nisar/ingest.py --bbox -114.82 32.50 -114.42 32.90 \
         --name colorado_yuma --track 5 --direction A --frame 18 --start 2026-01-01
 
-Output: <out-dir>/stores/<name>/nisar-gcov-v1 (the store), <out-dir>/stores/<name>/
-nisar-gcov-v1.scenes.json (the manifest: query, ASF properties, identification, window and
-validity of every scene) and <out-dir>/cache/nisar/<name>/<granule>.npz (the window of each
-granule with its manifest record beside it, which a rerun reuses instead of reading the granule
-again).
+Output: <out-dir>/stores/<name>/<store> (the store; `--store` names it, nisar-gcov-v1 by
+default, and a re-encode takes a new name because a published store is immutable),
+<out-dir>/stores/<name>/<store>.scenes.json (the manifest: query, ASF properties,
+identification, window and validity of every scene) and <out-dir>/cache/nisar/<name>/
+<granule>.npz (the window of each granule with its manifest record beside it, which a rerun
+reuses instead of reading the granule again).
 """
 
 from __future__ import annotations
@@ -392,7 +393,8 @@ def extract(scene: Scene, window: Window, out: Path) -> dict:
             record[f"{name}_dB_p2_p50_p98"] = [
                 round(float(v) * DB_SCALE + DB_OFFSET, 2) for v in (p2, p50, p98)
             ]
-    sidecar_of(out).write_text(json.dumps(record, indent=2, default=str))
+    # The sidecar names the window file, not its path: the cache directory may move.
+    sidecar_of(out).write_text(json.dumps({**record, "npz": out.name}, indent=2, default=str))
     return record
 
 
@@ -415,7 +417,8 @@ def extract_all(scenes: list[Scene], window: Window, cache: Path, workers: int) 
     for scene, _, path in jobs:
         if path.is_file() and sidecar_of(path).is_file():
             logger.info("cached %s", path.name)
-            records[scene.granule] = {**json.loads(sidecar_of(path).read_text()), "cached": True}
+            record = json.loads(sidecar_of(path).read_text())
+            records[scene.granule] = {**record, "npz": str(path), "cached": True}
         else:
             pending.append((scene, window, path))
     with ProcessPoolExecutor(max_workers=workers) as pool:
@@ -508,6 +511,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--bbox", nargs=4, type=float, required=True, metavar=("W", "S", "E", "N"))
     parser.add_argument("--name", required=True, help="store directory under <out-dir>/stores")
+    parser.add_argument(
+        "--store", default=STORE_NAME, help="store name under <out-dir>/stores/NAME"
+    )
     parser.add_argument("--start", default="2025-10-01")
     parser.add_argument("--end", default=date.today().isoformat())
     parser.add_argument("--collection", choices=sorted(COLLECTIONS), default="PROVISIONAL")
@@ -524,8 +530,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     west, south, east, north = args.bbox
     if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
         parser.error("--bbox is west south east north in degrees, west < east and south < north")
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+", args.name):
-        parser.error("--name may use letters, digits, '_', '-' and '.'")
+    for option, value in (("--name", args.name), ("--store", args.store)):
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", value):
+            parser.error(f"{option} may use letters, digits, '_', '-' and '.'")
     return args
 
 
@@ -536,8 +543,8 @@ def main(argv: list[str] | None = None) -> None:
     logger.setLevel(logging.INFO)
     args = parse_args(argv)
     bbox: BBox = (args.bbox[0], args.bbox[1], args.bbox[2], args.bbox[3])
-    store = args.out_dir / "stores" / args.name / STORE_NAME
-    manifest_path = store.with_name(f"{STORE_NAME}.scenes.json")
+    store = args.out_dir / "stores" / args.name / args.store
+    manifest_path = store.with_name(f"{args.store}.scenes.json")
     cache = args.out_dir / "cache" / "nisar" / args.name
     if store.exists() and any(store.iterdir()):
         raise SystemExit(f"{store} exists; stores are immutable: another --name or --out-dir")
