@@ -4,7 +4,7 @@
 
 ## The Ucayali store
 
-The store `ucayali_santa_maria/s1-rtc-monthly-v1` covers the same box as the Sentinel-2 store `ucayali_santa_maria_v03`, the Santa María reach of the Ucayali River in Peru, on the same grid coarsened 2x: its 20 m pixels are the pixels of that store's level 1. Radar sees through the wet-season cloud that leaves gaps in the optical months. It holds relative orbit 171 descending from 2017-01 to 2026-09: 309 acquisitions in 110 monthly composites. Seven months have no acquisition on that orbit (2018-07 to 2018-10 and 2022-01 to 2022-03, after Sentinel-1B failed) and are left out of the time axis. Build it with:
+The public store `https://data.chronozarr.org/ucayali_santa_maria/s1-rtc-monthly-v1` covers the same box as the Sentinel-2 store `ucayali_santa_maria_v03`, the Santa María reach of the Ucayali River in Peru, on the same grid coarsened 2x: its 20 m pixels are the pixels of that store's level 1. Radar sees through the wet-season cloud that leaves gaps in the optical months. It holds relative orbit 171 descending from 2017-01 to 2026-09: 309 acquisitions in 110 monthly composites. Seven months have no acquisition on that orbit (2018-07 to 2018-10 and 2022-01 to 2022-03, after Sentinel-1B failed) and are left out of the time axis. It was built with:
 
 ```sh
 uv sync --extra ingest
@@ -12,12 +12,12 @@ uv run python examples/sentinel1_pc/ingest.py --bbox -75.13 -7.76 -74.88 -7.51 \
     --name ucayali_santa_maria --start 2017-01-01 --end 2026-09-30
 ```
 
-Add `--dry-run` to list the acquisitions and the empty months and write nothing. Each acquisition reads about 70 MB of float32 (VV and VH windows of a 28 km box), so a full run moves about 21 GB from Planetary Computer's West Europe storage; eight acquisitions are read at once (`--workers`). It writes:
+Add `--dry-run` to list the acquisitions and the empty months and write nothing. Each acquisition reads about 70 MB of float32 (VV and VH windows of a 28 km box), so a full run moves about 21 GB from Planetary Computer's West Europe storage; eight acquisitions are read at once (`--workers`). The Ucayali run took 3 h 38 min; a signed URL that expires during a read fails it, and the read is retried once with a fresh signature. It writes:
 
 | Path | What |
 |---|---|
-| `data/stores/ucayali_santa_maria/s1-rtc-monthly-v1` | the store. `--store` names it; a re-encode takes a new name, because a published store is immutable |
-| `data/stores/ucayali_santa_maria/s1-rtc-monthly-v1.scenes.json` | the manifest: the query, the orbit, the grid, every acquisition (slices, platform, valid fraction, dB percentiles) and every month (its acquisitions, valid fraction, dB percentiles) |
+| `data/stores/ucayali_santa_maria/s1-rtc-monthly-v1` | the store: 110 timesteps, 3 levels, 801 MB in 3,114 objects, every month 100 % valid. `--store` names it; a re-encode takes a new name, because a published store is immutable |
+| `data/stores/ucayali_santa_maria/s1-rtc-monthly-v1.scenes.json` | the manifest: the query, the orbit, the grid, every acquisition (slices, platform, valid fraction, dB percentiles) and every month (its acquisitions, valid fraction, dB percentiles). The public store's manifest is `examples/sentinel1_pc/ucayali_santa_maria.scenes.json` |
 | `data/cache/sentinel1/ucayali_santa_maria/<slice id>.npz` | the 20 m VV and VH power of each acquisition with its record beside it; a rerun reads these instead of the scenes |
 
 Then check it, share it and look at it:

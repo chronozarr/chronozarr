@@ -539,7 +539,7 @@ def encode_store(months: list[dict], grid: Grid, store: Path, manifest: dict) ->
         },
     )
     manifest["store"] = {
-        "path": str(store),
+        "path": f"{store.parent.name}/{store.name}",
         "timesteps": len(months),
         "levels": len(report.levels),
         "files": report.n_files,
