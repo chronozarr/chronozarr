@@ -86,7 +86,8 @@ test('a link to a store on this computer says that it opens nowhere else', async
   assert.equal(await copy(), true);
   assert.equal(button.textContent, 'Copied (local only)');
   assert.match(status.textContent, /only on this computer/);
-  assert.match(status.textContent, /chronozarr share/);
+  assert.ok(button.textContent.length <= 20, 'the label stays short');
+  assert.match(status.textContent, /For a link anyone can open, run chronozarr share STORE in a terminal/);
 });
 
 test('links to a store on this computer are told from shared and published ones', () => {

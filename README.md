@@ -28,16 +28,16 @@ Use a folder with one GeoTIFF per date, with the date in each file name, such as
 chronozarr export-cog https://data.chronozarr.org/ucayali_santa_maria_v03 sample --level 2 --times 2024-01..2024-12
 ```
 
-Then convert the folder, look at it, and share it:
+Then convert the folder and share it:
 
 ```bash
 chronozarr convert sample my_store --dry-run
 chronozarr convert sample my_store
-chronozarr preview my_store
-chronozarr share my_store
+chronozarr share my_store      # a temporary public link that any computer can open
+chronozarr preview my_store    # or: private, opens on this computer only
 ```
 
-The dry run checks every file and writes nothing. `convert` writes the store. `preview` opens it in your browser. `share` prints a temporary link that a colleague opens in a browser; it needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) and works only while the command runs.
+The dry run checks every file and writes nothing. `convert` writes the store. `share` prints a temporary link that you or a colleague open in a browser. It needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/), works only while the command runs and your computer is on, and anyone with the link can read the store. `preview` opens the store in your browser through a local server. Its link opens only on this computer.
 
 The [full quickstart](https://chronozarr.org/quickstart) has a sample dataset, the expected output of each command and the pip route.
 

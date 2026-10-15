@@ -46,7 +46,7 @@ from chronozarr.schema import Band, SchemaError, validate
 from chronozarr.share import share
 from chronozarr.stac import write_stac
 from chronozarr.store import redact_url
-from chronozarr.view import VIEWER_URL, preview, preview_command, viewer_url
+from chronozarr.view import VIEWER_URL, preview, preview_command, share_command, viewer_url
 
 _REFUSED = re.compile(r"\bHTTP 40[13]\b")
 _DATE_IN_NAME = re.compile(r"(?<!\d)(\d{4})-?(\d{2})(?:-?(\d{2}))?(?!\d)")
@@ -355,6 +355,15 @@ def _encode_summary(out: Path, report: EncodeReport) -> str:
     )
 
 
+def _echo_next_steps(out: Path) -> None:
+    """Print how to open a finished store: the public link first, this computer second."""
+    click.echo(
+        f"share it: {share_command(out)}  "
+        "(temporary public link via a Cloudflare quick tunnel; needs cloudflared)"
+    )
+    click.echo(f"preview it here: {preview_command(out)}  (this computer only)")
+
+
 @click.group()
 @click.version_option(package_name="chronozarr")
 def main() -> None:
@@ -410,7 +419,7 @@ def encode_command(
             file_options["bands"] = assign_roles(named, roles)
         report = encode(da, out, crs=crs, **file_options, **_encode_kwargs(options))
     click.echo(_encode_summary(out, report))
-    click.echo(f"preview it: {preview_command(out)}")
+    _echo_next_steps(out)
 
 
 @main.command("append")
@@ -584,7 +593,8 @@ def preview_command_(
     """Serve the local store STORE and open it in the viewer. Ctrl-C stops the server.
 
     The server answers byte ranges with CORS on 127.0.0.1 and nothing else can reach it. The
-    viewer comes from chronozarr.org unless --viewer-dir or --viewer is given.
+    viewer comes from chronozarr.org unless --viewer-dir or --viewer is given. The link opens
+    only on this computer; `chronozarr share STORE` gives a link other people can open.
     """
     with _command_errors():
         preview(
@@ -629,6 +639,8 @@ def share_command_(
 
     The command checks the public URL with `chronozarr doctor` before printing a link. Ctrl-C
     stops both the tunnel and the loopback server. Anyone who has the link can read the store.
+    The link works while this command runs and this computer is on; for a view on this computer
+    only, use `chronozarr preview STORE`.
     """
     with _command_errors():
         share(
@@ -947,13 +959,13 @@ def convert_command(
             f"verified every value in {len(report.encode.levels)} levels, "
             f"{report.plan.n_time} timesteps; total {report.total_s:.1f} s"
         )
-        click.echo(f"preview it: {preview_command(out)}")
+        _echo_next_steps(out)
         return
     click.echo(
         f"read {report.n_staged} timesteps ({report.n_reused} reused) in {report.read_s:.1f} s, "
         f"encoded in {report.encode_s:.1f} s, total {report.total_s:.1f} s"
     )
-    click.echo(f"preview it: {preview_command(out)}")
+    _echo_next_steps(out)
 
 
 convert_command.help = f"{inspect.cleandoc(convert_command.help or '')}\n\n{FIDELITY_HELP}"
@@ -1225,8 +1237,9 @@ def link_command(
     if not is_url(store_url):
         raise click.ClickException(
             f"{store_url} is not an http(s) URL. A link needs a hosted store. For a local one, "
-            f"run `chronozarr preview {store_url}`, or `chronozarr share {store_url}` for a "
-            "temporary link; in a notebook, use chronozarr.view()"
+            f"run `{share_command(store_url)}` for a temporary public link, or "
+            f"`{preview_command(store_url)}` to open it on this computer only; in a notebook, "
+            "use chronozarr.view()"
         )
     low_high = _parse_numbers(limits, 2, "--range", float)
     with _command_errors():

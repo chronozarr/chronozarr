@@ -20,11 +20,12 @@ Add `--dry-run` to list the dates and the window and write nothing. The run take
 | `data/stores/colorado_yuma/nisar-gcov-v2.scenes.json` | the manifest: the ASF query, every granule's ASF properties and HDF5 identification, the window, the valid fraction and dB percentiles per date |
 | `data/cache/nisar/colorado_yuma/<granule>.npz` | the window of each granule; a rerun reads these instead of the granules |
 
-Then check it and look at it:
+Then check it, share it and look at it:
 
 ```sh
 uv run chronozarr doctor data/stores/colorado_yuma/nisar-gcov-v2
-uv run chronozarr preview data/stores/colorado_yuma/nisar-gcov-v2
+uv run chronozarr share data/stores/colorado_yuma/nisar-gcov-v2     # a temporary public link; needs cloudflared
+uv run chronozarr preview data/stores/colorado_yuma/nisar-gcov-v2   # or: this computer only
 ```
 
 In the viewer the single-band product shows HH or HV in dB with a percentile stretch; the chart follows one pixel over the 26 dates. In Python the backend applies the band scale and offset, so the values are dB with NaN where the mask is 0 (`physical=False` gives the stored uint16):

@@ -46,7 +46,7 @@ export function bindCopyLink({ button, status, getUrl, clipboard, feedbackMs = C
     try {
       await copyLink(url, { clipboard });
       if (linksToThisComputer(url)) {
-        show('Copied (local only)', 'Link copied. It opens only on this computer; to send the store to someone, run chronozarr share.');
+        show('Copied (local only)', 'Copied a link that opens only on this computer. For a link anyone can open, run chronozarr share STORE in a terminal.');
       } else {
         show('Link copied', 'Link copied.');
       }

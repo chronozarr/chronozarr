@@ -79,10 +79,11 @@ It searches the catalog, reads the parts of each scene that lie inside the box, 
 ```bash
 uv run chronozarr validate /tmp/s2_try/stores/rio_grande/chronozarr
 uv run chronozarr info /tmp/s2_try/stores/rio_grande/chronozarr
+uv run chronozarr share /tmp/s2_try/stores/rio_grande/chronozarr
 uv run chronozarr preview /tmp/s2_try/stores/rio_grande/chronozarr
 ```
 
-`validate` prints `conforms to chronozarr 0.3.0`. `info` lists the times, the bands and the pyramid. `preview` serves the store on `127.0.0.1` and opens the viewer; Ctrl-C stops it (see [Preview, share, publish](#preview-share-publish)).
+`validate` prints `conforms to chronozarr 0.3.0`. `info` lists the times, the bands and the pyramid. `share` prints a temporary public link through a Cloudflare quick tunnel; it needs `cloudflared`. `preview` serves the store on `127.0.0.1` and opens the viewer; its link opens only on this computer. Ctrl-C stops either one, so run them one after the other (see [Share, preview, publish](#share-preview-publish)).
 
 Then the full range. Give both dates, begin on the first day of a month and end on the last day of one:
 
@@ -162,10 +163,10 @@ The run keeps up to 16 reads in flight (4 per CPU on machines with fewer than 4 
 
 The monthly files carry in their metadata the number of scenes searched, the scenes that could not be read, and which month filled the gaps. Keep them: a re-run resumes from them, and QGIS and GDAL read them directly (`chronozarr export-cog STORE` writes COGs from the store instead).
 
-## Preview, share, publish
+## Share, preview, publish
 
-1. Preview. `uv run chronozarr preview STORE` serves the store on `127.0.0.1` and opens the hosted viewer at chronozarr.org, which reads your store from your machine. Chrome asks permission before a public page may reach a local address; allow it. If the browser blocks the read, the viewer says that it could not read the store on this computer. Use `--no-open` to print the URL, or `--viewer-dir` for a self-hosted viewer that needs no internet.
-2. Share. `uv run chronozarr share STORE` makes a temporary public link through a Cloudflare quick tunnel while your terminal stays open. It needs `cloudflared`; see [Share a temporary link](share.md). Anyone with the link can read the store.
+1. Share. `uv run chronozarr share STORE` makes a temporary public link through a Cloudflare quick tunnel while your terminal stays open, and the link works on any computer. It needs `cloudflared`; see [Share a temporary link](share.md). Anyone with the link can read the store.
+2. Preview, on this computer only. `uv run chronozarr preview STORE` serves the store on `127.0.0.1` and opens the hosted viewer at chronozarr.org, which reads your store from your machine. Its link opens only on this computer; use `share` for anyone else. Chrome asks permission before a public page may reach a local address; allow it. If the browser blocks the read, the viewer says that it could not read the store on this computer. Use `--no-open` to print the URL, or `--viewer-dir` for a self-hosted viewer that needs no internet.
 3. Publish. `uv run chronozarr publish STORE --destination s3://BUCKET/PREFIX` uploads to your own S3, R2, Google Cloud Storage or Azure bucket and prints a viewer link after `doctor` checks pass. See [Publish a permanent link](publish.md).
 4. Catalog. Add `--stac` to the ingest (or run `chronozarr stac STORE`) to write a static STAC Collection and Item. Its description carries the line "Contains modified Copernicus Sentinel data."
 

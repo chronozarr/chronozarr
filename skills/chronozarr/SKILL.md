@@ -38,8 +38,8 @@ Extras: `geo` (rasterio: GeoTIFF/COG input, `export-cog`, `stac`), `netcdf`, `s3
 | A store path or URL to analyze | `xr.open_dataset(path_or_url, engine="chronozarr")`, or `chronozarr.open_store(path_or_url)`. See `/guides/analyze.md` |
 | A store to inspect or check | `chronozarr info STORE`, `chronozarr validate STORE` (exit 1 if it does not conform) |
 | New timesteps for an existing store | `chronozarr append STORE INPUT` (in place; see traps), then `chronozarr publish STORE --destination SAME_PREFIX --update` for a published copy |
-| To look at a store on this computer | `chronozarr preview STORE` (local server, opens the viewer; the data stays on the computer). Offline: `--viewer-dir` with a viewer copied by `chronozarr-viewer`. Safari can block the https viewer from reaching `127.0.0.1`; use Chrome or Firefox |
-| A temporary link for a colleague | `chronozarr share STORE` (needs `cloudflared`). Public while it runs, and only while the sharing computer is on and online. See `/guides/share.md` |
+| A local store to show to anyone, a colleague included (the first route to offer) | `chronozarr share STORE` (needs `cloudflared`). Prints a temporary public link that opens on any computer. Public while it runs, and only while the sharing computer is on and online. See `/guides/share.md` |
+| To look at a local store on this computer only, privately or without `cloudflared` | `chronozarr preview STORE` (local server, opens the viewer; the data stays on the computer). Its link and the viewer's Copy link open only on this computer; use `share` for anyone else. Offline: `--viewer-dir` with a viewer copied by `chronozarr-viewer`. Safari can block the https viewer from reaching `127.0.0.1`; use Chrome or Firefox |
 | A link that lasts | `chronozarr publish STORE --destination s3://BUCKET/PREFIX --dry-run`, then without `--dry-run` (`gs://`, `az://ACCOUNT/CONTAINER/PREFIX` too). It validates, uploads chunks before metadata and the root `zarr.json` last, runs the `doctor` checks on the public URL and prints a viewer link only if they pass. R2 and other S3-compatible hosts: add `--endpoint-url` and `--public-url`. `--apply-cors` adds the viewer's CORS rule. Use a fresh prefix per version. See `/guides/publish.md` |
 | A store already hosted that needs checking | `chronozarr doctor https://host/prefix` (CORS, byte ranges, caching, decode) |
 | A Jupyter notebook | `chronozarr.view("STORE")` or `chronozarr.player("STORE")` (`notebook` extra). JupyterHub, VS Code or SSH: `/guides/notebooks.md` |
@@ -96,7 +96,8 @@ Each is confirmed in the source or docs.
 chronozarr convert scenes/ my_store --dry-run     # check every file, print size estimate
 chronozarr convert scenes/ my_store
 chronozarr validate my_store && chronozarr info my_store
-chronozarr preview my_store                       # opens the viewer on a local server
+chronozarr share my_store                         # temporary public link, needs cloudflared; Ctrl-C stops it
+chronozarr preview my_store                       # or: this computer only, no tunnel
 chronozarr publish my_store --destination s3://BUCKET/aoi/store-v1 --dry-run
 ```
 

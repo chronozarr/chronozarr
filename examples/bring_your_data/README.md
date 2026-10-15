@@ -55,13 +55,21 @@ For another filename pattern, pass `--date-pattern`, for example `--date-pattern
    uv run chronozarr doctor /tmp/my-series
    ```
 
-5. Open the store in the viewer before you upload it.
+5. Share the store, or open it in the viewer, before you upload it.
+
+   ```sh
+   uv run chronozarr share /tmp/my-series
+   ```
+
+   `share` makes a temporary public link through a Cloudflare quick tunnel and opens it. It needs `cloudflared`, and anyone with the link can read the store. The terminal and laptop must stay running while the recipient uses the link. The requested data is transferred from your laptop to the recipient's browser. In the viewer, choose the intended view and use `Copy link` to share it. The recipient needs only a modern browser. Press Ctrl-C to stop it before starting another command in the same terminal. See the [sharing walkthrough](../../docs/share.md) for setup and public-link limits.
+
+   To look at the store on this computer only, or without `cloudflared`, use `preview`:
 
    ```sh
    uv run chronozarr preview /tmp/my-series
    ```
 
-   The preview serves the store on localhost and opens the viewer. Press Ctrl-C to stop it before starting another command in the same terminal. To share a temporary view from your laptop, use `uv run chronozarr share /tmp/my-series`; it needs `cloudflared`, and the terminal and laptop must stay running while the recipient uses the link. The requested data is transferred from your laptop to the recipient's browser. In the viewer, choose the intended view and use `Copy link` to share it. The recipient needs only a modern browser. See the [sharing walkthrough](../../docs/share.md) for setup and public-link limits.
+   The preview serves the store on localhost and opens the viewer. Its link opens only on this computer. Press Ctrl-C to stop it before starting another command in the same terminal.
 
 ## 4. Read a pixel's history
 

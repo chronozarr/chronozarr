@@ -683,6 +683,11 @@ def view(
         )
         store_url, page = access.store_url, access.viewer_url
         note = " &middot; empty frame? run <code>chronozarr.diagnose_view(store)</code>"
+        if access.route == "loopback":
+            note += (
+                " &middot; this link opens only on this machine; "
+                f"<code>{html.escape(share_command(text))}</code> gives one others can open"
+            )
     target = viewer_url(store_url, page, t=t, product=product, band=band, range=range)
     frame = (
         f'<iframe src="{html.escape(target, quote=True)}" width="100%" height="{int(height)}" '
@@ -698,8 +703,13 @@ def view(
 
 
 def preview_command(store: str | Path) -> str:
-    """The command that previews `store`, printed after `encode` and `convert` succeed."""
+    """The command that previews `store` on this computer, printed after `encode` and `convert`."""
     return f"chronozarr preview {shlex.quote(os.fspath(store))}"
+
+
+def share_command(store: str | Path) -> str:
+    """The command that shares `store` through a public link, printed before `preview_command`."""
+    return f"chronozarr share {shlex.quote(os.fspath(store))}"
 
 
 def _block() -> None:
@@ -756,6 +766,11 @@ def preview(
     else:
         echo(f"viewer: {access.viewer_url}")
     echo(f"open: {target}")
+    if access.route == "loopback":
+        echo(
+            "this link opens only on this computer; for a link others can open, run "
+            f"`{share_command(store)}`"
+        )
     if open_browser and not webbrowser.open(target):
         echo("could not open a browser here; open the URL above in one.")
     echo("press Ctrl-C to stop")

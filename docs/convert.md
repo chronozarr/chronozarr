@@ -105,7 +105,7 @@ chronozarr info my_store
 
 ## Next
 
-- [Preview a store](preview.md) on your computer.
 - [Share a temporary link](share.md).
+- [Preview a store](preview.md) on your computer only.
 - [Publish a permanent link](publish.md).
 - [Analyze a store in Python](analyze.md).

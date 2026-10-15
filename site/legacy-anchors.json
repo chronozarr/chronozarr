@@ -3,7 +3,7 @@
     "how-it-works": "/how-it-works",
     "1-put-dated-geotiffs-in-a-directory": "/quickstart#2-get-a-dated-raster-series",
     "2-convert-and-check-the-store": "/quickstart#3-convert",
-    "3-open-and-share-the-first-view": "/quickstart#4-look-at-it-on-your-computer",
+    "3-open-and-share-the-first-view": "/quickstart#4-share-a-temporary-link",
     "read-a-store-without-chronozarr": "/how-it-works#read-a-store-without-chronozarr",
     "commands": "/reference/cli",
     "javascript": "/reference/javascript",
