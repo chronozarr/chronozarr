@@ -10,6 +10,7 @@
 // mercator projection.
 
 import { openStore } from '../chronozarr/decoder.js';
+import { COLORMAPS, colormapIndex } from '../shared/colormaps.js';
 import { channelBounds, computeStretchLo, describePixel, displayMode, dualPolRanges, findBand, inputConversion, inputIndices, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../shared/products.js';
 import { TEXTURE_FORMATS } from '../shared/texture-formats.js';
 import { buildMesh, FLOATS_PER_VERTEX, MAX_DIVISIONS, originMatrix } from './mesh.js';
@@ -58,6 +59,7 @@ function compile(gl, type, source) {
  * @property {string} [id='chronozarr']  MapLibre layer id
  * @property {string} [product='true_color']  product id (see `layer.products`)
  * @property {number|string} [band=0]  band index or name for the 'band' (single band) product
+ * @property {string} [colormap='gray']  colormap of the 'band' product: 'gray', 'viridis', 'magma' or 'turbo'
  * @property {number} [t=0]  timestep index
  * @property {number} [opacity=1]
  * @property {number} [meshDivisions=8]  quads per cell side in the warp mesh
@@ -89,6 +91,7 @@ export class ChronozarrLayer {
   #t;
   #productId;
   #band;
+  #colormap;
   #opacity;
   #stretchLo;
   #ranges = new Map();
@@ -116,7 +119,7 @@ export class ChronozarrLayer {
 
   /** @param {ChronozarrLayerOptions} options */
   constructor(options) {
-    const { id = 'chronozarr', url, product = 'true_color', band = 0, t = 0, opacity = 1, meshDivisions = 8, gpuBudgetBytes = DEFAULT_GPU_BUDGET_BYTES, lodBias = 0.5, stretchLo = null, range = null, prefetch = false, storeOptions = {} } = options ?? {};
+    const { id = 'chronozarr', url, product = 'true_color', band = 0, colormap = 'gray', t = 0, opacity = 1, meshDivisions = 8, gpuBudgetBytes = DEFAULT_GPU_BUDGET_BYTES, lodBias = 0.5, stretchLo = null, range = null, prefetch = false, storeOptions = {} } = options ?? {};
     if (typeof url !== 'string' || url === '') throw new TypeError('ChronozarrLayer: options.url (the store root URL) is required');
     if (!Number.isInteger(t) || t < 0) throw new RangeError(`ChronozarrLayer: t must be a non-negative integer timestep index, got ${t}`);
     if (!Number.isInteger(meshDivisions) || meshDivisions < 1 || meshDivisions > MAX_DIVISIONS) throw new RangeError(`ChronozarrLayer: meshDivisions must be an integer in 1..${MAX_DIVISIONS}, got ${meshDivisions}`);
@@ -128,6 +131,7 @@ export class ChronozarrLayer {
     this.#t = t;
     this.#productId = product;
     this.#band = band;
+    this.#colormap = ChronozarrLayer.#checkColormap(colormap);
     this.#opacity = ChronozarrLayer.#checkOpacity(opacity);
     this.#stretchLo = stretchLo;
     this.#opened = new Promise((resolve, reject) => {
@@ -154,6 +158,10 @@ export class ChronozarrLayer {
 
   get product() {
     return this.#productId;
+  }
+
+  get colormap() {
+    return COLORMAPS[this.#colormap].id;
   }
 
   /** Timestamps of the store (ISO-8601), or null before it is open. */
@@ -230,6 +238,12 @@ export class ChronozarrLayer {
     if (this.#bandInfo) this.#resolveProduct(id, band);
     this.#productId = id;
     this.#band = band;
+    this.#repaint();
+  }
+
+  /** Colormap of the 'band' product: 'gray', 'viridis', 'magma' or 'turbo'. Other products keep their own colors. */
+  setColormap(id) {
+    this.#colormap = ChronozarrLayer.#checkColormap(id);
     this.#repaint();
   }
 
@@ -430,7 +444,7 @@ export class ChronozarrLayer {
       throw new Error(`ChronozarrLayer: shader link failed: ${log}`);
     }
     const uniforms = {};
-    for (const name of ['u_matrix', 'u_data', 'u_mask', 'u_extent', 'u_dataBase', 'u_maskLayer', 'u_inputs', 'u_product', 'u_display', 'u_rangeLo', 'u_rangeHi', 'u_stretchLo', 'u_hasNodata', 'u_nodata', 'u_opacity', 'u_scale', 'u_divisor', 'u_offset']) {
+    for (const name of ['u_matrix', 'u_data', 'u_mask', 'u_extent', 'u_dataBase', 'u_maskLayer', 'u_inputs', 'u_product', 'u_display', 'u_colormap', 'u_rangeLo', 'u_rangeHi', 'u_stretchLo', 'u_hasNodata', 'u_nodata', 'u_opacity', 'u_scale', 'u_divisor', 'u_offset']) {
       uniforms[name] = gl.getUniformLocation(program, name);
     }
     return { program, uniforms, attributes: { pos: gl.getAttribLocation(program, 'a_pos'), texel: gl.getAttribLocation(program, 'a_texel') }, texture: null, maskTexture: null, pool: null, maskPool: null, indexBuffer: null };
@@ -524,6 +538,13 @@ export class ChronozarrLayer {
         }
       });
     }
+  }
+
+  /** Index in COLORMAPS of a colormap id; throws for an unknown one. */
+  static #checkColormap(id) {
+    const index = colormapIndex(id);
+    if (index < 0) throw new RangeError(`ChronozarrLayer: unknown colormap ${JSON.stringify(id)}; available: ${COLORMAPS.map((colormap) => colormap.id).join(', ')}`);
+    return index;
   }
 
   static #checkOpacity(opacity) {
@@ -882,6 +903,7 @@ export class ChronozarrLayer {
     gl.uniform1i(uniforms.u_product, view.product.shader);
     gl.uniform3i(uniforms.u_inputs, ...view.inputs);
     gl.uniform1i(uniforms.u_display, view.linear ? 1 : 0);
+    gl.uniform1i(uniforms.u_colormap, this.#colormap);
     const { lo, hi } = channelBounds(view.range ?? [0, 1]);
     gl.uniform3f(uniforms.u_rangeLo, ...lo);
     gl.uniform3f(uniforms.u_rangeHi, ...hi);

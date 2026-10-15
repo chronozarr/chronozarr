@@ -24,6 +24,7 @@ Any other address starts where it says. A link with a timestep (`t`) opens at th
 | See a pixel's values over time | Click the map. The inspector shows the values and a chart. Press Escape to close it |
 | Change the product | Choose it in the product list, or press 1 to 9 |
 | Change the display range of one band | Choose Single band, then set the minimum and maximum. Auto fits the range to the pixels on the screen |
+| Color one band | Choose Single band, then pick Viridis, Magma or Turbo in the colormap list. The bar between the minimum and maximum shows the colors |
 | Show where no scene was observed | Click Gaps. It hatches the pixels whose value was carried over from an earlier month. It needs a store with a coverage plane |
 | Copy a link to this view | Click Copy link |
 | Open another store | Paste its URL in the store field and click Open |
@@ -50,7 +51,7 @@ The store names these roles in its band metadata. `chronozarr bands STORE` lists
 
 ## Links to a view
 
-Copy link copies the address of the current view. It holds the store, the timestep, the product, the band and its display range, the zoom and the map centre. It does not hold the playback speed or the loop setting.
+Copy link copies the address of the current view. It holds the store, the timestep, the product, the band with its display range and colormap, the zoom and the map centre. It does not hold the playback speed or the loop setting.
 
 The address uses these parameters:
 
@@ -61,6 +62,7 @@ The address uses these parameters:
 | `p` | Product | `p=ndvi` |
 | `b` | Band, for Single band | `b=B08` |
 | `r` | Display range low,high in physical units, for Single band | `r=0,0.4` |
+| `cm` | Colormap for Single band: `gray`, `viridis`, `magma` or `turbo` | `cm=viridis` |
 | `z` | Zoom, in screen pixels per stored pixel | `z=2.5` |
 | `c` | Map centre x,y in the store's coordinate system | `c=684500,9123350` |
 

@@ -19,6 +19,7 @@ import { FrameMonitor, formatBytes, formatMs, formatRate, hitRate, readStats } f
 import { Renderer } from './renderer.js';
 import { MAX_SCALE, bindViewerInput } from './input.js';
 import { formatValue, sidebarHtml } from './inspector.js';
+import { COLORMAPS, colormapGradient, colormapIndex } from '../shared/colormaps.js';
 import {
   computeStretchLo,
   defaultProductIndex,
@@ -117,6 +118,8 @@ class Viewer {
   products = [];
   productIndex = 0;
   bandChoice = 0;
+  /** Index in COLORMAPS of the single band's colormap; 0 = gray. */
+  colormap = 0;
   /** The store's bands as {name, common_name?, scale, offset, divisor, units?}. */
   bands = [];
   /** Data type of the store: uint8, uint16, int16 or float32. */
@@ -293,6 +296,7 @@ class Viewer {
     this.products = resolveProducts(this.bands);
     this.productIndex = defaultProductIndex(this.products);
     this.bandChoice = 0;
+    this.colormap = 0;
     this.t = 0;
     this.paintedT = -1;
     this.#shown = null;
@@ -312,6 +316,7 @@ class Viewer {
     else if (startT !== null) this.t = startT;
     if (view.productId !== undefined) this.productIndex = this.products.findIndex((p) => p.id === view.productId);
     if (view.bandName !== undefined) this.bandChoice = bandNames.indexOf(view.bandName);
+    if (view.colormapId !== undefined) this.colormap = colormapIndex(view.colormapId);
     if (view.range !== undefined && this.#usesLinearRange()) this.#linear = { range: view.range, manual: true };
     if (options.camera) this.camera = { ...options.camera };
     else if (view.zoom !== undefined || view.center !== undefined) this.#restoreCamera(view);
@@ -515,6 +520,7 @@ class Viewer {
         productId: this.productIndex === defaultProductIndex(this.products) ? null : product.id,
         bandName: product.id === 'band' && this.bandChoice !== 0 ? this.bands[this.bandChoice].name : null,
         range: this.#usesLinearRange() ? this.stretchRange : null,
+        colormapId: product.id === 'band' && this.colormap !== 0 ? COLORMAPS[this.colormap].id : null,
         zoom: atFit ? null : scale / (window.devicePixelRatio || 1),
         center: atFit ? null : { col: cx, row: cy },
       },
@@ -678,6 +684,17 @@ class Viewer {
     this.#channelRanges = null;
     this.#updateProductUi();
     this.#renderChart();
+    this.#dirty = true;
+    this.requestRender();
+    this.#scheduleUrlSync();
+  }
+
+  /** Colormap of the single-band product, an index in COLORMAPS (0 = gray). */
+  setColormap(index) {
+    if (!COLORMAPS[index]) return;
+    this.colormap = index;
+    $('colormap-select').value = String(index);
+    this.#updateStretchUi();
     this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
@@ -1375,6 +1392,7 @@ class Viewer {
       ...inputConversion(product, this.bands, this.bandChoice),
       display: display.mode,
       range: display.range,
+      colormap: this.colormap,
     };
   }
 
@@ -2121,13 +2139,18 @@ class Viewer {
     const select = $('band-select');
     select.replaceChildren(...this.bands.map((band, i) => new Option(band.name, i)));
     select.value = String(this.bandChoice);
+    const colormaps = $('colormap-select');
+    colormaps.replaceChildren(...COLORMAPS.map((colormap, i) => new Option(colormap.name, i)));
+    colormaps.value = String(this.colormap);
     this.#updateProductUi();
   }
 
   #updateProductUi() {
     for (const button of $('products').children) button.classList.toggle('active', Number(button.dataset.index) === this.productIndex);
     $('product-select').value = String(this.productIndex);
-    $('band-select').hidden = this.products[this.productIndex].id !== 'band';
+    const singleBand = this.products[this.productIndex].id === 'band';
+    $('band-select').hidden = !singleBand;
+    $('colormap-select').hidden = !singleBand;
     this.#updateStretchUi();
   }
 
@@ -2136,6 +2159,7 @@ class Viewer {
     const visible = Boolean(this.store) && this.#usesLinearRange();
     $('stretch').hidden = !visible;
     if (!visible) return;
+    $('stretch-ramp').style.backgroundImage = colormapGradient(this.colormap);
     const [lo, hi] = this.#linear.range ?? [0, 1];
     for (const [id, value] of [['stretch-min', lo], ['stretch-max', hi]]) {
       const input = $(id);

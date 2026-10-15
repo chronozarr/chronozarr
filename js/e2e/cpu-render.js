@@ -2,6 +2,7 @@
 // follows renderer.js (the nodata rule, stored -> physical) and products-glsl.js (the color of each product); the
 // tone map gain comes from products.js, which the shader's copy must stay in step with.
 
+import { colormapColor } from '../shared/colormaps.js';
 import { GAIN, channelBounds, dualPolChannels } from '../shared/products.js';
 
 export const BACKGROUND = [0.035, 0.047, 0.071].map((c) => Math.round(c * 255));
@@ -87,5 +88,7 @@ export function shadeTexel(frame, stored) {
     return (frame.unitDivisor[slot] > 0 ? value / frame.unitDivisor[slot] : value * frame.unitScale[slot]) + frame.unitOffset[slot];
   });
   const color = frame.display === 'linear' ? shadeLinear(frame.shader, physical, frame.range) : shade(frame.shader, physical, frame.stretchLo);
-  return color.map((c) => c * 255);
+  // `pseudocolor`: the single band's gray level through its colormap (0 = gray leaves it).
+  const shown = frame.shader === 5 && frame.colormap > 0 ? colormapColor(frame.colormap, color[0]) : color;
+  return shown.map((c) => c * 255);
 }

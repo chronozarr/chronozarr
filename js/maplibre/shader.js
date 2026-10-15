@@ -46,6 +46,7 @@ uniform int u_maskLayer;    // layer of the mask slot (only read when the store 
 uniform ivec3 u_inputs;     // band index per product input, -1 = unused
 uniform int u_product;
 uniform int u_display;      // 0 = tone-mapped reflectance, 1 = linear stretch from u_rangeLo to u_rangeHi per channel
+uniform int u_colormap;     // single band: index in COLORMAPS (colormaps.js), 0 = gray
 uniform vec3 u_rangeLo;
 uniform vec3 u_rangeHi;
 uniform float u_stretchLo;
@@ -79,7 +80,7 @@ ${hasMask ? '  if (texelFetch(u_mask, ivec3(texel, u_maskLayer), 0).r == 0u) dis
   bool empty = (u_inputs.x < 0 || isNodata(v0)) && (u_inputs.y < 0 || isNodata(v1)) && (u_inputs.z < 0 || isNodata(v2));
   if (empty) discard;                                              // no data: the basemap shows through
   vec3 x = toPhysical(vec3(v0, v1, v2));
-  vec4 color = u_display == 1 ? shadeLinear(u_product, x, u_rangeLo, u_rangeHi) : shade(u_product, x, u_stretchLo);
+  vec4 color = pseudocolor(u_product, u_colormap, u_display == 1 ? shadeLinear(u_product, x, u_rangeLo, u_rangeHi) : shade(u_product, x, u_stretchLo));
   outColor = vec4(color.rgb * color.a * u_opacity, color.a * u_opacity);   // premultiplied, as MapLibre blends
 }`;
 }

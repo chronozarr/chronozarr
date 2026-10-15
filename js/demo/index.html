@@ -626,6 +626,14 @@
     font-variant-numeric: tabular-nums;
   }
   .stretch input:focus { border-color: var(--accent); }
+  /* The colormap between the two limits it spans: the legend of the single band. */
+  .stretch-ramp {
+    width: 56px;
+    height: 10px;
+    flex-shrink: 0;
+    border-radius: 2px;
+    border: 1px solid var(--border);
+  }
   .stretch button {
     background: none;
     border: 1px solid var(--border);
@@ -937,9 +945,10 @@
   <div class="products" id="products"></div>
   <select id="product-select" class="product-select" aria-label="Product"></select>
   <select id="band-select" aria-label="Band" hidden></select>
+  <select id="colormap-select" aria-label="Colormap" title="Colormap of the single band" hidden></select>
   <div class="stretch" id="stretch" hidden>
     <input id="stretch-min" type="number" step="any" title="Stretch minimum" aria-label="Stretch minimum">
-    <span>–</span>
+    <span id="stretch-ramp" class="stretch-ramp" role="img" aria-label="Color ramp from minimum to maximum"></span>
     <input id="stretch-max" type="number" step="any" title="Stretch maximum" aria-label="Stretch maximum">
     <button id="stretch-auto" title="Fit the stretch to the data on screen">Auto</button>
   </div>

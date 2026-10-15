@@ -4,7 +4,7 @@
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, test } from './fixtures.js';
-import { captureFrame } from './viewer-helpers.js';
+import { captureFrame, expectFrameMatchesStore } from './viewer-helpers.js';
 
 const PLAYER = path.resolve(import.meta.dirname, '../../src/chronozarr/player.js');
 
@@ -34,6 +34,30 @@ test('limits set in the page reach the address bar and auto limits remove them',
   await expect.poll(() => addressRange(page)).toBe('0,10');
   await page.evaluate(() => window.chronozarr.viewer.autoStretch());
   await expect.poll(() => addressRange(page)).toBeNull();
+});
+
+test('cm= colors the single band; the GPU frame equals the CPU render, and the choice reaches the address bar', async ({ page, servers, storeUrl }) => {
+  // A linear band and a band toned as reflectance: the colormap applies after either.
+  for (const [store, colormap, index] of [['i16_band', 'viridis', 1], ['u16_sharded', 'magma', 2]]) {
+    await openAt(page, servers, await storeUrl(store), `p=band&cm=${colormap}`);
+    const capture = await captureFrame(page);
+    expect(capture.frame.colormap).toBe(index);
+    expectFrameMatchesStore(capture, store, 0);
+    await expect(page.locator('#colormap-select')).toBeVisible();
+    await expect(page.locator('#colormap-select')).toHaveValue(String(index));
+    await expect.poll(() => new URL(page.url()).searchParams.get('cm')).toBe(colormap);
+  }
+  await page.locator('#colormap-select').selectOption({ label: 'Gray' });
+  await expect.poll(() => new URL(page.url()).searchParams.get('cm')).toBeNull();
+  expect((await captureFrame(page)).frame.colormap).toBe(0);
+});
+
+test('the colormap control shows only for the single band, and other products ignore cm=', async ({ page, servers, storeUrl }) => {
+  await openAt(page, servers, await storeUrl('u16_sharded'), 'cm=turbo');
+  await expect(page.locator('#colormap-select')).toBeHidden();
+  const capture = await captureFrame(page);
+  expect(capture.frame.shader).not.toBe(5);
+  expectFrameMatchesStore(capture, 'u16_sharded', 0);
 });
 
 test('r= is ignored where the viewer has no adjustable limits', async ({ page, servers, storeUrl }) => {

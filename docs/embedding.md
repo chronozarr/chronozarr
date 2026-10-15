@@ -48,6 +48,7 @@ All parameters go in the iframe URL. The parameters of the full viewer also work
 | `t` | timestep index | 0 | Initial timestep. |
 | `p` | `true_color`, `false_color`, `ndvi`, `ndwi`, `water`, `band` or `dual_pol` | the first product that the store's bands allow, except `band` | Initial product. `band` is the default only when no other product is allowed. |
 | `b` | band name | first band | Band of the single-band product (`p=band`). |
+| `cm` | `gray`, `viridis`, `magma` or `turbo` | `gray` | Colormap of the single-band product (`p=band`). The viewer ignores it for every other product. |
 | `r` | `low,high` | measured from the data on screen | Display limits of the single-band product, in physical units (`stored * scale + offset`) with `low` below `high`. The viewer ignores it for another product and for a band it tones as reflectance, an unsigned 8-bit or 16-bit band whose largest physical value is 10 or less. The viewer keeps it in its address bar after you set limits. |
 | `z` | number above 0 | the fitted view | Initial zoom in CSS pixels per full-resolution data pixel. The same ground width then shows in a window of any size. |
 | `c` | `x,y` | the store center | Initial view center in the store's projected coordinates. A store with no georeferencing uses level-0 pixels. |
@@ -84,13 +85,14 @@ The viewer ignores messages of other protocols on the same window. It also ignor
 
 #### `chronozarr:set`
 
-A `set` changes the view, and every field is optional. The viewer applies the fields that are present together, in this order: product and band, display range, time, camera, speed, playback.
+A `set` changes the view, and every field is optional. The viewer applies the fields that are present together, in this order: product, band and colormap, display range, time, camera, speed, playback.
 
 | Field | Type | Meaning |
 |---|---|---|
 | `t` | integer or ISO 8601 string | A timestep index (0 to `times.length - 1`) or a date such as `"2024-03-01"` or `"2024-03-01T12:00:00Z"`. A date selects the nearest timestep. The earlier timestep wins a tie. A date outside the series selects the first or last timestep. A date-time without a zone is read as UTC. |
 | `product` | string | A product id from `ready.products` that is `available`. |
 | `band` | string | A band name from `ready.bands`. It chooses the band of the single-band product. Send `product: "band"` with it to show that product. |
+| `colormap` | string | `gray`, `viridis`, `magma` or `turbo`: the colormap of the single-band product. Other products keep their own colors. |
 | `range` | `null` or `[low, high]` | Display limits in physical units for a single band that is shown with a linear stretch. `low` must be below `high`. `null` returns to the range that the viewer measures from the pixels on screen. |
 | `zoom` | number above 0 | CSS pixels per full-resolution data pixel, as in `z=`. The limits are the same as for the mouse: out to half of the fitted view, in to 16 canvas pixels per data pixel. |
 | `center` | `{x, y}` or `{lon, lat}` | View center. `x` and `y` are in the store's coordinates, as in `c=`, or in level-0 pixels for a store with no georeferencing. `lon` and `lat` are WGS84 degrees. They need a georeferenced store whose CRS is WGS84 UTM, EPSG:3857 or EPSG:4326. When `x` and `y` are both present they win, so you can send the `center` of a `chronozarr:view` message back unchanged. |
@@ -143,7 +145,7 @@ The viewer sends `ready` when it has read the store's metadata and set up the vi
   "products": [{ "id": "true_color", "name": "True color", "available": true }],
   "levels": [{ "lod": 0, "width": 2759, "height": 2765, "resolution": 10 }],
   "state": {
-    "t": 0, "time": "2015-11-01T00:00:00Z", "product": "true_color", "band": "B02", "range": null, "zoom": 0.175,
+    "t": 0, "time": "2015-11-01T00:00:00Z", "product": "true_color", "band": "B02", "colormap": "gray", "range": null, "zoom": 0.175,
     "center": { "x": 499445, "y": 9156055, "lon": -75.005032, "lat": -7.634983 },
     "playing": false, "speed": 4
   }

@@ -138,6 +138,16 @@ test('parseCommand: a set with every field', () => {
   assert.deepEqual(result, { kind: 'set', set: { t: { index: 3 }, product: 'ndvi', band: 'B04', zoom: 2.5, center: { lon: 3.1, lat: 36.2 }, playing: true, speed: 12 } });
 });
 
+test('parseCommand: colormap is one of the colormap ids, checked without the store', () => {
+  assert.deepEqual(parseCommand({ type: 'chronozarr:set', colormap: 'magma' }), { kind: 'set', set: { colormap: 'magma' } });
+  for (const colormap of ['jet', '', 3, null]) {
+    const result = parseCommand({ type: 'chronozarr:set', colormap });
+    assert.deepEqual([result.kind, result.code], ['error', 'bad_set'], JSON.stringify(colormap));
+    assert.match(result.message, /^colormap must be one of gray, viridis, magma, turbo/);
+  }
+  assert.deepEqual(resolveSet({ colormap: 'turbo' }, { times: ['2024-01-01'], productIds: ['band'], bandNames: ['a'] }), { ok: true, plan: { colormap: 'turbo' } });
+});
+
 test('parseCommand: an empty set is valid, unknown fields are ignored, v may be left out', () => {
   assert.deepEqual(parseCommand({ type: 'chronozarr:set' }), { kind: 'set', set: {} });
   assert.deepEqual(parseCommand({ type: 'chronozarr:set', t: 0, future: { a: 1 }, __proto__: { x: 1 } }), { kind: 'set', set: { t: { index: 0 } } });
