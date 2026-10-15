@@ -6,7 +6,7 @@
 // has no reading. A series has one value per timestep: a number, null where the pixel has no
 // data (a gap), or undefined where the timestep is not loaded yet.
 
-import { isReflectance, ndvi, ndwi, toPhysical } from '../shared/products.js';
+import { dualPolChannels, isReflectance, ndvi, ndwi, toPhysical } from '../shared/products.js';
 
 // Custom properties of index.html (--series-*), so the lines and the legend follow the palette of the page: bright on the dark chrome, darker on the light one.
 const COLORS = { red: 'var(--series-red)', green: 'var(--series-green)', blue: 'var(--series-blue)', amber: 'var(--series-amber)', grey: 'var(--series-grey)' };
@@ -77,6 +77,22 @@ export function seriesSpecs(product, bands, bandChoice) {
       return [line(product.indices[0], 'red', COLORS.red), line(product.indices[1], 'green', COLORS.green), line(product.indices[2], 'blue', COLORS.blue)];
     case 'false_color':
       return [line(product.indices[0], 'nir', COLORS.red), line(product.indices[1], 'red', COLORS.green), line(product.indices[2], 'green', COLORS.blue)];
+    case 'dual_pol':
+      return [
+        line(i0, 'co-pol', COLORS.red),
+        line(i1, 'cross-pol', COLORS.green),
+        {
+          id: 'ratio',
+          label: 'co/cross ratio',
+          color: COLORS.blue,
+          window: 0,
+          domain: null,
+          compute: ([pixel], nodata) => {
+            const values = pair(pixel, nodata);
+            return values === null ? null : dualPolChannels(...values)[2];
+          },
+        },
+      ];
     case 'ndvi':
       return [index('ndvi', 'NDVI', COLORS.green, ndvi)];
     case 'ndwi':

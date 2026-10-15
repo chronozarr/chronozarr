@@ -6,7 +6,7 @@ import { GAIN, PRODUCTS } from '../shared/products.js';
 
 test('the product GLSL defines shade() and shadeLinear() with stable signatures, and the tone map gain of products.js', () => {
   assert.match(PRODUCT_GLSL, /vec4 shade\(int product, vec3 x, float stretchLo\)/);
-  assert.match(PRODUCT_GLSL, /vec4 shadeLinear\(int product, vec3 x, vec2 range\)/);
+  assert.match(PRODUCT_GLSL, /vec4 shadeLinear\(int product, vec3 x, vec3 lo, vec3 hi\)/);
   assert.match(PRODUCT_GLSL, new RegExp(`const float GAIN = ${GAIN.toFixed(1)};`));
   assert.ok(PRODUCTS.every((p, i) => p.shader === i), 'shader numbers are the product positions the GLSL branches on');
 });

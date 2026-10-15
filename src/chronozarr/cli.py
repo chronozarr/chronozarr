@@ -1158,9 +1158,12 @@ def _print_bands(bands: tuple[Band, ...]) -> None:
                 err=True,
             )
     click.echo("products (the first column is the id for `chronozarr link --product`):")
-    for status in product_status(bands):
+    statuses = product_status(bands)
+    id_width = max(len(status.id) for status in statuses)
+    name_width = max(len(status.name) for status in statuses)
+    for status in statuses:
         detail = "available" if status.available else f"needs {', '.join(status.missing)}"
-        click.echo(f"  {status.id.ljust(11)}  {status.name.ljust(12)}  {detail}")
+        click.echo(f"  {status.id.ljust(id_width)}  {status.name.ljust(name_width)}  {detail}")
 
 
 @main.command("bands")
@@ -1172,7 +1175,8 @@ def bands_command(store: str, band_roles: tuple[str, ...], dry_run: bool) -> Non
 
     The viewer picks the bands of True color, False color, NDVI, NDWI and Water by role: a
     band's common_name, else (when it has none) its name if that is red, green, blue or nir,
-    else its Sentinel-2 name (B04, B03, B02, B08). Nothing else is guessed. For other names,
+    else its Sentinel-2 name (B04, B03, B02, B08). The Dual-pol composite takes the bands named
+    VV and VH, else HH and HV. Nothing else is guessed. For other names,
     --band-role NAME=ROLE sets the common_name in the local STORE, in place: only the root
     zarr.json (and consolidated metadata) changes, never data, scale, offset or units. A hosted
     copy needs its root zarr.json uploaded again and any CDN copy purged.

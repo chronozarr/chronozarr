@@ -21,8 +21,10 @@ import { MAX_SCALE, bindViewerInput } from './input.js';
 import { formatValue, sidebarHtml } from './inspector.js';
 import {
   computeStretchLo,
+  defaultProductIndex,
   describePixel,
   displayMode,
+  dualPolRanges,
   findBand,
   inputConversion,
   inputIndices,
@@ -149,6 +151,8 @@ class Viewer {
   #stretchLo = null;
   /** Linear stretch of a single band that is not reflectance: the [lo, hi] range (null until measured) and whether the user set it. */
   #linear = { range: null, manual: false };
+  /** The three per-channel [lo, hi] ranges of the dual-pol composite (null until measured). Held while the timestep changes. */
+  #channelRanges = null;
   /** The canvas must be painted again even if the frame to show is the one already on it (the camera, product or size changed). */
   #dirty = true;
   /** The frame on the canvas: {lod, t, cells (a Set of "row/col"), kind}; null until the first one. */
@@ -283,10 +287,11 @@ class Viewer {
     this.#movieMemo = null;
     this.#clearScrub();
     this.#linear = { range: null, manual: false };
+    this.#channelRanges = null;
     this.#gaps = { visible: false, masks: new Map(), requested: new Set() };
     this.#drawGapOverlay();
     this.products = resolveProducts(this.bands);
-    this.productIndex = this.products.findIndex((p) => p.available);
+    this.productIndex = defaultProductIndex(this.products);
     this.bandChoice = 0;
     this.t = 0;
     this.paintedT = -1;
@@ -507,7 +512,7 @@ class Viewer {
     const view = encodeView(
       {
         t: this.t === 0 ? null : this.t,
-        productId: this.productIndex === this.products.findIndex((p) => p.available) ? null : product.id,
+        productId: this.productIndex === defaultProductIndex(this.products) ? null : product.id,
         bandName: product.id === 'band' && this.bandChoice !== 0 ? this.bands[this.bandChoice].name : null,
         range: this.#usesLinearRange() ? this.stretchRange : null,
         zoom: atFit ? null : scale / (window.devicePixelRatio || 1),
@@ -670,6 +675,7 @@ class Viewer {
     if (!this.products[index]?.available) return;
     this.productIndex = index;
     this.#linear = { range: null, manual: false };
+    this.#channelRanges = null;
     this.#updateProductUi();
     this.#renderChart();
     this.#dirty = true;
@@ -797,6 +803,7 @@ class Viewer {
     }
     if (this.#stretchLo === null) this.#stretchLo = this.#computeStretch(lod, cells, t);
     if (this.#linear.range === null && this.#usesLinearRange()) this.#measureLinear(lod, cells, t);
+    if (this.#channelRanges === null && this.#usesChannelRanges()) this.#measureChannelRanges(lod, cells, t);
     renderer.beginPaint(
       {
         width: canvas.width,
@@ -1371,9 +1378,13 @@ class Viewer {
     };
   }
 
-  /** How the product is shown (see displayMode): a linear stretch that is not fixed uses the measured or user-set range. */
+  /**
+   * How the product is shown (see displayMode): a linear stretch that is not fixed uses the measured or user-set range,
+   * and a per-channel one the ranges measured for its channels.
+   */
   #display(product) {
     const display = displayMode(product, this.bands, this.bandChoice, this.dtype);
+    if (display.perChannel) return { ...display, range: this.#channelRanges ?? [0, 1] };
     return display.mode === 'linear' && !display.fixed ? { ...display, range: this.#linear.range ?? [0, 1] } : display;
   }
 
@@ -1382,12 +1393,17 @@ class Viewer {
     return display.mode === 'linear' && !display.fixed;
   }
 
-  /** The range of a linear single band from the data on screen: 2nd to 98th percentile of the valid physical values. */
-  #measureLinear(lod, cells, t) {
+  #usesChannelRanges() {
+    return Boolean(displayMode(this.products[this.productIndex], this.bands, this.bandChoice, this.dtype).perChannel);
+  }
+
+  /**
+   * Calls `visit` with the stored values (one per band) of about STRETCH_SAMPLES_PER_CELL pixels of each cell at
+   * timestep t, leaving out the pixels the validity mask marks invalid.
+   */
+  #sampleCells(lod, cells, t, visit) {
     const { store } = this;
     const level = store.levels[lod];
-    const band = this.bands[this.bandChoice];
-    const values = [];
     for (const [row, col] of cells) {
       const { width, height } = store.cellExtent(lod, row, col);
       const mask = this.#peekMaskOrNull(lod, row, col, t);
@@ -1395,13 +1411,34 @@ class Viewer {
       for (let i = 0; i < width * height; i += stride) {
         const [x, y] = [i % width, Math.floor(i / width)];
         if (mask && mask[y * level.chunkWidth + x] === 0) continue;
-        const stored = store.samplePixel(lod, row, col, t, x, y)?.[this.bandChoice];
-        if (stored !== undefined && stored !== this.#nodata && Number.isFinite(stored)) values.push(toPhysical(stored, band));
+        const values = store.samplePixel(lod, row, col, t, x, y);
+        if (values) visit(values);
       }
     }
+  }
+
+  /** The range of a linear single band from the data on screen: 2nd to 98th percentile of the valid physical values. */
+  #measureLinear(lod, cells, t) {
+    const band = this.bands[this.bandChoice];
+    const values = [];
+    this.#sampleCells(lod, cells, t, (stored) => {
+      const value = stored[this.bandChoice];
+      if (value !== this.#nodata && Number.isFinite(value)) values.push(toPhysical(value, band));
+    });
     const range = percentileRange(values);
     if (range) this.#linear = { range, manual: false };
     this.#updateStretchUi();
+  }
+
+  /** The ranges of the dual-pol composite from the data on screen (see dualPolRanges); kept until the product or the store changes. */
+  #measureChannelRanges(lod, cells, t) {
+    const [copol, crosspol] = this.products[this.productIndex].indices;
+    const samples = [];
+    this.#sampleCells(lod, cells, t, (stored) => {
+      if (stored[copol] === this.#nodata || stored[crosspol] === this.#nodata) return;
+      samples.push([toPhysical(stored[copol], this.bands[copol]), toPhysical(stored[crosspol], this.bands[crosspol])]);
+    });
+    this.#channelRanges = dualPolRanges(samples);
   }
 
   get stretchRange() { return this.#linear.manual ? [...this.#linear.range] : null; }
@@ -1428,22 +1465,10 @@ class Viewer {
 
   /** 2nd percentile of tone-mapped true-color samples (physical reflectance), kept fixed while scrubbing. 0 without red, green and blue bands. */
   #computeStretch(lod, cells, t) {
-    const { store } = this;
     const idx = ['red', 'green', 'blue'].map((common) => findBand(this.bands, common));
     if (idx.some((i) => i < 0)) return 0;
-    const level = store.levels[lod];
     const samples = [];
-    for (const [row, col] of cells) {
-      const { width, height } = store.cellExtent(lod, row, col);
-      const mask = this.#peekMaskOrNull(lod, row, col, t);
-      const stride = Math.max(1, Math.floor((width * height) / STRETCH_SAMPLES_PER_CELL));
-      for (let i = 0; i < width * height; i += stride) {
-        const [x, y] = [i % width, Math.floor(i / width)];
-        if (mask && mask[y * level.chunkWidth + x] === 0) continue;
-        const values = store.samplePixel(lod, row, col, t, x, y);
-        if (values) samples.push(idx.map((b) => toPhysical(values[b], this.bands[b])));
-      }
-    }
+    this.#sampleCells(lod, cells, t, (values) => samples.push(idx.map((b) => toPhysical(values[b], this.bands[b]))));
     return computeStretchLo(samples);
   }
 

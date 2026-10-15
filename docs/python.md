@@ -75,6 +75,8 @@ Band names are free text. The viewer chooses the bands of True color, False colo
 
 The first rule that matches decides. Nothing else is guessed: `band_1`, `NIR1` or `b4` have no role. A product whose roles are missing is not offered.
 
+The Dual-pol composite needs the roles `copol` and `crosspol`. Bands named VV and VH have them, or else bands named HH and HV, in any case. A name counts only as part of a pair, so VV with HV has no role. A band with the `common_name` `copol` or `crosspol` has that role first. `--band-role` does not set these two.
+
 ```sh
 chronozarr bands my_store                                  # bands, roles, products
 chronozarr bands my_store --band-role b4=red,b8=nir --dry-run
@@ -90,7 +92,7 @@ The initial product and display limits are presentation. They are not stored in 
 | Parameter | `player` and `view` argument | Meaning |
 |---|---|---|
 | `t` | `t` | Timestep index |
-| `p` | `product` | `true_color`, `false_color`, `ndvi`, `ndwi`, `water` or `band` |
+| `p` | `product` | `true_color`, `false_color`, `ndvi`, `ndwi`, `water`, `band` or `dual_pol` |
 | `b` | `band` | Band of the single-band product |
 | `r` | `range` | Display limits `low,high` of the single-band product, in physical units |
 

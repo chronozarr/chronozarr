@@ -45,6 +45,37 @@ test('MapLibre demo: the layer opens a synthetic store, reports ready, follows t
   }
 });
 
+test('MapLibre demo: a SAR store with HH and HV offers the dual-pol composite and draws it in color', async ({ page, servers, storeUrl }) => {
+  await page.route(/^https:\/\/cdn\.jsdelivr\.net\//, (route) => route.continue());
+  await page.route('https://demotiles.maplibre.org/style.json', (route) => route.fulfill({ json: EMPTY_STYLE }));
+  await page.goto(`${servers.appUrl}/maplibre/index.html?store=${encodeURIComponent(await storeUrl('u16_sar'))}&p=dual_pol`);
+  await expect(page.locator('#status')).toHaveAttribute('data-state', 'ready', { timeout: 30_000 });
+  await expect(page.locator('#error')).toBeEmpty();
+  expect(await page.evaluate(() => window.chronozarrDemo.layer.products.filter((p) => p.available).map((p) => p.id))).toEqual(['band', 'dual_pol']);
+  await expect(page.locator('#products button[aria-pressed="true"]')).toHaveText('Dual-pol composite');
+
+  // Read the drawing buffer inside a render event, where it still holds the frame: the middle of the map is inside
+  // the store, where HH, HV and their ratio get three different stretches, so some pixel there is not gray.
+  const spread = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const { map } = window.chronozarrDemo;
+        map.once('render', () => {
+          const canvas = map.getCanvas();
+          const gl = canvas.getContext('webgl2');
+          const side = 40;
+          const pixels = new Uint8Array(side * side * 4);
+          gl.readPixels(Math.floor(canvas.width / 2 - side / 2), Math.floor(canvas.height / 2 - side / 2), side, side, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+          let widest = 0;
+          for (let i = 0; i < pixels.length; i += 4) widest = Math.max(widest, Math.max(pixels[i], pixels[i + 1], pixels[i + 2]) - Math.min(pixels[i], pixels[i + 1], pixels[i + 2]));
+          resolve(widest);
+        });
+        map.triggerRepaint();
+      }),
+  );
+  expect(spread, 'widest gap between a pixel\'s red, green and blue').toBeGreaterThan(40);
+});
+
 // Keep the host map/context alive: deleting a whole canvas can hide custom-layer leaks.
 test('repeated layer removal releases cache and GPU handles while reusing decode workers', async ({ page, servers, storeUrl }) => {
   test.setTimeout(90_000);

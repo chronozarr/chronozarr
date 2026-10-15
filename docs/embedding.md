@@ -46,7 +46,7 @@ All parameters go in the iframe URL. The parameters of the full viewer also work
 | `theme` | `light` | `dark` | Uses the light palette for the chrome (header, timeline, inspector). The canvas and its pixels are the same in both themes. Needs `embed=1`. |
 | `origin` | URL-encoded origin of the host page | the origin of `document.referrer` | The only origin that the viewer listens to and sends to. See section 3. |
 | `t` | timestep index | 0 | Initial timestep. |
-| `p` | `true_color`, `false_color`, `ndvi`, `ndwi`, `water` or `band` | the first product that the store's bands allow | Initial product. |
+| `p` | `true_color`, `false_color`, `ndvi`, `ndwi`, `water`, `band` or `dual_pol` | the first product that the store's bands allow, except `band` | Initial product. `band` is the default only when no other product is allowed. |
 | `b` | band name | first band | Band of the single-band product (`p=band`). |
 | `r` | `low,high` | measured from the data on screen | Display limits of the single-band product, in physical units (`stored * scale + offset`) with `low` below `high`. The viewer ignores it for another product and for a band it tones as reflectance, an unsigned 8-bit or 16-bit band whose largest physical value is 10 or less. The viewer keeps it in its address bar after you set limits. |
 | `z` | number above 0 | the fitted view | Initial zoom in CSS pixels per full-resolution data pixel. The same ground width then shows in a window of any size. |

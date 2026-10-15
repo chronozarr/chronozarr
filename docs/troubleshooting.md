@@ -38,7 +38,7 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 
 | Symptom | Cause and fix |
 |---|---|
-| Only Single band is offered | The viewer does not know which band is red, green, blue or near infrared. Set the roles with `chronozarr bands STORE --band-role NAME=ROLE`. See [Band roles](python.md#band-roles-and-the-first-view) |
+| Only Single band is offered | The viewer does not know which band is red, green, blue or near infrared, or which two are VV and VH or HH and HV. Set the roles with `chronozarr bands STORE --band-role NAME=ROLE`. See [Band roles](python.md#band-roles-and-the-first-view) |
 | `Store on this computer not reachable` | The viewer page is on the internet and the store on your computer. Check that `preview` still runs, allow the page to reach your local network when Chrome asks, or use Chrome or Firefox instead of Safari |
 | `Shared link not available` | The temporary link from `chronozarr share` has stopped. Ask the sender for a new one |
 | True color looks white or black | The bands may lack their scale. A Sentinel-2 band stored as 0 to 10000 needs a scale of 0.0001. Check with `chronozarr bands STORE` |

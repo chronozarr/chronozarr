@@ -85,7 +85,7 @@ The `x` and `y` coordinates are the projected pixel centres. See [How it works](
 
 ## Band roles
 
-The viewer offers True color, False color, NDVI, NDWI and Water when it knows which band is red, green, blue and near infrared. It recognizes the names `red`, `green`, `blue` and `nir`, and the Sentinel-2 names `B02`, `B03`, `B04` and `B08`. For other names, set the roles:
+The viewer offers True color, False color, NDVI, NDWI and Water when it knows which band is red, green, blue and near infrared. It recognizes the names `red`, `green`, `blue` and `nir`, and the Sentinel-2 names `B02`, `B03`, `B04` and `B08`. It offers the Dual-pol composite for bands named VV and VH, or HH and HV. For other names, set the roles:
 
 ```bash
 chronozarr bands my_store                              # list bands, roles and products

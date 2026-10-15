@@ -71,10 +71,10 @@ test('a float32 single-band store: only the single band, with an adjustable line
   assert.equal(series.values[1], null, 'NaN is a gap');
 });
 
-test('a v0.3 store with explicit reflectance scales supports every product', async () => {
+test('a v0.3 store with explicit reflectance scales supports every optical product', async () => {
   const { store, bands, products } = await open({ ...base, nBand: 4, bands: ['B02', 'B03', 'B04', 'B08'], values: (t, b, y, x) => 1000 + 100 * b + x + t });
   assert.equal(store.attrs.spec_version, '0.3.0');
-  assert.ok(Object.values(products).every((p) => p.available));
+  assert.deepEqual(Object.values(products).filter((p) => !p.available).map((p) => p.id), ['dual_pol'], 'every product but the SAR one');
   assert.deepEqual(products.true_color.indices, [2, 1, 0]);
   assert.deepEqual(products.ndvi.indices.slice(0, 2), [3, 2]);
   const conversion = inputConversion(products.ndvi, bands, 0);

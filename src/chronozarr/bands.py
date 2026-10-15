@@ -1,11 +1,13 @@
-"""Band roles: which bands answer to red, green, blue and nir, and which viewer products follow.
+"""Band roles: which bands answer to red, green, blue, nir, copol and crosspol, and which viewer
+products follow.
 
 A store names its bands freely. The viewer picks the bands of a product (True color, NDVI, ...) by
 role, using the band's `common_name` (the STAC `eo:bands` vocabulary, spec 4.4). A band without a
 `common_name` also answers to a role when its name is the role ("red") or the Sentinel-2 name for
-it ("B04"). Nothing else is guessed. `assign_roles` and `set_band_roles` write `common_name`, the
-existing spec field, so the assignment travels with the store. The tables below mirror
-js/shared/products.js; tests/test_bands.py fails when they drift.
+it ("B04"). The SAR roles `copol` and `crosspol` take a band name only as a pair: VV with VH, else
+HH with HV (any case). Nothing else is guessed. `assign_roles` and `set_band_roles` write
+`common_name`, the existing spec field, so the assignment travels with the store. The tables below
+mirror js/shared/products.js; tests/test_bands.py fails when they drift.
 """
 
 from __future__ import annotations
@@ -43,8 +45,13 @@ STAC_COMMON_NAMES = (
 )
 
 # Roles the viewer's products ask for, and the Sentinel-2 band name that stands in for each.
-PRODUCT_ROLES = ("red", "green", "blue", "nir")
+PRODUCT_ROLES = ("red", "green", "blue", "nir", "copol", "crosspol")
 SENTINEL2_NAMES = {"blue": "B02", "green": "B03", "red": "B04", "nir": "B08"}
+
+# The SAR roles, and the (copol, crosspol) band names (lower case) a store may use for them, in the
+# order the viewer prefers them. A band name stands for a role only together with its partner.
+POLARISATION_ROLES = ("copol", "crosspol")
+POLARISATION_PAIRS = (("vv", "vh"), ("hh", "hv"))
 
 # (id, display name, roles it needs), in viewer order. The single-band product needs none.
 PRODUCTS = (
@@ -54,6 +61,7 @@ PRODUCTS = (
     ("ndwi", "NDWI", ("green", "nir")),
     ("water", "Water", ("green", "nir")),
     ("band", "Single band", ()),
+    ("dual_pol", "Dual-pol composite", ("copol", "crosspol")),
 )
 
 CLEAR = "none"  # in a role assignment: remove the band's common_name
@@ -80,15 +88,29 @@ class ProductStatus:
     missing: tuple[str, ...]  # roles no band answers to
 
 
+def _polarisation_name(bands: Sequence[Band], role: str) -> str | None:
+    """The lower-case band name that stands for the SAR `role`: the member of the first pair of
+    POLARISATION_PAIRS whose two bands both have no `common_name`. None when no pair is there.
+    """
+    names = {b.name.lower() for b in bands if b.common_name is None}
+    pair = next((pair for pair in POLARISATION_PAIRS if names.issuperset(pair)), None)
+    return None if pair is None else pair[POLARISATION_ROLES.index(role)]
+
+
 def resolve_role(bands: Sequence[Band], role: str) -> RoleResolution:
     """The bands that answer to `role`, in the order the viewer tries: a declared `common_name`,
-    else a band with no `common_name` named like the role, else one named like its Sentinel-2
-    band. The first rule that matches anything decides.
+    else a band with no `common_name` named like the role (for a SAR role, named like its member
+    of a polarisation pair), else one named like its Sentinel-2 band. The first rule that matches
+    anything decides.
     """
     sentinel2 = SENTINEL2_NAMES.get(role)
+    named = _polarisation_name(bands, role) if role in POLARISATION_ROLES else role
     rules = (
         ("common_name", lambda b: b.common_name == role),
-        ("name", lambda b: b.common_name is None and b.name.lower() == role),
+        (
+            "name",
+            lambda b: named is not None and b.common_name is None and b.name.lower() == named,
+        ),
         (
             "Sentinel-2 name",
             lambda b: sentinel2 is not None and b.common_name is None and b.name == sentinel2,

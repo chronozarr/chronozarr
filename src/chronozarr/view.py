@@ -421,10 +421,10 @@ def viewer_url(
     """URL that opens `store_url` in the viewer, optionally at a timestep, product and display.
 
     `t` is a timestep index, `product` a viewer product id (`true_color`, `false_color`, `ndvi`,
-    `ndwi`, `water`, `band`), `band` the band of the single-band product, and `range` its display
-    limits (low, high) in physical units. They are presentation only: the store is not touched,
-    and anyone who opens the URL sees the same initial view. The viewer ignores a value the
-    store cannot honour, so check them first with `chronozarr link`.
+    `ndwi`, `water`, `band`, `dual_pol`), `band` the band of the single-band product, and `range`
+    its display limits (low, high) in physical units. They are presentation only: the store is
+    not touched, and anyone who opens the URL sees the same initial view. The viewer ignores a
+    value the store cannot honour, so check them first with `chronozarr link`.
     """
     query = [f"store={urllib.parse.quote(store_url, safe='')}"]
     if t is not None:

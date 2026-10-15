@@ -54,7 +54,7 @@ map.on('click', async (e) => console.log(await layer.getValueAt(e.lngLat))); // 
 | `gpuBudgetBytes` | 256 MiB | The size of the GPU texture pool. |
 | `lodBias` | 0.5 | The bias of the pyramid level choice. Negative values pick finer levels. See [Level of detail](#level-of-detail). |
 | `stretchLo` | measured once from the first complete view | The shadow-lift stretch of reflectance products. |
-| `range` | measured per band from the first complete view | `[min, max]` in physical units for single-band products that use a linear stretch. |
+| `range` | measured per band from the first complete view | `[min, max]` in physical units for single-band products that use a linear stretch. The `dual_pol` product always measures its own ranges. |
 | `storeOptions` | `{}` | The options that the layer passes to `openStore`: `fetch`, `workers`, `decodedBytes` and others. |
 
 ### Methods
@@ -62,7 +62,7 @@ map.on('click', async (e) => console.log(await layer.getValueAt(e.lngLat))); // 
 | Method | Description |
 |---|---|
 | `setTime(t)` | Shows timestep `t`, an integer index into `layer.times`. Throws `RangeError` outside the axis. |
-| `setProduct(id, band?)` | Shows `true_color`, `false_color`, `ndvi`, `ndwi`, `water` or `band`. Once the store has opened, it throws `RangeError` when the store lacks the bands. |
+| `setProduct(id, band?)` | Shows `true_color`, `false_color`, `ndvi`, `ndwi`, `water`, `band` or `dual_pol`. Once the store has opened, it throws `RangeError` when the store lacks the bands. |
 | `setOpacity(o)` | Sets the opacity from 0 to 1. |
 | `getValueAt(lngLat, { t }?)` | Returns a promise of the stored values at a map position, or of `null` outside the footprint. The values come from the finest level. See below. |
 | `on(type, fn)` | Adds a listener and returns a function that removes it. |
@@ -107,6 +107,7 @@ The product colors are `PRODUCT_GLSL` from `js/shared/products-glsl.js`, the sam
 
 - An 8-bit RGB store, with scale 1 and offset 0, is shown as stored.
 - A single band gets a linear stretch unless it looks like reflectance. A band looks like reflectance when the largest value of its dtype is 10 or less after scale and offset. The stretch runs from the 2nd to the 98th percentile of the valid values on screen, or over `range` in physical units.
+- The `dual_pol` product draws the co-pol band in red, the cross-pol band in green and their difference in dB in blue. Each channel is stretched from its 2nd to its 98th percentile, measured once from the first complete view.
 - Every other product keeps the tone-mapped reflectance look.
 
 ## Limits

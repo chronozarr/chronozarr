@@ -42,6 +42,9 @@ The viewer computes each product on your graphics card from the stored bands. A 
 | NDWI | green, near infrared |
 | Water | green, near infrared |
 | Single band | any one band |
+| Dual-pol composite | co-pol and cross-pol, in dB |
+
+The Dual-pol composite draws co-pol in red, cross-pol in green and their ratio in dB in blue. The co-pol and cross-pol bands are the bands named VV and VH, or HH and HV. The viewer sets each channel's range once, from the first pixels on the screen, and keeps it while you step through time. A store with such a pair opens on this product.
 
 The store names these roles in its band metadata. `chronozarr bands STORE` lists them and sets them. See [Band roles and the first view](python.md#band-roles-and-the-first-view).
 

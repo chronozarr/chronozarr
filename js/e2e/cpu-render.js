@@ -2,7 +2,7 @@
 // follows renderer.js (the nodata rule, stored -> physical) and products-glsl.js (the color of each product); the
 // tone map gain comes from products.js, which the shader's copy must stay in step with.
 
-import { GAIN } from '../shared/products.js';
+import { GAIN, channelBounds, dualPolChannels } from '../shared/products.js';
 
 export const BACKGROUND = [0.035, 0.047, 0.071].map((c) => Math.round(c * 255));
 
@@ -64,9 +64,11 @@ function shade(product, x, lo) {
   return [gray, gray, gray];
 }
 
-/** `shadeLinear`: a straight stretch of [range[0], range[1]], gray for the single band. */
+/** `shadeLinear`: a straight stretch of each channel between its lo and hi (`range`: see channelBounds), gray for the single band. */
 function shadeLinear(product, x, range) {
-  const n = x.map((v) => clamp01((v - range[0]) / (range[1] - range[0])));
+  const { lo, hi } = channelBounds(range);
+  const channels = product === 6 ? dualPolChannels(x[0], x[1]) : x;
+  const n = channels.map((v, i) => clamp01((v - lo[i]) / (hi[i] - lo[i])));
   return product === 5 ? [n[0], n[0], n[0]] : n;
 }
 

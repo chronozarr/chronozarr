@@ -23,6 +23,9 @@ const wobbled = (nodataValue) => {
   };
 };
 
+/** HH and HV stored values: HV is the same pattern with x and y swapped, so the three channels of the composite differ. */
+const sarValues = (t, b, y, x, lod = 0) => defaultValues('uint16')(t, 0, b === 0 ? y : x, b === 0 ? x : y, lod);
+
 /** Sentinel-2 band names in file order: blue, green, red, nir. */
 const S2_BANDS = ['B02', 'B03', 'B04', 'B08'];
 const ALL_PRODUCTS = ['True color', 'False color', 'NDVI', 'NDWI', 'Water', 'Single band'];
@@ -90,6 +93,21 @@ export const STORES = {
     dtype: 'uint16',
     spec: { ...BASE, nBand: 4, bands: S2_BANDS, specVersion: '0.3.0', nodata: 0, mask: true, transform: GEOREFERENCE, values: wobbled(0) },
     enabledProducts: ALL_PRODUCTS,
+  },
+  // SAR backscatter in dB (physical = stored * 0.01 - 60), HH and HV, with a validity mask, as the NISAR store has it.
+  u16_sar: {
+    dtype: 'uint16',
+    spec: {
+      ...BASE,
+      nBand: 2,
+      specVersion: '0.3.0',
+      nodata: null,
+      mask: true,
+      transform: GEOREFERENCE,
+      bandObjects: [{ name: 'HH', scale: 0.01, offset: -60, units: 'dB' }, { name: 'HV', scale: 0.01, offset: -60, units: 'dB' }],
+      values: sarValues,
+    },
+    enabledProducts: ['Single band', 'Dual-pol composite'],
   },
   // 1792 x 1024 pixels x 4 bands: a level-0 frame of 14.7 MB that takes over a second at the bandwidth the viewer
   // assumes before it has measured any, so the viewer stages it (a coarse level first). One file per chunk.

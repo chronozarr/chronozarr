@@ -153,7 +153,7 @@ for (const width of [400, 900]) {
       await expect(wordmark).toHaveAttribute('rel', /noopener/);
 
       // The product control (buttons from 700 px, a select below) and the timeline stay.
-      if (width >= 700) await expect(page.locator('#products button')).toHaveCount(6);
+      if (width >= 700) await expect(page.locator('#products button')).toHaveCount(7);
       else await expect(page.locator('#product-select')).toBeVisible();
       for (const id of ['play-btn', 'prev-btn', 'next-btn', 'time-label', 'timeline-track']) await expect(page.locator(`#${id}`), id).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'no horizontal scroll').toBe(true);
@@ -293,7 +293,7 @@ test.describe('postMessage', () => {
     expect(ready.store).toEqual({ url: store, name: STORE, crs: 'EPSG:32631' });
     expect(ready.times).toEqual(Array.from({ length: 6 }, (_, t) => `2024-01-${String(t + 1).padStart(2, '0')}T00:00:00Z`));
     expect(ready.bands.map((b) => [b.name, b.scale, b.units])).toEqual([['B02', 1e-4, null], ['B03', 1e-4, null], ['B04', 1e-4, null], ['B08', 1e-4, null]]);
-    expect(ready.products.map((p) => [p.id, p.available])).toEqual([['true_color', true], ['false_color', true], ['ndvi', true], ['ndwi', true], ['water', true], ['band', true]]);
+    expect(ready.products.map((p) => [p.id, p.available])).toEqual([['true_color', true], ['false_color', true], ['ndvi', true], ['ndwi', true], ['water', true], ['band', true], ['dual_pol', false]]);
     expect(ready.levels).toEqual([{ lod: 0, width: 200, height: 200, resolution: 10 }, { lod: 1, width: 100, height: 100, resolution: 20 }]);
     expect(ready.state).toMatchObject({ t: 0, time: '2024-01-01T00:00:00Z', product: 'true_color', band: 'B02', playing: false });
     expect(ready.state.zoom).toBeGreaterThan(0);

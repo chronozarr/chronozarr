@@ -11,6 +11,7 @@
 // the mask is 0 the shader writes the background color (opaque, so painting over the previous frame cannot leave
 // the previous timestep's pixel behind), and the store's nodata value is not compared (spec 2.3).
 
+import { channelBounds } from '../shared/products.js';
 import { PRODUCT_GLSL } from '../shared/products-glsl.js';
 import { TEXTURE_FORMATS } from '../shared/texture-formats.js';
 
@@ -56,8 +57,9 @@ uniform vec2 u_extent;
 uniform int u_dataBase;     // first layer of the true-value data slot
 uniform ivec3 u_inputs;     // band index per product input, -1 = unused
 uniform int u_product;
-uniform int u_display;      // 0 = tone-mapped reflectance, 1 = linear stretch of u_range
-uniform vec2 u_range;
+uniform int u_display;      // 0 = tone-mapped reflectance, 1 = linear stretch from u_rangeLo to u_rangeHi per channel
+uniform vec3 u_rangeLo;
+uniform vec3 u_rangeHi;
 uniform float u_stretch_lo;
 uniform int u_hasNodata;    // the store declares a nodata value and has no mask
 uniform float u_nodata;
@@ -96,7 +98,7 @@ ${hasMask ? `  if (texelFetch(u_mask, ivec3(texel, u_maskLayer), 0).r == 0u) {  
     return;
   }
   vec3 x = toPhysical(vec3(v0, v1, v2));
-  outColor = u_display == 1 ? shadeLinear(u_product, x, u_range) : shade(u_product, x, u_stretch_lo);
+  outColor = u_display == 1 ? shadeLinear(u_product, x, u_rangeLo, u_rangeHi) : shade(u_product, x, u_stretch_lo);
 }`;
 }
 
@@ -112,7 +114,7 @@ function compile(gl, type, source) {
   return shader;
 }
 
-const UNIFORM_NAMES = ['u_canvas', 'u_view', 'u_cell', 'u_extent', 'u_data', 'u_mask', 'u_maskLayer', 'u_dataBase', 'u_inputs', 'u_product', 'u_display', 'u_range', 'u_stretch_lo', 'u_hasNodata', 'u_nodata', 'u_scale', 'u_divisor', 'u_offset'];
+const UNIFORM_NAMES = ['u_canvas', 'u_view', 'u_cell', 'u_extent', 'u_data', 'u_mask', 'u_maskLayer', 'u_dataBase', 'u_inputs', 'u_product', 'u_display', 'u_rangeLo', 'u_rangeHi', 'u_stretch_lo', 'u_hasNodata', 'u_nodata', 'u_scale', 'u_divisor', 'u_offset'];
 
 export class Renderer {
   #gl;
@@ -361,7 +363,9 @@ export class Renderer {
     gl.uniform3i(this.#uniforms.u_inputs, ...f.inputs);
     gl.uniform1f(this.#uniforms.u_stretch_lo, f.stretchLo);
     gl.uniform1i(this.#uniforms.u_display, f.display === 'linear' ? 1 : 0);
-    gl.uniform2f(this.#uniforms.u_range, ...(f.range ?? [0, 1]));
+    const { lo, hi } = channelBounds(f.range ?? [0, 1]);
+    gl.uniform3f(this.#uniforms.u_rangeLo, ...lo);
+    gl.uniform3f(this.#uniforms.u_rangeHi, ...hi);
     gl.uniform1i(this.#uniforms.u_hasNodata, f.nodata === null ? 0 : 1);
     gl.uniform1f(this.#uniforms.u_nodata, f.nodata ?? 0);
     gl.uniform3f(this.#uniforms.u_scale, ...f.unitScale);

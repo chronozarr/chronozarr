@@ -14,6 +14,7 @@ from click.testing import CliRunner
 import chronozarr
 from chronozarr import schema
 from chronozarr.bands import (
+    POLARISATION_PAIRS,
     PRODUCT_ROLES,
     PRODUCTS,
     SENTINEL2_NAMES,
@@ -93,6 +94,66 @@ def test_product_status_names_the_missing_roles():
     assert statuses["ndvi"].missing == ("nir",)
     assert statuses["false_color"].missing == ("nir",)
     assert statuses["band"].available and statuses["band"].missing == ()
+    assert statuses["dual_pol"].missing == ("copol", "crosspol")
+
+
+# --- SAR roles: js/test/dual-pol.test.js holds the same cases ---
+
+
+def _pair(*bands: Band) -> tuple[str | None, str | None]:
+    """The names of the bands that answer to copol and crosspol (None where no band does)."""
+    resolved = resolve_roles(list(bands))
+    copol, crosspol = resolved["copol"].bands, resolved["crosspol"].bands
+    return (copol[0] if copol else None, crosspol[0] if crosspol else None)
+
+
+@pytest.mark.parametrize(
+    ("names", "expected"),
+    [
+        (("VV", "VH"), ("VV", "VH")),
+        (("VH", "VV"), ("VV", "VH")),
+        (("HH", "HV"), ("HH", "HV")),
+        (("mask_x", "hv", "Hh"), ("Hh", "hv")),
+        (("HH", "HV", "VH", "VV"), ("VV", "VH")),  # quad-pol: VV with VH wins
+        (("VV", "VH", "HH", "HV"), ("VV", "VH")),
+        (("HH", "HV", "VV"), ("HH", "HV")),  # no VH: HH with HV
+        (("HH", "HV", "VH"), ("HH", "HV")),  # no VV: HH with HV
+        (("VV", "HV"), (None, None)),  # VV is never paired with HV
+        (("HH", "VH"), (None, None)),  # nor HH with VH
+        (("VV",), (None, None)),
+        (("VH", "HV"), (None, None)),
+        (("VV", "HH"), (None, None)),
+    ],
+)
+def test_sar_roles_are_a_whole_pair_by_name(names, expected):
+    assert _pair(*(Band(name) for name in names)) == expected
+
+
+def test_sar_roles_follow_a_declared_common_name_first():
+    declared = [Band("a", common_name="copol"), Band("b", common_name="crosspol"), Band("VV")]
+    assert _pair(*declared, Band("VH")) == ("a", "b")
+    assert resolve_role(declared, "copol").source == "common_name"
+    # The role that is not declared is found by name; a name needs its whole pair.
+    assert _pair(Band("x", common_name="copol"), Band("VV"), Band("VH")) == ("x", "VH")
+    assert _pair(Band("x", common_name="copol"), Band("HV")) == ("x", None)
+    assert _pair(Band("z", common_name="crosspol"), Band("VV"), Band("VH")) == ("VV", "z")
+    # A band with another common_name is not matched by its name.
+    assert _pair(Band("VV", common_name="red"), Band("VH")) == (None, None)
+    assert resolve_role([Band("VV"), Band("VH")], "copol").source == "name"
+
+
+def test_dual_pol_is_available_for_a_pair_and_for_no_other_store():
+    available = {
+        names: {s.id: s for s in product_status([Band(n) for n in names])}["dual_pol"].available
+        for names in [("VV", "VH"), ("HH", "HV"), ("VV", "HV"), ("B04", "B08"), ("B2",)]
+    }
+    assert available == {
+        ("VV", "VH"): True,
+        ("HH", "HV"): True,
+        ("VV", "HV"): False,
+        ("B04", "B08"): False,
+        ("B2",): False,
+    }
 
 
 # --- the tables mirror the viewer's ---
@@ -112,6 +173,10 @@ def test_tables_match_the_viewer_source():
     assert names is not None
     viewer_names = dict(re.findall(r"(\w+): '(\w+)'", names.group(1)))
     assert {k: v for k, v in viewer_names.items() if k in PRODUCT_ROLES} == SENTINEL2_NAMES
+    pairs = re.search(r"const POLARISATION_PAIRS = \[(.*)\];", source)
+    assert pairs is not None
+    viewer_pairs = tuple(tuple(m) for m in re.findall(r"\['(\w+)', '(\w+)'\]", pairs.group(1)))
+    assert viewer_pairs == POLARISATION_PAIRS
     assert re.search(r"DTYPE_MAX = \{ uint8: 255, uint16: 65535 \}", source)
     assert re.search(r"toPhysical\(max, band\) <= 10\b", source)
 
@@ -311,6 +376,16 @@ def test_bands_lists_roles_and_products(tmp_path):
     assert re.search(r"weird\s+-\s+-\s", text)
     assert re.search(r"true_color\s+True color\s+available", text), "the id that link takes"
     assert re.search(r"NDVI\s+needs nir", text)
+    assert re.search(r"dual_pol\s+Dual-pol composite\s+needs copol, crosspol", text)
+
+
+def test_bands_shows_the_sar_roles_and_the_composite(tmp_path):
+    path = _store(tmp_path / "s", ["HH", "HV"])
+    text = _run("bands", str(path)).output
+    assert re.search(r"HH\s+-\s+copol \(name\)", text)
+    assert re.search(r"HV\s+-\s+crosspol \(name\)", text)
+    assert re.search(r"dual_pol\s+Dual-pol composite\s+available", text)
+    assert re.search(r"true_color\s+True color\s+needs red, green, blue", text)
 
 
 def test_bands_dry_run_writes_nothing_and_set_writes(tmp_path):
@@ -421,6 +496,7 @@ def test_link_prints_a_checked_url(hosted):
     ("args", "message"),
     [
         (["--product", "ndwi"], "ndwi needs green"),
+        (["--product", "dual_pol"], "dual_pol needs copol, crosspol"),
         (["--product", "sepia"], "is not a product"),
         (["--band", "nope"], "is not a band"),
         (["--time", "3"], "outside 0..2"),
@@ -432,6 +508,15 @@ def test_link_prints_a_checked_url(hosted):
 )
 def test_link_refuses_what_the_viewer_would_ignore(hosted, args, message):
     assert message in _run("link", hosted, *args, ok=False).output
+
+
+def test_link_opens_a_sar_store_on_the_composite(tmp_path):
+    server = serve_store(_store(tmp_path / "sar", ["VV", "VH"]))
+    try:
+        url = _run("link", server.url, "--product", "dual_pol").stdout.strip()
+        assert parse_qs(urlsplit(url).query)["p"] == ["dual_pol"]
+    finally:
+        server.close()
 
 
 def test_link_needs_a_hosted_store(tmp_path):
