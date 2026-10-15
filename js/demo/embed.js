@@ -1,7 +1,7 @@
 // The embedding contract of the viewer: the URL parameters of ?embed=1, the postMessage protocol between the
 // host page and the viewer in its iframe, and the bridge that speaks it. docs/embedding.md is the reference.
 //
-//   ?embed=1            compact layout: no catalog selector, no export, the inspector as a drawer opened by a click
+//   ?embed=1            compact layout: no catalog selector, the inspector as a drawer opened by a click
 //   &controls=0         only the canvas and a thin time readout
 //   &theme=light        light palette for the chrome (the canvas is untouched)
 //   &origin=<origin>    the origin of the host page: the only origin whose messages are read, and the only one

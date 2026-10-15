@@ -28,7 +28,7 @@ Any other address starts where it says. A link with a timestep (`t`) opens at th
 | Show where no scene was observed | Click Gaps. It hatches the pixels whose value was carried over from an earlier month. It needs a store with a coverage plane |
 | Copy a link to this view | Click Copy link |
 | Open another store | Paste its URL in the store field and click Open |
-| Save the loop as a video | Click Export, then choose WebM or GIF |
+| Save the loop as a video | Click Export, choose MP4, WebM or GIF and the range, click Export, then click the Download link. Firefox records WebM and GIF only. Embedded viewers have Export too |
 | Show load and decode statistics | Press D |
 
 ## Products

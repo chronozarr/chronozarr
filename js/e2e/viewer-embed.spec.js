@@ -125,7 +125,7 @@ for (const width of [400, 900]) {
   test.describe(`${width} px wide`, () => {
     test.use({ viewport: { width, height: 700 } });
 
-    test('embed layout: no catalog selector, no export, wordmark, inspector only after a click', async ({ page, servers, storeUrl }) => {
+    test('embed layout: no catalog selector, Export kept, wordmark, inspector only after a click', async ({ page, servers, storeUrl }) => {
       const store = await storeUrl(STORE);
       // The full viewer on the same page size, to show the assertions below can fail: it has all of these.
       await page.goto(`${servers.appUrl}/demo/index.html?store=${encodeURIComponent(store)}`);
@@ -141,7 +141,7 @@ for (const width of [400, 900]) {
       expect(await page.evaluate(() => window.chronozarr.ready), 'the store opened').toBeTruthy();
 
       await expect(page.locator('#catalog-select')).toBeHidden();
-      await expect(page.locator('#export-btn')).toBeHidden();
+      await expect(page.locator('#export-btn'), 'an embed can save the loop as a file').toBeVisible();
       await expect(page.locator('#export-panel')).toBeHidden();
       await expect(page.locator('.brand')).toBeHidden();
       expect(servers.app.requests.filter((r) => r.path.endsWith('catalog.json')), 'an embed does not fetch the catalog').toEqual([]);

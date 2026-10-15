@@ -1,6 +1,7 @@
-// Export the current view's loop as a WebM video (canvas.captureStream + MediaRecorder) or a GIF (vendored
+// Export the current view's loop as an MP4 or WebM video (canvas.captureStream + MediaRecorder) or a GIF (vendored
 // gifenc). Frames are drawn offscreen at the canvas size by the viewer's export session, so the file matches
-// what is on screen; a timestep whose data is not in memory yet is waited for, like playback holds.
+// what is on screen; a timestep whose data is not in memory yet is waited for, like playback holds. MP4 (H.264) is
+// what slides, chat apps and phones play; Chrome and Safari record it, Firefox records only WebM.
 
 import { applyPalette, GIFEncoder, quantize } from '../vendor/gifenc.esm.js';
 import { Playback } from './playback.js';
@@ -9,7 +10,12 @@ const PALETTE_SAMPLES = 6;
 const PALETTE_PIXEL_STRIDE = 4;
 const PRELOAD_BATCH = 4;
 const LOAD_ATTEMPTS = 3;
-const WEBM_TYPES = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+/** MediaRecorder types per video format, in the order they are tried. A bare video/mp4 lets the browser pick H.264. */
+const VIDEO_TYPES = {
+  mp4: ['video/mp4;codecs=avc1', 'video/mp4'],
+  webm: ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'],
+};
+export const EXPORT_FORMATS = ['mp4', 'webm', 'gif'];
 
 const abortError = () => new DOMException('Aborted', 'AbortError');
 
@@ -29,11 +35,18 @@ export function gifDelayMs(stepsPerSecond) {
   return Math.max(20, Math.round(1000 / stepsPerSecond / 10) * 10);
 }
 
-export function pickWebmMimeType(isTypeSupported) {
-  return WEBM_TYPES.find((type) => isTypeSupported(type)) ?? null;
+/** The first MediaRecorder type of a video format ('mp4' or 'webm') that the browser records, or null. */
+export function pickVideoMimeType(format, isTypeSupported) {
+  return VIDEO_TYPES[format].find((type) => isTypeSupported(type)) ?? null;
 }
 
-export function webmBitrate(width, height, stepsPerSecond) {
+/** Whether this browser can write `format`: GIF always, a video format when MediaRecorder records one of its types. */
+export function canExport(format, recorder = globalThis.MediaRecorder) {
+  if (format === 'gif') return true;
+  return typeof recorder?.isTypeSupported === 'function' && pickVideoMimeType(format, (type) => recorder.isTypeSupported(type)) !== null;
+}
+
+export function videoBitrate(width, height, stepsPerSecond) {
   return Math.round(Math.min(24e6, Math.max(2e6, width * height * stepsPerSecond * 0.15)));
 }
 
@@ -61,7 +74,7 @@ export function subsamplePixels(rgba, stride) {
 
 export function exportFilename(storeName, format, from, to, labels) {
   const slug = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  return `chronozarr-${slug(storeName)}-${slug(labels(from))}-to-${slug(labels(to))}.${format === 'gif' ? 'gif' : 'webm'}`;
+  return `chronozarr-${slug(storeName)}-${slug(labels(from))}-to-${slug(labels(to))}.${format}`;
 }
 
 /** Load a timestep for every cell, retrying if the cache dropped it again; fails rather than waiting forever. */
@@ -115,13 +128,13 @@ async function encodeGif(session, { from, to, stepsPerSecond, onProgress, signal
   return new Blob([gif.bytesView()], { type: 'image/gif' });
 }
 
-async function recordWebm(session, { from, to, stepsPerSecond, onProgress, signal }) {
-  const mimeType = pickWebmMimeType((type) => MediaRecorder.isTypeSupported(type));
-  if (!mimeType) throw new Error('This browser cannot record WebM: MediaRecorder with a WebM codec is not available.');
+async function recordVideo(session, { format, from, to, stepsPerSecond, onProgress, signal }) {
+  const mimeType = typeof MediaRecorder === 'undefined' ? null : pickVideoMimeType(format, (type) => MediaRecorder.isTypeSupported(type));
+  if (!mimeType) throw new Error(`This browser cannot record ${format.toUpperCase()}: MediaRecorder with a ${format.toUpperCase()} codec is not available. Choose another format.`);
   const total = to - from + 1;
   const stream = session.canvas.captureStream(0);
   const [track] = stream.getVideoTracks();
-  const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: webmBitrate(session.canvas.width, session.canvas.height, stepsPerSecond) });
+  const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: videoBitrate(session.canvas.width, session.canvas.height, stepsPerSecond) });
   const chunks = [];
   recorder.ondataavailable = (event) => event.data.size > 0 && chunks.push(event.data);
   const stopped = new Promise((resolve, reject) => {
@@ -176,26 +189,26 @@ async function recordWebm(session, { from, to, stepsPerSecond, onProgress, signa
     if (recorder.state !== 'inactive') recorder.stop();
     for (const t of stream.getTracks()) t.stop();
   }
-  return new Blob(chunks, { type: mimeType });
+  return new Blob(chunks, { type: recorder.mimeType || mimeType });
 }
 
 /**
  * Render timesteps from..to of the current view at `stepsPerSecond` and encode them.
  * @param {object} viewer  the Viewer (pauses it, then uses viewer.createExportSession)
- * @param {{format: 'webm'|'gif', from: number, to: number, stepsPerSecond: number, scale?: number,
+ * @param {{format: 'mp4'|'webm'|'gif', from: number, to: number, stepsPerSecond: number, scale?: number,
  *   onProgress?: (p: {stage: 'loading'|'recording'|'encoding', done: number, total: number}) => void, signal?: AbortSignal}} options
  * @returns {Promise<{blob: Blob, filename: string, frames: number, width: number, height: number, ms: number, bytes: number}>}
  */
 export async function exportLoop(viewer, { format, from, to, stepsPerSecond, scale = 1, onProgress = () => {}, signal }) {
-  if (!['webm', 'gif'].includes(format)) throw new RangeError(`unknown export format "${format}"`);
+  if (!EXPORT_FORMATS.includes(format)) throw new RangeError(`unknown export format "${format}"; formats: ${EXPORT_FORMATS.join(', ')}`);
   if (!(from >= 0 && to >= from && to < viewer.store.times.length)) throw new RangeError(`export range ${from}..${to} is outside 0..${viewer.store.times.length - 1}`);
   viewer.pause();
   const started = performance.now();
   const session = viewer.createExportSession({ scale, timesteps: to - from + 1 });
   try {
     await preload(session, from, to, onProgress, signal);
-    const run = format === 'gif' ? encodeGif : recordWebm;
-    const blob = await run(session, { from, to, stepsPerSecond, onProgress, signal });
+    const run = format === 'gif' ? encodeGif : recordVideo;
+    const blob = await run(session, { format, from, to, stepsPerSecond, onProgress, signal });
     const storeName = new URL(viewer.store.url, location.href).pathname.replace(/\/$/, '').split('/').slice(-2).join(' ');
     return {
       blob,
@@ -224,6 +237,16 @@ const megabytes = (bytes) => `${(bytes / 1048576).toFixed(1)} MB`;
 function describeProgress({ stage, done, total }, format) {
   const what = stage === 'loading' ? 'Loading' : stage === 'recording' ? 'Recording' : `Encoding ${format.toUpperCase()}`;
   return { fraction: done / total, text: `${what}: ${done} of ${total}` };
+}
+
+/** Disable the formats this browser cannot write; a disabled choice falls to the first one that works (GIF always does). */
+function fillFormats() {
+  const select = $('export-format');
+  for (const option of select.options) {
+    option.disabled = !canExport(option.value);
+    option.title = option.disabled ? 'This browser cannot record this format' : '';
+  }
+  if (select.selectedOptions[0]?.disabled) select.value = [...select.options].find((option) => !option.disabled).value;
 }
 
 function fillTimeSelects(viewer) {
@@ -301,5 +324,7 @@ export function toggleExportPanel(viewer) {
     });
   }
   panel.hidden = !panel.hidden;
-  if (!panel.hidden && viewer.store) fillTimeSelects(viewer);
+  if (panel.hidden) return;
+  fillFormats();
+  if (viewer.store) fillTimeSelects(viewer);
 }

@@ -53,7 +53,7 @@ All parameters go in the iframe URL. The parameters of the full viewer also work
 | `z` | number above 0 | the fitted view | Initial zoom in CSS pixels per full-resolution data pixel. The same ground width then shows in a window of any size. |
 | `c` | `x,y` | the store center | Initial view center in the store's projected coordinates. A store with no georeferencing uses level-0 pixels. |
 
-The embed layout drops the catalog selector and the export button. It keeps the product buttons and the timeline. The inspector is a drawer at every width. It opens on a click, and Escape or the close button closes it.
+The embed layout drops the catalog selector. It keeps the product buttons, the timeline and the Export button, which saves the loop as MP4, WebM or GIF. With `controls=0` there is no Export button. The inspector is a drawer at every width. It opens on a click, and Escape or the close button closes it.
 
 A small "chronozarr" wordmark in the header links to the full viewer on the same store and view. The link opens in a new tab and carries no embed parameters.
 
