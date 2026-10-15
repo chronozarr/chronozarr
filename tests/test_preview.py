@@ -248,6 +248,15 @@ def test_view_rejects_local_options_for_a_hosted_store():
         view("https://example.org/store", base_url="https://x.example")
 
 
+def test_view_colors_the_single_band_and_refuses_an_unknown_colormap():
+    pytest.importorskip("IPython")
+    page = view("https://example.org/store", product="band", colormap="turbo").data
+    assert "&amp;p=band&amp;cm=turbo" in page
+    assert "cm=" not in view("https://example.org/store", product="band").data
+    with pytest.raises(ValueError, match="colormap must be one of gray, viridis, magma, turbo"):
+        view("https://example.org/store", colormap="jet")
+
+
 def test_player_with_base_url_and_error_hint(store):
     pytest.importorskip("anywidget")
     widget = chronozarr.player(store, base_url="/user/ada/proxy/8765")
@@ -261,6 +270,30 @@ def test_player_with_base_url_and_error_hint(store):
         assert widget.hint == ""
     finally:
         widget.close()
+
+
+def test_bad_display_options_fail_before_a_local_server_starts(store):
+    pytest.importorskip("IPython")
+    with pytest.raises(ValueError, match="colormap must be one of"):
+        view(store, colormap="jet")
+    with pytest.raises(ValueError, match="finite increasing"):
+        view(store, range=[2, 1])
+    assert view_module._servers == {}
+
+
+def test_player_bad_display_options_fail_before_a_local_server_starts(store):
+    pytest.importorskip("anywidget")
+    from traitlets import TraitError
+
+    with pytest.raises(TraitError):
+        chronozarr.player(store, colormap="jet")
+    with pytest.raises(TraitError):
+        chronozarr.player(store, t=-1)
+    with pytest.raises(TraitError):
+        chronozarr.player(store, range=[2, 1])
+    assert view_module._servers == {}
+    with pytest.raises(TraitError, match="HTTP"):
+        chronozarr.player(store, viewer="javascript:alert(1)")
 
 
 def test_player_hosted_store_has_no_hint_source():

@@ -28,7 +28,7 @@ from chronozarr.bands import (
 )
 from chronozarr.cli import main
 from chronozarr.schema import Band
-from chronozarr.view import serve_store, viewer_url
+from chronozarr.view import COLORMAPS, serve_store, viewer_url
 from tests.synthetic import CRS, TRANSFORM, make_da, make_truth
 
 pytestmark = pytest.mark.unit
@@ -179,6 +179,15 @@ def test_tables_match_the_viewer_source():
     assert viewer_pairs == POLARISATION_PAIRS
     assert re.search(r"DTYPE_MAX = \{ uint8: 255, uint16: 65535 \}", source)
     assert re.search(r"toPhysical\(max, band\) <= 10\b", source)
+
+
+def test_colormaps_match_the_viewer_and_the_player():
+    viewer = (ROOT / "js/shared/colormaps.js").read_text(encoding="utf-8")
+    assert tuple(re.findall(r"\{\s*id: '(\w+)',", viewer)) == COLORMAPS
+    player = (ROOT / "src/chronozarr/player.js").read_text(encoding="utf-8")
+    listed = re.search(r"const COLORMAPS = \[(.*)\];", player)
+    assert listed is not None
+    assert tuple(re.findall(r"\['(\w+)', '\w+'\]", listed.group(1))) == COLORMAPS
 
 
 @pytest.mark.parametrize(
@@ -424,7 +433,12 @@ def test_bands_cannot_write_a_url(tmp_path):
 
 def test_viewer_url_carries_the_initial_view():
     url = viewer_url(
-        "https://h.example/s", t=4, product="band", band="B 4", range=(0.0, 0.00012345)
+        "https://h.example/s",
+        t=4,
+        product="band",
+        band="B 4",
+        range=(0.0, 0.00012345),
+        colormap="viridis",
     )
     params = parse_qs(urlsplit(url).query)
     assert params == {
@@ -433,6 +447,7 @@ def test_viewer_url_carries_the_initial_view():
         "p": ["band"],
         "b": ["B 4"],
         "r": ["0,0.00012345"],
+        "cm": ["viridis"],
     }
     assert viewer_url("https://h.example/s") == (
         "https://chronozarr.org/demo/?store=https%3A%2F%2Fh.example%2Fs"
@@ -445,6 +460,12 @@ def test_viewer_url_rejects_bad_limits(limits):
         viewer_url("https://h.example/s", range=limits)
     with pytest.raises(ValueError, match="timestep index"):
         viewer_url("https://h.example/s", t=-1)
+
+
+@pytest.mark.parametrize("colormap", ["jet", "Viridis", ""])
+def test_viewer_url_rejects_an_unknown_colormap(colormap):
+    with pytest.raises(ValueError, match="gray, viridis, magma, turbo"):
+        viewer_url("https://h.example/s", product="band", colormap=colormap)
 
 
 @pytest.fixture
@@ -477,14 +498,17 @@ def test_link_prints_a_checked_url(hosted):
         "counts",
         "--range",
         "100,5000",
+        "--colormap",
+        "magma",
         "--time",
         "2",
     ).stdout.strip()
     params = parse_qs(urlsplit(url).query)
-    assert (params["p"], params["b"], params["r"], params["t"]) == (
+    assert (params["p"], params["b"], params["r"], params["cm"], params["t"]) == (
         ["band"],
         ["counts"],
         ["100,5000"],
+        ["magma"],
         ["2"],
     )
     plain = _run("link", hosted, "--product", "ndvi")
@@ -504,10 +528,20 @@ def test_link_prints_a_checked_url(hosted):
         (["--product", "band", "--range", "1,2"], "fixed limits"),  # first band is reflectance
         (["--product", "band", "--band", "counts", "--range", "5,5"], "finite increasing"),
         (["--product", "band", "--band", "counts", "--range", "1"], "2 comma-separated"),
+        (["--colormap", "viridis"], "add --product band"),
+        (["--product", "ndvi", "--colormap", "viridis"], "add --product band"),
+        (["--product", "band", "--colormap", "jet"], "'jet' is not one of"),
     ],
 )
 def test_link_refuses_what_the_viewer_would_ignore(hosted, args, message):
     assert message in _run("link", hosted, *args, ok=False).output
+
+
+@pytest.mark.parametrize("args", [["--colormap", "viridis"], ["--range", "1,2"]])
+def test_link_reports_a_usage_error_before_reading_the_store(args):
+    # nothing listens on port 9 (discard): a read would fail with a connection error instead
+    refused = _run("link", "http://127.0.0.1:9/nope", *args, ok=False).output
+    assert "add --product band" in refused
 
 
 def test_link_opens_a_sar_store_on_the_composite(tmp_path):

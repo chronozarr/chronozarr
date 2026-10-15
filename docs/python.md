@@ -87,7 +87,7 @@ chronozarr bands my_store --band-role b4=red,b8=nir        # write them
 
 `chronozarr encode` and `chronozarr convert` take `--band-role` too, so a store can carry the roles from the start. In Python, `convert` has `band_roles={"b8": "nir"}` and `encode` takes `Band(..., common_name="nir")` in `bands=`. A manifest that names its bands has no common names unless you give them.
 
-The initial product and display limits are presentation. They are not stored in the store, so every other client still reads the same store. They travel in the viewer URL and in the notebook:
+The initial product, display limits and colormap are presentation. They are not stored in the store, so every other client still reads the same store. They travel in the viewer URL and in the notebook:
 
 | Parameter | `player` and `view` argument | Meaning |
 |---|---|---|
@@ -95,12 +95,13 @@ The initial product and display limits are presentation. They are not stored in 
 | `p` | `product` | `true_color`, `false_color`, `ndvi`, `ndwi`, `water`, `band` or `dual_pol` |
 | `b` | `band` | Band of the single-band product |
 | `r` | `range` | Display limits `low,high` of the single-band product, in physical units |
+| `cm` | `colormap` | Colormap of the single-band product: `gray` (the default), `viridis`, `magma` or `turbo` |
 
 ```sh
-chronozarr link https://data.example.org/my_store --product band --band B8 --range 0,4000
-# https://chronozarr.org/demo/?store=...&p=band&b=B8&r=0,4000
+chronozarr link https://data.example.org/my_store --product band --band B8 --range 0,4000 --colormap viridis
+# https://chronozarr.org/demo/?store=...&p=band&b=B8&r=0,4000&cm=viridis
 ```
 
-`link` checks each value against the store and prints the URL, because the viewer ignores a value that the store cannot honor. A product needs its roles. Display limits only apply to the single-band product of a band that is not reflectance-like: an unsigned 8-bit or 16-bit band whose largest possible physical value is 10 or less is toned with fixed reflectance limits, and every other band has adjustable ones. `from chronozarr.view import viewer_url` builds the same URL from Python. The viewer keeps the limits you set in its address bar, so copying the address shares them.
+`link` checks each value against the store and prints the URL, because the viewer ignores a value that the store cannot honor. A product needs its roles. Display limits only apply to the single-band product of a band that is not reflectance-like: an unsigned 8-bit or 16-bit band whose largest possible physical value is 10 or less is toned with fixed reflectance limits, and every other band has adjustable ones. A colormap only applies to the single-band product. `from chronozarr.view import viewer_url` builds the same URL from Python and refuses an unknown colormap. The viewer keeps the limits you set in its address bar, so copying the address shares them.
 
 `chronozarr.add_chronozarr` adds a store as a layer on a leafmap or geemap MapLibre map. Install the `leafmap` or `geemap` extra. See [examples/leafmap](../examples/leafmap/README.md).

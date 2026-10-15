@@ -212,6 +212,7 @@ function fakeViewer({ transform = GEOREF, crs = 'EPSG:32631' } = {}) {
     t: 0,
     camera: { cx: 100, cy: 100, scale: 1 },
     zoom: 1,
+    fitted: true,
     speed: 4,
     playback: { playing: false },
     goToTime(t) {
@@ -261,6 +262,7 @@ test('connectEmbed: ready carries the store, its times, bands, products, levels 
   assert.equal(data.state.band, 'B02');
   assert.equal(data.state.colormap, 'gray');
   assert.equal(data.state.zoom, 1);
+  assert.equal(data.state.fitted, true);
   assert.equal(data.state.playing, false);
   assert.equal(data.state.speed, 4);
   assert.deepEqual([data.state.center.x, data.state.center.y, data.state.center.lon], [501000, 3999000, data.state.center.lon]);

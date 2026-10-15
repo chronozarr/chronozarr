@@ -70,7 +70,7 @@ test('r= is ignored where the viewer has no adjustable limits', async ({ page, s
   expect(await page.evaluate(() => window.chronozarr.viewer.stretchRange)).toBeNull();
 });
 
-test('the notebook player puts product, band and limits in the iframe URL', async ({ page, servers, stores, storeUrl }) => {
+test('the notebook player puts product, band, limits and colormap in the iframe URL and links to the same view', async ({ page, servers, stores, storeUrl }) => {
   const store = await storeUrl('i16_band');
   const hostDir = path.join(stores.dir, 'player-host');
   await mkdir(hostDir, { recursive: true });
@@ -80,8 +80,8 @@ test('the notebook player puts product, band and limits in the iframe URL', asyn
     `<!doctype html><meta charset="utf-8"><body></body>
 <script type="module">
   const values = {
-    store_url: ${JSON.stringify(store)}, viewer_url: ${JSON.stringify(`${servers.appUrl}/demo/index.html`)},
-    controls: false, height: 400, theme: 'light', t: 0, product: 'band', band: 'elev', range: [-50, 300],
+    store_url: ${JSON.stringify(store)}, viewer_url: ${JSON.stringify(`${servers.appUrl}/demo/index.html?theme=dark&controls=1`)},
+    controls: false, height: 400, theme: 'light', t: 0, product: 'band', band: 'elev', range: [-50, 300], colormap: 'viridis',
     speed: 4, playing: false, times: [], products: [], bands: [], ready: false, state: {}, click: {}, error: {},
   };
   window.values = values;
@@ -93,6 +93,7 @@ test('the notebook player puts product, band and limits in the iframe URL', asyn
     on(key, callback) { if (!listeners.has(key)) listeners.set(key, new Set()); listeners.get(key).add(callback); },
     off(key, callback) { listeners.get(key)?.delete(callback); },
   };
+  window.model = model;
   const widget = (await import('./player.js')).default;
   widget.render({ model, el: document.body });
 </script>`,
@@ -100,9 +101,53 @@ test('the notebook player puts product, band and limits in the iframe URL', asyn
   await page.goto(`${servers.dataUrl}/player-host/host.html`);
   await page.waitForSelector('iframe');
   const params = await page.evaluate(() => Object.fromEntries(new URL(document.querySelector('iframe').src).searchParams));
-  expect([params.p, params.b, params.r]).toEqual(['band', 'elev', '-50,300']);
+  expect([params.p, params.b, params.r, params.cm]).toEqual(['band', 'elev', '-50,300', 'viridis']);
   await page.waitForFunction(() => window.values.ready);
   expect(await page.evaluate(() => window.values.state.range)).toEqual([-50, 300]);
+  expect(await page.evaluate(() => window.values.state.colormap)).toBe('viridis');
+  const viewer = page.frameLocator('iframe');
+  await expect.poll(() => viewer.locator('html').evaluate(() => window.chronozarr.viewer.colormap)).toBe(1);
+
+  // A colormap set from Python goes to the viewer and comes back in the acknowledged state.
+  await page.evaluate(() => window.model.set('colormap', 'magma'));
+  await page.waitForFunction(() => window.values.state.colormap === 'magma');
+  expect(await viewer.locator('html').evaluate(() => window.chronozarr.viewer.colormap)).toBe(2);
+  // The select shows with the other single-band controls, and a choice there reaches the viewer the same way.
+  const select = page.locator('select[aria-label=Colormap]');
+  await expect(select).toBeHidden();
+  await page.evaluate(() => window.model.set('controls', true));
+  await expect(select).toHaveValue('magma');
+  await select.selectOption('turbo');
+  await page.waitForFunction(() => window.values.state.colormap === 'turbo');
+  expect(await viewer.locator('html').evaluate(() => window.chronozarr.viewer.colormap)).toBe(3);
+
+  // The link opens the same view in the full viewer (which has Export), without the embed parameters or the query
+  // of viewer_url. A fitted camera is left out, so the full viewer fits the store to its own window.
+  const link = page.getByRole('link', { name: 'Open in viewer' });
+  await expect(link).toHaveAttribute('target', '_blank');
+  const linkParams = async () => Object.fromEntries(new URL(await link.getAttribute('href')).searchParams);
+  const fitted = await linkParams();
+  expect(fitted).toEqual({ store, t: '0', p: 'band', b: 'elev', r: '-50,300', cm: 'turbo' });
+  expect(await page.evaluate(() => window.values.state.fitted)).toBe(true);
+
+  // Once the camera moves, the link carries it.
+  const zoom = await viewer.locator('html').evaluate(() => {
+    const zoomed = window.chronozarr.viewer.zoom * 2;
+    window.chronozarr.viewer.setView({ zoom: zoomed });
+    return window.chronozarr.viewer.zoom;
+  });
+  await page.waitForFunction(() => window.values.state.fitted === false);
+  const moved = await linkParams();
+  expect(Number(moved.z)).toBe(zoom);
+  const center = await page.evaluate(() => window.values.state.center);
+  expect(moved.c).toBe(`${center.x},${center.y}`);
+  const href = new URL(await link.getAttribute('href'));
+  expect(href.origin + href.pathname).toBe(`${servers.appUrl}/demo/index.html`);
+  await page.goto(href.href);
+  await page.waitForFunction(() => window.chronozarr?.ready);
+  await page.evaluate(() => window.chronozarr.ready);
+  const opened = await page.evaluate(() => ({ colormap: window.chronozarr.viewer.colormap, range: window.chronozarr.viewer.stretchRange, zoom: window.chronozarr.viewer.zoom }));
+  expect(opened).toEqual({ colormap: 3, range: [-50, 300], zoom });
 });
 
 test('the notebook player does not send an empty initial band', async ({ page, servers, stores, storeUrl }) => {
@@ -116,7 +161,7 @@ test('the notebook player does not send an empty initial band', async ({ page, s
 <script type="module">
   const values = {
     store_url: ${JSON.stringify(store)}, viewer_url: ${JSON.stringify(`${servers.appUrl}/demo/index.html`)},
-    controls: false, height: 400, theme: 'light', t: 0, product: '', band: '', range: null,
+    controls: false, height: 400, theme: 'light', t: 0, product: '', band: '', range: null, colormap: 'gray',
     speed: 4, playing: false, times: [], products: [], bands: [], ready: false, state: {}, click: {}, error: {},
   };
   window.values = values;

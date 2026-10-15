@@ -43,7 +43,7 @@ Extras: `geo` (rasterio: GeoTIFF/COG input, `export-cog`, `stac`), `netcdf`, `s3
 | A link that lasts | `chronozarr publish STORE --destination s3://BUCKET/PREFIX --dry-run`, then without `--dry-run` (`gs://`, `az://ACCOUNT/CONTAINER/PREFIX` too). It validates, uploads chunks before metadata and the root `zarr.json` last, runs the `doctor` checks on the public URL and prints a viewer link only if they pass. R2 and other S3-compatible hosts: add `--endpoint-url` and `--public-url`. `--apply-cors` adds the viewer's CORS rule. Use a fresh prefix per version. See `/guides/publish.md` |
 | A store already hosted that needs checking | `chronozarr doctor https://host/prefix` (CORS, byte ranges, caching, decode) |
 | A Jupyter notebook | `chronozarr.view("STORE")` or `chronozarr.player("STORE")` (`notebook` extra). JupyterHub, VS Code or SSH: `/guides/notebooks.md` |
-| To choose the first view of a hosted store | `chronozarr link STORE_URL --product ndvi`, or `--product band --band B8 --range 0,4000`. `--time N` is a timestep index. Needs an http(s) URL; it does not check CORS (run `doctor`) |
+| To choose the first view of a hosted store | `chronozarr link STORE_URL --product ndvi`, or `--product band --band B8 --range 0,4000 --colormap viridis` (`gray`, `viridis`, `magma`, `turbo`). `--time N` is a timestep index. Needs an http(s) URL; it does not check CORS (run `doctor`) |
 | GeoTIFFs for QGIS or GDAL | `chronozarr export-cog STORE OUT_DIR [--level N] [--times 2024-03] [--physical]` |
 | A STAC catalog | `chronozarr stac STORE --out DIR [--href URL]` |
 | Bands the viewer's products do not find (True color, NDVI, ...) | `chronozarr bands STORE`, then `chronozarr bands STORE --band-role b4=red,b8=nir` (also `--band-role` on `convert` and `encode`) |

@@ -398,6 +398,11 @@ class Viewer {
     return Number((this.camera.scale / (window.devicePixelRatio || 1)).toPrecision(3));
   }
 
+  /** Whether the camera is the fitted view, which a link leaves out (z and c) so that it fits any window. */
+  get fitted() {
+    return Boolean(this.store) && this.#atFit();
+  }
+
   /**
    * Move the camera: `zoom` (see the zoom getter) and `center` ({col, row} in level-0 pixels), either one alone to keep
    * the other as it is. The same limits as the mouse: zoomed out to half the fitted view at most, in to 16 canvas pixels per data pixel.

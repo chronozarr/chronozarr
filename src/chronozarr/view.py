@@ -47,6 +47,9 @@ from typing import Any, BinaryIO, ClassVar, Literal
 from chronozarr._install import extra_hint
 
 VIEWER_URL = "https://chronozarr.org/demo/"
+# Colormap ids of the single-band product, as in js/shared/colormaps.js (tests/test_bands.py
+# fails when they drift). The viewer's default is gray.
+COLORMAPS = ("gray", "viridis", "magma", "turbo")
 # The server mounts a self-hosted viewer folder under this path, next to the store.
 VIEWER_MOUNT = "_viewer"
 _VIEWER_PAGE = "demo/index.html"
@@ -409,6 +412,18 @@ def serve_store(
         return running
 
 
+def _check_view(t: int | None, range: Sequence[float] | None, colormap: str | None) -> None:
+    """Raise ValueError for an initial-view value that no viewer accepts."""
+    if t is not None and t < 0:
+        raise ValueError(f"t must be a timestep index of 0 or more, got {t}")
+    if range is not None:
+        low, high = range
+        if not (math.isfinite(low) and math.isfinite(high) and low < high):
+            raise ValueError(f"range must be two finite increasing limits, got {tuple(range)}")
+    if colormap is not None and colormap not in COLORMAPS:
+        raise ValueError(f"colormap must be one of {', '.join(COLORMAPS)}, got {colormap!r}")
+
+
 def viewer_url(
     store_url: str,
     viewer: str = VIEWER_URL,
@@ -417,19 +432,20 @@ def viewer_url(
     product: str | None = None,
     band: str | None = None,
     range: Sequence[float] | None = None,
+    colormap: str | None = None,
 ) -> str:
     """URL that opens `store_url` in the viewer, optionally at a timestep, product and display.
 
     `t` is a timestep index, `product` a viewer product id (`true_color`, `false_color`, `ndvi`,
-    `ndwi`, `water`, `band`, `dual_pol`), `band` the band of the single-band product, and `range`
-    its display limits (low, high) in physical units. They are presentation only: the store is
-    not touched, and anyone who opens the URL sees the same initial view. The viewer ignores a
-    value the store cannot honour, so check them first with `chronozarr link`.
+    `ndwi`, `water`, `band`, `dual_pol`), `band` the band of the single-band product, `range`
+    its display limits (low, high) in physical units, and `colormap` its colormap (`gray`,
+    `viridis`, `magma`, `turbo`). They are presentation only: the store is not touched, and
+    anyone who opens the URL sees the same initial view. The viewer ignores a value the store
+    cannot honour, so check them first with `chronozarr link`.
     """
+    _check_view(t, range, colormap)
     query = [f"store={urllib.parse.quote(store_url, safe='')}"]
     if t is not None:
-        if t < 0:
-            raise ValueError(f"t must be a timestep index of 0 or more, got {t}")
         query.append(f"t={t}")
     if product is not None:
         query.append(f"p={urllib.parse.quote(product, safe='')}")
@@ -437,9 +453,9 @@ def viewer_url(
         query.append(f"b={urllib.parse.quote(band, safe='')}")
     if range is not None:
         low, high = range
-        if not (math.isfinite(low) and math.isfinite(high) and low < high):
-            raise ValueError(f"range must be two finite increasing limits, got {tuple(range)}")
         query.append(f"r={low:.12g},{high:.12g}")
+    if colormap is not None:
+        query.append(f"cm={colormap}")
     return f"{viewer}?{'&'.join(query)}"
 
 
@@ -658,6 +674,7 @@ def view(
     product: str | None = None,
     band: str | None = None,
     range: Sequence[float] | None = None,
+    colormap: str | None = None,
 ) -> Any:
     """Show a store in the chronozarr viewer as a notebook iframe.
 
@@ -666,12 +683,13 @@ def view(
     for remote notebooks, see `local_access`. Returns an `IPython.display.HTML`; leave it as a
     cell's last expression or pass it to `display`. If the frame stays empty, call
     `chronozarr.diagnose_view(store)`.
-    `t`, `product`, `band` and `range` set the initial view, as in `viewer_url`.
+    `t`, `product`, `band`, `range` and `colormap` set the initial view, as in `viewer_url`.
     """
     try:
         ipython_display = importlib.import_module("IPython.display")  # optional extra
     except ImportError as exc:
         raise ImportError(f"chronozarr.view needs IPython: {extra_hint('notebook')}") from exc
+    _check_view(t, range, colormap)  # before a local server starts
     text = str(store)
     if text.startswith(("http://", "https://")):
         if base_url is not None or viewer_dir is not None:
@@ -688,7 +706,9 @@ def view(
                 " &middot; this link opens only on this machine; "
                 f"<code>{html.escape(share_command(text))}</code> gives one others can open"
             )
-    target = viewer_url(store_url, page, t=t, product=product, band=band, range=range)
+    target = viewer_url(
+        store_url, page, t=t, product=product, band=band, range=range, colormap=colormap
+    )
     frame = (
         f'<iframe src="{html.escape(target, quote=True)}" width="100%" height="{int(height)}" '
         'style="border:0" allow="fullscreen; local-network-access" loading="lazy"></iframe>'

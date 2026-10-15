@@ -46,7 +46,14 @@ from chronozarr.schema import Band, SchemaError, validate
 from chronozarr.share import share
 from chronozarr.stac import write_stac
 from chronozarr.store import redact_url
-from chronozarr.view import VIEWER_URL, preview, preview_command, share_command, viewer_url
+from chronozarr.view import (
+    COLORMAPS,
+    VIEWER_URL,
+    preview,
+    preview_command,
+    share_command,
+    viewer_url,
+)
 
 _REFUSED = re.compile(r"\bHTTP 40[13]\b")
 _DATE_IN_NAME = re.compile(r"(?<!\d)(\d{4})-?(\d{2})(?:-?(\d{2}))?(?!\d)")
@@ -1217,6 +1224,13 @@ def bands_command(store: str, band_roles: tuple[str, ...], dry_run: bool) -> Non
     help="Display limits of the single-band product, in physical units (the band's scale and "
     "offset applied). Needs --product band.",
 )
+@click.option(
+    "--colormap",
+    type=click.Choice(COLORMAPS),
+    default=None,
+    help="Colormap of the single-band product (the viewer's default is gray). "
+    "Needs --product band.",
+)
 @click.option("--time", "t", type=int, default=None, help="Initial timestep index.")
 @click.option("--viewer", default=VIEWER_URL, show_default=True, help="Viewer URL.")
 def link_command(
@@ -1224,15 +1238,16 @@ def link_command(
     product: str | None,
     band: str | None,
     limits: str | None,
+    colormap: str | None,
     t: int | None,
     viewer: str,
 ) -> None:
     """Print a viewer URL that opens the hosted store STORE_URL at a chosen initial view.
 
-    The product, band, display limits and timestep live in the URL, not in the store, so the
-    store stays readable by every client and anyone with the URL sees the same first view. Each
-    value is checked against the store (read over HTTP), because the viewer silently ignores one
-    the store cannot honor. To set the bands a product uses, see `chronozarr bands`.
+    The product, band, display limits, colormap and timestep live in the URL, not in the store,
+    so the store stays readable by every client and anyone with the URL sees the same first view.
+    Each value is checked against the store (read over HTTP), because the viewer silently ignores
+    one the store cannot honor. To set the bands a product uses, see `chronozarr bands`.
     """
     if not is_url(store_url):
         raise click.ClickException(
@@ -1242,6 +1257,10 @@ def link_command(
             "use chronozarr.view()"
         )
     low_high = _parse_numbers(limits, 2, "--range", float)
+    if low_high is not None and product != "band":
+        raise click.UsageError("--range sets the single-band product: add --product band")
+    if colormap is not None and product != "band":
+        raise click.UsageError("--colormap colors the single-band product: add --product band")
     with _command_errors():
         opened = open_store(store_url)
         bands = opened.attrs.bands
@@ -1270,14 +1289,22 @@ def link_command(
             )
         if low_high is not None:
             chosen = next(b for b in bands if b.name == (band or bands[0].name))
-            if product != "band":
-                raise click.UsageError("--range sets the single-band product: add --product band")
             if not display_limits_apply(opened.dtype.name, chosen):
                 raise click.UsageError(
                     f"band {chosen.name} is shown as reflectance with fixed limits, so --range "
                     "would be ignored; choose a band whose values are not reflectance-like"
                 )
-        click.echo(viewer_url(store_url, viewer, t=t, product=product, band=band, range=low_high))
+        click.echo(
+            viewer_url(
+                store_url,
+                viewer,
+                t=t,
+                product=product,
+                band=band,
+                range=low_high,
+                colormap=colormap,
+            )
+        )
     click.echo(
         "checked: the store opens and the view applies to it. Not checked: whether a browser may "
         f"read it (CORS); run `chronozarr doctor {store_url}`.",

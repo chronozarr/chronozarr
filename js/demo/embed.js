@@ -397,7 +397,7 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
   if (!bridge.active) return null;
 
   const timeOf = (t) => viewer.store.times[t];
-  const viewPayload = () => ({ zoom: viewer.zoom, center: geo.fromPixel(viewer.camera.cx, viewer.camera.cy) });
+  const viewPayload = () => ({ zoom: viewer.zoom, center: geo.fromPixel(viewer.camera.cx, viewer.camera.cy), fitted: viewer.fitted });
   const statePayload = () => ({
     t: viewer.t,
     time: timeOf(viewer.t),

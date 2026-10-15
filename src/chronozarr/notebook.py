@@ -19,6 +19,7 @@ def player(
     controls: bool = False,
     band: str = "",
     range: list[float] | None = None,
+    colormap: str = "gray",
     speed: float = 4,
     playing: bool = False,
     theme: str = "light",
@@ -27,9 +28,12 @@ def player(
 
     Install ``chronozarr[notebook]``. Display the result in a trusted Jupyter,
     VS Code or compatible notebook. Set ``widget.t``, ``product``, ``speed`` or
-    ``playing``, ``band`` (name) and ``range`` (physical limits or None) from Python.
-    By default only play and the time slider are shown. ``controls=True`` reveals
-    product, band, display-limit and speed controls.
+    ``playing``, ``band`` (name), ``range`` (physical limits or None) and ``colormap``
+    (``gray``, ``viridis``, ``magma``, ``turbo``; the single-band product's colors) from Python.
+    By default only play, the time slider and, once the store is open, a link that opens the same
+    view in the full viewer (which has Export: MP4 or WebM in Chrome and Safari, WebM in Firefox,
+    GIF everywhere) are shown. ``controls=True`` reveals product, band, colormap, display-limit
+    and speed controls.
     Inspect ``times``, ``state``, ``click``, ``error`` and ``hint``.
     Local stores use the same CORS/range server as view(), on 127.0.0.1 of the machine
     that runs the kernel. In a remote notebook pass ``base_url`` (where the browser reaches
@@ -42,28 +46,34 @@ def player(
     except ImportError as exc:
         raise ImportError(f"chronozarr.player needs anywidget: {extra_hint('notebook')}") from exc
     text = str(store)
-    access = None
-    if text.startswith(("https://", "http://")):
-        if base_url is not None or viewer_dir is not None:
-            raise ValueError("base_url and viewer_dir apply to local stores, not to a URL")
-        url, viewer_page = text, viewer or VIEWER_URL
-    else:
-        access = local_access(
-            text, port=port, base_url=base_url, viewer=viewer, viewer_dir=viewer_dir
-        )
-        url, viewer_page = access.store_url, access.viewer_url
+    hosted = text.startswith(("https://", "http://"))
+    if hosted and (base_url is not None or viewer_dir is not None):
+        raise ValueError("base_url and viewer_dir apply to local stores, not to a URL")
+    # The traits check the display options before a local server starts.
     widget = Player(
-        store_url=url,
-        viewer_url=viewer_page,
         height=height,
         t=t,
         product=product,
         controls=controls,
         band=band,
         range=range,
+        colormap=colormap,
         speed=speed,
         playing=playing,
         theme=theme,
     )
-    widget.access = access
+    try:
+        if hosted:
+            widget.viewer_url = viewer or VIEWER_URL
+            widget.store_url = text
+        else:
+            access = local_access(
+                text, port=port, base_url=base_url, viewer=viewer, viewer_dir=viewer_dir
+            )
+            widget.access = access
+            widget.viewer_url = access.viewer_url
+            widget.store_url = access.store_url
+    except Exception:
+        widget.close()
+        raise
     return widget

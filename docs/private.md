@@ -155,6 +155,7 @@ Where a token in `store=` ends up, and how to limit it:
 | Store menu | A catalog-page label for an opened store omits the query. Its internal option value remains the URL used to read the store. | Do not treat the page's JavaScript state as a credential vault. |
 | Embedded page | The iframe URL contains the `store` value, so the token is saved with the embedding page or notebook output. The wordmark copies the store address without its query; a signed store needs fresh authorization there. | Use a token that is safe for every viewer of the embedded page, or use a same-origin protected viewer. |
 | Notebook output | `view(url)` writes the URL into the iframe `src` and the caption of the cell output (`view` in `src/chronozarr/view.py`), and Jupyter saves it in the `.ipynb` file | Use `view` with a local directory (3.1). Clear outputs before you commit or share a notebook |
+| Notebook player link | The "Open in viewer" link of `player(url)` holds the full store URL with its query, so the store opens in the new tab. Copying the link address copies the token. | Treat the link like the original signed link |
 | Python and CLI tools | `HttpStore` joins each Zarr key onto the URL path and carries the query onto every object request. `open_store`, `info` and `doctor` work with prefix-wide token URLs; their displayed URLs redact the query. | Keep the original command argument out of shell history and CI logs. |
 | Shell history and CI logs | A URL on the command line is recorded | Use a profile or an environment variable for credentials, not a URL |
 

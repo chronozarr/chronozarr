@@ -146,13 +146,13 @@ The viewer sends `ready` when it has read the store's metadata and set up the vi
   "levels": [{ "lod": 0, "width": 2759, "height": 2765, "resolution": 10 }],
   "state": {
     "t": 0, "time": "2015-11-01T00:00:00Z", "product": "true_color", "band": "B02", "colormap": "gray", "range": null, "zoom": 0.175,
-    "center": { "x": 499445, "y": 9156055, "lon": -75.005032, "lat": -7.634983 },
+    "center": { "x": 499445, "y": 9156055, "lon": -75.005032, "lat": -7.634983 }, "fitted": true,
     "playing": false, "speed": 4
   }
 }
 ```
 
-`times` and `state.time` are the ISO strings of the store. `state.range` is `null` while the viewer measures the range itself. `bands[].common_name` and `units` are `null` when the store does not say. `levels[].resolution` is the pixel size in the store's units, or `null` without georeferencing. In `state.center`, `x` and `y` are in the store's coordinates. `lon` and `lat` are `null` when the viewer cannot compute them.
+`times` and `state.time` are the ISO strings of the store. `state.range` is `null` while the viewer measures the range itself. `bands[].common_name` and `units` are `null` when the store does not say. `levels[].resolution` is the pixel size in the store's units, or `null` without georeferencing. In `state.center`, `x` and `y` are in the store's coordinates. `lon` and `lat` are `null` when the viewer cannot compute them. `state.fitted` is `true` while the camera shows the whole store at the fitted scale. A link to the view can then leave out `z` and `c`, so that it fits any window.
 
 #### `chronozarr:time`
 
@@ -192,10 +192,10 @@ The values belong to the frame on screen. `t` and `time` are the timestep of tha
 The viewer sends `view` when the camera has been still for 120 ms after a pan, zoom or resize. It sends it only when the view differs from the last view sent. A `set` that moved the camera also leads to a `view`.
 
 ```json
-{ "v": 1, "type": "chronozarr:view", "zoom": 2, "center": { "x": 497386.015, "y": 9155942.492, "lon": -75.0237, "lat": -7.636 } }
+{ "v": 1, "type": "chronozarr:view", "zoom": 2, "center": { "x": 497386.015, "y": 9155942.492, "lon": -75.0237, "lat": -7.636 }, "fitted": false }
 ```
 
-`zoom` and `center` mean the same as in `set`, so you can send a saved `view` back to restore the camera.
+`zoom` and `center` mean the same as in `set`, so you can send a saved `view` back to restore the camera. `fitted` means the same as in `state`.
 
 #### `chronozarr:error`
 
