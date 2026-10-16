@@ -46,13 +46,14 @@ All parameters go in the iframe URL. The parameters of the full viewer also work
 | `theme` | `light` | `dark` | Uses the light palette for the chrome (header, timeline, inspector). The canvas and its pixels are the same in both themes. Needs `embed=1`. |
 | `origin` | URL-encoded origin of the host page | the origin of `document.referrer` | The only origin that the viewer listens to and sends to. See section 3. |
 | `t` | timestep index | 0 | Initial timestep. |
-| `p` | `true_color`, `false_color`, `ndvi`, `ndwi`, `water` or `band` | the first product that the store's bands allow | Initial product. |
+| `p` | `true_color`, `false_color`, `ndvi`, `ndwi`, `water`, `band` or `dual_pol` | the first product that the store's bands allow, except `band` | Initial product. `band` is the default only when no other product is allowed. |
 | `b` | band name | first band | Band of the single-band product (`p=band`). |
+| `cm` | `gray`, `viridis`, `magma` or `turbo` | `gray` | Colormap of the single-band product (`p=band`). The viewer ignores it for every other product. |
 | `r` | `low,high` | measured from the data on screen | Display limits of the single-band product, in physical units (`stored * scale + offset`) with `low` below `high`. The viewer ignores it for another product and for a band it tones as reflectance, an unsigned 8-bit or 16-bit band whose largest physical value is 10 or less. The viewer keeps it in its address bar after you set limits. |
 | `z` | number above 0 | the fitted view | Initial zoom in CSS pixels per full-resolution data pixel. The same ground width then shows in a window of any size. |
 | `c` | `x,y` | the store center | Initial view center in the store's projected coordinates. A store with no georeferencing uses level-0 pixels. |
 
-The embed layout drops the catalog selector and the export button. It keeps the product buttons and the timeline. The inspector is a drawer at every width. It opens on a click, and Escape or the close button closes it.
+The embed layout drops the catalog selector. It keeps the product buttons, the timeline and the Export button, which saves the loop as MP4, WebM or GIF. With `controls=0` there is no Export button. The inspector is a drawer at every width. It opens on a click, and Escape or the close button closes it.
 
 A small "chronozarr" wordmark in the header links to the full viewer on the same store and view. The link opens in a new tab and carries no embed parameters.
 
@@ -84,13 +85,14 @@ The viewer ignores messages of other protocols on the same window. It also ignor
 
 #### `chronozarr:set`
 
-A `set` changes the view, and every field is optional. The viewer applies the fields that are present together, in this order: product and band, display range, time, camera, speed, playback.
+A `set` changes the view, and every field is optional. The viewer applies the fields that are present together, in this order: product, band and colormap, display range, time, camera, speed, playback.
 
 | Field | Type | Meaning |
 |---|---|---|
 | `t` | integer or ISO 8601 string | A timestep index (0 to `times.length - 1`) or a date such as `"2024-03-01"` or `"2024-03-01T12:00:00Z"`. A date selects the nearest timestep. The earlier timestep wins a tie. A date outside the series selects the first or last timestep. A date-time without a zone is read as UTC. |
 | `product` | string | A product id from `ready.products` that is `available`. |
 | `band` | string | A band name from `ready.bands`. It chooses the band of the single-band product. Send `product: "band"` with it to show that product. |
+| `colormap` | string | `gray`, `viridis`, `magma` or `turbo`: the colormap of the single-band product. Other products keep their own colors. |
 | `range` | `null` or `[low, high]` | Display limits in physical units for a single band that is shown with a linear stretch. `low` must be below `high`. `null` returns to the range that the viewer measures from the pixels on screen. |
 | `zoom` | number above 0 | CSS pixels per full-resolution data pixel, as in `z=`. The limits are the same as for the mouse: out to half of the fitted view, in to 16 canvas pixels per data pixel. |
 | `center` | `{x, y}` or `{lon, lat}` | View center. `x` and `y` are in the store's coordinates, as in `c=`, or in level-0 pixels for a store with no georeferencing. `lon` and `lat` are WGS84 degrees. They need a georeferenced store whose CRS is WGS84 UTM, EPSG:3857 or EPSG:4326. When `x` and `y` are both present they win, so you can send the `center` of a `chronozarr:view` message back unchanged. |
@@ -143,14 +145,14 @@ The viewer sends `ready` when it has read the store's metadata and set up the vi
   "products": [{ "id": "true_color", "name": "True color", "available": true }],
   "levels": [{ "lod": 0, "width": 2759, "height": 2765, "resolution": 10 }],
   "state": {
-    "t": 0, "time": "2015-11-01T00:00:00Z", "product": "true_color", "band": "B02", "range": null, "zoom": 0.175,
-    "center": { "x": 499445, "y": 9156055, "lon": -75.005032, "lat": -7.634983 },
+    "t": 0, "time": "2015-11-01T00:00:00Z", "product": "true_color", "band": "B02", "colormap": "gray", "range": null, "zoom": 0.175,
+    "center": { "x": 499445, "y": 9156055, "lon": -75.005032, "lat": -7.634983 }, "fitted": true,
     "playing": false, "speed": 4
   }
 }
 ```
 
-`times` and `state.time` are the ISO strings of the store. `state.range` is `null` while the viewer measures the range itself. `bands[].common_name` and `units` are `null` when the store does not say. `levels[].resolution` is the pixel size in the store's units, or `null` without georeferencing. In `state.center`, `x` and `y` are in the store's coordinates. `lon` and `lat` are `null` when the viewer cannot compute them.
+`times` and `state.time` are the ISO strings of the store. `state.range` is `null` while the viewer measures the range itself. `bands[].common_name` and `units` are `null` when the store does not say. `levels[].resolution` is the pixel size in the store's units, or `null` without georeferencing. In `state.center`, `x` and `y` are in the store's coordinates. `lon` and `lat` are `null` when the viewer cannot compute them. `state.fitted` is `true` while the camera shows the whole store at the fitted scale. A link to the view can then leave out `z` and `c`, so that it fits any window.
 
 #### `chronozarr:time`
 
@@ -190,10 +192,10 @@ The values belong to the frame on screen. `t` and `time` are the timestep of tha
 The viewer sends `view` when the camera has been still for 120 ms after a pan, zoom or resize. It sends it only when the view differs from the last view sent. A `set` that moved the camera also leads to a `view`.
 
 ```json
-{ "v": 1, "type": "chronozarr:view", "zoom": 2, "center": { "x": 497386.015, "y": 9155942.492, "lon": -75.0237, "lat": -7.636 } }
+{ "v": 1, "type": "chronozarr:view", "zoom": 2, "center": { "x": 497386.015, "y": 9155942.492, "lon": -75.0237, "lat": -7.636 }, "fitted": false }
 ```
 
-`zoom` and `center` mean the same as in `set`, so you can send a saved `view` back to restore the camera.
+`zoom` and `center` mean the same as in `set`, so you can send a saved `view` back to restore the camera. `fitted` means the same as in `state`.
 
 #### `chronozarr:error`
 

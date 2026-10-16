@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 import anywidget
 import traitlets as T
 
-from chronozarr.view import LocalAccess
+from chronozarr.view import COLORMAPS, LocalAccess
 
 
 class Player(anywidget.AnyWidget):
@@ -20,6 +20,7 @@ class Player(anywidget.AnyWidget):
     controls = T.Bool(False).tag(sync=True)
     band = T.Unicode("").tag(sync=True)
     range = T.List(T.Float(), default_value=None, allow_none=True).tag(sync=True)
+    colormap = T.Enum(COLORMAPS, default_value="gray").tag(sync=True)
     speed = T.Float(4, min=0.01).tag(sync=True)
     playing = T.Bool(False).tag(sync=True)
     ready = T.Bool(False).tag(sync=True)

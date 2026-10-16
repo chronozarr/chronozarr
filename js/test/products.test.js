@@ -27,7 +27,8 @@ test('products resolve against the store bands by common name and report the com
   assert.deepEqual(products.true_color.missing, ['green', 'blue']);
   assert.deepEqual(products.water.missing, ['green']);
 
-  assert.ok(resolveProducts(['B02', 'B03', 'B04', 'B08']).every((p) => p.available));
+  assert.deepEqual(resolveProducts(['B02', 'B03', 'B04', 'B08']).filter((p) => !p.available).map((p) => p.id), ['dual_pol'], 'every product but the SAR one');
+  assert.deepEqual(products.dual_pol.missing, ['copol', 'crosspol']);
 });
 
 test('a band answers to its common_name first, then to a name that is the common name, then to its Sentinel-2 name', () => {

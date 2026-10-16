@@ -208,9 +208,11 @@ function fakeViewer({ transform = GEOREF, crs = 'EPSG:32631' } = {}) {
     ],
     productIndex: 1,
     bandChoice: 0,
+    colormap: 0,
     t: 0,
     camera: { cx: 100, cy: 100, scale: 1 },
     zoom: 1,
+    fitted: true,
     speed: 4,
     playback: { playing: false },
     goToTime(t) {
@@ -219,6 +221,7 @@ function fakeViewer({ transform = GEOREF, crs = 'EPSG:32631' } = {}) {
     },
     setProduct: (index) => calls.push(['setProduct', index]),
     setBandChoice: (index) => calls.push(['setBandChoice', index]),
+    setColormap: (index) => calls.push(['setColormap', index]),
     setView: (view) => calls.push(['setView', view]),
     setSpeed: (speed) => calls.push(['setSpeed', speed]),
     play: () => calls.push(['play']),
@@ -257,7 +260,9 @@ test('connectEmbed: ready carries the store, its times, bands, products, levels 
   assert.equal(data.state.time, '2024-01-01T00:00:00Z');
   assert.equal(data.state.product, 'ndvi');
   assert.equal(data.state.band, 'B02');
+  assert.equal(data.state.colormap, 'gray');
   assert.equal(data.state.zoom, 1);
+  assert.equal(data.state.fitted, true);
   assert.equal(data.state.playing, false);
   assert.equal(data.state.speed, 4);
   assert.deepEqual([data.state.center.x, data.state.center.y, data.state.center.lon], [501000, 3999000, data.state.center.lon]);
@@ -314,16 +319,17 @@ test('connectEmbed: errors of the viewer reach the host at once, even before rea
   assert.deepEqual(w.posted.map(({ data }) => [data.type, data.code, data.message]), [['chronozarr:error', 'store_open_failed', 'Could not open store: HTTP 404']]);
 });
 
-test('connectEmbed: a set is applied in a fixed order: product, band, time, camera, speed, playback', async () => {
+test('connectEmbed: a set is applied in a fixed order: product, band, colormap, time, camera, speed, playback', async () => {
   const { w, viewer, calls } = connected();
   viewer.hooks.ready();
   await sleep(5);
   w.posted.length = 0;
-  w.receive(setMessage({ playing: true, speed: 12, center: { x: 501000, y: 3999000 }, zoom: 3, t: '2024-03-10', band: 'B04', product: 'band' }));
+  w.receive(setMessage({ playing: true, speed: 12, center: { x: 501000, y: 3999000 }, zoom: 3, t: '2024-03-10', colormap: 'turbo', band: 'B04', product: 'band' }));
   await sleep(10);
   assert.deepEqual(calls, [
     ['setProduct', 2],
     ['setBandChoice', 1],
+    ['setColormap', 3],
     ['goToTime', 2],
     ['setView', { zoom: 3, center: { col: 100, row: 100 } }],
     ['setSpeed', 12],

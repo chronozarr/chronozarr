@@ -3,9 +3,13 @@
 // A store describes each band as {name, common_name?, scale, offset, units?}; the physical value is
 // stored * scale + offset. Products ask for bands by common name (red, green, blue, nir, swir16, ...). A band
 // matches a common name by its `common_name`, else by its `name` being that word, else, for stores that only
-// carry band names, by the Sentinel-2 name for it (red = B04).
+// carry band names, by the Sentinel-2 name for it (red = B04). The SAR roles `copol` and `crosspol` are matched as a
+// pair, see findPolarisations.
 
-/** `inputs` of the shader, in order: true color = (red, green, blue), NDVI = (nir, red), NDWI = (green, nir). */
+/**
+ * `inputs` of the shader, in order: true color = (red, green, blue), NDVI = (nir, red), NDWI = (green, nir),
+ * dual-pol composite = (copol, crosspol).
+ */
 export const PRODUCTS = [
   { id: 'true_color', shader: 0, name: 'True color', needs: ['red', 'green', 'blue'] },
   { id: 'false_color', shader: 1, name: 'False color', needs: ['nir', 'red', 'green'] },
@@ -13,9 +17,13 @@ export const PRODUCTS = [
   { id: 'ndwi', shader: 3, name: 'NDWI', needs: ['green', 'nir'] },
   { id: 'water', shader: 4, name: 'Water', needs: ['green', 'nir'] },
   { id: 'band', shader: 5, name: 'Single band', needs: null },
+  { id: 'dual_pol', shader: 6, name: 'Dual-pol composite', needs: ['copol', 'crosspol'] },
 ];
 
 const SENTINEL2_NAMES = { blue: 'B02', green: 'B03', red: 'B04', nir: 'B08', swir16: 'B11', swir22: 'B12' };
+
+/** Band names (lower case) of a co-pol and cross-pol pair, in the order the viewer prefers them. */
+const POLARISATION_PAIRS = [['vv', 'vh'], ['hh', 'hv']];
 
 /** Largest stored value of each dtype the viewer can show, to tell display-ready values from reflectance. */
 const DTYPE_MAX = { uint8: 255, uint16: 65535 };
@@ -44,8 +52,22 @@ export function toPhysical(stored, band) {
   return (band.divisor ? stored / band.divisor : stored * band.scale) + band.offset;
 }
 
+/**
+ * Indices [copol, crosspol] of the SAR bands, -1 where none. A band with that `common_name` is the role. Otherwise a
+ * band with no `common_name` named VV, VH, HH or HV (any case) is, but only as a whole pair: VV with VH if the store
+ * has both, else HH with HV. VV is never paired with HV, nor HH with VH.
+ */
+export function findPolarisations(bands) {
+  const declared = (role) => bands.findIndex((band) => band.common_name === role);
+  const named = (name) => bands.findIndex((band) => band.common_name === undefined && band.name.toLowerCase() === name);
+  const pair = POLARISATION_PAIRS.map(([co, cross]) => [named(co), named(cross)]).find(([co, cross]) => co >= 0 && cross >= 0) ?? [-1, -1];
+  const [copol, crosspol] = [declared('copol'), declared('crosspol')];
+  return [copol >= 0 ? copol : pair[0], crosspol >= 0 ? crosspol : pair[1]];
+}
+
 /** Index of the band that answers to a common name, or -1. */
 export function findBand(bands, common) {
+  if (common === 'copol' || common === 'crosspol') return findPolarisations(bands)[common === 'copol' ? 0 : 1];
   let index = bands.findIndex((band) => band.common_name === common);
   if (index < 0) index = bands.findIndex((band) => band.common_name === undefined && band.name.toLowerCase() === common);
   const alias = SENTINEL2_NAMES[common];
@@ -65,6 +87,15 @@ export function resolveProducts(rawBands) {
     const missing = product.needs.filter((_, i) => indices[i] < 0);
     return { ...product, available: missing.length === 0, missing, indices: [...indices, -1, -1, -1].slice(0, 3) };
   });
+}
+
+/**
+ * Index of the product the viewer opens with: the first available one in list order other than the single band,
+ * else the single band. Every store with a band has the single band, so it is the fallback, not a candidate.
+ */
+export function defaultProductIndex(products) {
+  const index = products.findIndex((product) => product.available && product.id !== 'band');
+  return index >= 0 ? index : products.findIndex((product) => product.available);
 }
 
 /** Band indices in shader input order (-1 = unused). `bandChoice` selects the band of the single-band product. */
@@ -92,7 +123,9 @@ export function inputConversion(product, bands, bandChoice) {
  * shadow-lift stretch (Sentinel-2 style). `linear`: a straight min/max stretch. `fixed` marks a range that comes
  * from the data type (8-bit color), not something to adjust. An 8-bit RGB store with scale 1 is display-ready and
  * shown as it is; a single band whose values are not reflectance-like (floats, signed integers, unscaled integers)
- * gets an adjustable linear stretch; indices and Sentinel-2 style bands keep the reflectance look.
+ * gets an adjustable linear stretch; indices and Sentinel-2 style bands keep the reflectance look. The dual-pol
+ * composite is linear and `perChannel`: one range for each of its three channels (see dualPolChannels), measured
+ * from the data once and then held, not adjustable.
  */
 export function displayMode(product, bands, bandChoice, dtype) {
   const used = inputIndices(product, bandChoice).filter((i) => i >= 0).map((i) => bands[i]);
@@ -100,6 +133,7 @@ export function displayMode(product, bands, bandChoice, dtype) {
     const displayReady = dtype === 'uint8' && used.every((band) => band.scale === 1 && band.offset === 0);
     return displayReady ? { mode: 'linear', fixed: true, range: [0, 255] } : { mode: 'reflectance', fixed: true, range: null };
   }
+  if (product.id === 'dual_pol') return { mode: 'linear', fixed: true, range: null, perChannel: true };
   if (product.id !== 'band') return { mode: 'reflectance', fixed: true, range: null };
   const [band] = used;
   const max = DTYPE_MAX[dtype];
@@ -184,6 +218,30 @@ export function computeStretchLo(rgbSamples) {
   if (tones.length < 30) return 0;
   tones.sort((a, b) => a - b);
   return tones[Math.floor(tones.length * 0.02)];
+}
+
+/** The three channels of the dual-pol composite from co-pol and cross-pol in dB: [co-pol, cross-pol, co-pol minus cross-pol (the power ratio in dB)]. */
+export function dualPolChannels(copol, crosspol) {
+  return [copol, crosspol, copol - crosspol];
+}
+
+/**
+ * Per-channel [lo, hi] of the composite (percentileRange of each channel of dualPolChannels) from [copol, crosspol]
+ * samples in dB. A sample with a non-finite value is left out of every channel. Null with no sample.
+ */
+export function dualPolRanges(samples) {
+  const channels = samples.filter(([copol, crosspol]) => Number.isFinite(copol) && Number.isFinite(crosspol)).map(([copol, crosspol]) => dualPolChannels(copol, crosspol));
+  const ranges = [0, 1, 2].map((channel) => percentileRange(channels.map((values) => values[channel])));
+  return ranges.every(Boolean) ? ranges : null;
+}
+
+/**
+ * What the shader's `u_rangeLo` and `u_rangeHi` (three numbers each) hold for a display range: one [lo, hi] used for
+ * every channel, or three [lo, hi] pairs, one per channel.
+ */
+export function channelBounds(range) {
+  const pairs = typeof range[0] === 'number' ? [range, range, range] : range;
+  return { lo: pairs.map(([lo]) => lo), hi: pairs.map(([, hi]) => hi) };
 }
 
 /** [lo, hi] at the 2nd and 98th percentile of the finite values; null with none. Equal ends are spread by 1. */

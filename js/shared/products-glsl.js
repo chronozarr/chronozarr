@@ -3,16 +3,26 @@
 //   vec4 shade(int product, vec3 x, float stretchLo)
 //       x: the product's input bands as physical values (stored * scale + offset), in input order:
 //          true color (red, green, blue), false color (nir, red, green), NDVI (nir, red), NDWI (green, nir),
-//          water (green, nir), single band (the band, in x.x). Returns an opaque color. `product` is the
-//          `shader` number of the product in products.js; `stretchLo` is the shadow-lift of the tone map.
-//   vec4 shadeLinear(int product, vec3 x, vec2 range)
-//       for values that are not reflectance: a straight stretch of [range.x, range.y] to 0..1, per channel for
-//       the three-band products and to gray for the single band.
+//          water (green, nir), single band (the band, in x.x), dual-pol composite (copol, crosspol) in dB.
+//          Returns an opaque color. `product` is the `shader` number of the product in products.js; `stretchLo` is
+//          the shadow-lift of the tone map.
+//   vec4 shadeLinear(int product, vec3 x, vec3 lo, vec3 hi)
+//       for values that are not reflectance: a straight stretch of [lo, hi] to 0..1 per channel (the same range
+//       in each for every product but the composite), to gray for the single band. The composite's channels are
+//       copol, crosspol and copol - crosspol, as dualPolChannels in products.js.
+//   vec4 pseudocolor(int product, int colormap, vec4 color)
+//       the single band's gray level (color.r, from shade or shadeLinear) through COLORMAPS[colormap] of
+//       colormaps.js; 0 (gray) and every other product return `color` as it is.
 //
 // Converting stored values to physical ones is left to the caller, so this signature does not depend on how the
 // data is stored. The tone map must stay in step with reinhardSrgb in products.js.
 
+import { COLORMAP_STOPS, COLORMAPS } from './colormaps.js';
 import { GAIN } from './products.js';
+
+/** Every colormap's stops but gray's, back to back, as GLSL vec3 constructors. */
+const COLORMAP_TABLE = COLORMAPS.filter((colormap) => colormap.stops)
+  .flatMap((colormap) => Array.from({ length: COLORMAP_STOPS }, (_, i) => `vec3(${colormap.stops.slice(3 * i, 3 * i + 3).map((c) => c.toFixed(3)).join(', ')})`));
 
 export const PRODUCT_GLSL = `
 const float GAIN = ${GAIN.toFixed(1)};
@@ -78,8 +88,21 @@ vec4 shade(int product, vec3 x, float stretchLo) {
   return vec4(vec3(tone(vec3(x.x), stretchLo).r), 1.0);
 }
 
-vec4 shadeLinear(int product, vec3 x, vec2 range) {
-  vec3 n = clamp((x - range.x) / (range.y - range.x), 0.0, 1.0);
+vec4 shadeLinear(int product, vec3 x, vec3 lo, vec3 hi) {
+  vec3 channels = product == 6 ? vec3(x.x, x.y, x.x - x.y) : x;
+  vec3 n = clamp((channels - lo) / (hi - lo), 0.0, 1.0);
   return product == 5 ? vec4(vec3(n.x), 1.0) : vec4(n, 1.0);
+}
+
+const int COLORMAP_STOPS = ${COLORMAP_STOPS};
+const vec3 COLORMAP_TABLE[${COLORMAP_TABLE.length}] = vec3[${COLORMAP_TABLE.length}](
+  ${COLORMAP_TABLE.join(',\n  ')});
+
+vec4 pseudocolor(int product, int colormap, vec4 color) {
+  if (product != 5 || colormap <= 0) return color;
+  float p = clamp(color.r, 0.0, 1.0) * float(COLORMAP_STOPS - 1);
+  int i = min(int(floor(p)), COLORMAP_STOPS - 2);
+  int base = (colormap - 1) * COLORMAP_STOPS;
+  return vec4(mix(COLORMAP_TABLE[base + i], COLORMAP_TABLE[base + i + 1], p - float(i)), color.a);
 }
 `;

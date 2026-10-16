@@ -1,7 +1,7 @@
 // The embedding contract of the viewer: the URL parameters of ?embed=1, the postMessage protocol between the
 // host page and the viewer in its iframe, and the bridge that speaks it. docs/embedding.md is the reference.
 //
-//   ?embed=1            compact layout: no catalog selector, no export, the inspector as a drawer opened by a click
+//   ?embed=1            compact layout: no catalog selector, the inspector as a drawer opened by a click
 //   &controls=0         only the canvas and a thin time readout
 //   &theme=light        light palette for the chrome (the canvas is untouched)
 //   &origin=<origin>    the origin of the host page: the only origin whose messages are read, and the only one
@@ -11,6 +11,7 @@
 // pixel <-> lon/lat, message shapes), so node tests cover it. EmbedBridge and connectEmbed are the thin parts that
 // touch window and the viewer.
 
+import { COLORMAPS, colormapIndex } from '../shared/colormaps.js';
 import { pixelToProjected, projectedToPixel } from './permalink.js';
 
 /** Contract version, in the `v` field of every message the viewer sends; a command may carry it and then must say 1. */
@@ -148,6 +149,10 @@ export function parseCommand(data) {
     if (typeof data[field] !== 'string' || data[field] === '') return bad(`${field} must be a non-empty string, got ${show(data[field])}.`);
     set[field] = data[field];
   }
+  if (data.colormap !== undefined) {
+    if (colormapIndex(data.colormap) < 0) return bad(`colormap must be one of ${COLORMAPS.map((colormap) => colormap.id).join(', ')}, got ${show(data.colormap)}.`);
+    set.colormap = data.colormap;
+  }
   if (data.range !== undefined) {
     if (data.range !== null && (!Array.isArray(data.range) || data.range.length !== 2 || !data.range.every(Number.isFinite) || data.range[0] >= data.range[1])) return bad("range must be null or two finite increasing physical limits.");
     set.range = data.range;
@@ -211,7 +216,7 @@ export function resolveSet(set, store) {
     if (!store.bandNames.includes(set.band)) return { ok: false, message: `band ${show(set.band)} is not in this store; bands: ${store.bandNames.join(', ')}.` };
     plan.bandName = set.band;
   }
-  for (const field of ['zoom', 'center', 'playing', 'speed', 'range']) if (set[field] !== undefined) plan[field] = set[field];
+  for (const field of ['zoom', 'center', 'playing', 'speed', 'range', 'colormap']) if (set[field] !== undefined) plan[field] = set[field];
   return { ok: true, plan };
 }
 
@@ -392,12 +397,13 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
   if (!bridge.active) return null;
 
   const timeOf = (t) => viewer.store.times[t];
-  const viewPayload = () => ({ zoom: viewer.zoom, center: geo.fromPixel(viewer.camera.cx, viewer.camera.cy) });
+  const viewPayload = () => ({ zoom: viewer.zoom, center: geo.fromPixel(viewer.camera.cx, viewer.camera.cy), fitted: viewer.fitted });
   const statePayload = () => ({
     t: viewer.t,
     time: timeOf(viewer.t),
     product: viewer.products[viewer.productIndex].id,
     band: viewer.bands[viewer.bandChoice].name,
+    colormap: COLORMAPS[viewer.colormap].id,
     range: viewer.stretchRange,
     ...viewPayload(),
     playing: viewer.playback?.playing ?? false,
@@ -435,6 +441,7 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
     }
     if (plan.productId !== undefined) viewer.setProduct(viewer.products.findIndex((product) => product.id === plan.productId));
     if (plan.bandName !== undefined) viewer.setBandChoice(viewer.bands.findIndex((band) => band.name === plan.bandName));
+    if (plan.colormap !== undefined) viewer.setColormap(colormapIndex(plan.colormap));
     if (plan.range === null) viewer.autoStretch();
     else if (plan.range !== undefined) viewer.setStretch(...plan.range);
     if (plan.t !== undefined) viewer.goToTime(plan.t);

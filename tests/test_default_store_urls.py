@@ -13,6 +13,7 @@ DATA_HOST = "data.chronozarr.org"
 V03_PREFIXES = (
     "/ucayali_santa_maria_v03",
     "/ucayali_santa_maria/png-v03",
+    "/ucayali_santa_maria/s1-rtc-monthly-v1",
     "/colorado_yuma/nisar-gcov-v2",
 )
 SCANNED_SUFFIXES = {".py", ".js", ".mjs", ".html", ".json", ".md"}

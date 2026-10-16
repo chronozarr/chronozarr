@@ -46,7 +46,14 @@ from chronozarr.schema import Band, SchemaError, validate
 from chronozarr.share import share
 from chronozarr.stac import write_stac
 from chronozarr.store import redact_url
-from chronozarr.view import VIEWER_URL, preview, preview_command, viewer_url
+from chronozarr.view import (
+    COLORMAPS,
+    VIEWER_URL,
+    preview,
+    preview_command,
+    share_command,
+    viewer_url,
+)
 
 _REFUSED = re.compile(r"\bHTTP 40[13]\b")
 _DATE_IN_NAME = re.compile(r"(?<!\d)(\d{4})-?(\d{2})(?:-?(\d{2}))?(?!\d)")
@@ -355,6 +362,15 @@ def _encode_summary(out: Path, report: EncodeReport) -> str:
     )
 
 
+def _echo_next_steps(out: Path) -> None:
+    """Print how to open a finished store: the public link first, this computer second."""
+    click.echo(
+        f"share it: {share_command(out)}  "
+        "(temporary public link via a Cloudflare quick tunnel; needs cloudflared)"
+    )
+    click.echo(f"preview it here: {preview_command(out)}  (this computer only)")
+
+
 @click.group()
 @click.version_option(package_name="chronozarr")
 def main() -> None:
@@ -410,7 +426,7 @@ def encode_command(
             file_options["bands"] = assign_roles(named, roles)
         report = encode(da, out, crs=crs, **file_options, **_encode_kwargs(options))
     click.echo(_encode_summary(out, report))
-    click.echo(f"preview it: {preview_command(out)}")
+    _echo_next_steps(out)
 
 
 @main.command("append")
@@ -584,7 +600,8 @@ def preview_command_(
     """Serve the local store STORE and open it in the viewer. Ctrl-C stops the server.
 
     The server answers byte ranges with CORS on 127.0.0.1 and nothing else can reach it. The
-    viewer comes from chronozarr.org unless --viewer-dir or --viewer is given.
+    viewer comes from chronozarr.org unless --viewer-dir or --viewer is given. The link opens
+    only on this computer; `chronozarr share STORE` gives a link other people can open.
     """
     with _command_errors():
         preview(
@@ -629,6 +646,8 @@ def share_command_(
 
     The command checks the public URL with `chronozarr doctor` before printing a link. Ctrl-C
     stops both the tunnel and the loopback server. Anyone who has the link can read the store.
+    The link works while this command runs and this computer is on; for a view on this computer
+    only, use `chronozarr preview STORE`.
     """
     with _command_errors():
         share(
@@ -947,13 +966,13 @@ def convert_command(
             f"verified every value in {len(report.encode.levels)} levels, "
             f"{report.plan.n_time} timesteps; total {report.total_s:.1f} s"
         )
-        click.echo(f"preview it: {preview_command(out)}")
+        _echo_next_steps(out)
         return
     click.echo(
         f"read {report.n_staged} timesteps ({report.n_reused} reused) in {report.read_s:.1f} s, "
         f"encoded in {report.encode_s:.1f} s, total {report.total_s:.1f} s"
     )
-    click.echo(f"preview it: {preview_command(out)}")
+    _echo_next_steps(out)
 
 
 convert_command.help = f"{inspect.cleandoc(convert_command.help or '')}\n\n{FIDELITY_HELP}"
@@ -1158,9 +1177,12 @@ def _print_bands(bands: tuple[Band, ...]) -> None:
                 err=True,
             )
     click.echo("products (the first column is the id for `chronozarr link --product`):")
-    for status in product_status(bands):
+    statuses = product_status(bands)
+    id_width = max(len(status.id) for status in statuses)
+    name_width = max(len(status.name) for status in statuses)
+    for status in statuses:
         detail = "available" if status.available else f"needs {', '.join(status.missing)}"
-        click.echo(f"  {status.id.ljust(11)}  {status.name.ljust(12)}  {detail}")
+        click.echo(f"  {status.id.ljust(id_width)}  {status.name.ljust(name_width)}  {detail}")
 
 
 @main.command("bands")
@@ -1172,7 +1194,8 @@ def bands_command(store: str, band_roles: tuple[str, ...], dry_run: bool) -> Non
 
     The viewer picks the bands of True color, False color, NDVI, NDWI and Water by role: a
     band's common_name, else (when it has none) its name if that is red, green, blue or nir,
-    else its Sentinel-2 name (B04, B03, B02, B08). Nothing else is guessed. For other names,
+    else its Sentinel-2 name (B04, B03, B02, B08). The Dual-pol composite takes the bands named
+    VV and VH, else HH and HV. Nothing else is guessed. For other names,
     --band-role NAME=ROLE sets the common_name in the local STORE, in place: only the root
     zarr.json (and consolidated metadata) changes, never data, scale, offset or units. A hosted
     copy needs its root zarr.json uploaded again and any CDN copy purged.
@@ -1201,6 +1224,13 @@ def bands_command(store: str, band_roles: tuple[str, ...], dry_run: bool) -> Non
     help="Display limits of the single-band product, in physical units (the band's scale and "
     "offset applied). Needs --product band.",
 )
+@click.option(
+    "--colormap",
+    type=click.Choice(COLORMAPS),
+    default=None,
+    help="Colormap of the single-band product (the viewer's default is gray). "
+    "Needs --product band.",
+)
 @click.option("--time", "t", type=int, default=None, help="Initial timestep index.")
 @click.option("--viewer", default=VIEWER_URL, show_default=True, help="Viewer URL.")
 def link_command(
@@ -1208,23 +1238,29 @@ def link_command(
     product: str | None,
     band: str | None,
     limits: str | None,
+    colormap: str | None,
     t: int | None,
     viewer: str,
 ) -> None:
     """Print a viewer URL that opens the hosted store STORE_URL at a chosen initial view.
 
-    The product, band, display limits and timestep live in the URL, not in the store, so the
-    store stays readable by every client and anyone with the URL sees the same first view. Each
-    value is checked against the store (read over HTTP), because the viewer silently ignores one
-    the store cannot honor. To set the bands a product uses, see `chronozarr bands`.
+    The product, band, display limits, colormap and timestep live in the URL, not in the store,
+    so the store stays readable by every client and anyone with the URL sees the same first view.
+    Each value is checked against the store (read over HTTP), because the viewer silently ignores
+    one the store cannot honor. To set the bands a product uses, see `chronozarr bands`.
     """
     if not is_url(store_url):
         raise click.ClickException(
             f"{store_url} is not an http(s) URL. A link needs a hosted store. For a local one, "
-            f"run `chronozarr preview {store_url}`, or `chronozarr share {store_url}` for a "
-            "temporary link; in a notebook, use chronozarr.view()"
+            f"run `{share_command(store_url)}` for a temporary public link, or "
+            f"`{preview_command(store_url)}` to open it on this computer only; in a notebook, "
+            "use chronozarr.view()"
         )
     low_high = _parse_numbers(limits, 2, "--range", float)
+    if low_high is not None and product != "band":
+        raise click.UsageError("--range sets the single-band product: add --product band")
+    if colormap is not None and product != "band":
+        raise click.UsageError("--colormap colors the single-band product: add --product band")
     with _command_errors():
         opened = open_store(store_url)
         bands = opened.attrs.bands
@@ -1253,14 +1289,22 @@ def link_command(
             )
         if low_high is not None:
             chosen = next(b for b in bands if b.name == (band or bands[0].name))
-            if product != "band":
-                raise click.UsageError("--range sets the single-band product: add --product band")
             if not display_limits_apply(opened.dtype.name, chosen):
                 raise click.UsageError(
                     f"band {chosen.name} is shown as reflectance with fixed limits, so --range "
                     "would be ignored; choose a band whose values are not reflectance-like"
                 )
-        click.echo(viewer_url(store_url, viewer, t=t, product=product, band=band, range=low_high))
+        click.echo(
+            viewer_url(
+                store_url,
+                viewer,
+                t=t,
+                product=product,
+                band=band,
+                range=low_high,
+                colormap=colormap,
+            )
+        )
     click.echo(
         "checked: the store opens and the view applies to it. Not checked: whether a browser may "
         f"read it (CORS); run `chronozarr doctor {store_url}`.",

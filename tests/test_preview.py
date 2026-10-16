@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import importlib
 import io
 import socket
@@ -24,6 +25,7 @@ from chronozarr.view import (
     preview,
     preview_command,
     serve_store,
+    share_command,
     view,
 )
 from tests.synthetic import make_da, make_truth
@@ -218,10 +220,41 @@ def test_view_with_a_proxy_route_gives_the_iframe_a_same_origin_path(
     assert "diagnose_view" in page
 
 
+def test_view_caption_for_a_local_store_names_share(store):
+    pytest.importorskip("IPython")
+    page = view(store).data
+    assert "this link opens only on this machine" in page
+    assert f"<code>{html.escape(share_command(store))}</code>" in page
+
+
+def test_view_caption_escapes_the_store_path_in_the_share_command(tmp_path):
+    pytest.importorskip("IPython")
+    path = tmp_path / "a<b>&c"
+    path.mkdir()
+    (path / "zarr.json").write_text("{}")
+    page = view(path).data
+    assert "<b>" not in page
+    assert "a&lt;b&gt;&amp;c" in page
+
+
+def test_view_caption_for_a_hosted_store_has_no_share_note():
+    pytest.importorskip("IPython")
+    assert "opens only on this machine" not in view("https://example.org/store").data
+
+
 def test_view_rejects_local_options_for_a_hosted_store():
     pytest.importorskip("IPython")
     with pytest.raises(ValueError, match="local stores"):
         view("https://example.org/store", base_url="https://x.example")
+
+
+def test_view_colors_the_single_band_and_refuses_an_unknown_colormap():
+    pytest.importorskip("IPython")
+    page = view("https://example.org/store", product="band", colormap="turbo").data
+    assert "&amp;p=band&amp;cm=turbo" in page
+    assert "cm=" not in view("https://example.org/store", product="band").data
+    with pytest.raises(ValueError, match="colormap must be one of gray, viridis, magma, turbo"):
+        view("https://example.org/store", colormap="jet")
 
 
 def test_player_with_base_url_and_error_hint(store):
@@ -237,6 +270,30 @@ def test_player_with_base_url_and_error_hint(store):
         assert widget.hint == ""
     finally:
         widget.close()
+
+
+def test_bad_display_options_fail_before_a_local_server_starts(store):
+    pytest.importorskip("IPython")
+    with pytest.raises(ValueError, match="colormap must be one of"):
+        view(store, colormap="jet")
+    with pytest.raises(ValueError, match="finite increasing"):
+        view(store, range=[2, 1])
+    assert view_module._servers == {}
+
+
+def test_player_bad_display_options_fail_before_a_local_server_starts(store):
+    pytest.importorskip("anywidget")
+    from traitlets import TraitError
+
+    with pytest.raises(TraitError):
+        chronozarr.player(store, colormap="jet")
+    with pytest.raises(TraitError):
+        chronozarr.player(store, t=-1)
+    with pytest.raises(TraitError):
+        chronozarr.player(store, range=[2, 1])
+    assert view_module._servers == {}
+    with pytest.raises(TraitError, match="HTTP"):
+        chronozarr.player(store, viewer="javascript:alert(1)")
 
 
 def test_player_hosted_store_has_no_hint_source():
@@ -414,6 +471,29 @@ def test_preview_command_quotes_paths():
     assert preview_command(Path("my store")) == "chronozarr preview 'my store'"
 
 
+def test_share_command_quotes_paths():
+    assert share_command("out") == "chronozarr share out"
+    assert share_command(Path("my store")) == "chronozarr share 'my store'"
+    assert share_command("it's") == "chronozarr share 'it'\"'\"'s'"
+
+
+def test_preview_on_loopback_says_the_link_is_for_this_computer_and_names_share(
+    store, monkeypatch
+):
+    lines, _ = run_preview(store, monkeypatch, Browser())
+    command = share_command(store)
+    assert command.endswith("my store'")  # the path has a space, so it is quoted
+    hint = f"this link opens only on this computer; for a link others can open, run `{command}`"
+    open_line = next(i for i, line in enumerate(lines) if line.startswith("open: "))
+    assert lines[open_line + 1] == hint
+    assert lines[-2:] == ["press Ctrl-C to stop", "stopped"]
+
+
+def test_preview_through_a_base_url_does_not_call_its_link_local(store, monkeypatch):
+    lines, _ = run_preview(store, monkeypatch, Browser(), base_url="https://x.trycloudflare.com")
+    assert not any("opens only on this computer" in line for line in lines)
+
+
 # ---- CLI ----
 
 
@@ -480,7 +560,19 @@ def test_cli_preview_rejects_conflicting_viewers(store, viewer_dir, monkeypatch)
     assert "either viewer" in result.output
 
 
-def test_encode_and_convert_print_the_preview_command(tmp_path):
+def assert_share_before_preview(output: str, store: Path) -> None:
+    lines = output.splitlines()
+    share_line = (
+        f"share it: chronozarr share {store}  "
+        "(temporary public link via a Cloudflare quick tunnel; needs cloudflared)"
+    )
+    preview_line = f"preview it here: chronozarr preview {store}  (this computer only)"
+    assert share_line in lines
+    assert preview_line in lines
+    assert lines.index(share_line) + 1 == lines.index(preview_line)
+
+
+def test_encode_and_convert_print_share_first_and_preview_second(tmp_path):
     source = tmp_path / "input.zarr"
     make_da(make_truth(2, 2, 40, 50)).to_dataset(name="reflectance").to_zarr(
         source, zarr_format=2, consolidated=False
@@ -490,7 +582,7 @@ def test_encode_and_convert_print_the_preview_command(tmp_path):
         main, ["encode", str(source), str(encoded), "--chunk-size", "16"], catch_exceptions=False
     )
     assert result.exit_code == 0, result.output
-    assert f"preview it: chronozarr preview {encoded}" in result.output
+    assert_share_before_preview(result.output, encoded)
 
     converted = tmp_path / "converted"
     result = CliRunner().invoke(
@@ -507,13 +599,14 @@ def test_encode_and_convert_print_the_preview_command(tmp_path):
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.output
-    assert f"preview it: chronozarr preview {converted}" in result.output
+    assert_share_before_preview(result.output, converted)
 
     dry = CliRunner().invoke(
         main,
         ["convert", str(source), str(tmp_path / "dry"), "--variable", "reflectance", "--dry-run"],
         catch_exceptions=False,
     )
+    assert "share it" not in dry.output
     assert "preview it" not in dry.output
 
 

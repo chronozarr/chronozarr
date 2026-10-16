@@ -54,4 +54,6 @@ Do not expose the server with a public `base_url` unless you want anyone with th
 
 `chronozarr.player` shows a viewer that Python can control. See [examples/anywidget](../examples/anywidget/README.md).
 
-`view` and `player` take the initial view: `view("my_store", product="ndvi")`, `player(url, product="band", band="B8", range=[0, 4000])`. See [Band roles and the first view](python.md#band-roles-and-the-first-view) for what these mean.
+`view` and `player` take the initial view: `view("my_store", product="ndvi")`, `player(url, product="band", band="B8", range=[0, 4000], colormap="viridis")`. See [Band roles and the first view](python.md#band-roles-and-the-first-view) for what these mean. The colormap colors the single-band product only. On a player, set `colormap` to `gray`, `viridis`, `magma` or `turbo` from Python, or with `controls=True` pick it in the list next to the band.
+
+The player has no Export button of its own. Once the viewer has opened the store, the player shows an "Open in viewer" link. It opens the current view in the full viewer in a new tab: the store, timestep and product, the band, display limits and colormap of the single-band product, and the zoom and centre unless the view is the fitted one. There, Export saves the loop as MP4 or WebM (Chrome and Safari) or as GIF, and Copy link gives an address to share. Firefox records WebM and GIF only. `view` shows the full viewer, Export included.

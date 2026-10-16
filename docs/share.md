@@ -6,6 +6,8 @@ chronozarr share my_store
 
 The command makes a store on your computer reachable through a temporary public address, checks that a browser can read it there, and prints a viewer link. The person who gets the link needs a web browser. They need no Python, no chronozarr and no account.
 
+Use `share` whenever someone other than you has to open the store. `encode` and `convert` print it first when they finish. The other way to look at a local store, [`chronozarr preview`](preview.md), opens only on your computer.
+
 ## Temporary or permanent
 
 | | Temporary link: `chronozarr share` | Permanent link: `chronozarr publish` |
@@ -16,7 +18,7 @@ The command makes a store on your computer reachable through a temporary public 
 | What you need | `cloudflared` | A bucket, credentials, public read access |
 | Good for | Showing a colleague a result today | A paper, a project page, many viewers |
 
-For a link that lasts, see [Publish a permanent link](publish.md). To look at a store yourself, use [`chronozarr preview`](preview.md). For data that must stay private, see [Private stores](private.md).
+For a link that lasts, see [Publish a permanent link](publish.md). To look at a store on your computer only, with no public address and no `cloudflared`, use [`chronozarr preview`](preview.md). For data that must stay private, see [Private stores](private.md).
 
 ## Before you start
 

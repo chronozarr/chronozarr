@@ -1,4 +1,8 @@
 // anywidget frontend using only the versioned iframe postMessage contract.
+
+// The single-band colormaps of js/shared/colormaps.js (this file is loaded on its own, so it cannot import that one).
+const COLORMAPS = [['gray', 'Gray'], ['viridis', 'Viridis'], ['magma', 'Magma'], ['turbo', 'Turbo']];
+
 export default {
   render({ model, el }) {
     const box = document.createElement('div');
@@ -11,6 +15,8 @@ export default {
     const date = document.createElement('span');
     const product = document.createElement('select'); product.setAttribute('aria-label', 'Product');
     const band = document.createElement('select'); band.setAttribute('aria-label', 'Band');
+    const colormap = document.createElement('select'); colormap.setAttribute('aria-label', 'Colormap');
+    for (const [id, name] of COLORMAPS) colormap.add(new Option(name, id));
     const low = document.createElement('input'), high = document.createElement('input');
     for (const [input, label] of [[low, 'Display minimum'], [high, 'Display maximum']]) { input.type = 'number'; input.step = 'any'; input.setAttribute('aria-label', label); input.style.width = '90px'; }
     const auto = document.createElement('button'); auto.textContent = 'Auto limits';
@@ -19,17 +25,20 @@ export default {
     for (const value of [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,20,24,30,40,48,60]) {
       speed.add(new Option(`${value}/s`, String(value)));
     }
+    // The same view in the full viewer, which has Export (GIF, MP4, WebM) and Copy link; the iframe runs with controls=0.
+    const open = document.createElement('a'); open.textContent = 'Open in viewer'; open.target = '_blank'; open.rel = 'noopener';
     const status = document.createElement('div'); status.setAttribute('role', 'status');
     const hint = document.createElement('pre'); hint.hidden = true;
     hint.style.cssText = 'margin:0;white-space:pre-wrap;font:12px ui-monospace,monospace;opacity:.75';
     const frame = document.createElement('iframe'); frame.title = 'chronozarr player';
     frame.style.cssText = 'width:100%;border:0;min-height:320px';
     frame.allow = 'fullscreen; local-network-access';
-    controls.append(play, time, date, product, band, low, high, auto, legend, speed); box.append(controls, frame, status, hint); el.append(box);
+    controls.append(play, time, date, product, band, colormap, low, high, auto, legend, speed, open); box.append(controls, frame, status, hint); el.append(box);
     let origin, connected = false, disposed = false, suppress = false, saveTimer = 0, commandTimer = 0, openTimer = 0;
     let pending = {};
     let activeBand = '';
     const bandRanges = new Map();
+    const colormapId = () => model.get('colormap') ?? 'gray';
     const subscriptions = [];
     const save = () => {
       if (!saveTimer) saveTimer = setTimeout(() => { saveTimer = 0; model.save_changes(); }, 100);
@@ -65,17 +74,38 @@ export default {
       date.textContent = times[model.get('t')]?.slice(0, 10) ?? '';
       play.textContent = model.get('playing') ? 'Pause' : 'Play';
       product.value = model.get('product'); speed.value = String(model.get('speed'));
-      band.value = model.get('band') ?? '';
+      band.value = model.get('band') ?? ''; colormap.value = colormapId();
       const limits = model.get('range');
       low.value = limits?.[0] ?? ''; high.value = limits?.[1] ?? '';
       const advanced = model.get('controls') === true;
       for (const control of [date, product, speed]) control.hidden = !advanced;
       const single = advanced && model.get('product') === 'band';
-      for (const control of [band, low, high, auto, legend]) control.hidden = !single;
+      for (const control of [band, colormap, low, high, auto, legend]) control.hidden = !single;
       const units = model.get('bands').find(item => item.name === model.get('band'))?.units ?? '';
       legend.textContent = limits ? `${limits[0]} → ${limits[1]} ${units}` : `${units} (auto limits)`;
-      for (const control of [play, time, product, band, low, high, auto, speed]) control.disabled = !connected;
+      for (const control of [play, time, product, band, colormap, low, high, auto, speed]) control.disabled = !connected;
+      open.hidden = !connected;
+      if (connected) open.href = viewerLink();
       frame.style.height = `${model.get('height')}px`;
+    }
+    // The current view as a viewer address (the parameters of js/demo/permalink.js), without the embed parameters.
+    // A fitted camera is left out, so the full viewer fits the store to its own window.
+    function viewerLink() {
+      const url = new URL(model.get('viewer_url'), location.href);
+      const params = url.searchParams;
+      for (const key of ['embed', 'controls', 'origin', 'theme', 'store', 't', 'p', 'b', 'r', 'cm', 'z', 'c']) params.delete(key);
+      params.set('store', new URL(model.get('store_url'), location.href).href); params.set('t', String(model.get('t')));
+      if (model.get('product')) params.set('p', model.get('product'));
+      if (model.get('product') === 'band') {
+        if (model.get('band')) params.set('b', model.get('band'));
+        if (model.get('range')) params.set('r', model.get('range').join(','));
+        if (colormapId() !== 'gray') params.set('cm', colormapId());
+      }
+      const { zoom, center, fitted } = model.get('state');
+      if (!fitted && zoom > 0 && center) {
+        params.set('z', String(Number(zoom.toPrecision(3)))); params.set('c', `${center.x},${center.y}`);
+      }
+      return url.href.replaceAll('%2C', ',');
     }
     function start() {
       connected = false; pending = {}; activeBand = ''; bandRanges.clear(); clearTimeout(commandTimer); clearTimeout(openTimer);
@@ -95,6 +125,7 @@ export default {
       const limits = model.get('range');
       if (model.get('band')) url.searchParams.set('b', model.get('band')); else url.searchParams.delete('b');
       if (limits) url.searchParams.set('r', limits.join(',')); else url.searchParams.delete('r');
+      if (colormapId() !== 'gray') url.searchParams.set('cm', colormapId()); else url.searchParams.delete('cm');
       frame.src = url.href; draw();
       // A browser that cannot reach the viewer or the store often shows nothing and sends nothing.
       openTimer = setTimeout(() => {
@@ -119,16 +150,18 @@ export default {
         activeBand = state.band;
         bandRanges.set(activeBand, state.range ?? null);
         const desired = first ? {
-          playing: model.get('playing'), speed: model.get('speed'), range: model.get('range') ?? null,
+          playing: model.get('playing'), speed: model.get('speed'), range: model.get('range') ?? null, colormap: colormapId(),
           ...(model.get('band') ? { band: model.get('band') } : {}), ...pending,
         } : null;
+        // A viewer older than the colormaps has no state.colormap.
         update({ ready: true, times: message.times, products: message.products, bands: message.bands,
-          state, t: state.t, product: state.product, band: state.band, range: state.range ?? null, playing: state.playing, speed: state.speed });
+          state, t: state.t, product: state.product, band: state.band, range: state.range ?? null,
+          colormap: state.colormap ?? 'gray', playing: state.playing, speed: state.speed });
         if (desired) { pending = desired; flush(); }
       } else if (message.type === 'chronozarr:time') {
         update({ t: message.t, state: { ...model.get('state'), t: message.t, time: message.time } });
       } else if (message.type === 'chronozarr:view') {
-        update({ state: { ...model.get('state'), zoom: message.zoom, center: message.center } });
+        update({ state: { ...model.get('state'), zoom: message.zoom, center: message.center, fitted: message.fitted } });
       } else if (message.type === 'chronozarr:click') update({ click: message });
       else if (message.type === 'chronozarr:error') {
         update({ error: message }); status.textContent = message.message;
@@ -136,7 +169,7 @@ export default {
       }
     };
     const listen = (key, callback) => { model.on(`change:${key}`, callback); subscriptions.push([`change:${key}`, callback]); };
-    for (const key of ['t', 'product', 'band', 'range', 'playing', 'speed']) listen(key, () => { if (!suppress) { queue(key, model.get(key)); draw(); } });
+    for (const key of ['t', 'product', 'band', 'range', 'colormap', 'playing', 'speed']) listen(key, () => { if (!suppress) { queue(key, model.get(key)); draw(); } });
     for (const key of ['store_url', 'viewer_url', 'theme']) listen(key, start);
     listen('hint', () => { hint.textContent = model.get('hint'); hint.hidden = !hint.textContent; });
     listen('height', draw);
@@ -146,6 +179,7 @@ export default {
     time.oninput = () => control('t', Number(time.value));
     product.onchange = () => control('product', product.value);
     band.onchange = () => control('band', band.value);
+    colormap.onchange = () => control('colormap', colormap.value);
     const applyLimits = () => {
       const limits = [Number(low.value), Number(high.value)];
       if (low.value !== '' && high.value !== '' && limits.every(Number.isFinite) && limits[0] < limits[1]) control('range', limits);

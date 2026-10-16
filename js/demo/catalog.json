@@ -4,6 +4,10 @@
     "url": "https://data.chronozarr.org/ucayali_santa_maria_v03"
   },
   {
+    "name": "Sentinel-1 C-band backscatter, Ucayali River, Peru (VV, VH, monthly 2017\u20132026)",
+    "url": "https://data.chronozarr.org/ucayali_santa_maria/s1-rtc-monthly-v1"
+  },
+  {
     "name": "PNG frames demo (RGB + alpha, 2019\u20132021)",
     "url": "https://data.chronozarr.org/ucayali_santa_maria/png-v03"
   },

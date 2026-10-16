@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { GIFEncoder, applyPalette, quantize } from '../vendor/gifenc.esm.js';
-import { exportFilename, flipRows, gifDelayMs, paletteSampleTimes, pickWebmMimeType, subsamplePixels, webmBitrate } from '../demo/export.js';
+import { canExport, exportFilename, flipRows, gifDelayMs, paletteSampleTimes, pickVideoMimeType, subsamplePixels, videoBitrate } from '../demo/export.js';
 
 test('gifDelayMs rounds to whole centiseconds and never goes below 20 ms', () => {
   assert.equal(gifDelayMs(1), 1000);
@@ -12,18 +12,33 @@ test('gifDelayMs rounds to whole centiseconds and never goes below 20 ms', () =>
   assert.equal(gifDelayMs(60), 20);
 });
 
-test('pickWebmMimeType prefers VP9, then VP8, then plain WebM, and returns null when none is supported', () => {
-  assert.equal(pickWebmMimeType(() => true), 'video/webm;codecs=vp9');
-  assert.equal(pickWebmMimeType((type) => type !== 'video/webm;codecs=vp9'), 'video/webm;codecs=vp8');
-  assert.equal(pickWebmMimeType((type) => type === 'video/webm'), 'video/webm');
-  assert.equal(pickWebmMimeType(() => false), null);
+test('pickVideoMimeType prefers VP9, then VP8, then plain WebM, and returns null when none is supported', () => {
+  assert.equal(pickVideoMimeType('webm', () => true), 'video/webm;codecs=vp9');
+  assert.equal(pickVideoMimeType('webm', (type) => type !== 'video/webm;codecs=vp9'), 'video/webm;codecs=vp8');
+  assert.equal(pickVideoMimeType('webm', (type) => type === 'video/webm'), 'video/webm');
+  assert.equal(pickVideoMimeType('webm', () => false), null);
 });
 
-test('webmBitrate scales with pixels and rate, within 2 and 24 Mbit/s', () => {
-  assert.equal(webmBitrate(100, 100, 4), 2e6);
-  assert.equal(webmBitrate(1600, 900, 10), 2160000);
-  assert.equal(webmBitrate(4000, 3000, 60), 24e6);
-  assert.ok(webmBitrate(1600, 900, 10) > webmBitrate(800, 450, 10));
+test('pickVideoMimeType asks for H.264 in MP4, then any MP4, and never offers a WebM type for MP4', () => {
+  assert.equal(pickVideoMimeType('mp4', () => true), 'video/mp4;codecs=avc1');
+  assert.equal(pickVideoMimeType('mp4', (type) => type === 'video/mp4'), 'video/mp4');
+  assert.equal(pickVideoMimeType('mp4', (type) => type.startsWith('video/webm')), null);
+});
+
+test('canExport: GIF always; a video format only where MediaRecorder records it', () => {
+  const firefox = { isTypeSupported: (type) => type.startsWith('video/webm') };
+  assert.equal(canExport('gif', undefined), true);
+  assert.equal(canExport('mp4', firefox), false);
+  assert.equal(canExport('webm', firefox), true);
+  assert.equal(canExport('mp4', undefined), false);
+  assert.equal(canExport('webm', {}), false);
+});
+
+test('videoBitrate scales with pixels and rate, within 2 and 24 Mbit/s', () => {
+  assert.equal(videoBitrate(100, 100, 4), 2e6);
+  assert.equal(videoBitrate(1600, 900, 10), 2160000);
+  assert.equal(videoBitrate(4000, 3000, 60), 24e6);
+  assert.ok(videoBitrate(1600, 900, 10) > videoBitrate(800, 450, 10));
 });
 
 test('paletteSampleTimes spreads distinct timesteps over the range, ends included', () => {
@@ -49,6 +64,7 @@ test('exportFilename names the store, range and format, with only safe character
   const labels = (t) => ['2015-01', '2015-02', '2024-09'][t];
   assert.equal(exportFilename('ucayali_santa_maria chronozarr-2', 'webm', 0, 2, labels), 'chronozarr-ucayali-santa-maria-chronozarr-2-2015-01-to-2024-09.webm');
   assert.equal(exportFilename('Stress 48', 'gif', 1, 1, labels), 'chronozarr-stress-48-2015-02-to-2015-02.gif');
+  assert.equal(exportFilename('Stress 48', 'mp4', 0, 1, labels), 'chronozarr-stress-48-2015-01-to-2015-02.mp4');
 });
 
 test('the vendored GIF encoder writes a looping GIF89a with the frames, palette and delay we give it', () => {

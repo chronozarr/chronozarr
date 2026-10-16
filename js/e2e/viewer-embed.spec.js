@@ -125,7 +125,7 @@ for (const width of [400, 900]) {
   test.describe(`${width} px wide`, () => {
     test.use({ viewport: { width, height: 700 } });
 
-    test('embed layout: no catalog selector, no export, wordmark, inspector only after a click', async ({ page, servers, storeUrl }) => {
+    test('embed layout: no catalog selector, Export kept, wordmark, inspector only after a click', async ({ page, servers, storeUrl }) => {
       const store = await storeUrl(STORE);
       // The full viewer on the same page size, to show the assertions below can fail: it has all of these.
       await page.goto(`${servers.appUrl}/demo/index.html?store=${encodeURIComponent(store)}`);
@@ -141,7 +141,7 @@ for (const width of [400, 900]) {
       expect(await page.evaluate(() => window.chronozarr.ready), 'the store opened').toBeTruthy();
 
       await expect(page.locator('#catalog-select')).toBeHidden();
-      await expect(page.locator('#export-btn')).toBeHidden();
+      await expect(page.locator('#export-btn'), 'an embed can save the loop as a file').toBeVisible();
       await expect(page.locator('#export-panel')).toBeHidden();
       await expect(page.locator('.brand')).toBeHidden();
       expect(servers.app.requests.filter((r) => r.path.endsWith('catalog.json')), 'an embed does not fetch the catalog').toEqual([]);
@@ -153,7 +153,7 @@ for (const width of [400, 900]) {
       await expect(wordmark).toHaveAttribute('rel', /noopener/);
 
       // The product control (buttons from 700 px, a select below) and the timeline stay.
-      if (width >= 700) await expect(page.locator('#products button')).toHaveCount(6);
+      if (width >= 700) await expect(page.locator('#products button')).toHaveCount(7);
       else await expect(page.locator('#product-select')).toBeVisible();
       for (const id of ['play-btn', 'prev-btn', 'next-btn', 'time-label', 'timeline-track']) await expect(page.locator(`#${id}`), id).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'no horizontal scroll').toBe(true);
@@ -293,7 +293,7 @@ test.describe('postMessage', () => {
     expect(ready.store).toEqual({ url: store, name: STORE, crs: 'EPSG:32631' });
     expect(ready.times).toEqual(Array.from({ length: 6 }, (_, t) => `2024-01-${String(t + 1).padStart(2, '0')}T00:00:00Z`));
     expect(ready.bands.map((b) => [b.name, b.scale, b.units])).toEqual([['B02', 1e-4, null], ['B03', 1e-4, null], ['B04', 1e-4, null], ['B08', 1e-4, null]]);
-    expect(ready.products.map((p) => [p.id, p.available])).toEqual([['true_color', true], ['false_color', true], ['ndvi', true], ['ndwi', true], ['water', true], ['band', true]]);
+    expect(ready.products.map((p) => [p.id, p.available])).toEqual([['true_color', true], ['false_color', true], ['ndvi', true], ['ndwi', true], ['water', true], ['band', true], ['dual_pol', false]]);
     expect(ready.levels).toEqual([{ lod: 0, width: 200, height: 200, resolution: 10 }, { lod: 1, width: 100, height: 100, resolution: 20 }]);
     expect(ready.state).toMatchObject({ t: 0, time: '2024-01-01T00:00:00Z', product: 'true_color', band: 'B02', playing: false });
     expect(ready.state.zoom).toBeGreaterThan(0);

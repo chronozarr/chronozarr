@@ -72,6 +72,7 @@ function bindControls(viewer) {
   $('prev-btn').addEventListener('click', () => viewer.goToTime(viewer.t - 1));
   $('next-btn').addEventListener('click', () => viewer.goToTime(viewer.t + 1));
   $('band-select').addEventListener('change', (e) => viewer.setBandChoice(Number(e.target.value)));
+  $('colormap-select').addEventListener('change', (e) => viewer.setColormap(Number(e.target.value)));
   $('product-select').addEventListener('change', (e) => viewer.setProduct(Number(e.target.value)));
   $('inspector-close').addEventListener('click', () => viewer.closeInspector());
   const applyStretch = () => viewer.setStretch(Number($('stretch-min').value), Number($('stretch-max').value));

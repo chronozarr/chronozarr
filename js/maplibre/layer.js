@@ -10,7 +10,8 @@
 // mercator projection.
 
 import { openStore } from '../chronozarr/decoder.js';
-import { computeStretchLo, describePixel, displayMode, findBand, inputConversion, inputIndices, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../shared/products.js';
+import { COLORMAPS, colormapIndex } from '../shared/colormaps.js';
+import { channelBounds, computeStretchLo, describePixel, displayMode, dualPolRanges, findBand, inputConversion, inputIndices, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../shared/products.js';
 import { TEXTURE_FORMATS } from '../shared/texture-formats.js';
 import { buildMesh, FLOATS_PER_VERTEX, MAX_DIVISIONS, originMatrix } from './mesh.js';
 import { createProjection, crsToPixel, footprintBounds, levelTransform, lonLatToMercator, mercatorPerTexel, pixelToCrs } from './projection.js';
@@ -58,6 +59,7 @@ function compile(gl, type, source) {
  * @property {string} [id='chronozarr']  MapLibre layer id
  * @property {string} [product='true_color']  product id (see `layer.products`)
  * @property {number|string} [band=0]  band index or name for the 'band' (single band) product
+ * @property {string} [colormap='gray']  colormap of the 'band' product: 'gray', 'viridis', 'magma' or 'turbo'
  * @property {number} [t=0]  timestep index
  * @property {number} [opacity=1]
  * @property {number} [meshDivisions=8]  quads per cell side in the warp mesh
@@ -89,9 +91,11 @@ export class ChronozarrLayer {
   #t;
   #productId;
   #band;
+  #colormap;
   #opacity;
   #stretchLo;
   #ranges = new Map();
+  #channelRanges = null;
   #bandInfo = null;
   #frame = 0;
   #state = 'loading';
@@ -115,7 +119,7 @@ export class ChronozarrLayer {
 
   /** @param {ChronozarrLayerOptions} options */
   constructor(options) {
-    const { id = 'chronozarr', url, product = 'true_color', band = 0, t = 0, opacity = 1, meshDivisions = 8, gpuBudgetBytes = DEFAULT_GPU_BUDGET_BYTES, lodBias = 0.5, stretchLo = null, range = null, prefetch = false, storeOptions = {} } = options ?? {};
+    const { id = 'chronozarr', url, product = 'true_color', band = 0, colormap = 'gray', t = 0, opacity = 1, meshDivisions = 8, gpuBudgetBytes = DEFAULT_GPU_BUDGET_BYTES, lodBias = 0.5, stretchLo = null, range = null, prefetch = false, storeOptions = {} } = options ?? {};
     if (typeof url !== 'string' || url === '') throw new TypeError('ChronozarrLayer: options.url (the store root URL) is required');
     if (!Number.isInteger(t) || t < 0) throw new RangeError(`ChronozarrLayer: t must be a non-negative integer timestep index, got ${t}`);
     if (!Number.isInteger(meshDivisions) || meshDivisions < 1 || meshDivisions > MAX_DIVISIONS) throw new RangeError(`ChronozarrLayer: meshDivisions must be an integer in 1..${MAX_DIVISIONS}, got ${meshDivisions}`);
@@ -127,6 +131,7 @@ export class ChronozarrLayer {
     this.#t = t;
     this.#productId = product;
     this.#band = band;
+    this.#colormap = ChronozarrLayer.#checkColormap(colormap);
     this.#opacity = ChronozarrLayer.#checkOpacity(opacity);
     this.#stretchLo = stretchLo;
     this.#opened = new Promise((resolve, reject) => {
@@ -153,6 +158,10 @@ export class ChronozarrLayer {
 
   get product() {
     return this.#productId;
+  }
+
+  get colormap() {
+    return COLORMAPS[this.#colormap].id;
   }
 
   /** Timestamps of the store (ISO-8601), or null before it is open. */
@@ -229,6 +238,12 @@ export class ChronozarrLayer {
     if (this.#bandInfo) this.#resolveProduct(id, band);
     this.#productId = id;
     this.#band = band;
+    this.#repaint();
+  }
+
+  /** Colormap of the 'band' product: 'gray', 'viridis', 'magma' or 'turbo'. Other products keep their own colors. */
+  setColormap(id) {
+    this.#colormap = ChronozarrLayer.#checkColormap(id);
     this.#repaint();
   }
 
@@ -429,7 +444,7 @@ export class ChronozarrLayer {
       throw new Error(`ChronozarrLayer: shader link failed: ${log}`);
     }
     const uniforms = {};
-    for (const name of ['u_matrix', 'u_data', 'u_mask', 'u_extent', 'u_dataBase', 'u_maskLayer', 'u_inputs', 'u_product', 'u_display', 'u_range', 'u_stretchLo', 'u_hasNodata', 'u_nodata', 'u_opacity', 'u_scale', 'u_divisor', 'u_offset']) {
+    for (const name of ['u_matrix', 'u_data', 'u_mask', 'u_extent', 'u_dataBase', 'u_maskLayer', 'u_inputs', 'u_product', 'u_display', 'u_colormap', 'u_rangeLo', 'u_rangeHi', 'u_stretchLo', 'u_hasNodata', 'u_nodata', 'u_opacity', 'u_scale', 'u_divisor', 'u_offset']) {
       uniforms[name] = gl.getUniformLocation(program, name);
     }
     return { program, uniforms, attributes: { pos: gl.getAttribLocation(program, 'a_pos'), texel: gl.getAttribLocation(program, 'a_texel') }, texture: null, maskTexture: null, pool: null, maskPool: null, indexBuffer: null };
@@ -523,6 +538,13 @@ export class ChronozarrLayer {
         }
       });
     }
+  }
+
+  /** Index in COLORMAPS of a colormap id; throws for an unknown one. */
+  static #checkColormap(id) {
+    const index = colormapIndex(id);
+    if (index < 0) throw new RangeError(`ChronozarrLayer: unknown colormap ${JSON.stringify(id)}; available: ${COLORMAPS.map((colormap) => colormap.id).join(', ')}`);
+    return index;
   }
 
   static #checkOpacity(opacity) {
@@ -665,7 +687,8 @@ export class ChronozarrLayer {
     const view = this.#productView();
     if (allResident && fine.length > 0) {
       if (this.#stretchLo === null) this.#stretchLo = this.#measureStretch(lod, fine, t);
-      if (view.linear && view.range === null) this.#ranges.set(view.bandIndex, this.#measureRange(lod, fine, t, view.bandIndex));
+      if (view.perChannel && view.range === null) this.#channelRanges = this.#measureChannelRanges(lod, fine, t, view.inputs);
+      else if (view.linear && view.range === null) this.#ranges.set(view.bandIndex, this.#measureRange(lod, fine, t, view.bandIndex));
     }
 
     if (fine.length + fallback.length > 0) this.#draw(gl, matrix, [...fallback, ...fine], this.#productView());
@@ -805,9 +828,14 @@ export class ChronozarrLayer {
     const { bands } = this.#bandInfo;
     const display = displayMode(product, bands, bandIndex, this.#store.dtype);
     const linear = display.mode === 'linear';
-    // A fixed range comes from the data type; otherwise the caller's range, else the one measured for this band (null until measured).
-    const range = !linear ? null : display.fixed ? display.range : (this.#options.range ?? this.#ranges.get(bandIndex) ?? null);
-    return { product, bandIndex, inputs: inputIndices(product, bandIndex), conversion: inputConversion(product, bands, bandIndex), linear, range };
+    // A fixed range comes from the data type; the composite has one range per channel, measured once; otherwise the
+    // caller's range, else the one measured for this band (null until measured).
+    let range = null;
+    if (linear) {
+      if (display.perChannel) range = this.#channelRanges;
+      else range = display.fixed ? display.range : (this.#options.range ?? this.#ranges.get(bandIndex) ?? null);
+    }
+    return { product, bandIndex, inputs: inputIndices(product, bandIndex), conversion: inputConversion(product, bands, bandIndex), linear, perChannel: Boolean(display.perChannel), range };
   }
 
   /** 2nd percentile of tone-mapped true-color reflectance, measured once from the first complete view and then kept, so scrubbing does not shift the tone mapping. */
@@ -818,6 +846,17 @@ export class ChronozarrLayer {
     const samples = [];
     this.#sample(lod, items, t, (values) => samples.push(indices.map((b) => toPhysical(values[b], bands[b]))));
     return computeStretchLo(samples);
+  }
+
+  /** Per-channel ranges of the dual-pol composite (see dualPolRanges) from the valid values on screen, measured once. Null with no valid sample. */
+  #measureChannelRanges(lod, items, t, [copol, crosspol]) {
+    const { bands, nodata } = this.#bandInfo;
+    const samples = [];
+    this.#sample(lod, items, t, (stored) => {
+      if (stored[copol] === nodata || stored[crosspol] === nodata) return;
+      samples.push([toPhysical(stored[copol], bands[copol]), toPhysical(stored[crosspol], bands[crosspol])]);
+    });
+    return dualPolRanges(samples);
   }
 
   /** Range of a linear single band: 2nd to 98th percentile of the valid physical values on screen, measured once per band. */
@@ -864,7 +903,10 @@ export class ChronozarrLayer {
     gl.uniform1i(uniforms.u_product, view.product.shader);
     gl.uniform3i(uniforms.u_inputs, ...view.inputs);
     gl.uniform1i(uniforms.u_display, view.linear ? 1 : 0);
-    gl.uniform2f(uniforms.u_range, ...(view.range ?? [0, 1]));
+    gl.uniform1i(uniforms.u_colormap, this.#colormap);
+    const { lo, hi } = channelBounds(view.range ?? [0, 1]);
+    gl.uniform3f(uniforms.u_rangeLo, ...lo);
+    gl.uniform3f(uniforms.u_rangeHi, ...hi);
     gl.uniform1f(uniforms.u_stretchLo, this.#stretchLo ?? 0);
     // With a mask the mask decides; otherwise the declared nodata value (if any).
     gl.uniform1i(uniforms.u_hasNodata, nodata !== null && !this.#store.hasMask ? 1 : 0);

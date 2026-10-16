@@ -82,8 +82,24 @@ def test_scientific_display_traits():
         for limits in ([1, 1], [2, 1], [float("nan"), 1], [1]):
             with pytest.raises(TraitError):
                 widget.range = limits
+        assert widget.colormap == "gray"
+        widget.colormap = "turbo"
+        for bad in ("jet", "Viridis", "", None):
+            with pytest.raises(TraitError):
+                widget.colormap = bad
+        assert widget.colormap == "turbo"
     finally:
         widget.close()
+
+
+def test_player_takes_an_initial_colormap_and_refuses_an_unknown_one():
+    widget = player("https://example.org/store", product="band", colormap="magma")
+    try:
+        assert widget.colormap == "magma"
+    finally:
+        widget.close()
+    with pytest.raises(TraitError):
+        player("https://example.org/store", colormap="jet")
 
 
 def test_proxy_view_preserves_initial_display_options(tmp_path, monkeypatch):
@@ -97,7 +113,13 @@ def test_proxy_view_preserves_initial_display_options(tmp_path, monkeypatch):
     monkeypatch.setenv("JUPYTERHUB_SERVICE_PREFIX", "/user/ada/")
     try:
         page = view_module.view(
-            store, viewer_dir=viewer_dir, t=2, product="band", band="HV_dB", range=[-25, 0]
+            store,
+            viewer_dir=viewer_dir,
+            t=2,
+            product="band",
+            band="HV_dB",
+            range=[-25, 0],
+            colormap="viridis",
         ).data
         iframe = re.search(r'<iframe src="([^"]+)"', page)
         assert iframe is not None
@@ -110,6 +132,7 @@ def test_proxy_view_preserves_initial_display_options(tmp_path, monkeypatch):
             "p": ["band"],
             "b": ["HV_dB"],
             "r": ["-25,0"],
+            "cm": ["viridis"],
         }
     finally:
         view_module.serve_store(store).close()

@@ -626,6 +626,14 @@
     font-variant-numeric: tabular-nums;
   }
   .stretch input:focus { border-color: var(--accent); }
+  /* The colormap between the two limits it spans: the legend of the single band. */
+  .stretch-ramp {
+    width: 56px;
+    height: 10px;
+    flex-shrink: 0;
+    border-radius: 2px;
+    border: 1px solid var(--border);
+  }
   .stretch button {
     background: none;
     border: 1px solid var(--border);
@@ -778,15 +786,13 @@
 
   /* ---- Embed (?embed=1) ----
      Set on <html> by the inline script above and by embed.js: data-embed="1", data-controls="0" for &controls=0.
-     No catalog selector, no export; the inspector is the drawer of the narrow layout at every width. */
+     No catalog selector; the inspector is the drawer of the narrow layout at every width. */
   .embed-wordmark { display: none; }
   html[data-embed] .brand,
   html[data-embed] .nav-sep,
   html[data-embed] #catalog-select,
   html[data-embed] .docs-link,
-  html[data-embed] #copy-link,
-  html[data-embed] #export-btn,
-  html[data-embed] #export-panel { display: none; }
+  html[data-embed] #copy-link { display: none; }
   html[data-embed] .embed-wordmark {
     display: inline-block;
     margin-left: auto;
@@ -937,9 +943,10 @@
   <div class="products" id="products"></div>
   <select id="product-select" class="product-select" aria-label="Product"></select>
   <select id="band-select" aria-label="Band" hidden></select>
+  <select id="colormap-select" aria-label="Colormap" title="Colormap of the single band" hidden></select>
   <div class="stretch" id="stretch" hidden>
     <input id="stretch-min" type="number" step="any" title="Stretch minimum" aria-label="Stretch minimum">
-    <span>–</span>
+    <span id="stretch-ramp" class="stretch-ramp" role="img" aria-label="Color ramp from minimum to maximum"></span>
     <input id="stretch-max" type="number" step="any" title="Stretch maximum" aria-label="Stretch maximum">
     <button id="stretch-auto" title="Fit the stretch to the data on screen">Auto</button>
   </div>
@@ -1008,13 +1015,13 @@
     <span id="buffer-hint" role="status"></span>
   </div>
   <button id="gap-toggle" class="export-btn" title="Hatch the pixels no scene observed this timestep (their value is carried over)" aria-pressed="false" hidden>Gaps</button>
-  <button id="export-btn" class="export-btn" title="Export the loop as WebM or GIF" disabled>Export</button>
+  <button id="export-btn" class="export-btn" title="Save the loop as an MP4, WebM or GIF file" disabled>Export</button>
 </section>
 
 <div id="export-panel" class="export-panel" hidden role="dialog" aria-label="Export loop">
   <h2>Export loop</h2>
   <label>Format
-    <select id="export-format"><option value="webm">WebM video</option><option value="gif">GIF</option></select>
+    <select id="export-format"><option value="mp4">MP4 video</option><option value="webm">WebM video</option><option value="gif">GIF</option></select>
   </label>
   <label>Size
     <select id="export-size"><option value="1">Screen</option><option value="0.5">Half</option><option value="0.25">Quarter</option></select>

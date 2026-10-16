@@ -20,8 +20,8 @@ test('the fragment shader is built per dtype: sampler and direct true-value read
 test('the product colors are the shared PRODUCT_GLSL, once; conversion and display mode are wired to the same uniforms as the viewer', () => {
   const source = fragmentShader({ dtype: 'uint16', hasMask: false });
   assert.equal(source.split(PRODUCT_GLSL).length - 1, 1);
-  for (const name of ['u_scale', 'u_divisor', 'u_offset', 'u_display', 'u_range', 'u_hasNodata', 'u_nodata', 'u_stretchLo']) assert.match(source, new RegExp(`uniform \\w+ ${name};`), name);
-  assert.ok(source.includes('u_display == 1 ? shadeLinear(u_product, x, u_range) : shade(u_product, x, u_stretchLo)'));
+  for (const name of ['u_scale', 'u_divisor', 'u_offset', 'u_display', 'u_rangeLo', 'u_rangeHi', 'u_hasNodata', 'u_nodata', 'u_stretchLo']) assert.match(source, new RegExp(`uniform \\w+ ${name};`), name);
+  assert.ok(source.includes('u_display == 1 ? shadeLinear(u_product, x, u_rangeLo, u_rangeHi) : shade(u_product, x, u_stretchLo)'));
   assert.ok(source.includes('if (empty) discard;'), 'no data is transparent, not a background color');
 });
 

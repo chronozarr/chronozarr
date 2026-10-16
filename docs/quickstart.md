@@ -1,6 +1,6 @@
 # Quickstart
 
-This page takes a folder of dated GeoTIFFs to an interactive viewer on your computer, and then to a link that a colleague can open. You need [uv](https://docs.astral.sh/uv/getting-started/installation/) and a web browser. You need no account, no cloud storage and no server.
+This page takes a folder of dated GeoTIFFs to a link that a colleague can open, and to an interactive viewer on your computer. You need [uv](https://docs.astral.sh/uv/getting-started/installation/) and a web browser. You need no account, no cloud storage and no server.
 
 ## 1. Install
 
@@ -78,12 +78,41 @@ chronozarr convert sample my_store
 ```text
 wrote my_store: 2 levels, 81 files, 40.2 MB, zstd level 5
 read 12 timesteps (0 reused) in 0.2 s, encoded in 0.3 s, total 0.5 s
-preview it: chronozarr preview my_store
+share it: chronozarr share my_store  (temporary public link via a Cloudflare quick tunnel; needs cloudflared)
+preview it here: chronozarr preview my_store  (this computer only)
 ```
 
 `my_store` is a folder of static files. It holds your values unchanged, plus a coarser copy for zoomed-out views.
 
-## 4. Look at it on your computer
+## 4. Share a temporary link
+
+`share` makes your store reachable through a temporary public address, so the link works on any computer, a colleague's included. It needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/), a free program from Cloudflare. It needs no Cloudflare account. On macOS, install it with `brew install cloudflared`. Without `cloudflared`, go to step 5.
+
+```bash
+chronozarr share my_store
+```
+
+The command prints its progress and then a viewer link, and opens the link in your browser. The link usually appears after about half a minute.
+
+Try these in the viewer:
+
+- Press Space to play the series. Press the Left and Right arrow keys to step.
+- Choose a product, such as NDVI or False color.
+- Click a pixel to see its values over time.
+
+Choose the date, product and view that you want to show. Click Copy link and send the link. The recipient needs only a web browser. The [viewer guide](viewer.md) lists every control.
+
+Before you send the link, know these limits:
+
+- The link works only while the command runs. Ctrl-C stops sharing, and the link stops working.
+- Your computer must stay on and connected. Every view that the recipient loads is sent from your computer, over your upload connection.
+- Anyone who has the link can read the store while it runs.
+
+[Share a temporary link](share.md) has the details and the troubleshooting steps.
+
+## 5. Look at it on your computer
+
+`preview` serves the store on `127.0.0.1` and opens the viewer. Nothing is public, and its link opens only on this computer. Use it when you have no `cloudflared`, when the data must stay on your computer, or to check a store before you share it.
 
 ```bash
 chronozarr preview my_store
@@ -93,36 +122,11 @@ chronozarr preview my_store
 serving my_store at http://127.0.0.1:56925/my_store (byte ranges and CORS, 127.0.0.1 only)
 viewer: https://chronozarr.org/demo/ (loaded from the internet; the store itself is read from this machine). For offline use see --viewer-dir and https://chronozarr.org/guides/viewer-distribution.
 open: https://chronozarr.org/demo/?store=http%3A%2F%2F127.0.0.1%3A56925%2Fmy_store
+this link opens only on this computer; for a link others can open, run `chronozarr share my_store`
 press Ctrl-C to stop
 ```
 
-Your browser opens the viewer. The viewer page comes from chronozarr.org. The store is read from your computer and is not uploaded.
-
-Try these in the viewer:
-
-- Press Space to play the series. Press the Left and Right arrow keys to step.
-- Choose a product, such as NDVI or False color.
-- Click a pixel to see its values over time.
-
-The [viewer guide](viewer.md) lists every control. Press Ctrl-C in the terminal to stop the preview. Use Chrome or Firefox: Safari can block a page on the internet from reading `127.0.0.1`.
-
-## 5. Share a temporary link
-
-`share` makes your store reachable through a temporary public address. It needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/), a free program from Cloudflare. It needs no Cloudflare account. On macOS, install it with `brew install cloudflared`.
-
-```bash
-chronozarr share my_store
-```
-
-The command prints its progress and then a viewer link. The link usually appears after about half a minute. In the viewer, choose the date, product and view that you want to show. Click Copy link and send the link. The recipient needs only a web browser.
-
-Before you send the link, know these limits:
-
-- The link works only while the command runs. Ctrl-C stops sharing, and the link stops working.
-- Your computer must stay on and connected. Every view that the recipient loads is sent from your computer, over your upload connection.
-- Anyone who has the link can read the store while it runs.
-
-[Share a temporary link](share.md) has the details and the troubleshooting steps.
+Your browser opens the viewer. The viewer page comes from chronozarr.org. The store is read from your computer and is not uploaded. Press Ctrl-C in the terminal to stop the preview. Use Chrome or Firefox: Safari can block a page on the internet from reading `127.0.0.1`.
 
 ## 6. Publish a permanent link
 

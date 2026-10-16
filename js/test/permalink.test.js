@@ -41,6 +41,14 @@ test('single-band product carries its band name', () => {
   assert.deepEqual(decodeView(query, STORE), { productId: 'band', bandName: 'B04' });
 });
 
+test('cm carries the colormap of the single band; an unknown one is ignored', () => {
+  const query = encodeView({ productId: 'band', bandName: 'B04', colormapId: 'viridis' });
+  assert.equal(query, 'p=band&b=B04&cm=viridis');
+  assert.deepEqual(decodeView(query, STORE), { productId: 'band', bandName: 'B04', colormapId: 'viridis' });
+  assert.deepEqual(decodeView('p=band&cm=jet', STORE), { productId: 'band' });
+  assert.deepEqual(decodeView('cm=', STORE), {});
+});
+
 test('an untouched view has an empty query, and an empty query decodes to no view', () => {
   assert.equal(encodeView({}), '');
   assert.deepEqual(decodeView('', STORE), {});

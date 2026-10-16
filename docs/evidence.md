@@ -10,6 +10,7 @@ This file holds measurements, tested versions, dates and caveats. User docs link
 - [Appending](#appending)
 - [PNG frames](#png-frames)
 - [NISAR and SWOT example data](#nisar-and-swot-example-data)
+- [Sentinel-1 example data](#sentinel-1-example-data)
 - [Embedding](#embedding)
 - [MapLibre layer](#maplibre-layer)
 - [JavaScript dependencies](#javascript-dependencies)
@@ -321,6 +322,21 @@ curl -sG https://cmr.earthdata.nasa.gov/search/granules.csv \
 The `source` tags of the two 5 m GeoTIFFs name `SWOT_L1B_HR_SLC_025_244_102R_20241211T161411_20241211T161422_PGD0_01.nc` and `SWOT_L1B_HR_SLC_032_244_102R_20250506T172942_20250506T172953_PGD0_01.nc`. The local SLC files of these names have the MD5 checksums that CMR lists for `SWOT_L1B_HR_SLC_D`: `0b79d78429ba02b47a9590a219fa21da` for 2024-12-11 and `67a1551ff4d035c45558fa152a7306f8` for 2025-05-06. Each file is 2.0 GB.
 
 That collection also holds `SWOT_L1B_HR_SLC_032_244_102R_20250506T172942_20250506T172953_PID0_01.nc`, a different file for the same pass. Only the `PGD0` name matches the tag. The 60 m and 5 m GeoTIFFs are outputs of `swot-slc-geocode`, a private project, and no archive holds them.
+
+## Sentinel-1 example data
+
+### Ucayali monthly store (2026-10-15)
+
+`examples/sentinel1_pc/ingest.py` built `ucayali_santa_maria/s1-rtc-monthly-v1` on 2026-10-15 from Planetary Computer's `sentinel-1-rtc` collection, with no login; the manifest is `examples/sentinel1_pc/ucayali_santa_maria.scenes.json`.
+
+- The STAC search over the box -75.13 -7.76 -74.88 -7.51 from 2017-01-01 to 2026-09-30 returned 834 IW VV+VH slices. Relative orbit 171 descending holds 309 acquisitions (322 slices; 13 passes cross the box in two slices) from 2017-01-16 to 2026-09-21; orbit 120 ascending holds 274 (83 in two slices). Each orbit has seven months without an acquisition; 2022-01 and 2022-02, after Sentinel-1B failed, are empty on both.
+- The assets are float32 GeoTIFFs (`.tiff`) of about 1.8 GB per polarization: deflate, 512 by 512 tiles, nodata -32768, 10 m in the scene's UTM zone. Over the box every file is in EPSG:32718 and offset from the Sentinel-2 store's grid by whole 10 m pixels, so the 20 m store grid is that store's level 1 (origin 485650, 9169880; 1380 by 1383 px).
+- Six S1A items of late 2024 (2024-10-24 to 2024-12-23 on orbit 171, and the same months on orbit 120) carry a `proj:transform` with a fractional origin and a positive y step, and a `proj:shape` that differs from the file; their files are north-up on whole 10 m pixels. The ingest reads the window from each file's header.
+- The run took 3 h 38 min with eight acquisitions read at once. Read failures came in four bursts about 44 minutes apart (13:21, 14:06, 14:50 and 15:34 EDT), consistent with the signed URLs expiring during reads; every one read on its retry with a fresh signature. The cache of 20 m float32 power is 5.4 GB for 309 acquisitions.
+- Encode: 110 timesteps, 3 levels, 801,425,701 bytes in 3,114 objects. Speckled dB at 0.01 dB compresses by about 15 %. Every month is 100 % valid; months hold 1 to 7 acquisitions, most 2 or 3. The monthly median is -6.8 to -6.0 dB in VV and -13.0 to -12.2 dB in VH. `chronozarr doctor` on the local store: 4 ok, 0 failures.
+- The local viewer opened the store with the dual-pol composite. The first month's 2nd to 98th percentile ranges are VV -21.4 to -2.2 dB, VH -24.9 to -8.6 dB and VV - VH 1.2 to 10.6 dB. About 10 % of the box is water (VH below -20 dB), so the forest median sits at 0.77 of the VV and VH ranges and the land shows pale; the river and its changes from 2017 to 2026 read clearly.
+- `scripts/r2_sync.py` uploaded the 3,114 objects in 473 s (7 objects/s on this link); a second run found all 3,114 in the bucket at the same size. The bucket held 11,236 objects, 8.450 GB, before the upload and 14,350 objects, 9.251 GB, after.
+- Live: root `zarr.json` 200 with `access-control-allow-origin: *` and `max-age=300`, a level-0 data chunk answered a 1 KB range with 206 and `max-age=31536000, immutable`, a mask chunk 200, the time coordinate `max-age=300`. `chronozarr doctor` on the URL: 12 ok, 3 info, 0 warnings, the edge cache hit on the second request. The deployed demo, which has no dual-pol product yet, opened the store as single-band VV (-21.18 to -2.12 dB) with no console error; the branch's viewer read it from localhost across origins with the composite as the default product, 174 requests and no console error.
 
 ## Embedding
 

@@ -18,7 +18,7 @@ try {
     const values = {
       store_url: live ? 'https://data.chronozarr.org/ucayali_santa_maria/png-v03' : `${base}/data/stores/ucayali_santa_maria/png-1`,
       viewer_url: live ? 'https://chronozarr.org/demo/' : `${base}/js/demo/index.html`,
-      controls: true, height: 560, theme: 'light', t: 0, product: '', speed: 4, playing: false,
+      controls: true, height: 560, theme: 'light', t: 0, product: '', colormap: 'gray', speed: 4, playing: false,
       times: [], products: [], bands: [], ready: false, state: {}, click: {}, error: {},
     };
     const listeners = new Map();
