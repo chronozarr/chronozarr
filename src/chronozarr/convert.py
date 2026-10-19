@@ -84,6 +84,11 @@ mask, or with a `mask` variable shared by all bands (spec 2.3, 2.4).
 8. Warped COG timesteps use the nearest-neighbour resampling of their validity plane, whatever
    `--resampling` says for the values.
 
+Plan lines from the pixels. The plan reads three timesteps, and from those pixels it adds a `fill:`
+line when a value that no declared nodata or mask covers looks like a fill (`_convert_pixels`
+says how it is judged), and a `range:` line, each band's values after scale and offset, when a band
+declares a scale or offset. Neither changes what is written or refuses a conversion.
+
 Image frames. A sequence of rendered, georeferenced PNGs (Earth Engine thumbnails, QGIS and
 matplotlib exports, drone pipelines) converts like COGs, with no GeoTIFF step; GDAL reads the
 frames, so every rule above applies to them. A frame is display values, not measurements: nothing
@@ -168,6 +173,7 @@ from chronozarr._convert_manifest import (
 from chronozarr._convert_manifest import (
     read_manifest as read_manifest,
 )
+from chronozarr._convert_pixels import fill_line, range_line
 from chronozarr._convert_preflight import (
     PreflightError as PreflightError,
 )
@@ -272,6 +278,10 @@ class Plan:
     warped: int
     samples: dict[int, Step] = field(default_factory=dict, repr=False)
     discovered: bool = False  # the files were found by listing, not named by a manifest
+    # From the sampled pixels (None: not sampled, or nothing to say): the value range after
+    # scale and offset, and a likely undeclared fill value.
+    value_range: str | None = None
+    fill: str | None = None
 
     def lines(self, read_ahead: int = 2, list_files: bool = False) -> list[str]:
         info = self.source.info
@@ -284,8 +294,10 @@ class Plan:
         if list_files and self.discovered and isinstance(self.source, CogManifestSource):
             out.append(f"files:      {len(self.source.entries)}, dated from their names")
             out.extend(f"  {show_time(e.time)}  {e.uri}" for e in self.source.entries)
+        longitude = info.grid.longitude_note()
         out += [
             f"grid:       {info.grid.describe()}",
+            *([f"longitude:  {longitude}"] if longitude else []),
             f"data:       {info.n_band} bands ({', '.join(info.band_names)}), {info.dtype.name}",
             "scaling:    "
             + ", ".join(
@@ -294,7 +306,9 @@ class Plan:
                 + (f" [{b.units}]" if b.units else "")
                 for b in info.bands
             ),
+            *([f"range:      {self.value_range}"] if self.value_range else []),
             f"validity:   {info.validity}",
+            *([f"fill:       {self.fill}"] if self.fill else []),
             *self.source.notes,
         ]
         if self.warped:
@@ -475,6 +489,10 @@ def plan_conversion(
         plan.sample_read_s = float(np.mean(seconds))
         plan.sample_ratio = _sample_ratio(list(plan.samples.values()), chunk_size)
         plan.est_output_bytes = int(plan.raw_bytes * plan.sample_ratio * pyramid)
+        if not isinstance(source, LegacySource):  # a migration copies what the store holds
+            steps = list(plan.samples.values())
+            plan.value_range = range_line(steps, info)
+            plan.fill = fill_line(steps, info)
     return plan
 
 
