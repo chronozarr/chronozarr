@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -13,7 +14,7 @@ from click.testing import CliRunner
 import chronozarr
 from chronozarr import _convert_pixels
 from chronozarr.cli import main
-from chronozarr.convert import Plan, convert, plan_conversion
+from chronozarr.convert import Plan, PreflightError, convert, plan_conversion
 from tests.synthetic import CRS, TRANSFORM, make_times
 
 pytestmark = pytest.mark.unit
@@ -548,11 +549,218 @@ def test_the_range_applies_the_offset_and_orders_a_negative_scale(tmp_path):
     assert "1 -50 to -5 (" in flipped
 
 
-def test_a_scale_that_multiplies_a_ratio_shows_an_absurd_range(tmp_path):
+def ndvi_counts() -> np.ndarray:
+    """int16 NDVI times 10000, -2000 to 10000, as MODIS MOD13 stores it."""
     ndvi = rng().integers(-1900, 9900, size=(1, HEIGHT, WIDTH)).astype(np.int16)
     ndvi[0, 0, :2] = (-2000, 10000)
-    text = line(plan_for(tmp_path, [ndvi] * N_TIME, scales=[10000.0]), "range:")
-    assert "1 -2e+07 to 1e+08" in text
+    return ndvi
+
+
+def counts_up_to(maximum: int, dtype: str = "uint16") -> np.ndarray:
+    counts = rng().integers(0, maximum + 1, size=(1, HEIGHT, WIDTH)).astype(dtype)
+    counts[0, 0, 0] = maximum
+    return counts
+
+
+MODIS: dict[str, Any] = {
+    "scales": [10000.0],
+    "units": ["NDVI"],
+    "descriptions": ["500m 16 days NDVI"],
+}
+
+
+def test_a_scale_that_multiplies_a_ratio_is_refused_with_the_fix(tmp_path):
+    message = refusal(tmp_path, [ndvi_counts()] * N_TIME, **MODIS)
+    assert (
+        "500m 16 days NDVI declares scale 10000 and would run -2e+07 to 1e+08 [NDVI] (stored * "
+        "scale + offset, valid pixels of the 3 sampled timesteps)." in message
+    )
+    assert (
+        "GDAL multiplies by the scale, but MODIS and other HDF-EOS products write a divisor"
+        in (message)
+    )
+    assert "If that is what the files mean, pass --scale 0.0001." in message
+    assert "If the scale is right, pass --scale 10000 to keep it." in message
+    assert "all 1 bands" not in message
+
+
+def test_the_refusal_says_that_scale_applies_to_every_band(tmp_path):
+    two = np.concatenate([ndvi_counts(), ndvi_counts()])
+    message = refusal(
+        tmp_path,
+        [two] * N_TIME,
+        scales=[10000.0, 10000.0],
+        descriptions=["NDVI", "EVI"],
+    )
+    assert "NDVI declares scale 10000 and would run -2e+07 to 1e+08" in message
+    assert "EVI declares scale 10000 and would run -2e+07 to 1e+08" in message
+    assert "--scale sets the scale of all 2 bands." in message
+
+
+def test_scale_replaces_the_scale_of_the_files_and_the_plan_records_it(tmp_path):
+    plan = plan_for(tmp_path, [ndvi_counts()] * N_TIME, scale=0.0001, **MODIS)
+    assert line(plan, "scaling:") == "scaling:    500m 16 days NDVI = stored * 0.0001 +0 [NDVI]"
+    assert "500m 16 days NDVI -0.2 to 1 [NDVI] (stored * scale + offset" in line(plan, "range:")
+    assert line(plan, "override:") == "override:   --scale 0.0001; the files declare 10000"
+
+
+def test_scale_equal_to_the_files_keeps_them_and_ends_the_refusal(tmp_path):
+    plan = plan_for(tmp_path, [ndvi_counts()] * N_TIME, scale=10000.0, **MODIS)
+    assert "-2e+07 to 1e+08" in line(plan, "range:")
+    assert line(plan, "override:") == "override:   --scale 10000; the files declare 10000"
+
+
+def test_offset_replaces_the_offset_of_the_files(tmp_path):
+    steps = [counts_up_to(50)] * N_TIME
+    plan = plan_for(tmp_path, steps, scales=[0.5], offsets=[3.0], offset=-1.0)
+    assert line(plan, "scaling:") == "scaling:    1 = stored * 0.5 -1"
+    assert line(plan, "override:") == "override:   --offset -1; the files declare 3"
+    other = tmp_path / "both"
+    other.mkdir()
+    both = plan_for(other, steps, scales=[0.5], offsets=[3.0], scale=2.0, offset=0.0)
+    assert line(both, "override:") == (
+        "override:   --scale 2; the files declare 0.5. --offset 0; the files declare 3"
+    )
+
+
+@pytest.mark.parametrize(
+    ("maximum", "dtype", "scale", "offset"),
+    [
+        pytest.param(10000, "uint16", 0.0001, 0.0, id="reflectance"),
+        pytest.param(100, "uint8", 0.01, 0.0, id="percent"),
+        pytest.param(65535, "uint16", 0.02, 0.0, id="land-surface-temperature-kelvin"),
+        pytest.param(6000, "uint16", 0.01, -60.0, id="backscatter-db"),
+        pytest.param(1050, "uint16", 100.0, 0.0, id="hectopascal-as-pascal"),
+        pytest.param(500, "uint16", 1000.0, 0.0, id="thousands-of-people"),
+        pytest.param(100, "uint16", 10000.0, 0.0, id="a-divisor-up-to-exactly-a-million"),
+        pytest.param(2000, "uint16", 10000.0, 5.0, id="a-divisor-with-an-offset-is-not-the-case"),
+        pytest.param(32767, "int16", 913.6, 29000000.0, id="era5-radiation-pack"),
+    ],
+)
+def test_legitimate_scales_are_never_refused(tmp_path, maximum, dtype, scale, offset):
+    steps = [counts_up_to(maximum, dtype)] * N_TIME
+    plan = plan_for(tmp_path, steps, scales=[scale], offsets=[offset])
+    assert not has_line(plan, "override:")
+    assert has_line(plan, "range:")
+
+
+def test_a_divisor_scale_is_refused_past_a_million_and_not_before(tmp_path):
+    over = refusal(tmp_path, [counts_up_to(101)] * N_TIME, scales=[10000.0])
+    assert "would run 0 to 1.01e+06" in over
+
+
+def test_a_scale_or_offset_that_cannot_work_is_refused(tmp_path):
+    steps = [counts_up_to(50)] * N_TIME
+    cases: list[tuple[dict[str, Any], str]] = [
+        ({"scale": 0.0}, "--scale must be finite and non-zero, got 0.0"),
+        ({"scale": float("nan")}, "--scale must be finite and non-zero, got nan"),
+        ({"offset": float("inf")}, "--offset must be finite, got inf"),
+    ]
+    for options, match in cases:
+        with pytest.raises(ValueError, match=match):
+            plan_for(tmp_path, steps, **options)
+
+
+def test_files_that_disagree_on_scale_or_offset_are_accepted_once_it_is_given(tmp_path):
+    files = [
+        write_tif(
+            tmp_path / f"d{t}.tif",
+            counts_up_to(50),
+            scales=[0.5 if t == 0 else 1.0],
+            offsets=[0.0 if t < 2 else 4.0],
+        )
+        for t in range(N_TIME)
+    ]
+    rows = "\n".join(f"{f},{d}" for f, d in zip(files, DATES, strict=False))
+    manifest = tmp_path / "m.csv"
+    manifest.write_text(f"uri,datetime\n{rows}\n")
+    with pytest.raises(PreflightError, match="has scales"):
+        plan_conversion(manifest, chunk_size=16)
+    with pytest.raises(PreflightError, match="has offsets"):
+        plan_conversion(manifest, chunk_size=16, scale=1.0)
+    plan = plan_conversion(manifest, chunk_size=16, scale=1.0, offset=0.0)
+    assert line(plan, "scaling:") == "scaling:    1 = stored * 1 +0"
+
+
+def zarr_with_packing(tmp_path: Path, counts: np.ndarray, **attrs: float) -> Path:
+    a, _, c, _, e, f = TRANSFORM
+    ds = xr.DataArray(
+        np.stack([counts[0]] * N_TIME),
+        dims=("time", "y", "x"),
+        coords={
+            "time": make_times(N_TIME),
+            "y": f + e * (np.arange(HEIGHT) + 0.5),
+            "x": c + a * (np.arange(WIDTH) + 0.5),
+        },
+        attrs={"crs": CRS, **attrs},
+        name="v",
+    ).to_dataset()
+    ds.to_zarr(tmp_path / "packed.zarr", zarr_format=2, consolidated=True)
+    return tmp_path / "packed.zarr"
+
+
+def test_a_zarr_variable_packed_with_a_divisor_scale_is_refused_and_fixed(tmp_path):
+    packed = zarr_with_packing(tmp_path, ndvi_counts(), scale_factor=10000.0)
+    with pytest.raises(
+        ValueError, match=r"v declares scale 10000 and would run -2e\+07 to 1e\+08"
+    ):
+        plan_conversion(packed, chunk_size=16)
+    plan = plan_conversion(packed, chunk_size=16, scale=0.0001)
+    assert "-0.2 to 1" in line(plan, "range:")
+
+
+def test_a_zarr_pack_with_an_offset_and_an_irregular_scale_is_not_refused(tmp_path):
+    counts = counts_up_to(32767, "int16")
+    packed = zarr_with_packing(tmp_path, counts, scale_factor=913.6, add_offset=29000000.0)
+    assert has_line(plan_conversion(packed, chunk_size=16), "range:")
+
+
+def test_both_findings_are_reported_together(tmp_path):
+    steps = [ndvi_counts()] * N_TIME
+    for step in steps:
+        put(step, -9999, 0.2)
+    message = refusal(tmp_path, steps, **MODIS)
+    fill, scale = message.split("\n")
+    assert fill.startswith("-9999 (20 % of the valid pixels in the 3 sampled timesteps)")
+    assert scale.startswith("500m 16 days NDVI declares scale 10000")
+
+
+def test_the_cli_refuses_the_scale_and_each_answer_is_accepted(tmp_path):
+    folder = tmp_path / "scenes"
+    folder.mkdir()
+    for date in DATES:
+        write_tif(folder / f"ndvi_{date}.tif", ndvi_counts(), **MODIS)
+    out = tmp_path / "out"
+    command = ["convert", str(folder), str(out), "--dry-run", "--chunk-size", "16"]
+    refused = CliRunner().invoke(main, command)
+    assert refused.exit_code == 1, refused.output
+    assert "If that is what the files mean, pass --scale 0.0001." in refused.output
+    fixed = CliRunner().invoke(main, [*command, "--scale", "0.0001"])
+    assert fixed.exit_code == 0, fixed.output
+    assert "range:      500m 16 days NDVI -0.2 to 1 [NDVI]" in fixed.output
+    assert "override:   --scale 0.0001; the files declare 10000" in fixed.output
+    kept = CliRunner().invoke(main, [*command, "--scale", "10000"])
+    assert kept.exit_code == 0, kept.output
+    wrong = CliRunner().invoke(main, [*command, "--scale", "zero"])
+    assert wrong.exit_code == 2
+    assert "Invalid value for '--scale'" in wrong.output
+
+
+def test_a_store_written_with_scale_carries_it_and_its_values_follow(tmp_path):
+    counts = ndvi_counts()
+    folder = tmp_path / "scenes"
+    folder.mkdir()
+    for date in DATES:
+        write_tif(folder / f"ndvi_{date}.tif", counts, **MODIS)
+    with pytest.raises(ValueError, match=r"pass --scale 0\.0001"):
+        convert(folder, tmp_path / "refused", chunk_size=16)
+    assert not (tmp_path / "refused").exists()
+    convert(folder, tmp_path / "fixed", scale=0.0001, offset=0.0, chunk_size=16)
+    store = chronozarr.open_store(tmp_path / "fixed")
+    assert [(b.scale, b.offset) for b in store.attrs.bands] == [(0.0001, 0.0)]
+    physical = store.to_xarray(physical=True).values
+    assert np.allclose(physical, counts[None].repeat(N_TIME, axis=0) * np.float32(0.0001))
+    assert float(physical.min()) >= -0.2 and float(physical.max()) <= 1.0
 
 
 def test_the_range_leaves_out_declared_nodata_and_is_absent_without_a_scale(tmp_path):

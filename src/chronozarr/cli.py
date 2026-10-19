@@ -900,6 +900,21 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     "'none' keeps every value as data.",
 )
 @click.option(
+    "--scale",
+    type=float,
+    default=None,
+    help="Replace the scale of every band (stored * scale + offset) in place of what the files "
+    "declare; the files then need not agree. A scale of 100, 1000, 10000 ... that gives values "
+    "past 1e6 is refused until you pass this: MODIS NDVI declares 10000 meaning stored / 10000, "
+    "so --scale 0.0001. --scale 10000 keeps the declared scale.",
+)
+@click.option(
+    "--offset",
+    type=float,
+    default=None,
+    help="Replace the offset of every band in place of what the files declare.",
+)
+@click.option(
     "--mask-var",
     default=None,
     help="Zarr/NetCDF only: a boolean or integer (time, y, x) variable whose nonzero values are "
@@ -955,6 +970,8 @@ def convert_command(
     bounds: str | None,
     resampling: str | None,
     nodata: str | None,
+    scale: float | None,
+    offset: float | None,
     mask_var: str | None,
     work_dir: Path | None,
     resume: bool,
@@ -1025,6 +1042,8 @@ def convert_command(
             bounds=_parse_numbers(bounds, 4, "--bounds", float),
             resampling=resampling,
             nodata=_parse_nodata(nodata),
+            scale=scale,
+            offset=offset,
             mask_var=mask_var,
             band_roles=_band_roles(band_roles),
             work_dir=work_dir,

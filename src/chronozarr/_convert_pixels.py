@@ -33,10 +33,21 @@ holds 48 % of the valid pixels, NSIDC 2540 holds 20 % (south, monthly) and 46 % 
 listed in the message that its neighbour causes. Every flagged value in the corpus is a fill or a
 flag, at every share, so the corpus does not set the 5 %. It is the share at which one value in
 twenty pixels is too many for a rare class, and a mistaken refusal costs one option.
+
+A scale is refused when it reads like a divisor and the values it produces are absurd. GDAL and CF
+compute stored * scale + offset, but MODIS and other HDF-EOS products write the divisor (MOD13
+NDVI: scale 10000, meaning stored / 10000), so the file gives NDVI of 1e8. The rule is narrow on
+purpose: no offset, a scale that is exactly 100, 1000, 10000 and so on, and a largest value after
+scaling above `IMPLAUSIBLE`. In the corpus only two datasets carry a scale tag: MODIS MOD13A1
+(10000, -2e+07 to 1e+08, refused) and HLS (0.0001, -0.08 to 1.6, not). A magnitude test alone would
+refuse ERA5's packed radiation (scale near 900, offset near 3e7, values to 3e7 J m-2), which is
+fine as it is; an irregular scale with an offset is not a divisor. A conversion with `--scale` is
+never refused: `--scale 0.0001` fixes the divisor, and `--scale 10000` keeps the file's value.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import NamedTuple
@@ -49,6 +60,8 @@ SAMPLE_PIXELS = 250_000  # pixels drawn per band across the sampled timesteps, w
 GAP_SHARE = 0.05  # a gap this share of the range of the values ends the body
 MIN_SHARE = 0.001  # of the valid pixels, for a value outside the body
 KNOWN_SHARE = 0.01  # of the valid pixels, for a value in KNOWN_FILLS
+IMPLAUSIBLE = 1e6  # a divisor scale that carries a value past this is refused
+DIVISOR_MIN = 100  # smallest scale read as a divisor: 100, 1000, 10000, ...
 REFUSE_SHARE = 0.05  # of the valid pixels, for a value outside KNOWN_FILLS to stop the conversion
 MAX_CODES = 5  # NSIDC's flags are the most seen in one band; more values outside the body are data
 KNOWN_FILLS = (-9999, -999, -3000, -32768)
@@ -269,6 +282,21 @@ def fill_line(
     return f"{kept}; a store takes one nodata value and --nodata gave {_number(nodata)}"
 
 
+def _stored_extremes(
+    steps: Sequence[Step], info: SourceInfo, band: int
+) -> tuple[float, float] | None:
+    """Lowest and highest stored value of `band` over the valid pixels of every step, or None
+    when no pixel is valid."""
+    extremes = [
+        (float(values.min()), float(values.max()))
+        for step in steps
+        if (values := _valid_values(step, info, band, slice(None))).size
+    ]
+    if not extremes:
+        return None
+    return min(low for low, _ in extremes), max(high for _, high in extremes)
+
+
 def range_line(steps: Sequence[Step], info: SourceInfo) -> str | None:
     """The text of the plan's `range:` line: each band's valid values after scale and offset in
     the sampled timesteps. None when no band declares a scale or offset."""
@@ -278,21 +306,57 @@ def range_line(steps: Sequence[Step], info: SourceInfo) -> str | None:
     for index, band in enumerate(info.bands):
         scale = 1.0 if band.scale is None else band.scale
         offset = 0.0 if band.offset is None else band.offset
-        extremes = [
-            (float(values.min()), float(values.max()))
-            for step in steps
-            if (values := _valid_values(step, info, index, slice(None))).size
-        ]
+        stored = _stored_extremes(steps, info, index)
         units = f" [{band.units}]" if band.units else ""
-        if not extremes:
+        if stored is None:
             parts.append(f"{band.name} has no valid pixel{units}")
             continue
-        ends = (
-            min(low for low, _ in extremes) * scale + offset,
-            max(high for _, high in extremes) * scale + offset,
-        )
+        ends = (stored[0] * scale + offset, stored[1] * scale + offset)
         parts.append(f"{band.name} {min(ends):.4g} to {max(ends):.4g}{units}")
     return (
         f"{', '.join(parts)} (stored * scale + offset, valid pixels of the "
         f"{_timesteps(len(steps))})"
+    )
+
+
+def _is_divisor(scale: float, offset: float) -> bool:
+    """Whether a scale and offset look like an HDF-EOS divisor read as a multiplier: no offset and
+    a scale that is exactly a power of ten of at least `DIVISOR_MIN`."""
+    if offset != 0 or scale < DIVISOR_MIN:
+        return False
+    exponent = math.log10(scale)
+    return abs(exponent - round(exponent)) < 1e-9
+
+
+def scale_refusal(steps: Sequence[Step], info: SourceInfo) -> str | None:
+    """The message that stops a conversion whose scale reads like a divisor and carries a band's
+    values past `IMPLAUSIBLE`, or None. Only a conversion without `--scale` is refused."""
+    found: list[tuple[str, float]] = []
+    for index, band in enumerate(info.bands):
+        scale = 1.0 if band.scale is None else band.scale
+        offset = 0.0 if band.offset is None else band.offset
+        stored = _stored_extremes(steps, info, index)
+        if stored is None or not _is_divisor(scale, offset):
+            continue
+        low, high = stored[0] * scale, stored[1] * scale
+        if max(abs(low), abs(high)) > IMPLAUSIBLE:
+            units = f" [{band.units}]" if band.units else ""
+            found.append(
+                (
+                    f"{band.name} declares scale {_number(scale)} and would run "
+                    f"{low:.4g} to {high:.4g}{units}",
+                    scale,
+                )
+            )
+    if not found:
+        return None
+    first = found[0][1]
+    shown = _number(first)
+    every = f" --scale sets the scale of all {info.n_band} bands." if info.n_band > 1 else ""
+    return (
+        f"{'; '.join(text for text, _ in found)} (stored * scale + offset, valid pixels of the "
+        f"{_timesteps(len(steps))}). GDAL multiplies by the scale, but MODIS and other HDF-EOS "
+        f"products write a divisor, so a scale of {shown} there means stored / {shown}. "
+        f"If that is what the files mean, pass --scale {_number(1 / first)}. "
+        f"If the scale is right, pass --scale {shown} to keep it.{every}"
     )
