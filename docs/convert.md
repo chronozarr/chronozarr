@@ -67,7 +67,7 @@ chronozarr convert model.nc my_store --variable tas
 chronozarr convert data.zarr my_store --variable ndvi --crs EPSG:32618
 ```
 
-`--variable` names the array to convert. Its dimensions must be time, y and x, with an optional band dimension. `--dims time=NAME,y=NAME,x=NAME[,band=NAME]` names them when they are not `time`, `y`, `x` or common aliases such as `lat` and `lon`. `--crs` gives the coordinate system when the file does not declare it. The CF `scale_factor`, `add_offset` and `units` of the variable apply to every band. `--mask-var` names a variable whose nonzero values mark valid pixels.
+`--variable` names the array to convert. Its dimensions must be time, y and x, with an optional band dimension. `--dims time=NAME,y=NAME,x=NAME[,band=NAME]` names them when they are not `time`, `y`, `x` or common aliases such as `lat` and `lon`. The coordinate system comes from a `crs`, `crs_wkt` or `spatial_ref` attribute, or from the CF grid mapping variable that the variable names in `grid_mapping`; reading a grid mapping needs pyproj. `--crs` gives it, as an EPSG code or WKT2 text, when the file does not declare it. A CRS with no EPSG code, such as Daymet's Lambert conformal conic, is stored as it is and is never reprojected. The CF `scale_factor`, `add_offset` and `units` of the variable apply to every band. `--mask-var` names a variable whose nonzero values mark valid pixels.
 
 For an array that fits in memory, `chronozarr encode FILE my_store --variable NAME` is the shorter route.
 

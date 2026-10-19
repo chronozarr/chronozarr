@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -128,3 +129,63 @@ def test_convert_keeps_the_crs_of_a_zarr_source_that_has_no_epsg_code(tmp_path, 
     assert opened.attrs.spec_version == "0.4.0"
     assert opened.crs.wkt2 is not None
     assert_values_equal(out, truth)
+
+
+LCC_CF = {
+    "grid_mapping_name": "lambert_conformal_conic",
+    "standard_parallel": [25.0, 60.0],
+    "longitude_of_central_meridian": -100.0,
+    "latitude_of_projection_origin": 42.5,
+    "false_easting": 0.0,
+    "false_northing": 0.0,
+    "semi_major_axis": 6378137.0,
+    "inverse_flattening": 298.257223563,
+}
+
+
+def cf_source(tmp_path: Path, truth: np.ndarray, mapping: dict[str, Any]) -> Path:
+    """A Zarr store like Daymet's NetCDF: the CRS only as a CF grid mapping variable."""
+    a, _, c, _, e, f = TRANSFORM
+    da = xr.DataArray(
+        truth,
+        dims=("time", "band", "y", "x"),
+        coords={
+            "time": make_times(len(truth)),
+            "band": list(BANDS),
+            "y": f + e * (np.arange(HEIGHT) + 0.5),
+            "x": c + a * (np.arange(WIDTH) + 0.5),
+        },
+        name="reflectance",
+        attrs={"grid_mapping": "lambert_conformal_conic"},
+    )
+    dataset = da.to_dataset().assign(lambert_conformal_conic=xr.DataArray(0, attrs=mapping))
+    source = tmp_path / "cf.zarr"
+    dataset.to_zarr(source, zarr_format=2, consolidated=True)
+    return source
+
+
+def test_convert_reads_a_cf_grid_mapping_variable_as_the_crs(tmp_path, truth):
+    pyproj = pytest.importorskip("pyproj")
+    rasterio_crs = pytest.importorskip("rasterio.crs").CRS
+    out = tmp_path / "store"
+    convert(cf_source(tmp_path, truth, LCC_CF), out, variable="reflectance", chunk_size=CHUNK)
+
+    opened = chronozarr.open_store(out)
+    assert (opened.attrs.spec_version, opened.crs.code) == ("0.4.0", None)
+    expected = pyproj.CRS.from_cf(LCC_CF).to_wkt()
+    assert rasterio_crs.from_user_input(opened.crs.to_string()) == rasterio_crs.from_wkt(expected)
+    assert_values_equal(out, truth)
+
+
+def test_a_cf_grid_mapping_needs_pyproj_and_says_so(tmp_path, truth, monkeypatch):
+    monkeypatch.setattr("chronozarr.crs._pyproj", lambda: None)
+    source = cf_source(tmp_path, truth, LCC_CF)
+    with pytest.raises(ValueError, match=r"CF grid mapping 'lambert_conformal_conic'.*pyproj"):
+        plan_conversion(source, variable="reflectance", sample=False)
+
+
+def test_a_cf_grid_mapping_that_pyproj_cannot_read_is_named(tmp_path, truth):
+    pytest.importorskip("pyproj")
+    source = cf_source(tmp_path, truth, {"grid_mapping_name": "no_such_projection"})
+    with pytest.raises(ValueError, match=r"cannot read the CF grid mapping 'lambert_conformal"):
+        plan_conversion(source, variable="reflectance", sample=False)

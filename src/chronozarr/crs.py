@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from types import ModuleType
@@ -184,6 +185,24 @@ def _pyproj() -> ModuleType | None:
         return importlib.import_module("pyproj")
     except ImportError:
         return None
+
+
+def wkt2_from_cf(attributes: Mapping[str, Any], name: str) -> str:
+    """The WKT2 of a CF grid mapping variable's attributes, which name `name` in their file.
+
+    A CF grid mapping holds projection parameters, not a CRS definition, so reading it needs
+    pyproj.
+    """
+    pyproj = _pyproj()
+    if pyproj is None:
+        raise ValueError(
+            f"the CRS is the CF grid mapping {name!r}, which needs pyproj to read: install "
+            "pyproj, or pass --crs with an EPSG code or WKT2 text"
+        )
+    try:
+        return pyproj.CRS.from_cf(dict(attributes)).to_wkt()  # pyproj's default is WKT2:2019
+    except _crs_error() as exc:
+        raise ValueError(f"cannot read the CF grid mapping {name!r}: {exc}") from exc
 
 
 def _crs_error() -> type[Exception]:

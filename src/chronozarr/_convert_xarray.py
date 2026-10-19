@@ -22,6 +22,7 @@ from chronozarr._convert_source import (
     _settle_nan,
     _value_valid,
 )
+from chronozarr.crs import wkt2_from_cf
 from chronozarr.schema import Band
 from chronozarr.store import as_store
 
@@ -156,7 +157,9 @@ class XarraySource(Source):
         transform = (dx, 0.0, float(x[0]) - dx / 2, 0.0, -pixel_h, y_top + pixel_h / 2)
         crs_text = crs or self._crs_from_attrs(da, dataset)
         if crs_text is None:
-            raise ValueError(f"{source} does not declare a CRS; pass --crs EPSG:xxxxx")
+            raise ValueError(
+                f"{source} does not declare a CRS; pass --crs with an EPSG code or WKT2 text"
+            )
         from rasterio.crs import CRS  # ty: ignore[unresolved-import]  # compiled, no stubs
 
         grid = Grid(_crs_string(CRS.from_user_input(crs_text)), transform, len(y), len(x))
@@ -258,6 +261,9 @@ class XarraySource(Source):
                 for key in ("crs_wkt", "spatial_ref", "crs"):
                     if attrs.get(key):
                         return str(attrs[key])
+        mapping = da.attrs.get("grid_mapping", da.encoding.get("grid_mapping"))
+        if isinstance(mapping, str) and mapping in dataset.variables:
+            return wkt2_from_cf(dataset[mapping].attrs, mapping)
         return None
 
     def fingerprint(self) -> Any:
