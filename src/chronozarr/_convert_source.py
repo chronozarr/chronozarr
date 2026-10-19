@@ -9,9 +9,10 @@ from typing import Any
 
 import numpy as np
 
-from chronozarr.schema import Band, Transform
+from chronozarr.schema import Band, Transform, axis_unit
 
 Bounds = tuple[float, float, float, float]  # west, south, east, north in the units of the CRS
+_EDGE_TOLERANCE = 1e-6  # degrees; a pixel edge at 180 that arithmetic puts a hair beyond
 
 
 @dataclass(frozen=True)
@@ -26,8 +27,26 @@ class Grid:
     def describe(self) -> str:
         return (
             f"{self.crs}, {self.height} x {self.width} px, "
-            f"{abs(self.transform[0]):.10g} m pixels (transform origin "
+            f"{abs(self.transform[0]):.10g} {axis_unit(self.crs)} pixels (transform origin "
             f"{self.transform[2]:.10g}, {self.transform[5]:.10g})"
+        )
+
+    def longitude_note(self) -> str | None:
+        """A plan line when the axes are degrees and x runs outside -180 to 180, else None.
+
+        Such a store is placed correctly by GDAL and zarr-layer, but a lookup with a longitude in
+        the other convention finds no column and `sel(method="nearest")` returns an edge one.
+        """
+        if axis_unit(self.crs) != "degree":
+            return None
+        west = self.transform[2]
+        east = west + self.transform[0] * self.width
+        if west >= -180 - _EDGE_TOLERANCE and east <= 180 + _EDGE_TOLERANCE:
+            return None
+        return (
+            f"x runs {west:.10g} to {east:.10g} degrees, outside -180 to 180, and is stored as "
+            "given. Look longitudes up in the same convention (shift by 360): "
+            'sel(x=-80, method="nearest") returns an edge column, with no error'
         )
 
 

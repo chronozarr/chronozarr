@@ -313,6 +313,23 @@ def crs_attr(crs: str) -> dict[str, str] | None:
     return attr
 
 
+_UNIT_SYMBOLS = {"metre": "m", "meter": "m"}
+
+
+def axis_unit(crs: str) -> str:
+    """The unit of the CRS's horizontal axes as the CRS names it: `m`, `degree`, `US survey foot`.
+
+    rasterio reads it from PROJ; metres are written `m` and every other unit as named. Without
+    rasterio (`chronozarr[geo]`) the unit is not known, and `CRS-unit` says so instead of a guess.
+    """
+    try:
+        from rasterio.crs import CRS  # ty: ignore[unresolved-import]  # compiled, no stubs
+    except ImportError:
+        return "CRS-unit"
+    unit = CRS.from_user_input(crs).units_factor[0]
+    return _UNIT_SYMBOLS.get(unit, unit)
+
+
 def data_array_attrs(
     crs: str,
     transform: Transform,

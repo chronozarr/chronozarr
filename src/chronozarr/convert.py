@@ -275,8 +275,10 @@ class Plan:
         if list_files and self.discovered and isinstance(self.source, CogManifestSource):
             out.append(f"files:      {len(self.source.entries)}, dated from their names")
             out.extend(f"  {show_time(e.time)}  {e.uri}" for e in self.source.entries)
+        longitude = info.grid.longitude_note()
         out += [
             f"grid:       {info.grid.describe()}",
+            *([f"longitude:  {longitude}"] if longitude else []),
             f"data:       {info.n_band} bands ({', '.join(info.band_names)}), {info.dtype.name}",
             "scaling:    "
             + ", ".join(

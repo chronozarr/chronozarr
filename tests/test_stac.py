@@ -11,7 +11,7 @@ import pytest
 import chronozarr
 from chronozarr import schema
 from chronozarr.stac import EXT_DATACUBE, ZARR_MEDIA_TYPE, build_stac, default_id, write_stac
-from tests.synthetic import BANDS, CRS, TRANSFORM, build_store, make_truth
+from tests.synthetic import BANDS, CRS, TRANSFORM, build_store, make_da, make_truth
 
 pytestmark = pytest.mark.unit
 
@@ -65,6 +65,22 @@ def test_footprint_is_a_closed_wgs84_polygon_containing_the_bbox_corners(store_p
     # UTM 31N has its central meridian at 3E; easting 746090 is ~2.4 degrees east of it, at ~23N
     assert 5.2 < item["bbox"][0] < 5.6
     assert 22.0 < item["bbox"][1] < 24.0
+
+
+@pytest.mark.parametrize(
+    ("crs", "transform", "expected"),
+    [
+        ("EPSG:4326", (0.25, 0.0, 10.0, 0.0, -0.25, 50.0), "0.25 degree pixels in EPSG:4326"),
+        ("EPSG:32631", TRANSFORM, "10 m pixels in EPSG:32631"),
+    ],
+)
+def test_summary_names_the_unit_of_the_crs(tmp_path, crs, transform, expected):
+    truth = make_truth(3, 1, 20, 20)
+    da = make_da(truth, ["B04"])
+    da.attrs.update(crs=crs, transform=transform)
+    chronozarr.encode(da, tmp_path / "store", chunk_size=16, shard=False)
+    _, (collection, _) = documents(tmp_path / "store")
+    assert expected in collection["description"]
 
 
 def test_datacube_dimensions_and_variables(store_path):
