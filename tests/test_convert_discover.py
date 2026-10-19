@@ -16,6 +16,7 @@ from chronozarr._convert_discover import (
     find_dates,
     is_discovery_source,
     list_tiffs,
+    show_time,
     write_manifest,
 )
 from chronozarr.cli import main
@@ -101,10 +102,130 @@ def test_date_pattern_reports_a_match_that_is_not_a_calendar_date():
     assert invalid == ["20211340"]
 
 
-@pytest.mark.parametrize("pattern", ["%Y", "%m%d", "%Y%m%Y", "%Y%q", "%Y%", "%Y%j"])
+@pytest.mark.parametrize("pattern", ["%Y", "%m%d", "%Y%m%Y", "%Y%q", "%Y%", "%j", "%Y%j%Y"])
 def test_malformed_date_patterns_are_refused(pattern):
     with pytest.raises(ValueError, match="--date-pattern"):
         discovery._compile_pattern(pattern)
+
+
+MODIS = "MOD13A1.A2020001.h12v04.061.2020326023424_500m_16_days_NDVI"
+HLS = "HLS.S30.T17SQV.2020061T155151.v2.0.B04"
+
+
+@pytest.mark.parametrize(
+    ("pattern", "stem", "expected"),
+    [
+        ("%Y%j", MODIS, ["2020-01-01T00:00:00.000"]),  # the 13-digit production time is no match
+        ("MOD13A1.A%Y%j", MODIS, ["2020-01-01T00:00:00.000"]),
+        ("%Y%jT%H%M%S", HLS, ["2020-03-01T15:51:51.000"]),  # 2020 is a leap year: day 61 is Mar 1
+        ("HLS.S30.T17SQV.%Y%jT%H%M%S", HLS, ["2020-03-01T15:51:51.000"]),
+        ("%Y-%j", "a_2021-032", ["2021-02-01T00:00:00.000"]),
+        ("%Y%j", "a_2020366", ["2020-12-31T00:00:00.000"]),  # day 366 of a leap year
+        ("%Y%j", "a_2021365", ["2021-12-31T00:00:00.000"]),
+        ("%Y%j", "a_2021060", ["2021-03-01T00:00:00.000"]),  # no Feb 29 in 2021
+        ("%Y%j", "a_2020060", ["2020-02-29T00:00:00.000"]),
+        ("%j_%Y", "a_032_2021", ["2021-02-01T00:00:00.000"]),
+        ("%Y%j", "a_20200011", []),  # digits around the date are not a date
+        ("%Y%j", "a_202001", []),
+    ],
+)
+def test_date_pattern_reads_a_year_and_day_of_year(pattern, stem, expected):
+    found, invalid = find_dates(stem, discovery._compile_pattern(pattern))
+    assert sorted(str(t) for t in found) == expected
+    assert invalid == []
+
+
+@pytest.mark.parametrize("stem", ["a_2021366", "a_2020367", "a_2020000", "a_2020999", "a_1800001"])
+def test_date_pattern_reports_a_day_of_year_that_is_not_in_that_year(stem):
+    found, invalid = find_dates(stem, discovery._compile_pattern("%Y%j"))
+    assert found == {}
+    assert invalid == [stem[2:]]
+
+
+@pytest.mark.parametrize("pattern", ["%Y%j%m", "%Y%m%j", "%Y%j%d", "%Y%j%m%d", "%d%Y%j"])
+def test_a_day_of_year_cannot_be_mixed_with_a_month_or_day(pattern):
+    with pytest.raises(ValueError, match=r"%j \(day of year\) cannot be combined with %m or %d"):
+        discovery._compile_pattern(pattern)
+
+
+def test_a_pattern_without_a_year_and_month_or_day_of_year_says_both_routes():
+    with pytest.raises(ValueError, match=r"needs at least %Y and %m, or %Y and %j"):
+        discovery._compile_pattern("%Y")
+
+
+def test_the_unsupported_directive_message_lists_day_of_year():
+    with pytest.raises(ValueError, match=r"%Y %m %d %j %H %M %S"):
+        discovery._compile_pattern("%Y%q")
+
+
+@pytest.mark.parametrize(
+    ("stem", "suggested", "expected"),
+    [
+        (MODIS, "MOD13A1.A%Y%j", "2020-01-01T00:00:00.000"),
+        (HLS, "HLS.S30.T17SQV.%Y%jT%H%M%S", "2020-03-01T15:51:51.000"),
+        (
+            "MOD13A1.A2021365.h12v04.061.2022012024209_500m_16_days_NDVI",
+            "MOD13A1.A%Y%j",
+            "2021-12-31T00:00:00.000",
+        ),
+        (
+            "HLS.L30.T17SQV.2020366T155151.v2.0.B04",
+            "HLS.L30.T17SQV.%Y%jT%H%M%S",
+            "2020-12-31T15:51:51.000",
+        ),
+        ("2020001_ndvi", "%Y%j", "2020-01-01T00:00:00.000"),
+        ("ndvi_2020001", "ndvi_%Y%j", "2020-01-01T00:00:00.000"),
+        ("100%_2020001", "100%%_%Y%j", "2020-01-01T00:00:00.000"),
+        ("it's_2020001", "it's_%Y%j", "2020-01-01T00:00:00.000"),
+        ("ndvi_2020001T250000", "ndvi_%Y%j", "2020-01-01T00:00:00.000"),  # 25:00:00 is no time
+    ],
+)
+def test_a_name_with_a_year_and_day_of_year_is_refused_with_the_pattern_that_reads_it(
+    tmp_path, stem, suggested, expected
+):
+    touch(tmp_path / f"{stem}.tif")
+    found = discover(str(tmp_path))
+    assert found.entries == []
+    (problem,) = found.problems
+    assert problem.detail == "no date in the file name"
+    assert problem.fix is not None
+    quoted = "'" + suggested.replace("'", "'\\''") + "'"
+    assert f"--date-pattern {quoted}" in problem.fix
+    # The suggestion, followed, dates the file.
+    again = discover(str(tmp_path), suggested)
+    assert again.problems == []
+    (entry,) = again.entries
+    assert str(entry.time) == expected
+    assert f"({show_time(entry.time)})" in problem.fix
+
+
+@pytest.mark.parametrize(
+    "stem",
+    [
+        "tile_123456",  # six digits
+        "scene_20201340",  # eight digits, no date
+        "v1234567",  # year 1234 is not plausible
+        "scene_2020999",  # day 999
+        "scene_2020000",  # day 0
+        "scene_2021366",  # 2021 has 365 days: the pattern would refuse it
+        "scene_2020001_2020017",  # two candidates: which one is the date is not guessed
+        "scene_12020001",  # eight digits
+        "ndvi",
+    ],
+)
+def test_a_name_that_does_not_look_like_a_day_of_year_gets_the_general_help(tmp_path, stem):
+    touch(tmp_path / f"{stem}.tif")
+    (problem,) = discover(str(tmp_path)).problems
+    assert problem.detail == "no date in the file name"
+    assert problem.fix == discovery.DATE_HELP
+
+
+def test_the_day_of_year_suggestion_leaves_the_general_help_in_place(tmp_path):
+    touch(tmp_path / f"{MODIS}.tif")
+    (problem,) = discover(str(tmp_path)).problems
+    assert problem.fix is not None
+    assert "a year and day of year, '2020001' (2020-01-01)" in problem.fix
+    assert "YYYYMMDD, YYYY-MM-DD or YYYY-MM" in problem.fix
 
 
 # --- what counts as a discovery source -----------------------------------------------------
@@ -405,6 +526,18 @@ def test_a_glob_with_a_date_pattern_converts(tmp_path, truth):
     assert str(chronozarr.open_store(out).times[0])[:10] == "2024-01-15"
 
 
+def test_a_glob_with_a_day_of_year_pattern_converts(tmp_path, truth):
+    folder = tmp_path / "g"
+    for t, doy in enumerate([1, 17, 33, 49]):  # 16-day composites, as MODIS names them
+        name = f"MOD13A1.A2020{doy:03d}.h12v04.061.2020326023424_500m_16_days_NDVI.tif"
+        write_tif(folder / name, truth[t])
+    out = tmp_path / "store"
+    convert(str(folder / "*.tif"), out, date_pattern="MOD13A1.A%Y%j", **OPTIONS)
+    assert np.array_equal(stored(out), truth)
+    times = chronozarr.open_store(out).times
+    assert [str(t)[:10] for t in times] == ["2020-01-01", "2020-01-17", "2020-02-02", "2020-02-18"]
+
+
 def test_subdirectories_are_not_searched_unless_a_glob_says_so(tmp_path, series, truth):
     write_tif(series / "old" / "ndvi_2023-12.tif", truth[0])
     assert plan_conversion(series, sample=False).n_time == N_TIME
@@ -654,9 +787,43 @@ def test_cli_date_pattern_and_help(tmp_path, series):
     for fragment in (
         "directory, quoted glob or s3:// prefix",
         "--date-pattern",
+        "%Y %j for a year and day of year",
         "--write-manifest",
     ):
         assert fragment in " ".join(help_text.split())
+
+
+def test_cli_day_of_year_names_are_refused_with_a_pattern_that_works(tmp_path, truth):
+    folder = tmp_path / "doy"
+    for t, doy in enumerate([61, 94, 124, 156]):
+        write_tif(folder / f"HLS.S30.T17SQV.2020{doy:03d}T1{t}3000.v2.0.B04.tif", truth[t])
+    out = tmp_path / "store"
+    refused = run("convert", str(folder), str(out), "--dry-run")
+    assert refused.exit_code == 1
+    assert "no date in the file name" in refused.output
+    pattern = "HLS.S30.T17SQV.%Y%jT%H%M%S"
+    assert f"pass --date-pattern '{pattern}' to read it" in refused.output
+    # The advice, followed, dates every file.
+    dry = run("convert", str(folder), str(out), "--dry-run", "--date-pattern", pattern)
+    assert dry.exit_code == 0, dry.output
+    assert "2020-03-01T10:30:00" in dry.output
+    real = run("convert", str(folder), str(out), "--date-pattern", pattern, "--chunk-size", "16")
+    assert real.exit_code == 0, real.output
+    times = chronozarr.open_store(out).times
+    assert [str(t)[:19] for t in times] == [
+        "2020-03-01T10:30:00",
+        "2020-04-03T11:30:00",
+        "2020-05-03T12:30:00",
+        "2020-06-04T13:30:00",
+    ]
+    assert np.array_equal(stored(out), truth)
+
+
+def test_cli_refuses_a_day_of_year_mixed_with_a_month(tmp_path, series):
+    result = run("convert", str(series), str(tmp_path / "o"), "--date-pattern", "%Y%j%m")
+    assert result.exit_code == 1
+    assert "%j (day of year) cannot be combined with %m or %d" in result.output
+    assert not (tmp_path / "o").exists()
 
 
 def test_cli_encode_points_files_at_convert(tmp_path, series):
