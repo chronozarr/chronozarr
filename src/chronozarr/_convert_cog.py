@@ -15,6 +15,13 @@ import numpy as np
 
 from chronozarr import schema
 from chronozarr._convert_discover import DATE_MARK, mask_dates
+from chronozarr._convert_gdal_open import (
+    HDF4_DETAIL,
+    HDF4_FIX,
+    SubdatasetChoiceError,
+    hdf4_without_driver,
+    opened,
+)
 from chronozarr._convert_manifest import Entry, ManifestDraft
 from chronozarr._convert_preflight import PreflightError, Problem
 from chronozarr._convert_source import (
@@ -44,9 +51,10 @@ GDAL_ENV = {
 }
 
 
-# Formats whose georeferencing lives in sidecar files (world file, .aux.xml); GDAL finds them only
-# by probing for each candidate name, which GDAL_ENV switches off for everything else.
-SIDECAR_SUFFIXES = (".png",)
+# Formats whose georeferencing lives in sidecar files (a world file or .aux.xml, the .hdr of BIL
+# and FLT, the .prj of an ASCII grid); GDAL finds them only by probing for each candidate name,
+# which GDAL_ENV switches off for everything else.
+SIDECAR_SUFFIXES = (".png", ".bil", ".flt", ".asc")
 
 
 RESAMPLING_METHODS = ("nearest", "bilinear", "cubic", "average", "mode", "min", "max", "med")
@@ -98,6 +106,7 @@ def _frame_grid(src: Any, crs: str | None, bounds: Bounds | None) -> Grid:
 
 @dataclass(frozen=True)
 class _CogHeader:
+    dataset: str  # what GDAL opens to read it: the file, the raster in a zip or a subdataset
     driver: str  # GDAL driver short name: GTiff, PNG, ...
     grid: Grid
     own_grid: bool  # the file carries its own CRS and geotransform (else `grid` came from options)
@@ -148,12 +157,14 @@ def _tolerate_unlocated_frames(func: Callable[_P, _R]) -> Callable[_P, _R]:
 _COLOR_NAMES = ("red", "green", "blue")
 
 
-def _read_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader:
+def _read_header(
+    uri: str, crs: str | None, bounds: Bounds | None, variable: str | None
+) -> _CogHeader:
     import rasterio
     from rasterio.enums import ColorInterp, MaskFlags
 
     try:
-        with rasterio.Env(**_gdal_env(uri)), rasterio.open(uri) as src:
+        with opened(uri, variable, _gdal_env) as (src, dataset, subdataset):
             if src.driver == "PNG" and ColorInterp.palette in src.colorinterp:
                 raise ValueError(
                     "it is a palette (indexed colour) PNG, so its values are palette indices, "
@@ -175,12 +186,16 @@ def _read_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader
             internal_mask = alpha is None and any(
                 MaskFlags.per_dataset in src.mask_flag_enums[i - 1] for i in indexes
             )
+            descriptions = tuple(src.descriptions[i - 1] or None for i in indexes)
+            if subdataset is not None and len(indexes) == 1 and descriptions[0] is None:
+                descriptions = (subdataset,)  # the one band of a chosen variable is that variable
             tokens = tuple(_declared_nodata(src.nodatavals[i - 1], dtype) for i in indexes)
             scaling = [
                 _scaling(float(src.scales[i - 1]), float(src.offsets[i - 1]), f"band {i}")
                 for i in indexes
             ]
             return _CogHeader(
+                dataset=dataset,
                 driver=src.driver,
                 grid=grid,
                 own_grid=src.crs is not None and not src.transform.is_identity,
@@ -190,7 +205,7 @@ def _read_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader
                 dtype=dtype,
                 nodata=tokens,
                 warp_nodata=math.nan if isinstance(tokens[0], str) else tokens[0],
-                descriptions=tuple(src.descriptions[i - 1] or None for i in indexes),
+                descriptions=descriptions,
                 colors=tuple(
                     c if (c := src.colorinterp[i - 1].name) in _COLOR_NAMES else None
                     for i in indexes
@@ -199,6 +214,8 @@ def _read_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader
                 offsets=tuple(o for _, o in scaling),
                 units=tuple(src.units[i - 1] or None for i in indexes),
             )
+    except SubdatasetChoiceError:
+        raise
     except (rasterio.errors.RasterioIOError, ValueError) as exc:
         raise ValueError(str(exc)) from exc
 
@@ -270,10 +287,16 @@ def _open_fix(uri: str, exc: ValueError) -> str | None:
     return "check that the file exists and is a readable raster, or leave it out"
 
 
-def _open_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader | Problem:
+def _open_header(
+    uri: str, crs: str | None, bounds: Bounds | None, variable: str | None
+) -> _CogHeader | Problem:
     try:
-        return _read_header(uri, crs, bounds)
+        return _read_header(uri, crs, bounds, variable)
+    except SubdatasetChoiceError:
+        raise
     except ValueError as exc:
+        if hdf4_without_driver(uri):
+            return Problem(uri, HDF4_DETAIL, HDF4_FIX)
         return Problem(uri, f"cannot open source: {exc}", _open_fix(uri, exc))
 
 
@@ -300,6 +323,7 @@ class CogManifestSource(Source):
         nodata: float | int | None | str,
         chunk_size: int,
         bounds: Bounds | None = None,
+        variable: str | None = None,
         undated: Sequence[str] = (),
         prior_problems: Sequence[Problem] = (),
     ) -> None:
@@ -313,13 +337,20 @@ class CogManifestSource(Source):
         self.times = [e.time for e in entries]
         self.resampling = resampling
         self.chunk_size = chunk_size
+        self.variable = variable
         self.draft = ManifestDraft(entries, tuple(undated))
         uris = [*(e.uri for e in entries), *undated]
         workers = min(8, len(uris))
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            opened = list(pool.map(lambda uri: _open_header(uri, target_crs, bounds), uris))
-        problems = [*prior_problems, *(r for r in opened if isinstance(r, Problem))]
-        good = [(u, h) for u, h in zip(uris, opened, strict=True) if isinstance(h, _CogHeader)]
+            headers_or_problems = list(
+                pool.map(lambda uri: _open_header(uri, target_crs, bounds, variable), uris)
+            )
+        problems = [*prior_problems, *(r for r in headers_or_problems if isinstance(r, Problem))]
+        good = [
+            (u, h)
+            for u, h in zip(uris, headers_or_problems, strict=True)
+            if isinstance(h, _CogHeader)
+        ]
         if not good:
             self._raise(problems, uris)
         first_uri, first = good[0]
@@ -591,6 +622,7 @@ class CogManifestSource(Source):
         return {
             "kind": "manifest",
             "entries": [[e.uri, str(e.time)] for e in self.entries],
+            "variable": self.variable,
             "grid": [self.grid.crs, list(self.grid.transform), self.grid.height, self.grid.width],
             "bands": [b.to_attrs() for b in self.info.bands],
             "dtype": self.info.dtype.name,
@@ -609,7 +641,7 @@ class CogManifestSource(Source):
         data = np.empty((info.n_band, grid.height, grid.width), dtype=info.dtype)
         valid = np.empty((grid.height, grid.width), dtype=np.uint8) if info.mask else None
         try:
-            with rasterio.Env(**_gdal_env(entry.uri)), rasterio.open(entry.uri) as src:
+            with rasterio.Env(**_gdal_env(header.dataset)), rasterio.open(header.dataset) as src:
                 if t in self.warped:
                     self._read_warped(src, header, data, valid)
                 else:

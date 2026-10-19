@@ -719,6 +719,9 @@ def test_sidecars_are_probed_for_png_sources_only():
     assert _gdal_env("/data/frame.png")["GDAL_DISABLE_READDIR_ON_OPEN"] == "TRUE"
     assert _gdal_env("https://host/a/frame.PNG?sig=1")["GDAL_DISABLE_READDIR_ON_OPEN"] == "TRUE"
     assert _gdal_env("/data/scene.tif")["GDAL_DISABLE_READDIR_ON_OPEN"] == "EMPTY_DIR"
+    # BIL and FLT keep their header, ASCII grids their projection, in a sidecar, also inside a zip
+    for name in ("/data/day.bil", "/data/day.FLT", "/data/dem.asc", "/vsizip//data/d.zip/day.bil"):
+        assert _gdal_env(name)["GDAL_DISABLE_READDIR_ON_OPEN"] == "TRUE", name
     assert _gdal_env("https://host/scene.tif?sig=1")["GDAL_DISABLE_READDIR_ON_OPEN"] == "EMPTY_DIR"
 
 

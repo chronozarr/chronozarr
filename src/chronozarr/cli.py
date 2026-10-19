@@ -162,7 +162,7 @@ def _refuse_files_for_convert(input: str, out: Path) -> None:
     elif lowered.startswith("s3://") or (
         not any(ch in input for ch in _GLOB_CHARS) and is_discovery_source(input)
     ):
-        kind = "a directory, S3 prefix or file of GeoTIFFs"
+        kind = "a directory, S3 prefix or file of rasters"
     else:
         return
     raise click.ClickException(
@@ -799,7 +799,12 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
 @click.argument("source")
 @click.argument("out", type=click.Path(path_type=Path))
 @_encode_options
-@click.option("--variable", default=None, help="Variable to convert from a Zarr or NetCDF source.")
+@click.option(
+    "--variable",
+    default=None,
+    help="Variable to convert from a Zarr or NetCDF source; for rasters, the subdataset to read "
+    "from files that hold several, such as HDF5 (Group/name, or the name alone when unique).",
+)
 @click.option(
     "--dims",
     default=None,
@@ -907,17 +912,20 @@ def convert_command(
     This is the command for files on disk or in S3. SOURCE is one of:
 
     \b
-      a directory, quoted glob or s3:// prefix of GeoTIFFs, each dated from its file name
-      a manifest (.csv with columns uri,datetime[,bands] or .json) of COG or PNG frame URIs
+      a directory, quoted glob or s3:// prefix of rasters (GeoTIFF, BIL, GRIB2, HDF5, ...),
+        or local zips that hold one raster each, dated from their file names
+      a manifest (.csv with columns uri,datetime[,bands] or .json) of raster or PNG frame URIs
       a Zarr store (path or URL) or a NetCDF file, the last two with --variable
 
     A directory or S3 prefix is not searched recursively; use a glob such as 'dir/**/*.tif'
     for subdirectories. S3 prefixes are listed with your AWS credentials and need
-    `pip install 'chronozarr[s3]'`. A date is read from a name only when it holds exactly one
-    (YYYYMMDD, YYYY-MM-DD or YYYY-MM); otherwise the file is reported and --date-pattern or a
-    manifest says where the date is. MODIS and HLS names carry a year and day of year, which
-    --date-pattern reads with %Y%j (for example 'MOD13A1.A%Y%j'). --write-manifest saves what
-    was found, also when the checks report problems, so you can edit it and run convert on it.
+    `pip install 'chronozarr[s3]'`. A file that holds subdatasets and no band (HDF5, HDF-EOS5)
+    needs --variable to pick one; one without georeferencing needs --crs and --bounds. A date is
+    read from a name only when it holds exactly one (YYYYMMDD, YYYY-MM-DD or YYYY-MM); otherwise
+    the file is reported and --date-pattern or a manifest says where the date is. MODIS and HLS
+    names carry a year and day of year, which --date-pattern reads with %Y%j (for example
+    'MOD13A1.A%Y%j'). --write-manifest saves what was found, also when the checks report
+    problems, so you can edit it and run convert on it.
 
     Every file is checked before anything is read in bulk: dates, grid and CRS, bands, dtype,
     scale, offset, units and nodata. All problems are reported together, per file, with a

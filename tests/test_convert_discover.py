@@ -17,7 +17,7 @@ from chronozarr._convert_discover import (
     discover,
     find_dates,
     is_discovery_source,
-    list_tiffs,
+    list_rasters,
     show_time,
     write_manifest,
 )
@@ -273,15 +273,15 @@ def test_a_directory_lists_its_tiffs_without_recursing(tmp_path):
         tmp_path / "notes.txt",
         tmp_path / "deeper" / "d_2024-04.tif",
     )
-    found = list_tiffs(str(tmp_path))
+    found = list_rasters(str(tmp_path))
     assert [Path(p).name for p in found] == ["a_2024-01.TIF", "b_2024-02.tif", "c_2024-03.tiff"]
     assert all(Path(p).is_absolute() for p in found)
 
 
 def test_a_glob_lists_matches_and_recurses_only_with_double_star(tmp_path):
     touch(tmp_path / "a_2024-01.tif", tmp_path / "deeper" / "b_2024-02.tif", tmp_path / "c.png")
-    assert [Path(p).name for p in list_tiffs(str(tmp_path / "*.tif"))] == ["a_2024-01.tif"]
-    assert [Path(p).name for p in list_tiffs(str(tmp_path / "**" / "*.tif"))] == [
+    assert [Path(p).name for p in list_rasters(str(tmp_path / "*.tif"))] == ["a_2024-01.tif"]
+    assert [Path(p).name for p in list_rasters(str(tmp_path / "**" / "*.tif"))] == [
         "a_2024-01.tif",
         "b_2024-02.tif",
     ]
@@ -289,13 +289,13 @@ def test_a_glob_lists_matches_and_recurses_only_with_double_star(tmp_path):
 
 def test_nothing_found_is_an_actionable_error(tmp_path):
     touch(tmp_path / "readme.txt")
-    with pytest.raises(ValueError, match=r"no GeoTIFF files .* found in .*quote a glob"):
-        list_tiffs(str(tmp_path))
-    with pytest.raises(ValueError, match=r"no GeoTIFF files .* matching .*\.tif'"):
-        list_tiffs(str(tmp_path / "*.tif"))
+    with pytest.raises(ValueError, match=r"no raster files found in .*quote a glob"):
+        list_rasters(str(tmp_path))
+    with pytest.raises(ValueError, match=r"no raster files found matching .*\.tif'"):
+        list_rasters(str(tmp_path / "*.tif"))
     with pytest.raises(ValueError, match="does not exist"):
-        list_tiffs(str(tmp_path / "missing"))
-    with pytest.raises(ValueError, match="no GeoTIFF files"):
+        list_rasters(str(tmp_path / "missing"))
+    with pytest.raises(ValueError, match="no raster files found"):
         discover(str(tmp_path / "*.tif"))
 
 
@@ -307,24 +307,24 @@ def test_an_s3_prefix_is_listed_through_the_boundary(monkeypatch):
         return ["data/ndvi/b_2024-02.tif", "data/ndvi/a_2024-01.TIF", "data/ndvi/readme.txt"]
 
     monkeypatch.setattr(discovery, "_list_s3_keys", fake_keys)
-    assert list_tiffs("s3://bkt/data/ndvi") == [
+    assert list_rasters("s3://bkt/data/ndvi") == [
         "s3://bkt/data/ndvi/a_2024-01.TIF",
         "s3://bkt/data/ndvi/b_2024-02.tif",
     ]
-    assert list_tiffs("s3://bkt/data/ndvi/") == list_tiffs("s3://bkt/data/ndvi")
+    assert list_rasters("s3://bkt/data/ndvi/") == list_rasters("s3://bkt/data/ndvi")
     assert calls == [("bkt", "data/ndvi/")] * 3  # a trailing slash: never a sibling prefix
-    assert list_tiffs("s3://bkt/data/ndvi/a_2024-01.TIF") == ["s3://bkt/data/ndvi/a_2024-01.TIF"]
+    assert list_rasters("s3://bkt/data/ndvi/a_2024-01.TIF") == ["s3://bkt/data/ndvi/a_2024-01.TIF"]
     assert len(calls) == 3  # a single object is not listed
 
 
 def test_s3_prefix_errors_are_actionable(monkeypatch):
     monkeypatch.setattr(discovery, "_list_s3_keys", lambda bucket, prefix: ["x/readme.txt"])
-    with pytest.raises(ValueError, match=r"no GeoTIFF files .* under s3://bkt/x/"):
-        list_tiffs("s3://bkt/x")
+    with pytest.raises(ValueError, match=r"no raster files found under s3://bkt/x/"):
+        list_rasters("s3://bkt/x")
     with pytest.raises(ValueError, match="needs a bucket"):
-        list_tiffs("s3:///x")
+        list_rasters("s3:///x")
     with pytest.raises(ValueError, match="not a glob"):
-        list_tiffs("s3://bkt/x/*.tif")
+        list_rasters("s3://bkt/x/*.tif")
 
 
 def test_s3_listing_failures_name_the_cause_and_the_fix(monkeypatch):
@@ -590,8 +590,8 @@ def test_options_that_do_not_apply_to_discovery_are_refused(tmp_path, series):
     write_manifest(discover(str(series)).entries, manifest)
     with pytest.raises(ValueError, match="--date-pattern applies to a directory"):
         plan_conversion(manifest, date_pattern="%Y%m", sample=False)
-    with pytest.raises(ValueError, match="not manifests or GeoTIFFs"):
-        plan_conversion(series, variable="v", sample=False)
+    with pytest.raises(ValueError, match="not manifests or rasters"):
+        plan_conversion(series, mask_var="v", sample=False)
 
 
 # --- preflight: every problem at once -------------------------------------------------------
@@ -660,7 +660,7 @@ def test_mixed_grids_name_every_off_grid_file_and_warp_when_asked(tmp_path, seri
 def test_an_empty_listing_is_not_a_preflight_error(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
-    with pytest.raises(ValueError, match="no GeoTIFF files") as error:
+    with pytest.raises(ValueError, match="no raster files found") as error:
         convert(empty, tmp_path / "o", dry_run=True)
     assert not isinstance(error.value, PreflightError)
 
