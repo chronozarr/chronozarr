@@ -80,6 +80,14 @@ chronozarr convert model.nc my_store --variable tas
 chronozarr convert data.zarr my_store --variable ndvi --crs EPSG:32618
 ```
 
+Reading a NetCDF4 file needs the `netcdf` extra, which adds h5netcdf and h5py. The quickstart install does not include it, so add it to the extras that you already use:
+
+```bash
+uv tool install --python 3.13 'chronozarr[geo,netcdf]==0.4.1'
+```
+
+In a uv project, run `uv add 'chronozarr[netcdf]==0.4.1'`. With pip, install `'chronozarr[netcdf]==0.4.1'` in your environment. Without the extra, `convert` stops with `reading a NetCDF4 file needs h5netcdf and h5py` and these commands. A Zarr store needs no extra. A classic NetCDF3 file, which starts with the bytes `CDF`, is not a NetCDF4 file: add `scipy` to the environment instead, for example `uv tool install --python 3.13 'chronozarr[geo]==0.4.1' --with scipy`.
+
 `--variable` names the array to convert. Its dimensions must be time, y and x, with an optional band dimension. `--dims time=NAME,y=NAME,x=NAME[,band=NAME]` names them when they are not `time`, `y`, `x` or common aliases such as `lat` and `lon`. `--crs` gives the coordinate system when the file does not declare it. The CF `scale_factor`, `add_offset` and `units` of the variable apply to every band. `--mask-var` names a variable whose nonzero values mark valid pixels.
 
 For an array that fits in memory, `chronozarr encode FILE my_store --variable NAME` is the shorter route.

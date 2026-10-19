@@ -32,6 +32,7 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 | A `range:` line shows values far outside the physical range | The scale is applied as stored * scale + offset. Correct the scale in the files, for example with `gdal_edit.py -scale -offset` |
 | A palette PNG is refused | Expand it to RGB first: `gdal_translate -expand rgba` |
 | The output folder exists | A store is never overwritten. Choose a new folder |
+| `reading a NetCDF4 file needs h5netcdf and h5py`. Older releases print xarray's `found the following matches with the input file in xarray's IO backends`, or `No module named 'h5py'` | The `netcdf` extra is missing. Install it the way you installed chronozarr: `uv tool install --python 3.13 'chronozarr[geo,netcdf]==0.4.1'`, listing every extra you use at once; `uv add 'chronozarr[netcdf]==0.4.1'` in a uv project; or pip with `'chronozarr[netcdf]==0.4.1'`. A classic NetCDF3 file (it starts with `CDF`) needs `scipy` instead: add `--with scipy` to `uv tool install`. See [From NetCDF or Zarr](convert.md#from-netcdf-or-zarr) |
 | `listing an S3 prefix needs boto3` | Install the `s3` extra. The message gives the command |
 
 `convert --help` lists every source type, option and validity rule. [Convert your data](convert.md) explains them.
