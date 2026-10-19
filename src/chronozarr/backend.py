@@ -117,7 +117,8 @@ def open_dataset(
 
     Variables: the data variable (time, band, y, x), plus `mask` and `coverage` (time, y, x)
     when the store has them. Coordinates: time (datetime64), band, y, x (projected pixel
-    centres), and `common_name` along band when any band declares one.
+    centres), and `common_name` along band when any band declares one. The attribute
+    `chronozarr_notes` lists what the store leaves out or spells otherwise (`ChronoStore.notes`).
     """
     store = _as_store(filename_or_obj)
     level = store._level(lod)
@@ -159,6 +160,8 @@ def open_dataset(
     }
     if store.nodata is not None and level.mask is None:  # a mask carries validity instead
         attrs["nodata"] = store.nodata
+    if store.notes:
+        attrs["chronozarr_notes"] = list(store.notes)
     dropped = {drop_variables} if isinstance(drop_variables, str) else set(drop_variables or ())
     return xr.Dataset(
         {k: v for k, v in variables.items() if k not in dropped}, coords=coords, attrs=attrs

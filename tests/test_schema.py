@@ -208,10 +208,13 @@ def test_validator_flags_missing_arrays_and_wrong_coordinates(store_copy):
     shutil.rmtree(store_copy / "0" / "x")
     root = zarr.open_group(str(store_copy), mode="r+", zarr_format=3, use_consolidated=False)
     array_at(root, "1/time")[:] = np.array([0, 1, 2], dtype="int64")
-    problems = chronozarr.validate(store_copy)
-    assert any("0/x: listed in consolidated metadata but missing on disk" in p for p in problems)
-    assert any("level 0: array 'x' is missing" in p for p in problems)
-    assert any("level 1/time: values differ" in p for p in problems)
+    report = schema.validate_report(store_copy)
+    assert any(
+        "0/x: listed in consolidated metadata but missing on disk" in p for p in report.problems
+    )
+    assert any("level 1/time: values differ" in p for p in report.problems)
+    assert not any("array 'x' is missing" in p for p in report.problems)
+    assert any("level 0: coordinate arrays absent: x" in n for n in report.notes)
 
 
 def test_validator_reports_non_store(tmp_path):

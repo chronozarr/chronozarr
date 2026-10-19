@@ -581,6 +581,8 @@ def info_command(store: str) -> None:
             f"  {level.index}: shape {level.shape}, {level.resolution:g} m/px, "
             f"grid {level.grid[0]}x{level.grid[1]}, chunks {level.data.chunks}, {layout}"
         )
+    for note in opened.notes:
+        click.echo(f"note: {note}")
 
 
 _STATUS_LABEL = {"ok": "[ ok ]", "info": "[info]", "warn": "[warn]", "fail": "[FAIL]"}

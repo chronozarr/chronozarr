@@ -44,10 +44,18 @@ class Level:
 
 
 class ChronoStore:
-    """A chronozarr store opened for reading. Use `open_store` to create one."""
+    """A chronozarr store opened for reading. Use `open_store` to create one.
+
+    `notes` lists what the store leaves out or spells otherwise and the reader read through: an
+    absent mirror, a registration spelled with other URLs, an overview method other than the
+    block mean. Values, geometry, validity and scale are read as declared whatever the notes say.
+    `chronozarr validate` says which of them also keep the store from conforming.
+    """
 
     def __init__(self, group: zarr.Group, source: str) -> None:
-        root = schema.parse_root_attrs(group.attrs.asdict())
+        state = schema._LevelState()
+        found = state.found
+        root = schema.read_root_attrs(group.attrs.asdict(), found)
         self._group = group
         self.source = source
         self.attrs: Chronozarr = root.chronozarr
@@ -62,8 +70,9 @@ class ChronoStore:
             where = f"level {dataset.path}"
             level_group = schema.get_group(group, dataset.path, "store")
             data = schema.get_array(level_group, root.chronozarr.variable, where)
-            level_attrs = schema.canonical_level(data, where)
+            level_attrs = schema.read_geometry(data, where, found)
             mirrors = level_group.attrs.asdict()
+            schema.note_absent_level_mirrors(mirrors, where, found)
             for key, expected in (
                 ("transform", list(level_attrs.transform)),
                 ("resolution", level_attrs.resolution),
@@ -79,8 +88,10 @@ class ChronoStore:
                     )
             if "crs" in mirrors:
                 schema.check_crs_mirror(
-                    f"{where}: crs", mirrors["crs"], stored_crs[0], mirror_problems, []
+                    f"{where}: crs", mirrors["crs"], stored_crs[0], mirror_problems, found.notes
                 )
+            else:
+                state.absent.append(where)
             schema.check_codecs(data, where)
             if data.dtype.name not in schema.DTYPES:
                 raise SchemaError(f"{where}: unsupported data_type {data.dtype.name}")
@@ -101,12 +112,12 @@ class ChronoStore:
             )
         self.levels: tuple[Level, ...] = tuple(levels)
         self._stored_crs: Crs = stored_crs[0]
+        state.crs = self._stored_crs
         problems: list[str] = mirror_problems
         if root.chronozarr.crs is not None:
             schema.check_crs_mirror(
-                "chronozarr.crs", root.chronozarr.crs, self._stored_crs, problems, []
+                "chronozarr.crs", root.chronozarr.crs, self._stored_crs, problems, found.notes
             )
-        state = schema._LevelState()
         for level in levels:
             shape = schema._check_data_array(
                 level.data,
@@ -136,17 +147,20 @@ class ChronoStore:
                         problems.append(f"level {level.index}: chronozarr.levels mirror mismatch")
             for plane in (level.mask, level.coverage):
                 if plane is not None:
+                    plane_where = f"level {plane.path}"
                     schema._check_spatial(
                         plane,
                         self._stored_crs,
                         level.transform,
                         level.shape[2],
                         level.shape[3],
-                        plane.path,
+                        plane_where,
                         problems,
-                        [],
+                        found,
                     )
-                    schema._check_dims(plane, schema.PLANE_DIMENSIONS, plane.path, problems)
+                    schema._check_dims(
+                        plane, schema.PLANE_DIMENSIONS, plane_where, problems, found
+                    )
                     if plane.shape != (
                         level.shape[0],
                         *level.shape[2:],
@@ -154,6 +168,11 @@ class ChronoStore:
                         problems.append(f"{plane.path}: incompatible shape or dtype")
         if problems:
             raise SchemaError("; ".join(problems))
+        self.notes: tuple[str, ...] = (
+            *found.breaks,
+            *found.advice,
+            *schema._crs_notes(root, state),
+        )
         if isinstance(group.store, IndexStore):
             for level in levels:
                 for array in (level.data, level.mask, level.coverage):
