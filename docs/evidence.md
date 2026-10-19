@@ -19,6 +19,7 @@ This file holds measurements, tested versions, dates and caveats. User docs link
 - [Hosting observations](#hosting-observations)
 - [Newcomer trial (2026-10-12)](#newcomer-trial-2026-10-12)
 - [Newcomer baseline (2026-10-19)](#newcomer-baseline-2026-10-19)
+- [Readers that decode (2026-10-19)](#readers-that-decode-2026-10-19)
 - [Sentinel-2 ingest performance](#sentinel-2-ingest-performance)
 
 ## Reader checks
@@ -725,6 +726,29 @@ With `--port` set, `chronozarr preview` fails when anything listens on the port.
 ### Interrupt
 
 A SIGINT stopped the command with exit status 0 after it printed "stopped". The same port was free for a new bind afterwards.
+
+## Readers that decode (2026-10-19)
+
+The strip tests of the [GeoZarr review](../spec/review-2026-10-geozarr.md) copy a synthetic store (3 bands, 6 dates, 3 levels, a mask, a coverage plane) and remove or change one piece of chronozarr metadata at a time. The Python probe opened each of 43 copies with `validate`, `open_store` and `xr.open_dataset(engine="chronozarr")`, and compared the stored values at levels 0 and 1 and the physical values at one pixel with the values the copy was made from. It ran on main at 5673cee and on the branch that makes the readers decode what they can read as declared.
+
+Main already opened the copies with the CRS as `proj:wkt2` or `proj:projjson` only and with no `crs` mirror, so those rows did not change. 12 of 43 copies changed result, and every opened copy returned the stored values exactly.
+
+| Copy | `validate` on main | `open_store` on main | `validate` now | `open_store` now |
+|---|---|---|---|---|
+| `_ARRAY_DIMENSIONS` removed from every array | 22 problems | refused | conforms, 1 note | opens, 1 note |
+| `levels` mirror removed | 1 problem | opens | conforms, 1 note | opens, 1 note |
+| `band_names` removed | 1 problem | opens | conforms, 1 note | opens, 1 note |
+| level-group `crs`, `transform` and `resolution` removed | 3 problems | opens | conforms, 2 notes | opens, 2 notes |
+| `time`, `band`, `x` and `y` arrays removed | 12 problems | opens | conforms, 1 note | opens |
+| CF `units` and `calendar` removed from `time` | 3 problems | opens | conforms, 1 note | opens |
+| `proj` and `spatial` registrations removed from the arrays | 9 problems | refused | 2 problems | opens, 2 notes |
+| `multiscales` registration removed from the root | 1 problem | refused | 1 problem | opens, 1 note |
+| `resampling_method` set to `nearest` | 1 problem | refused | 1 problem | opens, 1 note |
+| `spec_version` set to `0.3.1` | 1 problem | refused | 1 problem | opens, 1 note |
+| `variable` removed from the block | 1 problem | refused | 1 problem | opens, 1 note |
+| the smallest metadata the knock-out tests accepted (`z_minimal`) | 5 problems | opens | conforms, 5 notes | opens, 4 notes |
+
+A copy that still fails `validate` fails on a MUST for writers: a registration, `resampling_method`, `spec_version` or `variable`. The reader reads through each of them and reports it, and a `resampling_method` note says that the overview levels are not block means. The reader does not read the coordinate arrays or the CF attributes of `time`, so only `validate` reports their absence. The `open_store` column of the bands as plain strings, `times`, `nodata` and the rotated and south-up grids is unchanged: they still refuse. Problems are counted once per distinct finding, so a registration that is missing from nine arrays counts once.
 
 ## Sentinel-2 ingest performance
 
