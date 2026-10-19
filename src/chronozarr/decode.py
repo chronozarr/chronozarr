@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,6 +16,7 @@ from zarr.errors import GroupNotFoundError
 from zarr.storage import LocalStore
 
 from chronozarr import schema
+from chronozarr.crs import Crs, same_crs
 from chronozarr.schema import Chronozarr, SchemaError, Transform
 from chronozarr.store import HttpStore as HttpStore
 from chronozarr.store import IndexStore, redact_url
@@ -53,17 +56,31 @@ class ChronoStore:
         )
         self.bands: tuple[str, ...] = root.chronozarr.band_names
         levels = []
+        stored_crs: list[Crs] = []
+        mirror_problems: list[str] = []
         for index, dataset in enumerate(root.datasets):
             where = f"level {dataset.path}"
             level_group = schema.get_group(group, dataset.path, "store")
             data = schema.get_array(level_group, root.chronozarr.variable, where)
             level_attrs = schema.canonical_level(data, where)
             mirrors = level_group.attrs.asdict()
-            for key, expected in level_attrs.to_attrs().items():
+            for key, expected in (
+                ("transform", list(level_attrs.transform)),
+                ("resolution", level_attrs.resolution),
+            ):
                 if key in mirrors and mirrors[key] != expected:
                     raise SchemaError(f"{where}: {key} mirror differs from canonical geometry")
-            if level_attrs.crs != root.chronozarr.crs:
-                raise SchemaError(f"{where}: CRS differs from root")
+            stored_crs.append(level_attrs.crs)
+            if index:
+                match = same_crs(level_attrs.crs, stored_crs[0])
+                if match.same is False:
+                    raise SchemaError(
+                        f"{where}: CRS differs from level 0 (compared by {match.method})"
+                    )
+            if "crs" in mirrors:
+                schema.check_crs_mirror(
+                    f"{where}: crs", mirrors["crs"], stored_crs[0], mirror_problems, []
+                )
             schema.check_codecs(data, where)
             if data.dtype.name not in schema.DTYPES:
                 raise SchemaError(f"{where}: unsupported data_type {data.dtype.name}")
@@ -83,7 +100,12 @@ class ChronoStore:
                 )
             )
         self.levels: tuple[Level, ...] = tuple(levels)
-        problems: list[str] = []
+        self._stored_crs: Crs = stored_crs[0]
+        problems: list[str] = mirror_problems
+        if root.chronozarr.crs is not None:
+            schema.check_crs_mirror(
+                "chronozarr.crs", root.chronozarr.crs, self._stored_crs, problems, []
+            )
         state = schema._LevelState()
         for level in levels:
             shape = schema._check_data_array(
@@ -116,12 +138,13 @@ class ChronoStore:
                 if plane is not None:
                     schema._check_spatial(
                         plane,
-                        self.attrs.crs,
+                        self._stored_crs,
                         level.transform,
                         level.shape[2],
                         level.shape[3],
                         plane.path,
                         problems,
+                        [],
                     )
                     schema._check_dims(plane, schema.PLANE_DIMENSIONS, plane.path, problems)
                     if plane.shape != (
@@ -167,6 +190,20 @@ class ChronoStore:
         self._offset = np.array(
             [0.0 if b.offset is None else b.offset for b in self.attrs.bands], dtype=np.float32
         )
+
+    @cached_property
+    def crs(self) -> Crs:
+        """The CRS of the store, from level 0's `proj:` attributes (wkt2 over projjson over code).
+
+        A representation that is shown to disagree with a higher-ranked one is dropped, and a
+        warning says so: proj v0.1 asks readers to surface the discrepancy.
+        """
+        for message in self._stored_crs.disagreements():
+            warnings.warn(
+                f"{message}. Ask whoever wrote {_shown(self.source)} to correct it.",
+                stacklevel=3,
+            )
+        return self._stored_crs.resolved()
 
     def _level(self, lod: int) -> Level:
         if not 0 <= lod < len(self.levels):
@@ -298,7 +335,7 @@ class ChronoStore:
         read = self._physical_region if physical else self._read_region
         values = read(level, selected, window, window)
         y, x = schema.pixel_centers(level.transform, level.shape[2], level.shape[3])
-        attrs: dict[str, Any] = {"crs": self.attrs.crs, "transform": list(level.transform)}
+        attrs: dict[str, Any] = {"crs": self.crs.to_string(), "transform": list(level.transform)}
         coords: dict[str, Any] = {
             "time": self.times[selected].astype("datetime64[ns]"),
             "band": list(self.bands),

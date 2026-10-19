@@ -42,7 +42,7 @@ from chronozarr.decode import open_store
 from chronozarr.doctor import DEFAULT_ORIGIN, diagnose, is_url
 from chronozarr.encode import EncodeReport, encode
 from chronozarr.export import export_cog, select_times
-from chronozarr.schema import Band, SchemaError, validate
+from chronozarr.schema import Band, SchemaError, validate_report
 from chronozarr.share import share
 from chronozarr.stac import write_stac
 from chronozarr.store import redact_url
@@ -477,13 +477,17 @@ def append_command(
 @click.argument("store")
 def validate_command(store: str) -> None:
     """Check STORE against the chronozarr spec. Exit status 1 if it does not conform."""
-    problems = validate(store)
-    if problems:
-        for problem in problems:
+    report = validate_report(store)
+    if report.problems:
+        for problem in report.problems:
             click.echo(problem, err=True)
-        click.echo(f"{store}: {len(problems)} problem(s)", err=True)
+        for note in report.notes:
+            click.echo(f"note: {note}", err=True)
+        click.echo(f"{store}: {len(report.problems)} problem(s)", err=True)
         sys.exit(1)
-    click.echo(f"{store}: conforms to chronozarr {schema.SPEC_VERSION}")
+    click.echo(f"{store}: conforms to chronozarr {report.spec_version}")
+    for note in report.notes:
+        click.echo(f"note: {note}")
 
 
 @main.command("info")
@@ -495,7 +499,7 @@ def info_command(store: str) -> None:
     attrs = opened.attrs
     click.echo(f"store:     {redact_url(store)}")
     click.echo(f"version:   chronozarr {attrs.spec_version}")
-    click.echo(f"crs:       {attrs.crs}")
+    click.echo(f"crs:       {opened.crs.describe()}")
     click.echo(f"times:     {len(opened.times)} ({attrs.times[0]} .. {attrs.times[-1]})")
     click.echo(f"bands:     {', '.join(opened.bands)}")
     click.echo(f"nodata:    {attrs.nodata}")

@@ -42,6 +42,8 @@ da = store.to_xarray(lod=0, times=[0], physical=False)
 
 `to_xarray` loads the requested level into memory.
 
+`store.crs` is the CRS the store declares: an authority code, WKT2 text, PROJJSON, or several of them. `store.crs.to_string()` returns the code when there is one and otherwise the WKT2 or PROJJSON text, which pyproj and rasterio accept. When representations disagree, the WKT2 is used and a warning says so.
+
 ## Open a store in xarray
 
 ```python

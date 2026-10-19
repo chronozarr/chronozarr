@@ -346,7 +346,7 @@ def test_legacy_null_nodata_replaces_all_copied_attributes(tmp_path, shard):
             assert "nodata" not in array.attrs
             height, width = array.shape[-2:]
             assert array.attrs.asdict() == schema.data_array_attrs(
-                attrs.crs,
+                required(attrs.crs),
                 attrs.transform,
                 height,
                 width,

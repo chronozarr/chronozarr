@@ -151,7 +151,7 @@ def open_dataset(
             )
 
     attrs: dict[str, Any] = {
-        "crs": store.attrs.crs,
+        "crs": store.crs.to_string(),
         "transform": list(level.transform),
         "resolution": level.resolution,
         "lod": lod,
