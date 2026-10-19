@@ -58,5 +58,9 @@
   },
   "/guides/publish": {
     "chronozarr-publish": "/guides/publish#publish"
+  },
+  "/specification": {
+    "23-epsg-north-up-grid-restriction": "/specification#23-north-up-grid-in-any-crs",
+    "10-changes-from-02": "/specification#10-changes-from-03-and-02"
   }
 }

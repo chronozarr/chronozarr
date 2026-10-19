@@ -34,6 +34,19 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 
 `convert --help` lists every source type, option and validity rule. [Convert your data](convert.md) explains them.
 
+## Opening a store
+
+A store whose CRS has no EPSG code, such as a Lambert conformal conic or a sinusoidal grid, declares `spec_version` `0.4.0`. A store whose CRS has an EPSG code declares `0.3.0`, and every chronozarr release opens it. Releases up to 0.4.1 refuse a `0.4.0` store, and their message names the wrong fix.
+
+| Message | Cause and fix |
+|---|---|
+| `chronozarr.spec_version: unsupported or missing version '0.4.0'; expected 0.3.0; use chronozarr convert before opening with a v0.3 reader` | The store has no EPSG code and the installed chronozarr is 0.4.1 or older. Do not run `chronozarr convert`: it reads v0.2 stores, not this one. Upgrade chronozarr past 0.4.1: `uv tool upgrade chronozarr` for a tool install, `uv add --upgrade-package chronozarr chronozarr` in a uv project, or the `--upgrade` option of your installer. Then check `chronozarr --version` |
+| `not a valid chronozarr store: unsupported spec_version 0.4.0; use chronozarr convert to convert this store to v0.3` in the viewer or the JavaScript package | The viewer or package is older than the store. Use a newer build. The hosted viewer at chronozarr.org/demo changes when the site is deployed, and a copy you host or embed needs a newer build. See [viewer distribution](viewer-distribution.md) |
+| `unsupported or missing version '0.2.0'` | The store is v0.2. `chronozarr convert OLD NEW` writes a v0.3 store from it |
+| `unsupported or missing version` with a version later than 0.4.0 | The store was written by a newer chronozarr. Upgrade chronozarr |
+| `cannot read the CRS ... Pass an authority code such as EPSG:32631 or WKT2 text` | `encode` was given a CRS it could not parse. Pass `EPSG:xxxxx`, or WKT2 text. WKT1, PROJJSON and PROJ strings need pyproj to be converted: install it, or convert the CRS to WKT2 yourself |
+| `crs: the input is ..., the store is ...` from `append` | The new data is in another CRS than the store. Append data on the store's grid. A code and a WKT2 can be compared only when pyproj is installed |
+
 ## The viewer
 
 | Symptom | Cause and fix |
