@@ -20,6 +20,7 @@ import xarray as xr
 from chronozarr import schema
 from chronozarr._convert_discover import TIFF_SUFFIXES, is_discovery_source
 from chronozarr._convert_source import UndeclaredNaNError
+from chronozarr._convert_xarray import open_netcdf
 from chronozarr._install import extra_hint
 from chronozarr.append import append, is_store
 from chronozarr.bands import (
@@ -223,11 +224,11 @@ def _read_xarray(path: str, variable: str | None) -> xr.DataArray:
     source = Path(path)
     if not source.exists():
         raise click.ClickException(f"input '{path}' does not exist")
-    dataset = (
-        xr.open_dataset(source)
-        if source.suffix == ".nc"
-        else xr.open_zarr(source, chunks=None, consolidated=False)
-    )
+    if source.suffix == ".nc":
+        with _command_errors():
+            dataset = open_netcdf(source)
+    else:
+        dataset = xr.open_zarr(source, chunks=None, consolidated=False)
     if variable is None:
         names = list(dataset.data_vars)
         if len(names) != 1:
