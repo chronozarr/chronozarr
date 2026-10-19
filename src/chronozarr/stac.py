@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 
 from chronozarr import schema
+from chronozarr.crs import Crs
 from chronozarr.decode import ChronoStore, open_store
 from chronozarr.doctor import is_url
 
@@ -47,6 +48,24 @@ def default_id(source: str) -> str:
 def _epsg_number(crs: str) -> int | str:
     match = re.fullmatch(r"EPSG:(\d+)", crs)
     return int(match.group(1)) if match else crs
+
+
+def _proj_properties(crs: Crs) -> dict[str, Any]:
+    """STAC projection 2.0: `proj:code`, or a null `proj:code` with the CRS definition."""
+    if crs.code is not None:
+        return {"proj:code": crs.code}
+    properties: dict[str, Any] = {"proj:code": None}
+    if crs.wkt2 is not None:
+        properties["proj:wkt2"] = crs.wkt2
+    if crs.projjson is not None:
+        properties["proj:projjson"] = crs.projjson
+    return properties
+
+
+def _proj_summaries(crs: Crs) -> dict[str, Any]:
+    if crs.code is not None:
+        return {"proj:code": [crs.code]}
+    return {key: [value] for key, value in _proj_properties(crs).items() if value is not None}
 
 
 def _footprint(
@@ -169,7 +188,7 @@ def build_stac(
     provenance = provenance if isinstance(provenance, dict) else None
     text = description or (
         f"chronozarr time series: {len(times)} timesteps, {len(bands)} bands, "
-        f"{abs(a):g} m pixels in {stored_crs}, {len(store.levels)} pyramid levels."
+        f"{abs(a):g} m pixels in {store.crs.describe()}, {len(store.levels)} pyramid levels."
     )
     asset = {
         "href": href,
@@ -184,7 +203,7 @@ def build_stac(
         "start_datetime": times[0],
         "end_datetime": times[-1],
         "title": title or id,
-        "proj:code": stored_crs,
+        **_proj_properties(store.crs),
         "proj:shape": [height, width],
         "proj:transform": [a, 0.0, c, 0.0, e, f, 0.0, 0.0, 1.0],
         "proj:bbox": list(bounds),
@@ -245,7 +264,7 @@ def build_stac(
             "spatial": {"bbox": [bbox]},
             "temporal": {"interval": [[times[0], times[-1]]]},
         },
-        "summaries": {"proj:code": [stored_crs]},
+        "summaries": _proj_summaries(store.crs),
         "cube:dimensions": dimensions,
         "cube:variables": variables,
         "links": [
