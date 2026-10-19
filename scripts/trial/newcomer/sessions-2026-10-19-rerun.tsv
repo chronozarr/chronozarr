@@ -1,0 +1,2 @@
+22	conda	nsidc-seaice-s-monthly/raw	sea ice scientist	5 monthly Antarctic sea ice concentration GeoTIFFs from the NSIDC Sea Ice Index, January to May 2020, in the month folders the NSIDC server uses.
+26	conda	gee-multiband-dates/raw	ecologist	one GeoTIFF you exported from Google Earth Engine with toBands(): 23 bands, one per 16-day MODIS NDVI composite of 2020.
