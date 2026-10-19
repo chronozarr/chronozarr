@@ -23,9 +23,10 @@ from chronozarr._convert_source import (
     Step,
     _bounds_grid,
     _check_north_up,
+    _crs_label,
+    _crs_string,
     _decide_validity,
     _declared_nodata,
-    _epsg,
     _grid_difference,
     _same_grid,
     _scaling,
@@ -61,8 +62,9 @@ def _frame_grid(src: Any, crs: str | None, bounds: Bounds | None) -> Grid:
     from rasterio.crs import CRS  # ty: ignore[unresolved-import]  # compiled, no stubs
 
     located = not src.transform.is_identity  # GDAL answers the identity when it finds nothing
-    given = None if crs is None else _epsg(CRS.from_user_input(crs), "--crs")
-    declared = None if src.crs is None else _epsg(src.crs, "the frame")
+    given_crs = None if crs is None else CRS.from_user_input(crs)
+    given = None if given_crs is None else _crs_string(given_crs)
+    declared = None if src.crs is None else _crs_string(src.crs)
     if bounds is not None:
         if given is None:
             raise ValueError("--bounds needs --crs, the CRS the bounds are in")
@@ -71,8 +73,10 @@ def _frame_grid(src: Any, crs: str | None, bounds: Bounds | None) -> Grid:
                 "it carries its own geotransform (a world file or .aux.xml) and --bounds "
                 "was given; drop --bounds, or remove the sidecar of the frames that have one"
             )
-        if declared is not None and declared != given:
-            raise ValueError(f"it declares {declared} but --crs is {given}")
+        if src.crs is not None and src.crs != given_crs:
+            raise ValueError(
+                f"it declares {_crs_label(declared or '')} but --crs is {_crs_label(given)}"
+            )
         return _bounds_grid(bounds, given, src.height, src.width)
     if not located:
         raise ValueError(
@@ -359,7 +363,12 @@ class CogManifestSource(Source):
         if transform is not None:
             if shape is None or crs is None:
                 raise ValueError("--transform needs --shape and --crs as well")
-            return Grid(crs, _check_north_up(transform, "--transform"), shape[0], shape[1])
+            return Grid(
+                _crs_string(CRS.from_user_input(crs)),
+                _check_north_up(transform, "--transform"),
+                shape[0],
+                shape[1],
+            )
         if crs is None or CRS.from_user_input(crs) == CRS.from_user_input(first.grid.crs):
             if shape is not None:
                 raise ValueError("--shape is only meaningful together with --transform")
@@ -375,7 +384,7 @@ class CogManifestSource(Source):
             source.crs, crs, source.width, source.height, west, south, east, north
         )
         return Grid(
-            _epsg(CRS.from_user_input(crs), "--crs"),
+            _crs_string(CRS.from_user_input(crs)),
             _check_north_up(tuple(dst)[:6], "--crs"),
             height,
             width,

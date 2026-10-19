@@ -15,9 +15,9 @@ from chronozarr._convert_source import (
     Source,
     SourceInfo,
     Step,
+    _crs_string,
     _decide_validity,
     _declared_nodata,
-    _epsg,
     _scaling,
     _settle_nan,
     _value_valid,
@@ -159,7 +159,7 @@ class XarraySource(Source):
             raise ValueError(f"{source} does not declare a CRS; pass --crs EPSG:xxxxx")
         from rasterio.crs import CRS  # ty: ignore[unresolved-import]  # compiled, no stubs
 
-        grid = Grid(_epsg(CRS.from_user_input(crs_text), "CRS"), transform, len(y), len(x))
+        grid = Grid(_crs_string(CRS.from_user_input(crs_text)), transform, len(y), len(x))
 
         self._mask = None
         if mask_var is not None:
