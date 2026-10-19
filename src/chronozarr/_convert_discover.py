@@ -13,6 +13,7 @@ import json
 import os
 import re
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -275,24 +276,43 @@ def find_dates(
                 continue
             found.setdefault(moment, match.group(0))
         return found, invalid
+    for start, end, moment in _default_date_spans(stem):
+        found.setdefault(moment, stem[start:end])
+    return found, invalid
+
+
+def _default_date_spans(text: str) -> list[tuple[int, int, np.datetime64]]:
+    """Where `text` holds a date by the default rules: (start, end, moment), days before months."""
+    spans: list[tuple[int, int, np.datetime64]] = []
     covered: list[tuple[int, int]] = []
-    for match in _DAY.finditer(stem):
+    for match in _DAY.finditer(text):
         year, _, month, day = match.groups()
         try:
             moment = _moment(int(year), int(month), int(day), 0, 0, 0)
         except ValueError:
             continue
         covered.append(match.span())
-        found.setdefault(moment, match.group(0))
-    for match in _MONTH.finditer(stem):
+        spans.append((*match.span(), moment))
+    for match in _MONTH.finditer(text):
         if any(start < match.end() and match.start() < end for start, end in covered):
             continue
         try:
             moment = _moment(int(match.group(1)), int(match.group(2)), 1, 0, 0, 0)
         except ValueError:
             continue
-        found.setdefault(moment, match.group(0))
-    return found, invalid
+        spans.append((*match.span(), moment))
+    return spans
+
+
+DATE_MARK = "\x00"
+
+
+def mask_dates(text: str) -> str:
+    """`text` with every date the default rules read replaced by `DATE_MARK`: the part of a
+    band description or file name that is the same from file to file once the date is taken out."""
+    for start, end, _ in sorted(_default_date_spans(text), key=lambda span: span[0], reverse=True):
+        text = text[:start] + DATE_MARK + text[end:]
+    return text
 
 
 def year_and_day_of_year_help(stem: str) -> str | None:
@@ -434,8 +454,20 @@ def check_manifest_target(path: Path) -> None:
         raise FileExistsError(f"{path} already exists; choose a new path or remove it first")
 
 
-def write_manifest(entries: list[Entry], path: Path) -> None:
-    """Write `entries` as a manifest `convert` reads back: CSV `uri,datetime` or a JSON list."""
+def write_manifest(
+    entries: list[Entry],
+    path: Path,
+    *,
+    undated: Sequence[str] = (),
+    bands: Sequence[str] | None = None,
+) -> None:
+    """Write `entries` as a manifest `convert` reads back: CSV `uri,datetime[,bands]` or JSON.
+
+    `undated` files get a row with an empty datetime, for the user to fill in (`convert` refuses
+    such a row, naming it). `bands` are the band names to carry: a CSV `bands` column (names
+    joined by `;`), or for JSON a `bands` entry, which turns the list of rows into an object with
+    `items`.
+    """
     check_manifest_target(path)
     rows = [
         {
@@ -446,10 +478,17 @@ def write_manifest(entries: list[Entry], path: Path) -> None:
         }
         for e in entries
     ]
+    rows.extend({"uri": uri, "datetime": ""} for uri in undated)
     if path.suffix.lower() == ".json":
-        path.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+        document: Any = {"bands": list(bands), "items": rows} if bands else rows
+        path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
         return
+    fieldnames = ["uri", "datetime"]
+    if bands:
+        fieldnames.append("bands")
+        for row in rows:
+            row["bands"] = ";".join(bands)
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer: Any = csv.DictWriter(handle, fieldnames=["uri", "datetime"])
+        writer: Any = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)

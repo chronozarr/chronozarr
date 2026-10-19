@@ -853,7 +853,9 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     type=click.Path(path_type=Path),
     default=None,
     help="Directory, glob or S3 prefix only: write the files and dates found as a manifest "
-    "(.csv or .json) that convert reads back. Refuses to overwrite.",
+    "(.csv or .json) that convert reads back, with a bands column when the files name "
+    "their bands. Written even when the checks find problems; a file with no date gets "
+    "an empty datetime to fill in. Refuses to overwrite.",
 )
 @click.option(
     "--dry-run",
@@ -905,7 +907,7 @@ def convert_command(
     (YYYYMMDD, YYYY-MM-DD or YYYY-MM); otherwise the file is reported and --date-pattern or a
     manifest says where the date is. MODIS and HLS names carry a year and day of year, which
     --date-pattern reads with %Y%j (for example 'MOD13A1.A%Y%j'). --write-manifest saves what
-    was found.
+    was found, also when the checks report problems, so you can edit it and run convert on it.
 
     Every file is checked before anything is read in bulk: dates, grid and CRS, bands, dtype,
     scale, offset, units and nodata. All problems are reported together, per file, with a
