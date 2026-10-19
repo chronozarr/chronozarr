@@ -78,6 +78,7 @@ function bindControls(viewer) {
   const applyStretch = () => viewer.setStretch(Number($('stretch-min').value), Number($('stretch-max').value));
   $('stretch-min').addEventListener('change', applyStretch);
   $('stretch-max').addEventListener('change', applyStretch);
+  $('auto-exposure').addEventListener('click', () => viewer.setAutoExposure(!viewer.autoExposure));
   $('stretch-auto').addEventListener('click', () => viewer.autoStretch());
   $('gap-toggle').addEventListener('click', () => viewer.toggleGaps());
 }

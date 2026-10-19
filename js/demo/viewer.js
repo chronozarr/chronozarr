@@ -153,6 +153,8 @@ class Viewer {
   #direction = 1;
   #stretchLo = null;
   /** Linear stretch of a single band that is not reflectance: the [lo, hi] range (null until measured) and whether the user set it. */
+  #autoExposure = false;
+  #exposureView = null;
   #linear = { range: null, manual: false };
   /** The three per-channel [lo, hi] ranges of the dual-pol composite (null until measured). Held while the timestep changes. */
   #channelRanges = null;
@@ -823,6 +825,14 @@ class Viewer {
       if (!slots) return false;
       drawable.push({ row, col, slots });
     }
+    if (this.#autoExposure && (this.#usesLinearRange() || this.#usesChannelRanges())) {
+      const key = [lod, t, this.productIndex, this.bandChoice, this.camera.cx, this.camera.cy, this.camera.scale, canvas.width, canvas.height].join('/');
+      if (key !== this.#exposureView) {
+        if (this.#usesLinearRange()) this.#measureLinear(lod, cells, t);
+        if (this.#usesChannelRanges()) this.#measureChannelRanges(lod, cells, t);
+        this.#exposureView = key;
+      }
+    }
     if (this.#stretchLo === null) this.#stretchLo = this.#computeStretch(lod, cells, t);
     if (this.#linear.range === null && this.#usesLinearRange()) this.#measureLinear(lod, cells, t);
     if (this.#channelRanges === null && this.#usesChannelRanges()) this.#measureChannelRanges(lod, cells, t);
@@ -1424,15 +1434,24 @@ class Viewer {
    * Calls `visit` with the stored values (one per band) of about STRETCH_SAMPLES_PER_CELL pixels of each cell at
    * timestep t, leaving out the pixels the validity mask marks invalid.
    */
-  #sampleCells(lod, cells, t, visit) {
+  #sampleCells(lod, cells, t, visit, viewportOnly = false) {
     const { store } = this;
     const level = store.levels[lod];
     for (const [row, col] of cells) {
       const { width, height } = store.cellExtent(lod, row, col);
       const mask = this.#peekMaskOrNull(lod, row, col, t);
-      const stride = Math.max(1, Math.floor((width * height) / STRETCH_SAMPLES_PER_CELL));
-      for (let i = 0; i < width * height; i += stride) {
-        const [x, y] = [i % width, Math.floor(i / width)];
+      const factor = 2 ** lod;
+      const { cx, cy, scale } = this.camera;
+      const x0 = viewportOnly ? Math.max(0, Math.ceil((cx - this.canvas.width / 2 / scale) / factor - col * level.chunkWidth)) : 0;
+      const x1 = viewportOnly ? Math.min(width, Math.ceil((cx + this.canvas.width / 2 / scale) / factor - col * level.chunkWidth)) : width;
+      const y0 = viewportOnly ? Math.max(0, Math.ceil((cy - this.canvas.height / 2 / scale) / factor - row * level.chunkHeight)) : 0;
+      const y1 = viewportOnly ? Math.min(height, Math.ceil((cy + this.canvas.height / 2 / scale) / factor - row * level.chunkHeight)) : height;
+      const sampleWidth = x1 - x0;
+      const count = sampleWidth * (y1 - y0);
+      const stride = Math.max(1, Math.floor(count / STRETCH_SAMPLES_PER_CELL));
+      for (let i = 0; i < count; i += stride) {
+        const x = x0 + i % sampleWidth;
+        const y = y0 + Math.floor(i / sampleWidth);
         if (mask && mask[y * level.chunkWidth + x] === 0) continue;
         const values = store.samplePixel(lod, row, col, t, x, y);
         if (values) visit(values);
@@ -1447,7 +1466,7 @@ class Viewer {
     this.#sampleCells(lod, cells, t, (stored) => {
       const value = stored[this.bandChoice];
       if (value !== this.#nodata && Number.isFinite(value)) values.push(toPhysical(value, band));
-    });
+    }, this.#autoExposure);
     const range = percentileRange(values);
     if (range) this.#linear = { range, manual: false };
     this.#updateStretchUi();
@@ -1460,8 +1479,20 @@ class Viewer {
     this.#sampleCells(lod, cells, t, (stored) => {
       if (stored[copol] === this.#nodata || stored[crosspol] === this.#nodata) return;
       samples.push([toPhysical(stored[copol], this.bands[copol]), toPhysical(stored[crosspol], this.bands[crosspol])]);
-    });
-    this.#channelRanges = dualPolRanges(samples);
+    }, this.#autoExposure);
+    this.#channelRanges = dualPolRanges(samples) ?? this.#channelRanges;
+  }
+
+  get autoExposure() { return this.#autoExposure; }
+
+  setAutoExposure(enabled) {
+    this.#autoExposure = Boolean(enabled);
+    this.#exposureView = null;
+    if (enabled) this.#linear.manual = false;
+    this.#updateStretchUi();
+    this.#dirty = true;
+    this.requestRender();
+    this.#scheduleUrlSync();
   }
 
   get stretchRange() { return this.#linear.manual ? [...this.#linear.range] : null; }
@@ -1472,6 +1503,7 @@ class Viewer {
       this.#updateStretchUi();
       return;
     }
+    this.setAutoExposure(false);
     this.#linear = { range: [lo, hi], manual: true };
     this.#dirty = true;
     this.requestRender();
@@ -2162,6 +2194,9 @@ class Viewer {
   /** The min/max stretch controls show only while a band is displayed with an adjustable linear stretch. */
   #updateStretchUi() {
     const visible = Boolean(this.store) && this.#usesLinearRange();
+    const toggle = $('auto-exposure');
+    toggle.hidden = !this.store || !(this.#usesLinearRange() || this.#usesChannelRanges());
+    toggle.setAttribute('aria-pressed', String(this.#autoExposure));
     $('stretch').hidden = !visible;
     if (!visible) return;
     $('stretch-ramp').style.backgroundImage = colormapGradient(this.colormap);
