@@ -1,0 +1,243 @@
+{
+  "_rules": {
+    "OK": "converts; dates (count and order), CRS and sampled values equal the independent read of the source, values inside the physical range a scientist expects, longitudes inside +-180 for EPSG:4326",
+    "WRONG": "converts but something is wrong: dates, orientation, values, CRS, longitudes beyond +-180, undeclared fill stored as data, scale convention wrong, dropped steps",
+    "ACTIONABLE": "refuses, and for every problem reported the message names a fix that clears that problem when applied",
+    "UNACTIONABLE": "refuses, and some problem has no named fix, or the named fix does not clear it, or applying it loses data",
+    "CRASH": "traceback, unhandled exception or timeout (none occurred)",
+    "first_run": "exactly what the docs tell a newcomer: convert INPUT STORE --dry-run, then convert if it passes (plus --variable for NetCDF/Zarr, which convert.md shows)",
+    "after_fix": "outcome of the verified fix chain (fixes.json, fix_prep.py); the fix runs use the extras venvs Ax/Bx where the netcdf extra is needed",
+    "A_vs_B": "convert, validate and every message are identical in 0.4.1 and main ca799a1: git diff v0.4.1..ca799a1 touches no convert code, only the next-steps lines printed after a conversion"
+  },
+  "chirps-africa-monthly": {
+    "first_run": "ACTIONABLE",
+    "first_message": "no date in the file name (24 files); fix: --date-pattern with the text around the date",
+    "chain": "--date-pattern \"chirps-v2.0.%Y.%m\" converts, but the store is WRONG: the files declare no nodata, so the -9999 fill (47% of sampled pixels) is stored as data and the dry run says 'every pixel is valid'; --nodata=-9999 is not suggested anywhere at that point",
+    "after_fix": "OK",
+    "fix": "--date-pattern \"chirps-v2.0.%Y.%m\" --nodata=-9999",
+    "minutes": "5 if you know CHIRPS marks missing as -9999; 30 or more if you find it from a wrong map",
+    "fix_records": [
+      "fix",
+      "fix2"
+    ]
+  },
+  "worldclim-tmax-monthly": {
+    "first_run": "ACTIONABLE",
+    "first_message": "23 problems: each file's band description is its own file name; fix: name the bands in a manifest (--write-manifest writes one to edit), or relabel the odd files",
+    "chain": "the named --write-manifest writes nothing when the preflight finds any problem (confirmed on 0.4.1 and main), so the suggestion is circular; a hand-written manifest uri,datetime,bands works",
+    "after_fix": "OK",
+    "fix": "write manifest.csv with uri,datetime,bands (one band name) for the 24 files, convert the manifest",
+    "minutes": "10-15 (a 10 line script), longer if you try --write-manifest first",
+    "fix_records": [
+      "fix"
+    ]
+  },
+  "nsidc-seaice-n-daily": {
+    "first_run": "ACTIONABLE",
+    "first_message": "no GeoTIFF files (.tif, .tiff) found in .../raw ... a directory is not searched recursively (use 'dir/**/*.tif' for subdirectories)",
+    "chain": "recursive glob converts 320 daily steps in EPSG:3411",
+    "after_fix": "OK",
+    "fix": "convert \"raw/**/*.tif\" STORE",
+    "minutes": "2",
+    "fix_records": [
+      "fix"
+    ]
+  },
+  "nsidc-seaice-s-monthly": {
+    "first_run": "ACTIONABLE",
+    "first_message": "no GeoTIFF files found ... use 'dir/**/*.tif'",
+    "chain": "the glob then refuses 5 of 5 files with 'no date in the file name' (YYYYMM is not read; step1 record); fix: --date-pattern \"S_%Y%m_\"",
+    "after_fix": "OK",
+    "fix": "\"raw/**/*.tif\" --date-pattern \"S_%Y%m_\"",
+    "minutes": "5",
+    "fix_records": [
+      "step1",
+      "fix"
+    ]
+  },
+  "prism-daily-bil-zip": {
+    "first_run": "UNACTIONABLE",
+    "first_message": "no GeoTIFF files (.tif, .tiff) found in .../raw/unzipped (nothing says BIL is unsupported or how to convert it)",
+    "chain": "after copying each .bil to GeoTIFF the names (prism_ppt_us_25m_YYYYMMDD) date correctly, EPSG:4269 and nodata -9999 carry over",
+    "after_fix": "OK",
+    "fix": "gdal_translate each .bil to .tif (or rasterio.shutil.copy), 46 files, then convert the folder",
+    "minutes": "15-20 (needs GDAL or a short script)",
+    "fix_records": [
+      "fix"
+    ]
+  },
+  "modis-13a1-pc-cog-julian": {
+    "first_run": "UNACTIONABLE",
+    "first_message": "no date in the file name (julian A2020001) and 'the CRS has no EPSG code; chronozarr stores declare EPSG:<code>. Pass --crs EPSG:xxxxx' for all 23 files",
+    "chain": "MODIS sinusoidal has no EPSG code: --crs SR-ORG:6974 fails ('The WKT could not be parsed') and --crs EPSG:4326 leaves the refusal; --date-pattern cannot read the day of year. After warping to EPSG:4326 and a manifest the store converts but is WRONG: the files carry scale 10000 (the HDF convention is divide), so NDVI is stored as up to 92,700,000; fixed by re-tagging scale 0.0001",
+    "after_fix": "OK",
+    "fix": "gdalwarp -t_srs EPSG:4326 on 23 files, gdal_edit.py -scale 0.0001, manifest uri,datetime from the day of year",
+    "minutes": "45-60",
+    "fix_records": [
+      "fix",
+      "fix2"
+    ]
+  },
+  "modis-mod13a3-hdf4": {
+    "first_run": "UNACTIONABLE",
+    "first_message": "no GeoTIFF files (.tif, .tiff) found in .../raw; passing one .hdf with --variable gives 'No group found in store ... at path'",
+    "chain": "not fixed: neither the rasterio wheel nor Homebrew GDAL 3.12.4 has an HDF4 driver, so even gdalinfo cannot open the file",
+    "after_fix": "NOT VERIFIED",
+    "fix": "get a GDAL with HDF4 (conda-forge) or re-download the tile as GeoTIFF, then the sinusoidal and julian-date fixes of modis-13a1-pc-cog-julian",
+    "minutes": "90 or more (estimate, unverified)",
+    "fix_records": []
+  },
+  "landsat-c2-productid": {
+    "first_run": "ACTIONABLE",
+    "first_message": "19 problems: the file name has several dates ('20200307', '20200822'); fix: --date-pattern ... or a manifest; 9 files not on the target grid; fix: --resampling nearest|...",
+    "chain": "--date-pattern \"LC08_L2SP_015035_%Y%m%d_\" --resampling nearest converts, 9 of 10 timesteps warped by whole-pixel shifts, sampled values equal",
+    "after_fix": "OK",
+    "fix": "--date-pattern \"LC08_L2SP_015035_%Y%m%d_\" --resampling nearest",
+    "minutes": "10",
+    "fix_records": [
+      "fix"
+    ]
+  },
+  "landsat-ndvi-derived-nan": {
+    "first_run": "ACTIONABLE",
+    "first_message": "ndvi_20200307.tif (timestep 0) holds 1399492 NaN values, but the source declares no NaN nodata ... pass --nodata nan",
+    "chain": "--nodata nan converts with a mask; NaN pixels read back as NaN",
+    "after_fix": "OK",
+    "fix": "--nodata nan",
+    "minutes": "2",
+    "fix_records": [
+      "fix"
+    ]
+  },
+  "gee-multiband-dates": {
+    "first_run": "UNACTIONABLE",
+    "first_message": "no date in the file name; CRS has no EPSG code (the dates are in the 23 band descriptions, which the message never mentions; the fixes it names do not apply)",
+    "chain": "after splitting to one file per date, warping to EPSG:4326 and --date-pattern the store converts and matches",
+    "after_fix": "OK",
+    "fix": "gdal_translate -b N for 23 bands into files with the date in the name, gdalwarp to EPSG:4326, --date-pattern \"ndvi_%Y_%m_%d\"",
+    "minutes": "40",
+    "fix_records": [
+      "fix"
+    ]
+  },
+  "gee-tiled-per-date": {
+    "first_run": "UNACTIONABLE",
+    "first_message": "has the same date 2020-01-01 as ... a store has one timestep per time; fix: leave one out (narrow the glob) ...; plus CRS has no EPSG code",
+    "chain": "'leave one out' would silently drop 3 of 4 tiles of every date; the real fix is mosaicking each date, then warping and --date-pattern",
+    "after_fix": "OK",
+    "fix": "gdal_merge.py (or gdalbuildvrt) per date, gdalwarp to EPSG:4326, --date-pattern \"ndvi_%Y_%m_%d\"",
+    "minutes": "40",
+    "fix_records": [
+      "fix"
+    ]
+  },
+  "hls-s30-julian": {
+    "first_run": "UNACTIONABLE",
+    "first_message": "12 problems: no date in the file name (2020061T155151, 10 files; manifest named) and 'the CRS has no EPSG code ... Pass --crs EPSG:xxxxx' for 2 of 10 files",
+    "chain": "--date-pattern with %j is refused ('%j' is not supported or repeated) and that message does not mention the manifest; --crs EPSG:32617 on a manifest does not clear the 2 CRS refusals (their CRS is named 'UTM Zone 17, Northern Hemisphere' on an unknown datum); re-tagging those 2 files and a manifest from the day of year converts",
+    "after_fix": "OK",
+    "fix": "gdal_edit.py -a_srs EPSG:32617 on the 2 files; manifest uri,datetime from the day of year",
+    "minutes": "25-30",
+    "fix_records": [
+      "fix"
+    ]
+  },
+  "oisst-psl-daily": {
+    "first_run": "UNACTIONABLE",
+    "first_message": "found the following matches with the input file in xarray's IO backends: ['netcdf4', 'h5netcdf']. But their dependencies may not be installed, see: <xarray docs urls> (no mention of chronozarr[netcdf])",
+    "chain": "with the extra: 'does not declare a CRS; pass --crs EPSG:xxxxx' (named, works); the store then converts but is WRONG: x runs 280..360 in EPSG:4326; wrapping longitudes to -180..180 first gives OK",
+    "after_fix": "OK",
+    "fix": "install chronozarr[netcdf]; --crs EPSG:4326; ds.assign_coords(lon=((ds.lon+180)%360)-180).sortby('lon') and save",
+    "minutes": "30",
+    "fix_records": [
+      "step1",
+      "fix",
+      "fix2"
+    ]
+  },
+  "oisst-ncei-daily-files": {
+    "first_run": "UNACTIONABLE",
+    "first_message": "NetCDF file .../raw/**/*.nc does not exist (a glob or folder of NetCDF files is not a source; nothing says so)",
+    "chain": "one daily file: 'sst has dims [time, zlev, lat, lon]; expected time, y, x and optionally a band dimension (name it with --dims band=NAME)' gives a 1-step store with a band named 0.0; the usable route is to concatenate the 60 files, squeeze zlev, install the extra, pass --crs, wrap longitudes",
+    "after_fix": "OK",
+    "fix": "xarray open_mfdataset(combine='nested', concat_dim='time') to one file, squeeze zlev, install chronozarr[netcdf], --crs EPSG:4326, wrap longitudes to -180..180",
+    "minutes": "45",
+    "fix_records": [
+      "step1",
+      "fix",
+      "fix2"
+    ]
+  },
+  "cmip6-hadgem3-360day-nc": {
+    "first_run": "UNACTIONABLE",
+    "first_message": "found the following matches with the input file in xarray's IO backends: ['netcdf4', 'h5netcdf']. But their dependencies may not be installed (same text as oisst-psl-daily)",
+    "chain": "extras: unable to decode time units 'days since 1850-01-01' with calendar '360_day' ... installing cftime (named); with cftime: 'the time coordinate 'time' is object, not datetimes; decode it (CF units) or convert it to datetime64' (not applicable from the CLI); a CRS and the 0..360 longitudes are the other two steps; converting the calendar to standard keeps all 780 Y-M-D labels",
+    "after_fix": "OK",
+    "fix": "install chronozarr[netcdf] and cftime; ds.convert_calendar('standard', align_on='date'); wrap longitudes; --crs EPSG:4326",
+    "minutes": "60-75",
+    "fix_records": [
+      "fix",
+      "fix2",
+      "fix3"
+    ]
+  },
+  "cmip6-cesm2-noleap-zarr": {
+    "first_run": "ACTIONABLE",
+    "first_message": "unable to decode time units 'days since 0001-01-01' with \"calendar 'noleap'\". Try opening your dataset with decode_times=False or installing cftime",
+    "chain": "installing cftime clears it and the next refusal is 'the time coordinate 'time' is object, not datetimes; decode it (CF units) or convert it to datetime64' (UNACTIONABLE from the CLI); then --crs and the 0..360 longitudes",
+    "after_fix": "OK",
+    "fix": "install cftime; ds.convert_calendar('standard', align_on='date'); wrap longitudes; --crs EPSG:4326",
+    "minutes": "45-60",
+    "fix_records": [
+      "fix",
+      "fix2",
+      "fix3"
+    ]
+  },
+  "era5-fiji-antimeridian-nc": {
+    "first_run": "UNACTIONABLE",
+    "first_message": "found the following matches with the input file in xarray's IO backends: ['netcdf4', 'h5netcdf']. But their dependencies may not be installed (same text)",
+    "chain": "with the extra: does not declare a CRS; pass --crs EPSG:4326 (works); the store is WRONG: x runs 165..195 through 180 in EPSG:4326. Wrapping to -180..180 would split Fiji in two; warping each step to a Pacific-centred CRS (EPSG:3832) and converting the GeoTIFF series gives OK",
+    "after_fix": "OK",
+    "fix": "install chronozarr[netcdf] to read it at all; for a store that is not wrong, warp each of 80 steps to EPSG:3832 GeoTIFFs and use --date-pattern \"era5_t2m_%Y%m%d_%H%M\" --nodata nan",
+    "minutes": "60",
+    "fix_records": [
+      "step1",
+      "fix",
+      "fix2"
+    ]
+  },
+  "daymet-lcc-nc": {
+    "first_run": "UNACTIONABLE",
+    "first_message": "found the following matches with the input file in xarray's IO backends: ['netcdf4', 'h5netcdf']. But their dependencies may not be installed (same text)",
+    "chain": "with the extra: 'does not declare a CRS; pass --crs EPSG:xxxxx' although the file carries a lambert_conformal_conic grid mapping; Daymet's Lambert has no EPSG code, so the named fix has no right answer (a guessed code such as EPSG:5070 passes the dry run and would place the data wrongly); the fix is to warp each day to EPSG:4326, then --date-pattern and --nodata nan",
+    "after_fix": "OK",
+    "fix": "install chronozarr[netcdf]; warp 365 days to EPSG:4326 GeoTIFFs named by date; --date-pattern \"daymet_tmax_%Y%m%d\" --nodata nan",
+    "minutes": "60",
+    "fix_records": [
+      "step1",
+      "fix"
+    ]
+  },
+  "hrrr-t2m-grib2": {
+    "first_run": "UNACTIONABLE",
+    "first_message": "no GeoTIFF files (.tif, .tiff) found matching '.../raw/**/*.grib2' (GRIB2 is not mentioned)",
+    "chain": "after gdal_translate to GeoTIFF: 'the CRS has no EPSG code' (HRRR Lambert), after warping to EPSG:4326: 'sources are float64; chronozarr stores hold [uint8, uint16, int16, float32]  fix: convert the sources first (for example with gdal_translate -ot)' (named, works); then OK; GDAL's GRIB driver reports temperature in degrees C",
+    "after_fix": "OK",
+    "fix": "gdal_translate to GeoTIFF, gdalwarp -t_srs EPSG:4326 -ot Float32 (12 files), --date-pattern \"hrrr_t2m_%Y%m%d\"",
+    "minutes": "45",
+    "fix_records": [
+      "fix",
+      "fix2"
+    ]
+  },
+  "smap-l3-hdf5": {
+    "first_run": "UNACTIONABLE",
+    "first_message": "no GeoTIFF files (.tif, .tiff) found in .../raw; passing one .h5 with --variable gives 'No group found in store ... at path' (a Zarr-flavoured error for an HDF5 file)",
+    "chain": "not fixed: the EASE-Grid 2.0 georeferencing is in lat/lon arrays and file metadata, not a GeoTIFF CRS; a newcomer would have to write the GeoTIFFs by hand with the EASE-Grid 2.0 parameters",
+    "after_fix": "NOT VERIFIED",
+    "fix": "write one GeoTIFF per day from Soil_Moisture_Retrieval_Data_AM/soil_moisture with EASE-Grid 2.0 global (EPSG:6933) geotransform, date in the name",
+    "minutes": "90 or more (estimate, unverified)",
+    "fix_records": []
+  }
+}
