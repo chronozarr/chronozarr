@@ -1,0 +1,51 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tasks", "share_link", "chosen_date", "chosen_place", "pixel_result", "debrief"],
+  "properties": {
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["task", "status", "start_utc", "end_utc", "pages_read", "errors", "uncertain_moments"],
+        "properties": {
+          "task": {"type": "integer"},
+          "status": {"type": "string", "enum": ["done", "gave_up"]},
+          "start_utc": {"type": "string"},
+          "end_utc": {"type": "string"},
+          "pages_read": {"type": "array", "items": {"type": "string"}},
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["message", "what_i_did_next"],
+              "properties": {
+                "message": {"type": "string"},
+                "what_i_did_next": {"type": "string"}
+              }
+            }
+          },
+          "uncertain_moments": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "share_link": {"type": ["string", "null"]},
+    "chosen_date": {"type": ["string", "null"]},
+    "chosen_place": {"type": ["string", "null"]},
+    "pixel_result": {"type": ["string", "null"]},
+    "debrief": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected", "longest_step", "lost_moment", "would_use", "what_would_stop_me"],
+      "properties": {
+        "expected": {"type": "string"},
+        "longest_step": {"type": "string"},
+        "lost_moment": {"type": "string"},
+        "would_use": {"type": "string"},
+        "what_would_stop_me": {"type": "string"}
+      }
+    }
+  }
+}

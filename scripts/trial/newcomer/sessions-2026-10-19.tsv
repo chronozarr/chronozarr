@@ -1,0 +1,10 @@
+1	ubuntu	worldclim-tmax-monthly/raw	climate scientist studying temperature extremes	24 monthly maximum temperature GeoTIFFs from WorldClim 2.1 for 2020 and 2021, global at 10 arc-minutes, unzipped from the download.
+2	conda	nsidc-seaice-s-monthly/raw	sea ice scientist	5 monthly Antarctic sea ice concentration GeoTIFFs from the NSIDC Sea Ice Index, January to May 2020, in the month folders the NSIDC server uses.
+3	ubuntu	prism-daily-bil-zip/raw/zips	agricultural hydrologist working in the United States	46 daily PRISM 4 km precipitation downloads for the contiguous US, 1 January to 14 February 2020, one zip per day as the PRISM website delivers them.
+4	conda	modis-13a1-pc-cog-julian/raw	ecologist studying vegetation phenology	23 MODIS MOD13A1 16-day NDVI GeoTIFFs for 2020, tile h12v04, downloaded from Microsoft Planetary Computer with their original file names.
+5	ubuntu	landsat-ndvi-derived-nan/raw	remote sensing scientist studying urban vegetation	10 NDVI GeoTIFFs you computed yourself from Landsat 8 scenes over Raleigh, North Carolina in 2020, one per scene date, with clouds set to NaN.
+6	conda	gee-multiband-dates/raw	ecologist	one GeoTIFF you exported from Google Earth Engine with toBands(): 23 bands, one per 16-day MODIS NDVI composite of 2020.
+7	ubuntu	oisst-psl-daily/raw	physical oceanographer	one NetCDF file of NOAA OISST v2.1 daily sea surface temperature for 2020 from NOAA PSL, cut to the North Atlantic.
+8	conda	cmip6-hadgem3-360day-nc/raw	climate modeller	one CMIP6 NetCDF file of monthly near-surface air temperature (tas) from the HadGEM3-GC31-LL historical run, 1950 to 2014.
+9	ubuntu	era5-fiji-antimeridian-nc/raw	atmospheric scientist working on tropical cyclones in the South Pacific	one ERA5 NetCDF file from the Copernicus Climate Data Store: 6-hourly 2 m temperature and total precipitation over Fiji, 1 to 20 January 2020.
+10	conda	daymet-lcc-nc/raw	agronomist	one Daymet v4 NetCDF file of daily maximum temperature for 2020 over a 200 km box in Kansas, as ORNL delivers it.
