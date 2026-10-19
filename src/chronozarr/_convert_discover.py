@@ -14,7 +14,7 @@ import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +35,9 @@ _YEARS = range(1900, 2101)
 _DAY = re.compile(r"(?<!\d)(\d{4})([-_]?)(\d{2})\2(\d{2})(?!\d)")
 _MONTH = re.compile(r"(?<!\d)(\d{4})[-_](\d{2})(?!\d)")
 
+# A time of day after a date, as HLS names its files ('2020061T155151').
+_TIME_OF_DAY = re.compile(r"T\d{6}(?!\d)")
+
 _DIRECTIVES = {
     "Y": r"(?P<Y>\d{4})",
     "m": r"(?P<m>\d{2})",
@@ -42,6 +45,7 @@ _DIRECTIVES = {
     "H": r"(?P<H>\d{2})",
     "M": r"(?P<M>\d{2})",
     "S": r"(?P<S>\d{2})",
+    "j": r"(?P<j>\d{3})",
 }
 
 DATE_HELP = (
@@ -188,8 +192,23 @@ def _moment(year: int, month: int, day: int, hour: int, minute: int, second: int
     return np.datetime64(datetime(year, month, day, hour, minute, second), "ms")
 
 
+def _month_and_day(year: int, day_of_year: int) -> tuple[int, int]:
+    """The month and day of `day_of_year` (1-366) in `year`; ValueError when the year has no such
+    day. `strptime` is not used: it wraps day 366 of a common year into January of the next."""
+    if not 1 <= day_of_year <= 366:
+        raise ValueError(f"day of year {day_of_year} is outside 1..366")
+    day = date(year, 1, 1) + timedelta(days=day_of_year - 1)
+    if day.year != year:
+        raise ValueError(f"{year} has no day {day_of_year}")
+    return day.month, day.day
+
+
 def _compile_pattern(date_pattern: str) -> re.Pattern[str]:
-    """A strptime-like `date_pattern` (%Y %m %d %H %M %S, %% for a percent sign) as a regex."""
+    """A strptime-like `date_pattern` as a regex.
+
+    Directives: %Y %m %d %H %M %S once each, %j (day of year) with %Y instead of %m and %d, and %%
+    for a percent sign.
+    """
     parts: list[str] = []
     seen: set[str] = set()
     i = 0
@@ -208,11 +227,16 @@ def _compile_pattern(date_pattern: str) -> re.Pattern[str]:
         else:
             raise ValueError(
                 f"--date-pattern '{date_pattern}': '%{directive}' is not supported or repeated; "
-                "use %Y %m %d %H %M %S once each (for example '%Y%m%d' or 'ndvi_%Y-%m')"
+                "use %Y %m %d %j %H %M %S once each (for example '%Y%m%d', '%Y%j' or 'ndvi_%Y-%m')"
             )
         i += 2
-    if not {"Y", "m"} <= seen:
-        raise ValueError(f"--date-pattern '{date_pattern}' needs at least %Y and %m")
+    if "j" in seen and seen & {"m", "d"}:
+        raise ValueError(
+            f"--date-pattern '{date_pattern}': %j (day of year) cannot be combined with %m or %d; "
+            "use %Y%j for a day of year, or %Y%m%d for a month and day"
+        )
+    if not ({"Y", "m"} <= seen or {"Y", "j"} <= seen):
+        raise ValueError(f"--date-pattern '{date_pattern}' needs at least %Y and %m, or %Y and %j")
     head = r"(?<!\d)" if date_pattern.startswith("%") and date_pattern[1:2] in _DIRECTIVES else ""
     tail = r"(?!\d)" if date_pattern.endswith(tuple(f"%{d}" for d in _DIRECTIVES)) else ""
     return re.compile(head + "".join(parts) + tail)
@@ -226,7 +250,7 @@ def find_dates(
 
     Without `pattern`: YYYYMMDD, YYYY-MM-DD, YYYY_MM_DD (day) and YYYY-MM, YYYY_MM (first of the
     month); numbers that are no calendar date are not dates. With `pattern`: what it matches, and a
-    match that is no calendar date is reported as invalid.
+    match that is no calendar date (or no such day of year) is reported as invalid.
     """
     found: dict[np.datetime64, str] = {}
     invalid: list[str] = []
@@ -234,10 +258,14 @@ def find_dates(
         for match in pattern.finditer(stem):
             fields = {k: int(v) for k, v in match.groupdict().items()}
             try:
+                if "j" in fields:
+                    month, day_of_month = _month_and_day(fields["Y"], fields["j"])
+                else:
+                    month, day_of_month = fields["m"], fields.get("d", 1)
                 moment = _moment(
                     fields["Y"],
-                    fields["m"],
-                    fields.get("d", 1),
+                    month,
+                    day_of_month,
                     fields.get("H", 0),
                     fields.get("M", 0),
                     fields.get("S", 0),
@@ -265,6 +293,40 @@ def find_dates(
             continue
         found.setdefault(moment, match.group(0))
     return found, invalid
+
+
+def year_and_day_of_year_help(stem: str) -> str | None:
+    """The fix for a name that holds one year and day of year, such as 'MOD13A1.A2020001.h12v04',
+    or None.
+
+    The default rules do not read YYYYDDD: it cannot be told from any other seven digits. This
+    suggests the `--date-pattern` that does: the text before the date, `%Y%j`, and `T%H%M%S` when
+    a time of day follows. The pattern is run on the name first, so it is only suggested when it
+    reads exactly one date. A name with two different candidates is not guessed at.
+    """
+    bare = _compile_pattern("%Y%j")
+    candidates, _ = find_dates(stem, bare)
+    if len(candidates) != 1:
+        return None
+    ((_, digits),) = candidates.items()
+    match = next(m for m in bare.finditer(stem) if m.group(0) == digits)
+    prefix = stem[: match.start()].replace("%", "%%")
+    clock = _TIME_OF_DAY.match(stem, match.end())
+    attempts = [("%Y%j", digits)]
+    if clock is not None:
+        attempts.insert(0, ("%Y%jT%H%M%S", digits + clock.group(0)))
+    for directives, token in attempts:
+        pattern = prefix + directives
+        dates, invalid = find_dates(stem, _compile_pattern(pattern))
+        if invalid or len(dates) != 1:
+            continue
+        (moment,) = dates
+        quoted = "'" + pattern.replace("'", "'\\''") + "'"
+        return (
+            f"the name has a year and day of year, '{token}' ({show_time(moment)}): pass "
+            f"--date-pattern {quoted} to read it. Otherwise {DATE_HELP}"
+        )
+    return None
 
 
 def show_time(moment: np.datetime64) -> str:
@@ -316,7 +378,8 @@ def discover(spec: str, date_pattern: str | None = None) -> Discovery:
         elif not found:
             undated.append(uri)
             if date_pattern is None:
-                problems.append(Problem(uri, "no date in the file name", DATE_HELP))
+                fix = year_and_day_of_year_help(_file_name_stem(uri)) or DATE_HELP
+                problems.append(Problem(uri, "no date in the file name", fix))
             else:
                 problems.append(
                     Problem(

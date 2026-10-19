@@ -844,8 +844,9 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     "--date-pattern",
     default=None,
     help="Directory, glob or S3 prefix only: where the date is in each file name, with %Y %m "
-    "%d %H %M %S (for example 'ndvi_%Y%m%d'). Default: YYYYMMDD, YYYY-MM-DD or YYYY-MM, read "
-    "only when a name holds exactly one date.",
+    "%d %H %M %S (for example 'ndvi_%Y%m%d'), or %Y %j for a year and day of year (for example "
+    "'MOD13A1.A%Y%j' or 'HLS.S30.T17SQV.%Y%jT%H%M%S'). Default: YYYYMMDD, YYYY-MM-DD or "
+    "YYYY-MM, read only when a name holds exactly one date.",
 )
 @click.option(
     "--write-manifest",
@@ -902,7 +903,9 @@ def convert_command(
     for subdirectories. S3 prefixes are listed with your AWS credentials and need
     `pip install 'chronozarr[s3]'`. A date is read from a name only when it holds exactly one
     (YYYYMMDD, YYYY-MM-DD or YYYY-MM); otherwise the file is reported and --date-pattern or a
-    manifest says where the date is. --write-manifest saves what was found.
+    manifest says where the date is. MODIS and HLS names carry a year and day of year, which
+    --date-pattern reads with %Y%j (for example 'MOD13A1.A%Y%j'). --write-manifest saves what
+    was found.
 
     Every file is checked before anything is read in bulk: dates, grid and CRS, bands, dtype,
     scale, offset, units and nodata. All problems are reported together, per file, with a
