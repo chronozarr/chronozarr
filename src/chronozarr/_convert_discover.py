@@ -1,4 +1,4 @@
-"""Find a GeoTIFF time series in a directory, glob or S3 prefix and date it from the file names.
+"""Find a raster time series in a directory, glob or S3 prefix and date it from the file names.
 
 Discovery only lists files and reads dates from their names; the converter's own checks (grid,
 bands, scale, offset, nodata) run afterwards on the entries it produces. A name is dated only when
@@ -12,6 +12,7 @@ import glob
 import json
 import os
 import re
+import zipfile
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -27,6 +28,27 @@ from chronozarr._convert_xarray import NETCDF_SUFFIXES
 from chronozarr._install import extra_hint
 
 TIFF_SUFFIXES = (".tif", ".tiff")
+# Files GDAL reads as a raster, which a directory, glob or S3 prefix is searched for. The sidecars
+# that go with them (.hdr, .prj, .aux.xml, .stx, .xml, .txt, .csv) are not rasters, and NetCDF has
+# its own route (a single .nc file with --variable), so none of these is listed.
+RASTER_SUFFIXES = (
+    *TIFF_SUFFIXES,
+    ".bil",
+    ".flt",
+    ".img",
+    ".asc",
+    ".grib",
+    ".grib2",
+    ".grb",
+    ".grb2",
+    ".hdf",
+    ".h5",
+    ".hdf5",
+    ".he5",
+    ".jp2",
+    ".vrt",
+)
+ZIP_SUFFIX = ".zip"  # a local zip that holds one raster is a source too
 GLOB_CHARS = "*?["
 _ZARR_MARKERS = ("zarr.json", ".zgroup", ".zarray", ".zmetadata")
 _YEARS = range(1900, 2101)
@@ -58,8 +80,9 @@ DATE_HELP = (
 
 
 def is_discovery_source(text: str) -> bool:
-    """Whether `text` names GeoTIFFs to discover: an s3:// prefix, a glob, a directory that is not
-    a Zarr store, or a single .tif file. Manifests, NetCDF files, Zarr stores and URLs are not."""
+    """Whether `text` names rasters to discover: an s3:// prefix, a glob, a directory that is not
+    a Zarr store, or a single raster or zip file. Manifests, NetCDF files, Zarr stores and URLs
+    are not."""
     lowered = text.lower()
     if lowered.endswith((".csv", ".json", ".zarr", *NETCDF_SUFFIXES)):
         return False
@@ -71,15 +94,16 @@ def is_discovery_source(text: str) -> bool:
     if path.is_dir():
         return not any((path / marker).exists() for marker in _ZARR_MARKERS)
     if path.is_file():
-        return lowered.endswith(TIFF_SUFFIXES)
+        return lowered.endswith((*RASTER_SUFFIXES, ZIP_SUFFIX))
     return any(ch in text for ch in GLOB_CHARS)
 
 
 # --- listing ------------------------------------------------------------------------------------
 
 
-def list_tiffs(spec: str) -> list[str]:
-    """The .tif/.tiff files of `spec`: sorted absolute paths, or s3:// URIs for an S3 prefix.
+def list_rasters(spec: str) -> list[str]:
+    """The raster files of `spec` (`RASTER_SUFFIXES`, and local `.zip` files): sorted absolute
+    paths, or s3:// URIs for an S3 prefix.
 
     `spec` is a directory (not searched recursively), a glob (`dir/**/*.tif` recurses), an S3
     prefix `s3://bucket/path/` (not recursive) or one file. Raises ValueError when nothing is
@@ -103,14 +127,22 @@ def _list_local(spec: str) -> list[str]:
         where = f"matching '{spec}'"
     else:
         raise ValueError(f"{spec} does not exist")
-    tiffs = sorted(str(p.resolve()) for p in found if p.suffix.lower() in TIFF_SUFFIXES)
-    if not tiffs:
+    rasters = sorted(
+        str(p.resolve()) for p in found if p.suffix.lower() in (*RASTER_SUFFIXES, ZIP_SUFFIX)
+    )
+    if not rasters:
         raise ValueError(
-            f"no GeoTIFF files (.tif, .tiff) found {where}. Check the path; quote a glob so the "
-            "shell does not expand it; a directory is not searched recursively (use "
-            "'dir/**/*.tif' for subdirectories)"
+            f"no raster files found {where}. Looked for "
+            f"{_suffix_list((*RASTER_SUFFIXES, ZIP_SUFFIX))} files. Check the path; quote a glob "
+            "so the shell does not expand it; a directory is not searched recursively (use "
+            "'dir/**/*.tif' for subdirectories). Files with another extension can be listed in a "
+            "manifest"
         )
-    return tiffs
+    return rasters
+
+
+def _suffix_list(suffixes: Sequence[str]) -> str:
+    return f"{', '.join(suffixes[:-1])} and {suffixes[-1]}"
 
 
 def _list_s3(spec: str) -> list[str]:
@@ -122,20 +154,21 @@ def _list_s3(spec: str) -> list[str]:
             f"'{spec}': an S3 source is a prefix such as s3://bucket/path/, not a glob. Name the "
             "prefix that holds the files, or write a manifest of s3:// URIs"
         )
-    if key.lower().endswith(TIFF_SUFFIXES):
+    if key.lower().endswith(RASTER_SUFFIXES):
         return [spec]
     prefix = key if not key or key.endswith("/") else f"{key}/"
-    tiffs = sorted(
+    rasters = sorted(
         f"s3://{bucket}/{k}"
         for k in _list_s3_keys(bucket, prefix)
-        if k.lower().endswith(TIFF_SUFFIXES)
+        if k.lower().endswith(RASTER_SUFFIXES)
     )
-    if not tiffs:
+    if not rasters:
         raise ValueError(
-            f"no GeoTIFF files (.tif, .tiff) found under s3://{bucket}/{prefix}. Check the "
-            "bucket and prefix (a prefix is not searched recursively)"
+            f"no raster files found under s3://{bucket}/{prefix}. Looked for "
+            f"{_suffix_list(RASTER_SUFFIXES)} files (zips are read from local folders only). "
+            "Check the bucket and prefix (a prefix is not searched recursively)"
         )
-    return tiffs
+    return rasters
 
 
 def _list_s3_keys(bucket: str, prefix: str) -> list[str]:
@@ -181,6 +214,47 @@ def _list_s3_keys(bucket: str, prefix: str) -> list[str]:
         ) from exc
     except BotoCoreError as exc:
         raise ValueError(f"cannot list {where}: {exc}") from exc
+
+
+# --- zips -----------------------------------------------------------------------------------
+
+
+def zip_raster(path: str) -> str:
+    """The member of the local zip `path` that is a raster, when the zip holds exactly one.
+
+    Its sidecars (.hdr, .prj, .aux.xml, ...) are not rasters, so a zip of one BIL file and its
+    sidecars is one raster. Raises ValueError, in words for a person, when `path` is not a
+    readable local zip or holds no raster or several.
+    """
+    if "://" in path:
+        raise ValueError(
+            "a zip is read from a local folder only; download and unzip it, then convert the "
+            "folder"
+        )
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = [n for n in archive.namelist() if not n.endswith("/")]
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise ValueError(f"not a readable zip file ({exc})") from exc
+    # macOS adds `__MACOSX/._name` resource forks next to every file it zips
+    names = [
+        n for n in names if not n.startswith("__MACOSX/") and not Path(n).name.startswith("._")
+    ]
+    rasters = [n for n in names if n.lower().endswith(RASTER_SUFFIXES)]
+    if not rasters:
+        raise ValueError(
+            f"the zip holds no raster ({len(names)} file{'s' if len(names) != 1 else ''}, none "
+            f"ending in {_suffix_list(RASTER_SUFFIXES)})"
+        )
+    if len(rasters) > 1:
+        shown = ", ".join(rasters[:4]) + (
+            f" and {len(rasters) - 4} more" if len(rasters) > 4 else ""
+        )
+        raise ValueError(
+            f"the zip holds {len(rasters)} rasters ({shown}); chronozarr reads a zip that holds "
+            "exactly one. Unzip it and convert the folder"
+        )
+    return rasters[0]
 
 
 # --- dates in file names --------------------------------------------------------------------
@@ -360,7 +434,7 @@ def _file_name_stem(uri: str) -> str:
 
 @dataclass(frozen=True)
 class Discovery:
-    """GeoTIFFs found by `discover`, dated from their names.
+    """Rasters found by `discover`, dated from their names.
 
     `entries` are the files with exactly one date, by time (two files may share one: those are in
     `problems`). `undated` have no date or several. `problems` are the date findings of every
@@ -372,19 +446,35 @@ class Discovery:
     problems: list[Problem]
 
 
-def discover(spec: str, date_pattern: str | None = None) -> Discovery:
-    """List the GeoTIFFs of `spec` and read a date from each file name.
+def _dates_in_zipped_raster(
+    uri: str, pattern: re.Pattern[str] | None
+) -> tuple[dict[np.datetime64, str], list[str]]:
+    """`find_dates` on the name of the raster inside the zip `uri`; nothing when the zip does not
+    hold exactly one (opening the zip reports that)."""
+    try:
+        member = zip_raster(uri)
+    except ValueError:
+        return {}, []
+    return find_dates(_file_name_stem(member), pattern)
 
-    Raises ValueError when nothing is found, the location cannot be listed or `date_pattern` is
-    malformed. Date problems are returned, not raised, so they can be reported together with the
-    problems the converter finds in the files themselves.
+
+def discover(spec: str, date_pattern: str | None = None) -> Discovery:
+    """List the rasters of `spec` and read a date from each file name.
+
+    A zip is dated from its own name, or from the name of the raster inside it when its own holds
+    no date. Raises ValueError when nothing is found, the location cannot be listed or
+    `date_pattern` is malformed. Date problems are returned, not raised, so they can be reported
+    together with the problems the converter finds in the files themselves.
     """
     pattern = None if date_pattern is None else _compile_pattern(date_pattern)
     dated: list[Entry] = []
     undated: list[str] = []
     problems: list[Problem] = []
-    for uri in list_tiffs(spec):
+    for uri in list_rasters(spec):
+        zipped = uri.lower().endswith(ZIP_SUFFIX)
         found, invalid = find_dates(_file_name_stem(uri), pattern)
+        if zipped and not found and not invalid:
+            found, invalid = _dates_in_zipped_raster(uri, pattern)
         if invalid:
             undated.append(uri)
             problems.append(
@@ -399,7 +489,10 @@ def discover(spec: str, date_pattern: str | None = None) -> Discovery:
             undated.append(uri)
             if date_pattern is None:
                 fix = year_and_day_of_year_help(_file_name_stem(uri)) or DATE_HELP
-                problems.append(Problem(uri, "no date in the file name", fix))
+                what = (
+                    "the name of the zip or of the raster inside it" if zipped else "the file name"
+                )
+                problems.append(Problem(uri, f"no date in {what}", fix))
             else:
                 problems.append(
                     Problem(

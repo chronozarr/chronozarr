@@ -8,18 +8,26 @@ the unit of `resume`: an interrupted run keeps them, and a rerun reads only the 
 
 Four input kinds are recognised from SOURCE:
 
-* a manifest (`.csv` or `.json`) of COG or image-frame (PNG) URIs with timestamps, one URI per
-  timestep;
-* a directory, a glob or an S3 prefix of GeoTIFFs, listed and dated from their file names (the
+* a manifest (`.csv` or `.json`) of COG, raster or image-frame (PNG) URIs with timestamps, one URI
+  per timestep;
+* a directory, a glob or an S3 prefix of rasters, listed and dated from their file names (the
   manifest, written for you);
 * a Zarr store (local path or http(s) URL) with a chosen variable;
 * a NetCDF file (`.nc`, `.nc4`, `.cdf`) with a chosen variable (needs an xarray NetCDF engine).
 
 Needs rasterio (`chronozarr[geo]`) for COG manifests and for the CRS handling of all kinds.
 
-Discovered GeoTIFFs. A directory, a glob (`dir/**/*.tif` recurses) or an S3 prefix
+Discovered rasters. A directory, a glob (`dir/**/*.tif` recurses) or an S3 prefix
 (`s3://bucket/path/`, listed with the AWS credential chain and boto3, `chronozarr[s3]`) is not
-searched recursively unless a glob says so, and only `.tif` and `.tiff` files count. A file is
+searched recursively unless a glob says so. Every file that GDAL reads through rasterio and has an
+extension in `RASTER_SUFFIXES` counts: GeoTIFF, BIL and FLT (with their `.hdr`), ASCII grids,
+Erdas Imagine, GRIB, HDF5 and HDF-EOS5, JPEG 2000 and VRT. Their sidecars (`.hdr`, `.prj`,
+`.aux.xml`, `.stx`, `.xml`, `.txt`, `.csv`) are read by GDAL and never listed as sources. A local
+`.zip` that holds exactly one raster, with its sidecars, is a source read in place through
+`/vsizip/`, dated from the zip's name or else from the raster's. A file that holds subdatasets and
+no band (HDF5, HDF-EOS5) needs `--variable`, which picks one, and a file without georeferencing
+needs `--crs` and `--bounds`. HDF4 is read only by a GDAL that has the HDF4 driver, which the
+rasterio wheel lacks. NetCDF stays on its own route above. A file is
 dated from its name only when the name holds exactly one date: YYYYMMDD, YYYY-MM-DD or YYYY_MM_DD
 (a day), YYYY-MM or YYYY_MM (the first of the month). A bare six-digit YYYYMM is not read because
 it cannot be told from YYMMDD. `date_pattern` (`--date-pattern`, strptime-like with `%Y %m %d %H
@@ -149,14 +157,15 @@ from chronozarr._convert_cog import (
     _tolerate_unlocated_frames,
 )
 from chronozarr._convert_discover import (
-    Discovery as Discovery,
-)
-from chronozarr._convert_discover import (
+    TIFF_SUFFIXES,
     check_manifest_target,
     discover,
     is_discovery_source,
     show_time,
     write_manifest,
+)
+from chronozarr._convert_discover import (
+    Discovery as Discovery,
 )
 from chronozarr._convert_manifest import (
     Entry as Entry,
@@ -382,14 +391,13 @@ def plan_conversion(
     discovered = not is_manifest and is_discovery_source(text)
     if date_pattern is not None and not discovered:
         raise ValueError(
-            f"--date-pattern applies to a directory, glob or S3 prefix of GeoTIFFs, not to {text}"
+            f"--date-pattern applies to a directory, glob or S3 prefix of rasters, not to {text}"
         )
     source: Source
     if is_manifest or discovered:
-        if variable is not None or dims is not None or mask_var is not None:
+        if dims is not None or mask_var is not None:
             raise ValueError(
-                "--variable, --dims and --mask-var apply to Zarr and NetCDF input, not "
-                "manifests or GeoTIFFs"
+                "--dims and --mask-var apply to Zarr and NetCDF input, not manifests or rasters"
             )
         manifest_bounds: Bounds | None = None
         if is_manifest:
@@ -427,10 +435,12 @@ def plan_conversion(
             nodata=nodata,
             chunk_size=chunk_size,
             bounds=frame_bounds,
+            variable=variable,
         )
         if discovered and source.kind == CogManifestSource.kind:
             # The plan's first line names what the user gave: files found by name, not a manifest.
-            source.kind = "dated GeoTIFFs"
+            tiffs_only = all(e.uri.lower().endswith(TIFF_SUFFIXES) for e in entries)
+            source.kind = "dated GeoTIFFs" if tiffs_only else "dated rasters"
     else:
         from chronozarr._convert_legacy import LegacySource, legacy_metadata
 
@@ -686,14 +696,14 @@ def convert(
 ) -> ConvertReport:
     """Convert `source` into a chronozarr store at `out` without holding the whole stack.
 
-    `source` is a manifest (`.csv`/`.json`), a directory, glob or S3 prefix of GeoTIFFs, a Zarr
+    `source` is a manifest (`.csv`/`.json`), a directory, glob or S3 prefix of rasters, a Zarr
     store (path or URL) or a NetCDF file; see the module docstring. The grid comes from the first
     source (manifests, GeoTIFFs) or the x/y coordinates (Zarr, NetCDF) unless `crs`, `transform`
     and `shape` override it for a manifest, in which case sources off the grid are warped with the
     explicit `resampling`.
 
-    A directory, glob or S3 prefix of GeoTIFFs is listed and each file dated from its name, like
-    a manifest of those files (module docstring, "Discovered GeoTIFFs"). `date_pattern` is a
+    A directory, glob or S3 prefix of rasters is listed and each file dated from its name, like
+    a manifest of those files (module docstring, "Discovered rasters"). `date_pattern` is a
     strptime-like pattern (`%Y %m %d %H %M %S`, or `%Y%j` for a day of year) that says where the
     date is; `write_manifest_to`
     writes the files and dates found as a `.csv` or `.json` manifest (`convert` reads it back),
@@ -711,7 +721,9 @@ def convert(
     `nodata` is "auto" (what the sources declare; none declared means no nodata, not 0), a
     number that replaces the declared nodata, None (no nodata) or NaN (float data: NaN pixels are
     invalid, through a mask). `mask_var` names a boolean or integer (time, y, x) variable of a
-    Zarr or NetCDF source whose nonzero values are valid; the store then gets a mask.
+    Zarr or NetCDF source whose nonzero values are valid; the store then gets a mask. `variable`
+    names the Zarr or NetCDF variable, or for rasters the subdataset to read from files that hold
+    several (HDF5, HDF-EOS5).
 
     `band_roles` maps band names of the source to a STAC common name (`{"B04": "red"}`; "none"
     clears one) and writes it as the band's `common_name` (see `chronozarr.bands`). An unknown
@@ -730,7 +742,7 @@ def convert(
         if not is_discovery_source(str(source)):
             raise ValueError(
                 "--write-manifest exports the files found in a directory, glob or S3 prefix; "
-                "this source is already a manifest or is not a set of GeoTIFFs"
+                "this source is already a manifest or is not a set of rasters"
             )
     out_path = Path(out)
     if not dry_run and out_path.exists() and any(out_path.iterdir()):
