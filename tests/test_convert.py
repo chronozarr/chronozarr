@@ -384,6 +384,55 @@ def test_declared_nodata_that_differs_between_sources_is_a_plan_note(tmp_path, t
     assert not any(line.startswith("nodata:") for line in explicit.lines())
 
 
+def grid_plan(tmp_path, truth, transform, crs):
+    """The plan for three tiny GeoTIFFs on one grid, read from headers only."""
+    files = [
+        write_tif(tmp_path / f"g{t}.tif", truth[t], transform=transform, crs=crs) for t in range(3)
+    ]
+    return plan_conversion(write_csv(tmp_path / "m.csv", files, DATES[:3]), sample=False)
+
+
+@pytest.mark.parametrize(
+    ("crs", "transform", "expected"),
+    [
+        ("EPSG:4326", (0.25, 0.0, 280.0, 0.0, -0.25, 60.0), "0.25 degree pixels"),
+        ("EPSG:4269", (0.05, 0.0, -20.0, 0.0, -0.05, 40.0), "0.05 degree pixels"),
+        (
+            "EPSG:2278",
+            (100.0, 0.0, 3000000.0, 0.0, -100.0, 13000000.0),
+            "100 US survey foot pixels",
+        ),
+        ("EPSG:32618", (30.0, 0.0, 500000.0, 0.0, -30.0, 4000000.0), "30 m pixels"),
+    ],
+)
+def test_plan_names_the_unit_of_the_crs(tmp_path, truth, crs, transform, expected):
+    plan = grid_plan(tmp_path, truth, transform, crs)
+    grid = next(line for line in plan.lines() if line.startswith("grid:"))
+    assert f"px, {expected} (transform origin" in grid
+
+
+@pytest.mark.parametrize(
+    ("west", "step", "expected"),
+    [
+        (280.0, 1.0, "x runs 280 to 330 degrees"),  # 0..360 convention (OISST)
+        (165.0, 0.6, "x runs 165 to 195 degrees"),  # across the antimeridian (ERA5)
+        (-210.0, 1.0, "x runs -210 to -160 degrees"),
+    ],
+)
+def test_plan_states_a_longitude_range_beyond_180(tmp_path, truth, west, step, expected):
+    plan = grid_plan(tmp_path, truth, (step, 0.0, west, 0.0, -step, 60.0), "EPSG:4326")
+    notes = [line for line in plan.lines() if line.startswith("longitude:")]
+    assert len(notes) == 1
+    assert expected in notes[0]
+    assert "same convention" in notes[0]
+
+
+@pytest.mark.parametrize(("west", "crs"), [(-100.0, "EPSG:4326"), (500000.0, "EPSG:32618")])
+def test_plan_has_no_longitude_note_inside_180_or_in_a_projected_crs(tmp_path, truth, west, crs):
+    plan = grid_plan(tmp_path, truth, (1.0, 0.0, west, 0.0, -1.0, 60.0), crs)
+    assert not any(line.startswith("longitude:") for line in plan.lines())
+
+
 # --- PNG frames -----------------------------------------------------------------------------
 
 

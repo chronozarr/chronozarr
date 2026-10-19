@@ -17,6 +17,8 @@ This file holds measurements, tested versions, dates and caveats. User docs link
 - [Comparison notes](#comparison-notes)
 - [Live store and publishing](#live-store-and-publishing)
 - [Hosting observations](#hosting-observations)
+- [Newcomer trial (2026-10-12)](#newcomer-trial-2026-10-12)
+- [Newcomer baseline (2026-10-19)](#newcomer-baseline-2026-10-19)
 - [Sentinel-2 ingest performance](#sentinel-2-ingest-performance)
 
 ## Reader checks
@@ -397,7 +399,23 @@ The headers of the files in `js/vendor/` record these versions: zarrita 0.7.5, @
 
 ## Comparison notes
 
-The statements about other tools in [format-comparison.md](format-comparison.md) were read from their documentation and source on 2026-09-30. Two were checked again on 2026-10-09. The `mapbox-gl-js` repository has the directory `src/data/mrt`. The README of zarr-layer states arbitrary CRS support through proj4 and lists the WGS84 UTM zones. The other statements were not checked again.
+The statements about other tools in [format-comparison.md](format-comparison.md) were first read from their documentation and source on 2026-09-30. Two were checked again on 2026-10-09: the `mapbox-gl-js` repository has the directory `src/data/mrt`, and the README of zarr-layer stated arbitrary CRS support through proj4 and listed the WGS84 UTM zones.
+
+On 2026-10-19 the page was checked against each tool's repository and rewritten. This was item 6 of the recommendation in the [GeoZarr review](../spec/review-2026-10-geozarr.md). What was read, from the repository named, at the version given:
+
+| Tool | Version, date | What the page now states, and where it was read |
+|---|---|---|
+| zarr-layer | 0.11.0, 2026-10-02 (the latest GitHub release) | Zarr v2 and v3; `multiscales`, `proj` and `spatial` read with no configuration, legacy ndpyramid pyramids too; selectors on a time dimension and `queryData` over several values (README); custom fragment shaders with an NDVI example (README); 8 and 16 bit integers in integer textures when a custom shader reads the bands, everything else float32, 32-bit integers kept as float because the fill comparison is exact only to 2^24 (`src/band-format.ts`); decoded-chunk cache bounded by count and bytes, 2 MiB times 128 regions per store (`src/decoded-chunk-cache.ts`, `src/region-cache.ts`); GPU mesh reprojection of a native CRS (README); scale and offset only from the array attributes `scale_factor` and `add_offset`, nodata from the array `fill_value` (`src/zarr-store.ts`); `store` option for an Icechunk store (README). Nothing in the source reads a `chronozarr` block or a `mask` array. |
+| topozarr | 0.2.0, 2026-10-13 | Coarsens by 2 per level by default and writes `multiscales`, `proj` and `spatial`; no reprojection, "Reproject first, then call `create_pyramid`" (`docs/tips.md`); CarbonPlan's writer for zarr-layer (README). |
+| ndpyramid | 0.4.0, 2024-11-22 (the latest release) | Written for `@carbonplan/maps`, which needs Web Mercator (topozarr `docs/tips.md`). The `zarr-conventions/multiscales` repository was created on 2025-10-15 and tagged v0.1 on 2026-06-12, so the last release predates it. |
+| titiler-multidim | 0.10.2, 2026-10-14 | TiTiler application for NetCDF and Zarr on `titiler.xarray`; `sel` on a dimension, such as `sel=time=nearest::2020-01-06` (README). |
+| OpenLayers | 10.11.0, 2026-10-04 | `ol/source/GeoZarr` reads `multiscales`, `proj` and `spatial`; `variable` and `dimensions` select from a `(time, band, y, x)` array. The file holds no `scale_factor` or `add_offset` handling; openlayers/openlayers#17649 asks for it and was open on 2026-10-19. |
+| deck.gl-raster | 0.8.1, 2026-09-24 | `deck.gl-zarr` and `geozarr` packages read `spatial`, `multiscales` and `geo-proj`; the caller supplies `getTileData` and `renderTile` (package READMEs). |
+| GDAL | 3.13.0, 2026-05-08; 3.13.3, 2026-08-18 | The Zarr driver documents the multiscales convention as overviews for Zarr v3 ("versionadded 3.13"); `NEWS.md` of 3.13.0 lists read support for `multiscales`, `spatial` and `proj`. |
+| Icechunk | 2.3.0, 2026-10-06 | "Transactional storage engine" for Zarr; the format crate holds snapshots, manifests and transaction logs; the README says reads and writes go through it (README). |
+| GeoZarr | geozarr-spec, no GitHub release; last commit 2026-07-06 | The README says the specification will be produced once mature conventions form a suite. `multiscales`, `proj` and `spatial` each state "Extension Maturity Classification: Pilot" and `v1` before the end of 2026 in their READMEs. Open on 2026-10-19: geozarr-spec #136 (time), #131 (layers and bands), zarr-conventions/spatial #33 (non-spatial coordinates). geozarr-spec #52 on scale and offset was closed on 2025-04-08 with the topic deferred to a second phase. `zarr-conventions/missing_value` is classed Proposal. |
+
+The measured statements in the page (zarr-layer on the same stores, the 12 MB/s link, the bytes fetched, the CRS placement, which readers refuse which stores) are from the review's measurements of 2026-10-18 and 2026-10-19, with its sources of 2026-10-18. The page cites the review for each. The statements about PMTiles, Mapbox raster-array and COG + TiTiler were not read again.
 
 ## Live store and publishing
 
@@ -544,6 +562,120 @@ Simulated by agents that read only the published documentation and the command h
 Values: the level-0 arrays read through `open_zarr`, the xarray backend and `open_store` equal the source GeoTIFFs bit for bit (uint16 and float32 stores), and the stores written on Python 3.11 and 3.13 are byte-identical. A copied viewer link restored the timestep, product, band, display range, zoom and centre in a new browser context.
 
 Problems found, and what changed on main after 0.4.0 (PR #100): a failed `?store=` link showed the demo store with no error (fixed in the viewer); `preview` and `share` printed a traceback for every cancelled read (fixed); `share` showed no address while it waited and cached a failed lookup (fixed); missing-extra messages named `uv sync`, which works only in a checkout (fixed); publish printed public-access advice for any failure (fixed); month names in file names could not be read and the fix pointed to `--date-pattern` (the message now gives the manifest route). Not changed: every command takes about 1.4 s to start, because the package imports xarray and pandas at once.
+
+## Newcomer baseline (2026-10-19)
+
+The baseline that the [colleague trial](colleague-trial.md#analysis) compares against, measured 2026-10-16 to 2026-10-19 with chronozarr 0.4.1 before any change it prompts. No person took part, so the trial's primary endpoint has no value yet. Every package installed for these checks was released at least 7 days earlier; chronozarr 0.4.1 was built from its tag (SHA-256 `e5ec2167…8dd00`, the same file as on PyPI).
+
+### Real data
+
+20 public datasets of the kind a scientist brings, kept as the source delivers them (2.18 GB, `scripts/corpus/manifest.json`), went through what the documentation tells a newcomer to run: `convert INPUT STORE --dry-run`, then `convert`. NetCDF and Zarr runs add `--variable`. 0.4.1 and main gave the same result and the same messages for every dataset.
+
+| First run | Datasets |
+|---|---:|
+| Converted, and the store is correct | 0 |
+| Refused, and the message names a fix that works | 7 |
+| Refused, and the message names no fix that works | 13 |
+| Converted, and the store is wrong | 0 |
+| Traceback or timeout | 0 |
+
+After the shortest fix that works, 18 of 20 reach a correct store, at an estimated 2 to 90 minutes each. The other 2 (HDF4, HDF5) were not converted. 2 datasets end with a wrong store if the user stops after the fix that the message names: CHIRPS (-9999 stored as rainfall) and MODIS MOD13A1 (the file's scale of 10000 makes NDVI about 1e8). 3 more keep longitudes beyond 180 in EPSG:4326: the two OISST sets (280 to 360) and ERA5 over Fiji (165 to 195). zarr-layer 0.11.0 and GDAL 3.13.3 place such a store correctly ([GeoZarr review](../spec/review-2026-10-geozarr.md)), but a lookup by a longitude from -180 to 180 in xarray returns the nearest edge column without an error.
+
+### Simulated newcomers
+
+Codex (gpt-6.1-sol, codex-cli 0.163.0-alpha.10.2) played the tester with an empty `CODEX_HOME`: no instructions, memories, hooks or tools beyond a shell. It read only chronozarr.org and worked in a fresh Ubuntu 24.04 or Miniforge container (`scripts/trial/`), each with one corpus dataset. A second fresh container with a headless browser opened the link. Session 101 was the pilot; session 2 stopped after 47 s when the model was at capacity, and session 6 did not start (a records-folder clash); they were repeated as 22 and 26.
+
+| Session | Data | Minutes to link | Tasks | Recipient saw the chosen date | Own conversion code | Store |
+|---|---|---:|---|---|---|---|
+| 101 | CHIRPS monthly GeoTIFF | 1.2 | 3 of 3 | yes | none | correct, after the agent found -9999 itself |
+| 1 | WorldClim monthly GeoTIFF | 1.3 | 3 of 3 | yes | 5-line manifest | correct |
+| 3 | PRISM daily BIL in zips | 1.8 | 3 of 3 | yes | 19 lines: BIL to GeoTIFF | correct, 45 of 46 days |
+| 4 | MODIS 16-day COG, day-of-year names | 2.0 | 3 of 3 | yes | 22 lines: dates, warp, scale | correct |
+| 5 | Landsat NDVI with NaN | 1.6 | 3 of 3 | yes | none | correct |
+| 7 | OISST daily NetCDF | 1.5 | 3 of 3 | yes | none | correct values; longitudes 280 to 360, so a lookup at -64.6 in xarray returns an edge column |
+| 8 | CMIP6 360-day NetCDF | 1.9 | 3 of 3 | yes | 10 lines: calendar, wrap | correct; dates relabelled without a note |
+| 9 | ERA5 6-hourly NetCDF over 180° | 1.5 | 3 of 3 | yes | none | correct values; longitudes 165 to 195, drawn across 180° by zarr-layer |
+| 10 | Daymet NetCDF, Lambert conformal | 1.7 | 3 of 3 | yes | 19 lines: warp 365 days | correct |
+| 22 | NSIDC monthly GeoTIFF, polar | 1.0 | 3 of 3 | yes | none | correct; flag values 2530 and 2540 kept as data |
+| 26 | Earth Engine 23-band export | 1.5 | 3 of 3 | yes | 25 lines: split, warp | correct; fill -3000 kept as data |
+
+Values were checked against the source files at the place and dates each session chose; stores 22 and 26 were also read whole. The recipient's first frame took 3.2 to 4.4 s with software WebGL.
+
+The agent reads and writes code at machine speed and knew the CHIRPS fill value and the MODIS scale convention, so these times are a lower bound for steps that the documentation covers. Sessions 3, 4, 8, 10 and 26 show where a scientist who does not write code stops: there the agent wrote its own conversion before `convert` accepted the data. The containers offered packages from a fixed local index, had `uv` and `cloudflared` installed, and granted the browser's local network permission without the prompt a person sees.
+
+### Clean-room quickstart
+
+`.github/workflows/quickstart-clean-room.yml` runs the shell blocks of the quickstart as printed, in bash on Linux and macOS and in PowerShell on Windows, on fresh GitHub runners (run 39184698136, 2026-10-19). Every step passed on all three. Seconds per step, the share step to a link that the runner read through the tunnel:
+
+| Step | Linux | macOS | Windows |
+|---|---:|---:|---:|
+| `uv tool install` and `--version` | 4.4 | 3.3 | 14.5 |
+| `export-cog` (12 files, 41.7 MB) | 7.9 | 4.9 | 8.7 |
+| `convert --dry-run` | 0.9 | 0.8 | 1.7 |
+| `convert` | 1.6 | 1.4 | 2.7 |
+| `share` | 27.1 | 66.3 | 28.5 |
+| `preview` | 1.0 | 36.6 | 2.1 |
+
+The macOS `preview` and `share` times were not explained; on a Mac with browser opening turned off, `preview` took 2.0 s. The quickstart shows the output of `convert` from main, which differs from what the 0.4.1 it installs prints.
+
+### Field performance
+
+The deployed viewer at chronozarr.org/demo/ with its default store (`ucayali_santa_maria_v03`), measured 2026-10-16 and 2026-10-18 (`scripts/fieldperf/`, raw data in `data/fieldperf/`). Other work kept this machine loaded (load average 5 to 25 on 16 cores) throughout, which affects the client-side numbers.
+
+A cold visit makes 76 requests (12.4 MB) before its first complete frame: 61 JavaScript modules in 4 to 9 sequential levels, then the catalog, root metadata, one coarse chunk and nine level-1 chunks. Adding latency per request shows about 11 sequential requests in front of the first frame: 0.86 s with none added, 3.2 s with 200 ms, 5.0 s with 400 ms.
+
+Real browser from Chapel Hill (Cloudflare IAD and EWR, about 24 MB/s), 2026-10-18, a new browser and a different timestep each run, p50 with p95:
+
+| From the store load call | Cold edge (N = 31) | Warm edge (N = 38) |
+|---|---|---|
+| First whole frame | 549 ms (1,477) | 456 ms (1,093) |
+| Target-level frame | 1,220 ms (2,332) | 922 ms (1,841) |
+| Target-level frame, from navigation | 2,135 ms (3,304) | 1,555 ms (3,017) |
+
+On 2026-10-16 the same machine reached Cloudflare at about 1 MB/s, and the target-level frame took 11.4 s cold and 11.6 s warm (N = 13 and 21): the link, not the edge, set the time.
+
+Edge samples from Globalping probes in data centres, first byte of a level-1 chunk, p50 (p95). A miss means the probe's Cloudflare location did not hold the object:
+
+| Region | Hit | Miss | Date |
+|---|---:|---:|---|
+| Ashburn | 29 ms (51) | 162 ms (384) | 2026-10-16 |
+| Frankfurt | 27 ms (49) | 353 ms (565) | 2026-10-16 |
+| São Paulo | 28 ms (38) | 375 ms (599) | 2026-10-16 |
+| Singapore | 28 ms (50) | 754 ms (1,180) | 2026-10-18 |
+
+Probes in Singapore were answered by Hong Kong for 21 of 67 requests on 2026-10-16, and a request answered by another location than the one before it was always a miss.
+
+Playback for 60 s at the default 4 steps per second, 2026-10-18, three runs each: unthrottled, 239 of 240 steps on time and 1 frame in 10,797 over 33 ms. With the link limited to 0.7 MB/s and 100 ms latency, the first step came after 18.4 to 18.9 s, then 0.85 to 0.89 steps per second with four pauses of about 7.5 s; the viewer was already at its coarsest level and does not lower the speed.
+
+| Speed gate | Measured | Holds |
+|---|---|---|
+| Cold open ≤ 500 ms, level 0, 36 cells | about 1.4 s (5 runs) from Chapel Hill; first whole frame 549 ms cold, 456 ms warm | no |
+| Warm switch ≤ 16 ms | 2.2 to 2.5 ms p50, but 29 or 30 of 30 frames were incomplete: the 36-cell, 117-step working set does not fit | not established |
+| Decode ≤ 5 ms per chunk | 5.8 ms p50 at load 9, 8.0 ms at load 21 | not established under load |
+| 0 wire bytes on a warm switch | 0 bytes in all three warm loops | yes |
+
+### Problems found
+
+Ranked by datasets and sessions affected, a wrong store first. Each is a candidate for a change; none is fixed yet.
+
+| Problem | Effect | Seen in |
+|---|---|---|
+| A fill value the file does not declare (-9999, -3000, flags) is stored as data; the dry run says "every pixel is valid". Undeclared NaN is refused instead | Wrong or misleading store | CHIRPS, NSIDC, Earth Engine (101, 22, 26) |
+| A file whose scale tag follows the divide convention (MODIS COGs carry 10000) gives values 10000 times too large, with no range check or warning | Wrong store | MODIS MOD13A1 |
+| A CRS with no EPSG code is refused, and the fix in the message (`--crs EPSG:xxxxx`) cannot work; for Daymet the first message says the file declares no CRS | Blocked without own code | MODIS sinusoidal, Daymet, HLS, Earth Engine (4, 10, 26) |
+| Only GeoTIFF is read as raster input: BIL, GRIB2 and HDF get "no GeoTIFF files found" | Blocked without own code | PRISM, HRRR, MODIS HDF4, SMAP (3) |
+| NetCDF needs an extra that the quickstart does not install; the error is xarray's and names no extra | Slowed | OISST, CMIP6, ERA5, Daymet (7, 8, 9, 10) |
+| `--date-pattern` cannot read a day of year (`%j`); multi-band files with dates in band descriptions have no route | Blocked without own code | MODIS, HLS, Earth Engine (4, 26) |
+| 360-day and noleap calendars stop at "the time coordinate 'time' is object" | Blocked without own code | CMIP6 (8) |
+| A band description that differs per file refuses a clean download, and `--write-manifest`, which the message suggests, writes nothing when the dry run finds a problem | Slowed | WorldClim (1) |
+| `docs/analyze.md` selects a band and the nearest x and y in one `.sel` call, which raises `TypeError` with xarray 2026.2.0 and 2026.9.0; its example also reads `band_units`, absent when the source has no units | Documented example fails | every session split the call; 101 |
+| Longitudes outside -180 to 180 are kept in EPSG:4326 with no note; readers place the store, but a lookup by a longitude from -180 to 180 in xarray returns an edge column without an error | Misleading lookups | OISST, ERA5 (sessions 7, 9); CMIP6 needed its own wrap |
+| The dry run prints "m pixels" for a grid in degrees | Misleading | 9 of 11 sessions |
+| `chronozarr link` has no option for centre, zoom or colormap | Slowed | 11 of 11 sessions read the viewer guide for `c`, `z`, `cm` |
+
+### Adoption
+
+GitHub on 2026-10-18: 0 stars, 0 forks, 0 watchers; every issue and pull request is the maintainer's; 35 unique visitors in 14 days, referred only by chronozarr.org. PyPI 2026-10-01 to 2026-10-15: 657 downloads without mirrors, 562 of them with no Python version and the rest peaking on release days. npm 2026-09-01 to 2026-10-16: 955 downloads, peaking on publish days. A GitHub code search finds no repository outside chronozarr that opens a store. Cloudflare analytics were not read.
 
 ## Temporary sharing
 

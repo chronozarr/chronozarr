@@ -14,7 +14,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-10-07T14:15:50.29412Z"
+exclude-newer = "2026-10-12T14:18:17.113104Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -670,6 +670,8 @@ geemap = [
     { name = "leafmap" },
 ]
 geo = [
+    { name = "pyproj", version = "3.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "pyproj", version = "3.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "rasterio", version = "1.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "rasterio", version = "1.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
@@ -748,6 +750,7 @@ requires-dist = [
     { name = "numcodecs", specifier = ">=0.14" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "planetary-computer", marker = "extra == 'ingest'", specifier = ">=1.0" },
+    { name = "pyproj", marker = "extra == 'geo'", specifier = ">=3.6" },
     { name = "pyproj", marker = "extra == 'nisar'", specifier = ">=3.6" },
     { name = "pystac", marker = "extra == 'ingest'", specifier = ">=1.10" },
     { name = "pystac-client", marker = "extra == 'ingest'", specifier = ">=0.8" },

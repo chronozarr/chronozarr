@@ -19,7 +19,7 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 
 | Message | Cause and fix |
 |---|---|
-| `no date in the file name` | Put one date in each name, as `20240131`, `2024-01-31` or `2024-01`. Or pass `--date-pattern`, such as `--date-pattern "ndvi_%Y%m%d"`, or list the files in a [manifest](convert.md#from-a-manifest-of-urls) |
+| `no date in the file name` | Put one date in each name, as `20240131`, `2024-01-31` or `2024-01`. Or pass `--date-pattern`, such as `--date-pattern "ndvi_%Y%m%d"` (`%Y%j` reads a year and day of year, as in MODIS and HLS names: `--date-pattern "MOD13A1.A%Y%j"`), or list the files in a [manifest](convert.md#from-a-manifest-of-urls) |
 | `several dates` in one name | Pass `--date-pattern` to say which part is the date |
 | A month name, such as `scene_Jan2024.tif` | `--date-pattern` reads numbers only. Write a CSV manifest with the columns `uri,datetime`, one row per file, and convert the manifest |
 | `Got unexpected extra arguments` | The shell expanded an unquoted glob into many files. Quote it: `"scenes/*.tif"` |
@@ -28,8 +28,11 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 | A file on another grid or CRS | All timesteps of a store share one grid. Fix the files, or pass `--resampling` to warp every file to the grid of the first |
 | Different scale, offset, units or band names | A store holds one value of each per band. Correct the metadata, for example with `gdal_edit.py -scale -offset -units` |
 | A float file with undeclared NaN | Pass `--nodata nan` to treat NaN as invalid |
+| A `fill:` line names a value such as `-9999` | The files declare no nodata, and the value looks like a fill. Pass `--nodata -9999` to mark it invalid. Leave it out if the value is data |
+| A `range:` line shows values far outside the physical range | The scale is applied as stored * scale + offset. Correct the scale in the files, for example with `gdal_edit.py -scale -offset` |
 | A palette PNG is refused | Expand it to RGB first: `gdal_translate -expand rgba` |
 | The output folder exists | A store is never overwritten. Choose a new folder |
+| `reading a NetCDF4 file needs h5netcdf and h5py`. Older releases print xarray's `found the following matches with the input file in xarray's IO backends`, or `No module named 'h5py'` | The `netcdf` extra is missing. Install it the way you installed chronozarr: `uv tool install --python 3.13 'chronozarr[geo,netcdf]==0.4.1'`, listing every extra you use at once; `uv add 'chronozarr[netcdf]==0.4.1'` in a uv project; or pip with `'chronozarr[netcdf]==0.4.1'`. A classic NetCDF3 file (it starts with `CDF`) needs `scipy` instead: add `--with scipy` to `uv tool install`. See [From NetCDF or Zarr](convert.md#from-netcdf-or-zarr) |
 | `listing an S3 prefix needs boto3` | Install the `s3` extra. The message gives the command |
 
 `convert --help` lists every source type, option and validity rule. [Convert your data](convert.md) explains them.

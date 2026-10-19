@@ -1,0 +1,15 @@
+# What the newcomer images offer from /opt/wheelhouse. Resolved on the host under the 7-day quarantine (uv.toml exclude-newer).
+# chronozarr itself is the wheel built from the v0.4.1 tag (sha256 in build_wheelhouse.py); PyPI's 0.4.1 is hidden by the quarantine.
+chronozarr[geo,netcdf,dask,notebook,s3,publish] @ file:///Users/jakegearon/projects/chronozarr/data/trial/wheelhouse/chronozarr-0.4.1-py3-none-any.whl
+
+# What a scientist might add to read one pixel over time.
+xarray
+rioxarray
+rasterio
+netCDF4
+h5netcdf
+zarr
+dask
+pandas
+matplotlib
+ipython

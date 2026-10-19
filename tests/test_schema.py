@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 
 import numpy as np
 import pytest
@@ -248,3 +249,17 @@ def test_geometry_aliases_are_optional_and_must_match_when_present(store_copy):
 
     data.attrs["spatial:bbox"] = [0.0, 0.0, 1.0, 1.0]
     assert any("spatial:bbox differs from geometry" in p for p in chronozarr.validate(store_copy))
+
+
+@pytest.mark.parametrize(
+    ("crs", "unit"),
+    [("EPSG:4326", "degree"), ("EPSG:32631", "m"), ("EPSG:2278", "US survey foot")],
+)
+def test_axis_unit_is_the_unit_the_crs_names(crs, unit):
+    pytest.importorskip("rasterio")
+    assert schema.axis_unit(crs) == unit
+
+
+def test_axis_unit_without_rasterio_does_not_guess_metres(monkeypatch):
+    monkeypatch.setitem(sys.modules, "rasterio.crs", None)  # `from rasterio.crs import CRS` fails
+    assert schema.axis_unit("EPSG:4326") == "CRS-unit"
