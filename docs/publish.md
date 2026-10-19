@@ -79,7 +79,7 @@ verified. Open the store in the viewer:
   https://chronozarr.org/demo/?store=https%3A%2F%2Fmy-bucket.s3.us-east-1.amazonaws.com%2Fmy_store-v1
 ```
 
-Open the link, choose the view that you want to show, and click Copy link. The copied link also holds the date, the product and the map view. `chronozarr link URL` prints a link with a chosen product and date from the command line.
+Open the link, choose the view that you want to show, and click Copy link. The copied link also holds the date, the product and the map view. `chronozarr link URL` prints a link with a chosen date, product, colormap and place from the command line; see [Choose a date and a place](viewer.md#choose-a-date-and-a-place).
 
 ## Provider examples
 
