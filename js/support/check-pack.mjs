@@ -19,7 +19,7 @@ const ROOT_LICENSE = path.join(JS_DIR, '..', 'LICENSE');
 const posix = (p) => p.split(path.sep).join('/');
 const RELATIVE = /(?:\bfrom\s*|\bimport\s*\(?\s*|new URL\(\s*)(['"])(\.{1,2}\/[^'"]+)\1/g;
 const HTML_ASSET = /<(?:script|link|img)\b[^>]*\b(?:src|href)\s*=\s*(['"])([^'"]+)\1/gi;
-const VENDORED = ['vendor/numcodecs/', 'vendor/zarrita/', 'vendor/zarrita-storage/'];
+const VENDORED = ['vendor/numcodecs/', 'vendor/proj4/', 'vendor/zarrita/', 'vendor/zarrita-storage/'];
 
 const pkg = JSON.parse(readFileSync(path.join(JS_DIR, 'package.json'), 'utf8'));
 const problems = [];
