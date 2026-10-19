@@ -13,6 +13,7 @@ import json
 import os
 import re
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -390,8 +391,20 @@ def check_manifest_target(path: Path) -> None:
         raise FileExistsError(f"{path} already exists; choose a new path or remove it first")
 
 
-def write_manifest(entries: list[Entry], path: Path) -> None:
-    """Write `entries` as a manifest `convert` reads back: CSV `uri,datetime` or a JSON list."""
+def write_manifest(
+    entries: list[Entry],
+    path: Path,
+    *,
+    undated: Sequence[str] = (),
+    bands: Sequence[str] | None = None,
+) -> None:
+    """Write `entries` as a manifest `convert` reads back: CSV `uri,datetime[,bands]` or JSON.
+
+    `undated` files get a row with an empty datetime, for the user to fill in (`convert` refuses
+    such a row, naming it). `bands` are the band names to carry: a CSV `bands` column (names
+    joined by `;`), or for JSON a `bands` entry, which turns the list of rows into an object with
+    `items`.
+    """
     check_manifest_target(path)
     rows = [
         {
@@ -402,10 +415,17 @@ def write_manifest(entries: list[Entry], path: Path) -> None:
         }
         for e in entries
     ]
+    rows.extend({"uri": uri, "datetime": ""} for uri in undated)
     if path.suffix.lower() == ".json":
-        path.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+        document: Any = {"bands": list(bands), "items": rows} if bands else rows
+        path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
         return
+    fieldnames = ["uri", "datetime"]
+    if bands:
+        fieldnames.append("bands")
+        for row in rows:
+            row["bands"] = ";".join(bands)
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer: Any = csv.DictWriter(handle, fieldnames=["uri", "datetime"])
+        writer: Any = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)

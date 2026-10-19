@@ -852,7 +852,9 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     type=click.Path(path_type=Path),
     default=None,
     help="Directory, glob or S3 prefix only: write the files and dates found as a manifest "
-    "(.csv or .json) that convert reads back. Refuses to overwrite.",
+    "(.csv or .json) that convert reads back, with a bands column when the files name "
+    "their bands. Written even when the checks find problems; a file with no date gets "
+    "an empty datetime to fill in. Refuses to overwrite.",
 )
 @click.option(
     "--dry-run",
@@ -902,7 +904,8 @@ def convert_command(
     for subdirectories. S3 prefixes are listed with your AWS credentials and need
     `pip install 'chronozarr[s3]'`. A date is read from a name only when it holds exactly one
     (YYYYMMDD, YYYY-MM-DD or YYYY-MM); otherwise the file is reported and --date-pattern or a
-    manifest says where the date is. --write-manifest saves what was found.
+    manifest says where the date is. --write-manifest saves what was found, also when
+    the checks report problems, so you can edit it and run convert on it.
 
     Every file is checked before anything is read in bulk: dates, grid and CRS, bands, dtype,
     scale, offset, units and nodata. All problems are reported together, per file, with a

@@ -27,7 +27,9 @@ it cannot be told from YYMMDD. `date_pattern` (`--date-pattern`, strptime-like w
 several different dates or with an impossible one, and two files with the same date, are reported;
 none is guessed or dropped. What the files hold is checked as for a manifest, and everything found
 wrong, in the names and in the files, is reported together, per file, in one `PreflightError`
-(`--dry-run` writes nothing and reports the same). `write_manifest_to` exports the files and dates.
+(`--dry-run` writes nothing and reports the same). `write_manifest_to` exports the files, their
+dates and the band names the files agree on, also when the checks report problems: a file
+with no date gets a row with an empty datetime for the user to fill in.
 
 Fidelity rules. The store carries the source's scale, offset, units and validity, or the
 conversion fails; nothing is guessed.
@@ -155,6 +157,9 @@ from chronozarr._convert_manifest import (
 )
 from chronozarr._convert_manifest import (
     Manifest as Manifest,
+)
+from chronozarr._convert_manifest import (
+    ManifestDraft as ManifestDraft,
 )
 from chronozarr._convert_manifest import (
     parse_time as parse_time,
@@ -612,6 +617,29 @@ def _staged_masks(plan: Plan, work: Path) -> Iterator[np.ndarray]:
         yield np.load(_staged_mask_path(work, t))
 
 
+def _write_draft(draft: ManifestDraft, path: Path) -> str:
+    """Write what discovery found although the files have problems; the sentence that says so."""
+    write_manifest(draft.entries, path, undated=draft.undated, bands=draft.bands)
+    n_rows = len(draft.entries) + len(draft.undated)
+    said = f"wrote manifest {path}: {n_rows} row{'s' if n_rows != 1 else ''}"
+    if draft.bands:
+        said += f", band{'s' if len(draft.bands) != 1 else ''} {';'.join(draft.bands)}"
+    if not draft.undated:
+        return f"{said}. Edit it and run convert on it, or fix the files and run again."
+    shown = ", ".join(Path(uri).name for uri in draft.undated[:3])
+    more = f" and {len(draft.undated) - 3} more" if len(draft.undated) > 3 else ""
+    count = (
+        f"{len(draft.undated)} of {n_rows} rows have"
+        if len(draft.undated) > 1
+        else f"1 of {n_rows} rows has"
+    )
+    return (
+        f"{said}. {count} no datetime because a date could not be read from the name "
+        f"({shown}{more}). Fill them in (for example 2024-03-01) or delete those rows, then run "
+        "convert on the manifest; problems in the files themselves need the fixes listed above."
+    )
+
+
 @_tolerate_unlocated_frames
 def convert(
     source: str | Path,
@@ -649,7 +677,9 @@ def convert(
     a manifest of those files (module docstring, "Discovered GeoTIFFs"). `date_pattern` is a
     strptime-like pattern (`%Y %m %d %H %M %S`) that says where the date is; `write_manifest_to`
     writes the files and dates found as a `.csv` or `.json` manifest (`convert` reads it back),
-    also on a dry run, and refuses to overwrite a file.
+    with a `bands` column or entry when the files name their bands. It is written on a dry
+    run too, and also when the checks raise a `PreflightError` (a file with no date gets an
+    empty datetime; the error carries a note saying so). It refuses to overwrite a file.
 
     Image frames (PNG) are manifest sources. `crs` names the CRS of frames that carry none (a
     world file has none). `bounds` is `(west, south, east, north)` in the units of `crs`, the
@@ -677,37 +707,44 @@ def convert(
         raise ValueError(f"read_ahead must be >= 1, got {read_ahead}")
     if write_manifest_to is not None:
         check_manifest_target(Path(write_manifest_to))
+        if not is_discovery_source(str(source)):
+            raise ValueError(
+                "--write-manifest exports the files found in a directory, glob or S3 prefix; "
+                "this source is already a manifest or is not a set of GeoTIFFs"
+            )
     out_path = Path(out)
     if not dry_run and out_path.exists() and any(out_path.iterdir()):
         raise FileExistsError(
             f"{out_path} already exists and is not empty; stores are immutable, write to a "
             "new path"
         )
-    plan = plan_conversion(
-        source,
-        variable=variable,
-        dims=dims,
-        crs=crs,
-        transform=transform,
-        shape=shape,
-        resampling=resampling,
-        nodata=nodata,
-        mask_var=mask_var,
-        bounds=bounds,
-        chunk_size=encode_options.get("chunk_size", 512),
-        n_lods=encode_options.get("n_lods"),
-        date_pattern=date_pattern,
-    )
+    try:
+        plan = plan_conversion(
+            source,
+            variable=variable,
+            dims=dims,
+            crs=crs,
+            transform=transform,
+            shape=shape,
+            resampling=resampling,
+            nodata=nodata,
+            mask_var=mask_var,
+            bounds=bounds,
+            chunk_size=encode_options.get("chunk_size", 512),
+            n_lods=encode_options.get("n_lods"),
+            date_pattern=date_pattern,
+        )
+    except PreflightError as exc:
+        if write_manifest_to is not None and exc.draft is not None:
+            exc.wrote_manifest(_write_draft(exc.draft, Path(write_manifest_to)))
+        raise
     bands = list(plan.source.info.bands)
     if band_roles:
         bands = list(assign_roles(bands, band_roles))
     if write_manifest_to is not None:
-        if not plan.discovered or not isinstance(plan.source, CogManifestSource):
-            raise ValueError(
-                "--write-manifest exports the files found in a directory, glob or S3 prefix; "
-                "this source is already a manifest or is not a set of GeoTIFFs"
-            )
-        write_manifest(plan.source.entries, Path(write_manifest_to))
+        assert isinstance(plan.source, CogManifestSource)
+        draft = plan.source.draft
+        write_manifest(draft.entries, Path(write_manifest_to), bands=draft.bands)
     if on_plan is not None:
         on_plan(plan)
     if dry_run:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import json
 from pathlib import Path
 from typing import Any
 
@@ -821,3 +823,154 @@ def test_cli_dry_run_says_which_band_name_it_chose_and_how_to_change_it(tmp_path
     assert "--write-manifest found.csv" in text
     assert "bands column" in text
     assert not (tmp_path / "store").exists()
+
+
+# --- --write-manifest ------------------------------------------------------------------------
+
+
+def test_write_manifest_has_no_bands_column_when_the_files_name_no_bands(tmp_path, series):
+    manifest = tmp_path / "found.csv"
+    convert(series, tmp_path / "unused", dry_run=True, write_manifest_to=manifest, **OPTIONS)
+    assert manifest.read_text().splitlines()[0] == "uri,datetime"
+
+
+def test_write_manifest_carries_the_band_name_for_the_user_to_edit(tmp_path, truth):
+    folder = labelled_series(tmp_path / "wc", truth, lambda name, month: name)
+    manifest = tmp_path / "found.csv"
+    convert(folder, tmp_path / "unused", dry_run=True, write_manifest_to=manifest, **OPTIONS)
+    with manifest.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [r["bands"] for r in rows] == ["wc2.1_10m_tmax"] * len(MONTHS)
+    assert read_manifest(manifest).bands == ("wc2.1_10m_tmax",)
+    from_dir, from_manifest = tmp_path / "a", tmp_path / "b"
+    convert(folder, from_dir, **OPTIONS)
+    convert(manifest, from_manifest, **OPTIONS)
+    assert np.array_equal(stored(from_dir), stored(from_manifest))
+
+
+def test_write_manifest_writes_what_was_found_when_the_preflight_finds_problems(
+    tmp_path, series, truth
+):
+    write_tif(series / "ndvi_2024-02.tif", truth[1], scales=[0.5, 1.0])
+    write_tif(series / "readme_nodate.tif", truth[0])
+    manifest = tmp_path / "found.csv"
+    with pytest.raises(PreflightError) as error:
+        convert(series, tmp_path / "unused", dry_run=True, write_manifest_to=manifest, **OPTIONS)
+    assert len(error.value.problems) == 2
+    with manifest.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [(Path(r["uri"]).name, r["datetime"]) for r in rows] == [
+        ("ndvi_2024-01.tif", "2024-01-01"),
+        ("ndvi_2024-02.tif", "2024-02-01"),
+        ("ndvi_2024-03.tif", "2024-03-01"),
+        ("ndvi_2024-04.tif", "2024-04-01"),
+        ("readme_nodate.tif", ""),
+    ]
+    note = "\n".join(error.value.__notes__)
+    assert f"wrote manifest {manifest}" in note
+    assert "1 of 5 rows has no datetime" in note
+    assert "readme_nodate.tif" in note
+    assert "2 problem(s) in 2 of 5 source file(s); no store was written:" in str(error.value)
+    assert "nothing was written" not in str(error.value)
+    assert not (tmp_path / "unused").exists()
+
+
+def test_a_manifest_written_after_problems_is_filled_in_and_converts(tmp_path, series, truth):
+    final = write_tif(series / "final.tif", truth[0])
+    manifest = tmp_path / "found.csv"
+    with pytest.raises(PreflightError):
+        convert(series, tmp_path / "unused", dry_run=True, write_manifest_to=manifest, **OPTIONS)
+    with manifest.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    for row in rows:
+        if row["uri"] == str(final):
+            row["datetime"] = "2024-05-01"
+    with manifest.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["uri", "datetime"])
+        writer.writeheader()
+        writer.writerows(rows)
+    out = tmp_path / "store"
+    convert(manifest, out, **OPTIONS)
+    assert np.array_equal(stored(out), np.concatenate([truth, truth[:1]]))
+    assert [str(t)[:10] for t in chronozarr.open_store(out).times][-1] == "2024-05-01"
+
+
+def test_write_manifest_after_problems_lists_every_file_when_none_has_a_date(tmp_path, truth):
+    folder = tmp_path / "chirps"
+    for t in range(3):
+        write_tif(folder / f"chirps-v2.0.2019.{t + 1:02d}.tif", truth[t])
+    manifest = tmp_path / "found.csv"
+    with pytest.raises(PreflightError) as error:
+        convert(folder, tmp_path / "unused", dry_run=True, write_manifest_to=manifest, **OPTIONS)
+    assert len(error.value.problems) == 3
+    lines = manifest.read_text().splitlines()
+    assert lines[0] == "uri,datetime"
+    assert [Path(line.split(",")[0]).name for line in lines[1:]] == [
+        f"chirps-v2.0.2019.{m:02d}.tif" for m in (1, 2, 3)
+    ]
+    assert all(line.endswith(",") for line in lines[1:])
+    assert "3 of 3 rows have no datetime" in "\n".join(error.value.__notes__)
+
+
+def test_write_manifest_after_problems_carries_the_bands_when_the_files_agree(tmp_path, truth):
+    folder = tmp_path / "rn"
+    for t, month in enumerate(MONTHS):
+        write_tif(folder / f"x_{month}.tif", truth[t], descriptions=["red", "nir"])
+    write_tif(folder / "readme.tif", truth[0], descriptions=["red", "nir"])
+    manifest = tmp_path / "found.json"
+    with pytest.raises(PreflightError):
+        convert(folder, tmp_path / "unused", dry_run=True, write_manifest_to=manifest, **OPTIONS)
+    document = json.loads(manifest.read_text())
+    assert document["bands"] == ["red", "nir"]
+    assert [(Path(i["uri"]).name, i["datetime"]) for i in document["items"]] == [
+        *((f"x_{m}.tif", f"{m}-01") for m in MONTHS),
+        ("readme.tif", ""),
+    ]
+
+
+def test_write_manifest_after_problems_leaves_the_bands_out_when_the_files_disagree(
+    tmp_path, truth
+):
+    folder = tmp_path / "rn"
+    for t, month in enumerate(MONTHS):
+        write_tif(
+            folder / f"x_{month}.tif", truth[t], descriptions=["red", "swir" if t else "nir"]
+        )
+    manifest = tmp_path / "found.csv"
+    with pytest.raises(PreflightError, match="band descriptions"):
+        convert(folder, tmp_path / "unused", dry_run=True, write_manifest_to=manifest, **OPTIONS)
+    assert manifest.read_text().splitlines()[0] == "uri,datetime"
+
+
+def test_a_source_that_is_not_discovered_is_refused_before_any_work(tmp_path, series, truth):
+    manifest = tmp_path / "given.csv"
+    write_manifest(discover(str(series)).entries, manifest)
+    write_tif(series / "ndvi_2024-02.tif", truth[1], scales=[0.5, 1.0])
+    target = tmp_path / "n.csv"
+    with pytest.raises(ValueError, match="already a manifest") as error:
+        convert(manifest, tmp_path / "o", dry_run=True, write_manifest_to=target)
+    assert not isinstance(error.value, PreflightError)
+    assert not target.exists()
+
+
+def test_cli_write_manifest_with_problems_writes_it_then_reports_them(tmp_path, series, truth):
+    write_tif(series / "readme_nodate.tif", truth[0])
+    manifest = tmp_path / "found.csv"
+    out = tmp_path / "store"
+    result = run(
+        "convert", str(series), str(out), "--dry-run", "--write-manifest", str(manifest),
+    )  # fmt: skip
+    assert result.exit_code == 1
+    assert "no date in the file name" in result.output
+    assert f"wrote manifest {manifest}" in result.output
+    assert "1 of 5 rows has no datetime" in result.output
+    assert result.output.index("no date in the file name") < result.output.index("wrote manifest")
+    assert manifest.is_file()
+    assert not out.exists()
+
+
+def test_a_manifest_row_without_a_datetime_says_which_row_and_what_to_do(tmp_path):
+    manifest = tmp_path / "m.csv"
+    manifest.write_text("uri,datetime\na.tif,2024-01-01\nb.tif,\n")
+    with pytest.raises(ValueError, match=r"row 2: .*b\.tif has no datetime.*fill it in"):
+        read_manifest(manifest)

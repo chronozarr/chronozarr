@@ -15,7 +15,7 @@ import numpy as np
 
 from chronozarr import schema
 from chronozarr._convert_discover import DATE_MARK, mask_dates
-from chronozarr._convert_manifest import Entry
+from chronozarr._convert_manifest import Entry, ManifestDraft
 from chronozarr._convert_preflight import PreflightError, Problem
 from chronozarr._convert_source import (
     Bounds,
@@ -232,6 +232,22 @@ def _file_labels(good: list[tuple[str, _CogHeader]]) -> _FileLabels | None:
     return _FileLabels(shared or None, (descriptions[0], other))
 
 
+def _agreed_names(
+    good: list[tuple[str, _CogHeader]], labels: _FileLabels | None
+) -> tuple[str, ...] | None:
+    """The band names the files' descriptions give, for a manifest to carry; None when a band has
+    no description (or one with a `;`, which a CSV could not hold) or the files disagree."""
+    first = good[0][1]
+    if labels is not None:
+        descriptions: tuple[str | None, ...] = (labels.name,)
+    elif any(header.descriptions != first.descriptions for _, header in good):
+        return None
+    else:
+        descriptions = first.descriptions
+    named = tuple(d for d in descriptions if d and ";" not in d)
+    return named if len(named) == len(descriptions) else None
+
+
 def _open_fix(uri: str, exc: ValueError) -> str | None:
     """A remedy for a source GDAL could not open; None when the error already says what to do."""
     from rasterio.errors import RasterioIOError
@@ -293,6 +309,7 @@ class CogManifestSource(Source):
         self.times = [e.time for e in entries]
         self.resampling = resampling
         self.chunk_size = chunk_size
+        self.draft = ManifestDraft(entries, tuple(undated))
         uris = [*(e.uri for e in entries), *undated]
         workers = min(8, len(uris))
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -303,6 +320,9 @@ class CogManifestSource(Source):
             self._raise(problems, uris)
         first_uri, first = good[0]
         labels = _file_labels(good) if band_names is None else None
+        self.draft = ManifestDraft(
+            entries, tuple(undated), _agreed_names(good, labels) if band_names is None else None
+        )
         if bounds is not None:
             problems += self._size_problems(good)
         self.grid = self._target_grid(first, target_crs, target_transform, target_shape)
@@ -382,11 +402,10 @@ class CogManifestSource(Source):
             validity=validity.why,
         )
 
-    @staticmethod
-    def _raise(problems: list[Problem], uris: list[str]) -> NoReturn:
+    def _raise(self, problems: list[Problem], uris: list[str]) -> NoReturn:
         order = {uri: i for i, uri in enumerate(uris)}
         problems.sort(key=lambda p: order.get(p.uri, len(order)))
-        raise PreflightError(problems, len(uris))
+        raise PreflightError(problems, len(uris), self.draft)
 
     @staticmethod
     def _target_grid(
@@ -492,7 +511,7 @@ class CogManifestSource(Source):
                         "A store holds one value per band for every timestep, so the sources "
                         "must agree",
                         "name the bands in a manifest (a bands column or key; --write-manifest "
-                        "writes one to edit), or relabel the odd files"
+                        "writes a manifest to add it to), or relabel the odd files"
                         if relabel
                         else "if the metadata is wrong, correct it (gdal_edit.py -scale -offset "
                         "-units); if the values really are on another scale, rescale the odd "
@@ -536,7 +555,7 @@ class CogManifestSource(Source):
             f"bands:      the band description differs per file ('{first}', '{second}', ...) and "
             "looks like a file label, not a band name, so the band is named "
             f"'{names[0]}'{shared}. To name it yourself, run again with --write-manifest "
-            "found.csv, add a bands column to the manifest it writes, and convert the manifest",
+            "found.csv, set the bands column of the manifest it writes, and convert the manifest",
         )
 
     @staticmethod
