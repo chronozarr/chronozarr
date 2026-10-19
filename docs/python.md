@@ -44,6 +44,8 @@ da = store.to_xarray(lod=0, times=[0], physical=False)
 
 `to_xarray` loads the requested level into memory.
 
+`store.notes` lists what the store leaves out or spells otherwise and the reader read through, such as an absent `levels` mirror or a registration with other URLs. It is empty for a store that conforms. A store can open with notes and still fail `chronozarr validate`: the reader decodes what it can read as declared, and `validate` checks the spec's rules for writers.
+
 `store.crs` is the CRS the store declares: an authority code, WKT2 text, PROJJSON, or several of them. `store.crs.to_string()` returns the code when there is one and otherwise the WKT2 or PROJJSON text, which pyproj and rasterio accept. When representations disagree, the WKT2 is used and a warning says so.
 
 ## Open a store in xarray
@@ -55,7 +57,7 @@ ds = xr.open_dataset("my_store", engine="chronozarr")
 raw = xr.open_dataset("my_store", engine="chronozarr", physical=False)
 ```
 
-The backend reads lazily. It returns physical values unless you pass `physical=False`. The `lod` argument selects the level, and the default is 0.
+The backend reads lazily. It returns physical values unless you pass `physical=False`. The `lod` argument selects the level, and the default is 0. When the store has notes, `ds.attrs["chronozarr_notes"]` lists them.
 
 Install `chronozarr[dask]` to pass `chunks=` and get dask arrays.
 
