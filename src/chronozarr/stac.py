@@ -188,7 +188,8 @@ def build_stac(
     provenance = provenance if isinstance(provenance, dict) else None
     text = description or (
         f"chronozarr time series: {len(times)} timesteps, {len(bands)} bands, "
-        f"{abs(a):g} m pixels in {store.crs.describe()}, {len(store.levels)} pyramid levels."
+        f"{abs(a):g} {schema.axis_unit(stored_crs)} pixels in {store.crs.describe()}, "
+        f"{len(store.levels)} pyramid levels."
     )
     asset = {
         "href": href,

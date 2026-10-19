@@ -20,6 +20,7 @@ import xarray as xr
 from chronozarr import schema
 from chronozarr._convert_discover import TIFF_SUFFIXES, is_discovery_source
 from chronozarr._convert_source import UndeclaredNaNError
+from chronozarr._convert_xarray import open_netcdf
 from chronozarr._install import extra_hint
 from chronozarr.append import append, is_store
 from chronozarr.bands import (
@@ -38,10 +39,11 @@ from chronozarr.convert import (
     Plan,
     convert,
 )
-from chronozarr.decode import open_store
+from chronozarr.decode import ChronoStore, open_store
 from chronozarr.doctor import DEFAULT_ORIGIN, diagnose, is_url
 from chronozarr.encode import EncodeReport, encode
 from chronozarr.export import export_cog, select_times
+from chronozarr.place import check_xy, lonlat_to_xy
 from chronozarr.schema import Band, SchemaError, validate_report
 from chronozarr.share import share
 from chronozarr.stac import write_stac
@@ -223,11 +225,11 @@ def _read_xarray(path: str, variable: str | None) -> xr.DataArray:
     source = Path(path)
     if not source.exists():
         raise click.ClickException(f"input '{path}' does not exist")
-    dataset = (
-        xr.open_dataset(source)
-        if source.suffix == ".nc"
-        else xr.open_zarr(source, chunks=None, consolidated=False)
-    )
+    if source.suffix == ".nc":
+        with _command_errors():
+            dataset = open_netcdf(source)
+    else:
+        dataset = xr.open_zarr(source, chunks=None, consolidated=False)
     if variable is None:
         names = list(dataset.data_vars)
         if len(names) != 1:
@@ -852,15 +854,18 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     "--date-pattern",
     default=None,
     help="Directory, glob or S3 prefix only: where the date is in each file name, with %Y %m "
-    "%d %H %M %S (for example 'ndvi_%Y%m%d'). Default: YYYYMMDD, YYYY-MM-DD or YYYY-MM, read "
-    "only when a name holds exactly one date.",
+    "%d %H %M %S (for example 'ndvi_%Y%m%d'), or %Y %j for a year and day of year (for example "
+    "'MOD13A1.A%Y%j' or 'HLS.S30.T17SQV.%Y%jT%H%M%S'). Default: YYYYMMDD, YYYY-MM-DD or "
+    "YYYY-MM, read only when a name holds exactly one date.",
 )
 @click.option(
     "--write-manifest",
     type=click.Path(path_type=Path),
     default=None,
     help="Directory, glob or S3 prefix only: write the files and dates found as a manifest "
-    "(.csv or .json) that convert reads back. Refuses to overwrite.",
+    "(.csv or .json) that convert reads back, with a bands column when the files name "
+    "their bands. Written even when the checks find problems; a file with no date gets "
+    "an empty datetime to fill in. Refuses to overwrite.",
 )
 @click.option(
     "--dry-run",
@@ -910,7 +915,9 @@ def convert_command(
     for subdirectories. S3 prefixes are listed with your AWS credentials and need
     `pip install 'chronozarr[s3]'`. A date is read from a name only when it holds exactly one
     (YYYYMMDD, YYYY-MM-DD or YYYY-MM); otherwise the file is reported and --date-pattern or a
-    manifest says where the date is. --write-manifest saves what was found.
+    manifest says where the date is. MODIS and HLS names carry a year and day of year, which
+    --date-pattern reads with %Y%j (for example 'MOD13A1.A%Y%j'). --write-manifest saves what
+    was found, also when the checks report problems, so you can edit it and run convert on it.
 
     Every file is checked before anything is read in bulk: dates, grid and CRS, bands, dtype,
     scale, offset, units and nodata. All problems are reported together, per file, with a
@@ -1220,6 +1227,48 @@ def bands_command(store: str, band_roles: tuple[str, ...], dry_run: bool) -> Non
     _print_bands(bands)
 
 
+def _view_center(
+    opened: ChronoStore, lon_lat: tuple | None, store_xy: tuple | None
+) -> tuple[float, float] | None:
+    """The map centre, in store coordinates, that --lonlat or --xy asks for; None if neither.
+
+    Raises click.BadParameter for a point the store does not cover. The converted position of a
+    longitude and latitude goes to stderr, so that it can be given again as --xy.
+    """
+    level = opened.levels[0]
+    extent = schema.bounds(level.transform, level.shape[2], level.shape[3])
+    crs = opened.crs.to_string()
+    shown = opened.crs.describe()
+    if store_xy is not None:
+        x, y = store_xy
+        try:
+            check_xy(shown, extent, x, y)
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), param_hint="--xy") from exc
+        return x, y
+    if lon_lat is None:
+        return None
+    lon, lat = lon_lat
+    try:
+        x, y = lonlat_to_xy(crs, extent, lon, lat)
+    except ImportError as exc:
+        if exc.name != "pyproj":
+            raise
+        raise click.BadParameter(
+            f"a store in {shown} needs pyproj to place a longitude and latitude: "
+            f"{extra_hint('geo')}. Or give --xy, a point in {shown}",
+            param_hint="--lonlat",
+        ) from exc
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--lonlat") from exc
+    click.echo(
+        f"centre: longitude {lon:.12g}, latitude {lat:.12g} is x {x:.12g}, y {y:.12g} in {shown}, "
+        "inside the store",
+        err=True,
+    )
+    return x, y
+
+
 @main.command("link")
 @click.argument("store_url")
 @click.option("--product", default=None, help="Initial product id (see `chronozarr bands`).")
@@ -1240,6 +1289,30 @@ def bands_command(store: str, band_roles: tuple[str, ...], dry_run: bool) -> Non
     "Needs --product band.",
 )
 @click.option("--time", "t", type=int, default=None, help="Initial timestep index.")
+@click.option(
+    "--lonlat",
+    default=None,
+    metavar="LON,LAT",
+    help="Centre the map on this longitude and latitude, in degrees (WGS 84), longitude first: "
+    "--lonlat -64.62,-3.41. Converted to the store's coordinate system, which needs pyproj (the "
+    "geo extra) unless the store is in EPSG:4326. Refused if the store does not cover the point.",
+)
+@click.option(
+    "--xy",
+    default=None,
+    metavar="X,Y",
+    help="Centre the map on this point in the store's own coordinate system (the CRS that "
+    "`chronozarr info` shows), instead of --lonlat.",
+)
+@click.option(
+    "--zoom",
+    type=float,
+    default=None,
+    metavar="Z",
+    help="Screen pixels per stored pixel: 1 draws each stored pixel as one screen pixel, 4 as a "
+    "square of 4 by 4, 0.5 fits 2 by 2 stored pixels in one. With a centre it defaults to 1. "
+    "The viewer limits how far it zooms in and out.",
+)
 @click.option("--viewer", default=VIEWER_URL, show_default=True, help="Viewer URL.")
 def link_command(
     store_url: str,
@@ -1248,14 +1321,18 @@ def link_command(
     limits: str | None,
     colormap: str | None,
     t: int | None,
+    lonlat: str | None,
+    xy: str | None,
+    zoom: float | None,
     viewer: str,
 ) -> None:
     """Print a viewer URL that opens the hosted store STORE_URL at a chosen initial view.
 
-    The product, band, display limits, colormap and timestep live in the URL, not in the store,
-    so the store stays readable by every client and anyone with the URL sees the same first view.
-    Each value is checked against the store (read over HTTP), because the viewer silently ignores
-    one the store cannot honor. To set the bands a product uses, see `chronozarr bands`.
+    The product, band, display limits, colormap, timestep and place (centre and zoom) live in the
+    URL, not in the store, so the store stays readable by every client and anyone with the URL
+    sees the same first view. Each value is checked against the store (read over HTTP), because
+    the viewer silently ignores one the store cannot honor, or moves a centre outside the store to
+    its edge. To set the bands a product uses, see `chronozarr bands`.
     """
     if not is_url(store_url):
         raise click.ClickException(
@@ -1269,6 +1346,10 @@ def link_command(
         raise click.UsageError("--range sets the single-band product: add --product band")
     if colormap is not None and product != "band":
         raise click.UsageError("--colormap colors the single-band product: add --product band")
+    lon_lat = _parse_numbers(lonlat, 2, "--lonlat", float)
+    store_xy = _parse_numbers(xy, 2, "--xy", float)
+    if lon_lat is not None and store_xy is not None:
+        raise click.UsageError("--lonlat and --xy both set the centre of the map: give one")
     with _command_errors():
         opened = open_store(store_url)
         bands = opened.attrs.bands
@@ -1302,6 +1383,13 @@ def link_command(
                     f"band {chosen.name} is shown as reflectance with fixed limits, so --range "
                     "would be ignored; choose a band whose values are not reflectance-like"
                 )
+        center = _view_center(opened, lon_lat, store_xy)
+        if center is not None and zoom is None:
+            zoom = 1.0
+            click.echo(
+                "no --zoom with the centre: using zoom 1, one stored pixel per screen pixel",
+                err=True,
+            )
         click.echo(
             viewer_url(
                 store_url,
@@ -1311,6 +1399,8 @@ def link_command(
                 band=band,
                 range=low_high,
                 colormap=colormap,
+                zoom=zoom,
+                center=center,
             )
         )
     click.echo(

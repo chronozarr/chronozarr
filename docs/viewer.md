@@ -66,7 +66,18 @@ The address uses these parameters:
 | `z` | Zoom, in screen pixels per stored pixel | `z=2.5` |
 | `c` | Map centre x,y in the store's coordinate system | `c=684500,9123350` |
 
-`chronozarr link STORE_URL` prints the same kind of link from the command line and checks it against the store. To show the viewer inside your own page, see [Embed the viewer](embedding.md).
+`chronozarr link STORE_URL` prints the same kind of link from the command line and checks it against the store. It sets `t`, `p`, `b`, `r`, `cm`, `z` and `c` with `--time`, `--product`, `--band`, `--range`, `--colormap`, `--zoom` and `--lonlat` or `--xy`. To show the viewer inside your own page, see [Embed the viewer](embedding.md).
+
+### Choose a date and a place
+
+```sh
+chronozarr link https://data.example.org/my_store --time 71 --lonlat -64.62,-3.41 --zoom 2
+```
+
+- `--lonlat LON,LAT` is a longitude and a latitude in degrees, longitude first. `link` converts them to the store's coordinate system and writes the result as `c`. A store in degrees needs nothing else. A store in a projected system, such as UTM, needs the `geo` extra for the conversion. A longitude moves by 360 degrees when that puts it inside the store, so `-64.6` finds a store that counts longitudes from 0 to 360.
+- `--xy X,Y` is the point in the store's own coordinate system, the CRS that `chronozarr info` prints. Use it when you already have those numbers, for example from the `c` of a copied link. Give `--lonlat` or `--xy`, not both.
+- `link` refuses a point that the store does not cover and prints what it does cover. The viewer would move such a centre to the nearest edge without a message.
+- `--zoom Z` is `z`, the number of screen pixels that draw one stored pixel. At 1 each stored pixel is one screen pixel, at 4 it is a square of 4 by 4, and at 0.5 one screen pixel shows 2 by 2 stored pixels. The map shows its width in screen pixels, times the pixel size, divided by the zoom: on a map 1,000 pixels wide, a store with 10 m pixels shows 10 km at zoom 1, 2.5 km at zoom 4 and 20 km at zoom 0.5. A centre without `--zoom` gets zoom 1. A zoom without a centre zooms on the middle of the store. The viewer cannot draw more than 16 device pixels per stored pixel, or less than half of what fits the whole store, and moves a zoom beyond that to the limit.
 
 ## What the browser downloads
 

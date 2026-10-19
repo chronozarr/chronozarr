@@ -21,9 +21,18 @@ chronozarr convert "scenes/*.tif" my_store --dry-run   # check every file, write
 chronozarr convert "scenes/*.tif" my_store
 ```
 
-The dry run runs the same discovery and checks as conversion. It prints each file with its date, the grid, the bands, the scaling, the validity rule and the expected size. A directory or `s3://` prefix is not searched recursively; use a glob such as `"scenes/**/*.tif"` for subdirectories. Listing an S3 prefix needs the `s3` extra (`uv tool install --python 3.13 'chronozarr[geo,s3]==0.4.1'`) and uses your AWS credentials.
+The dry run runs the same discovery and checks as conversion. It prints each file with its date, the grid, the bands, the scaling, the validity rule and the expected size. The pixel size is in the unit of the CRS: `m`, `degree` or `US survey foot`. A geographic grid whose longitudes run outside -180 to 180, such as 0 to 360, gets a `longitude:` line. The store keeps those values, so a lookup in xarray must use the same convention. A directory or `s3://` prefix is not searched recursively; use a glob such as `"scenes/**/*.tif"` for subdirectories. Listing an S3 prefix needs the `s3` extra (`uv tool install --python 3.13 'chronozarr[geo,s3]==0.4.1'`) and uses your AWS credentials.
 
-A date is read from a name only when the name holds exactly one. A name with no date, with several (`20240215_2024-03`), or two files with the same date are reported, never guessed. `--date-pattern` says where the date is, for example `--date-pattern "ndvi_%Y%m%d"`. `--write-manifest found.csv` saves discovered files and dates as a manifest that `convert` reads back; it is the one output allowed with `--dry-run`.
+A date is read from a name only when the name holds exactly one. A name with no date, with several (`20240215_2024-03`), or two files with the same date are reported, never guessed. `--date-pattern` says where the date is, for example `--date-pattern "ndvi_%Y%m%d"`. `--write-manifest found.csv` saves discovered files and dates as a manifest that `convert` reads back; it is the one output allowed with `--dry-run`. The manifest is written even when the checks find problems, and the problems are reported after it. A file whose date was not found gets a row with an empty `datetime`, and the report says which rows; fill them in or delete them, then convert the manifest. When the files name their bands, the manifest has a `bands` column with those names to edit.
+
+MODIS and HLS name a file by year and day of year. `MOD13A1.A2020001.h12v04.061.2020326023424_500m_16_days_NDVI.tif` is 1 January 2020, and `HLS.S30.T17SQV.2020061T155151.v2.0.B04.tif` is 1 March 2020 at 15:51:51. `%j` reads the three-digit day of year, 001 to 366, and goes with `%Y`, alone or with `%H%M%S`:
+
+```bash
+chronozarr convert "modis/*.tif" my_store --date-pattern "MOD13A1.A%Y%j" --dry-run
+chronozarr convert "hls/*.tif" my_store --date-pattern "HLS.S30.T17SQV.%Y%jT%H%M%S" --dry-run
+```
+
+`%j` cannot be combined with `%m` or `%d`, and day 366 is refused in a year that has 365 days. Such a name has no date by the default rules, because seven digits can be anything. When one holds seven digits that read as a year and a day of year, the fix line under `no date in the file name` shows the pattern for that name, with the date it reads.
 
 Before it reads any pixels in bulk, `convert` checks every file for its date, grid and CRS, bands, dtype, scale, offset, units and nodata. It reports all problems at once, grouped by file, each with a suggested fix, and writes nothing:
 
@@ -41,7 +50,11 @@ scenes/readme_copy.tif
 
 Files on another grid fail with a suggestion to pass `--resampling`, which warps them to the grid of the first file.
 
-The store takes each band's description (its name), scale, offset and units from the files, so a Sentinel-2 file with a scale of 0.0001 gives reflectance. These must be identical in every file. A file whose bands have no description gives bands named `1`, `2` and so on. To name them, write the files and dates to a manifest with `--write-manifest found.csv`, add a `bands` column such as `ndvi`, and convert the manifest. The store also takes the nodata value that the files declare. Files that declare none give a store with no nodata, so a stored 0 is data. `--nodata 0` sets one.
+The store takes each band's description (its name), scale, offset and units from the files, so a Sentinel-2 file with a scale of 0.0001 gives reflectance. These must be identical in every file. A file whose bands have no description gives bands named `1`, `2` and so on. To name them, write the files and dates to a manifest with `--write-manifest found.csv`, add a `bands` column such as `ndvi`, and convert the manifest. A `bands` column replaces whatever the files say, so it is also the way to rename a band.
+
+Some files carry a description that is the file's own name, such as the one band of a WorldClim file `wc2.1_10m_tmax_2020-01.tif`. When every file has one band and the descriptions are identical once the dates in them are left out, `convert` takes them for file labels and not for a band name. The band is named by the part they share (`wc2.1_10m_tmax`), or `1` when nothing is left, and the dry run prints a `bands:` line that says what it chose and how to change it. Descriptions that differ in anything but the date, such as `B04` and `B08` or `tmax` and `tmin`, are refused, and so are differing descriptions in files with more than one band. In those cases name the bands in a manifest. The store also takes the nodata value that the files declare. Files that declare none give a store with no nodata, so a stored 0 is data. `--nodata 0` sets one.
+
+The dry run also reads three timesteps and checks their pixels. A `fill:` line names a value that the files do not declare as nodata but that looks like a fill: one far outside the other values, such as `-9999` in rainfall, or a common code such as `-3000`. The store keeps it as data, because it could be real. The line gives the option that marks it, such as `--nodata -9999`. A `range:` line gives the values of each band after scale and offset. A scale written as a divisor, such as MODIS NDVI with a scale of 10000, shows up there as a range near 1e8 before anything is written.
 
 ## From a manifest of URLs
 
@@ -66,6 +79,14 @@ A CSV manifest has the columns `uri` and `datetime`, and an optional `bands` col
 chronozarr convert model.nc my_store --variable tas
 chronozarr convert data.zarr my_store --variable ndvi --crs EPSG:32618
 ```
+
+Reading a NetCDF4 file needs the `netcdf` extra, which adds h5netcdf and h5py. The quickstart install does not include it, so add it to the extras that you already use:
+
+```bash
+uv tool install --python 3.13 'chronozarr[geo,netcdf]==0.4.1'
+```
+
+In a uv project, run `uv add 'chronozarr[netcdf]==0.4.1'`. With pip, install `'chronozarr[netcdf]==0.4.1'` in your environment. Without the extra, `convert` stops with `reading a NetCDF4 file needs h5netcdf and h5py` and these commands. A Zarr store needs no extra. A classic NetCDF3 file, which starts with the bytes `CDF`, is not a NetCDF4 file: add `scipy` to the environment instead, for example `uv tool install --python 3.13 'chronozarr[geo]==0.4.1' --with scipy`.
 
 `--variable` names the array to convert. Its dimensions must be time, y and x, with an optional band dimension. `--dims time=NAME,y=NAME,x=NAME[,band=NAME]` names them when they are not `time`, `y`, `x` or common aliases such as `lat` and `lon`. The coordinate system comes from a `crs`, `crs_wkt` or `spatial_ref` attribute, or from the CF grid mapping variable that the variable names in `grid_mapping`; reading a grid mapping needs pyproj. `--crs` gives it, as an EPSG code or WKT2 text, when the file does not declare it. A CRS with no EPSG code, such as Daymet's Lambert conformal conic, is stored as it is and is never reprojected. The CF `scale_factor`, `add_offset` and `units` of the variable apply to every band. `--mask-var` names a variable whose nonzero values mark valid pixels.
 

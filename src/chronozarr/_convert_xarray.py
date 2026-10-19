@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -22,11 +23,48 @@ from chronozarr._convert_source import (
     _settle_nan,
     _value_valid,
 )
+from chronozarr._install import extra_hint
 from chronozarr.crs import wkt2_from_cf
 from chronozarr.schema import Band
 from chronozarr.store import as_store
 
 NETCDF_SUFFIXES = (".nc", ".nc4", ".cdf")
+_HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
+
+
+def _is_installed(module: str) -> bool:
+    return importlib.util.find_spec(module) is not None
+
+
+def _is_hdf5_file(path: str | Path) -> bool:
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(len(_HDF5_SIGNATURE)) == _HDF5_SIGNATURE
+    except OSError:
+        return False
+
+
+def open_netcdf(path: str | Path, **kwargs: Any) -> xr.Dataset:
+    """`xr.open_dataset` for a NetCDF file; the error names the extra when no reader is installed.
+
+    A NetCDF4 file is an HDF5 file. It needs netCDF4, or h5netcdf with h5py, which the `netcdf`
+    extra installs. xarray's own errors for their absence ("found the following matches ... their
+    dependencies may not be installed", or h5netcdf's ImportError for h5py) name no chronozarr
+    extra. Every other failure keeps the error of xarray, including a file that is not HDF5: a
+    NetCDF3 file needs scipy or netCDF4, which the extra does not provide.
+    """
+    try:
+        return xr.open_dataset(path, **kwargs)
+    except (ValueError, ImportError) as exc:
+        has_reader = _is_installed("netCDF4") or (
+            _is_installed("h5netcdf") and _is_installed("h5py")
+        )
+        # With a reader installed, the cause is another one, such as a calendar that needs cftime.
+        if has_reader or not _is_hdf5_file(path):
+            raise
+        raise ValueError(
+            f"{path}: reading a NetCDF4 file needs h5netcdf and h5py: {extra_hint('netcdf')}"
+        ) from exc
 
 
 _DIM_ALIASES = {
@@ -56,7 +94,7 @@ def _open_dataset(source: str) -> xr.Dataset:
     if source.lower().endswith(NETCDF_SUFFIXES):
         if not Path(source).is_file():
             raise FileNotFoundError(f"NetCDF file {source} does not exist")
-        return xr.open_dataset(source, mask_and_scale=False)
+        return open_netcdf(source, mask_and_scale=False)
     if not source.startswith(("http://", "https://")) and not Path(source).exists():
         raise FileNotFoundError(f"input {source} does not exist")
     store = as_store(source)

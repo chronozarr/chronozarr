@@ -34,6 +34,17 @@ class Manifest:
     bounds: Bounds | None
 
 
+@dataclass(frozen=True)
+class ManifestDraft:
+    """What discovery found in a directory, glob or S3 prefix, for `--write-manifest`: the files
+    with a date, the files it could not date (written with an empty datetime) and the band names
+    the files agree on (None: the files name none, or disagree)."""
+
+    entries: list[Entry]
+    undated: tuple[str, ...] = ()
+    bands: tuple[str, ...] | None = None
+
+
 def parse_time(text: str, where: str) -> np.datetime64:
     """ISO-8601 date or datetime (Z or an offset allowed) as UTC milliseconds."""
     try:
@@ -110,6 +121,12 @@ def read_manifest(path: Path) -> Manifest:
     for i, row in enumerate(rows, start=1):
         where = f"{path} row {i}"
         if not isinstance(row, Mapping) or not row.get("uri") or not row.get("datetime"):
+            if isinstance(row, Mapping) and row.get("uri") and row.get("datetime") == "":
+                # the row `--write-manifest` leaves for a file whose date it could not read
+                raise ValueError(
+                    f"{where}: {row['uri']} has no datetime; fill it in (for example "
+                    "2024-03-01) or delete the row"
+                )
             raise ValueError(f"{where}: needs both 'uri' and 'datetime'")
         row_names = _split_bands(row.get("bands"), where)
         if row_names is not None:

@@ -14,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import click
 import numpy as np
 import pytest
 import xarray as xr
@@ -23,7 +24,7 @@ from zarr.errors import ZarrUserWarning
 
 import chronozarr
 from chronozarr import schema
-from chronozarr.cli import main
+from chronozarr.cli import _view_center, main
 from chronozarr.crs import Crs
 from tests.crs_samples import LCC_WKT2, SINUSOIDAL_WKT2
 from tests.narrow import array_at, group_at
@@ -338,3 +339,13 @@ def test_other_geometry_checks_still_apply_to_a_store_without_an_epsg_code(store
     root = zarr.open_group(str(store_copy), mode="r+", zarr_format=3, use_consolidated=False)
     group_at(root, "1").attrs["transform"] = [30.0, 0.0, 746090.0, 0.0, -30.0, 2540440.0]
     assert any("not the level-0 transform scaled" in p for p in chronozarr.validate(store_copy))
+
+
+def test_link_names_a_store_without_a_code_by_its_wkt2_name(store_copy):
+    make_non_epsg(store_copy)
+    opened = chronozarr.open_store(store_copy)
+    west, north = opened.levels[0].transform[2], opened.levels[0].transform[5]
+    inside = (west + 100.0, north - 100.0)
+    assert _view_center(opened, None, inside) == inside
+    with pytest.raises(click.BadParameter, match=r'WKT2 "unknown" x '):
+        _view_center(opened, None, (west - 1e6, north))

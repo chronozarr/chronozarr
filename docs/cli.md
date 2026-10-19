@@ -26,7 +26,7 @@ Run `chronozarr <command> --help` for every option. In a uv project, run `uv run
 | `share STORE` | Starts a disposable Cloudflare quick tunnel for a local store, doctor-checks the public route, and prints a viewer link that opens on any computer. Needs `cloudflared`; Ctrl-C stops both processes. See [Share a temporary link](share.md) |
 | `preview STORE` | Serves a local store on `127.0.0.1` and opens it in the viewer. Its link opens only on this computer. Ctrl-C stops it. See [Preview a store](preview.md) |
 | `publish STORE --destination s3://BUCKET/PREFIX` | Uploads a store to S3 or R2; `gs://` and `az://` destinations publish to Google Cloud Storage and Azure Blob Storage. It checks the hosted store and prints a viewer link. `--update` publishes eligible appended timesteps to the same prefix and link. Install the matching `publish` extra. See [Publish a permanent link](publish.md) |
-| `link STORE_URL` | Prints a viewer URL with an initial product, band, display limits, colormap and timestep, checked against the hosted store |
+| `link STORE_URL` | Prints a viewer URL with an initial product, band, display limits, colormap, timestep, centre and zoom, checked against the hosted store. The centre is a longitude and latitude (`--lonlat`) or a point in the store's coordinates (`--xy`). See [Choose a date and a place](viewer.md#choose-a-date-and-a-place) |
 
 ## Export
 
@@ -39,7 +39,7 @@ Run `chronozarr <command> --help` for every option. In a uv project, run `uv run
 
 | Extra | Adds |
 |-------|------|
-| `geo` | GeoTIFF input and output |
+| `geo` | GeoTIFF input and output, and `link --lonlat` for a store in a projected coordinate system |
 | `notebook` | `chronozarr.view(store)` for Jupyter. See [notebooks](notebooks.md) |
 | `netcdf`, `dask` | NetCDF input and dask arrays |
 | `s3` | Listing of an `s3://` prefix for `convert` |

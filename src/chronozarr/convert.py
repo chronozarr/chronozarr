@@ -23,11 +23,14 @@ searched recursively unless a glob says so, and only `.tif` and `.tiff` files co
 dated from its name only when the name holds exactly one date: YYYYMMDD, YYYY-MM-DD or YYYY_MM_DD
 (a day), YYYY-MM or YYYY_MM (the first of the month). A bare six-digit YYYYMM is not read because
 it cannot be told from YYMMDD. `date_pattern` (`--date-pattern`, strptime-like with `%Y %m %d %H
-%M %S`) replaces these rules and finds the date where the pattern says. A name with no date, with
+%M %S`, or `%Y` and `%j` for a year and day of year) replaces these rules and finds the date where
+the pattern says. A name with no date, with
 several different dates or with an impossible one, and two files with the same date, are reported;
 none is guessed or dropped. What the files hold is checked as for a manifest, and everything found
 wrong, in the names and in the files, is reported together, per file, in one `PreflightError`
-(`--dry-run` writes nothing and reports the same). `write_manifest_to` exports the files and dates.
+(`--dry-run` writes nothing and reports the same). `write_manifest_to` exports the files, their
+dates and the band names the files agree on, also when the checks report problems: a file
+with no date gets a row with an empty datetime for the user to fill in.
 
 Fidelity rules. The store carries the source's scale, offset, units and validity, or the
 conversion fails; nothing is guessed.
@@ -38,8 +41,11 @@ Scale, offset and units:
    objects. Scale and offset are always written (1 and 0 when the source sets none). A store
    holds one value per band for every timestep, so each must be identical in all sources, band by
    band; the first source that differs fails the conversion and is named. Descriptions name the
-   bands unless the manifest does, and must agree too. An alpha band (colour interpretation
-   alpha) is not a data band: it is not stored as data and becomes the mask (rule 4).
+   bands unless the manifest does, and must agree too, except that a single-band series
+   whose descriptions differ only by a date (WorldClim's `wc2.1_10m_tmax_2020-01.tif`, the
+   file's own name) is taken for file labels: the band is named by what they share, else
+   `1`, and the plan says so. An alpha band (colour interpretation alpha) is not a data
+   band: it is not stored as data and becomes the mask (rule 4).
 2. Zarr and NetCDF: the variable's CF `scale_factor`, `add_offset` and `units` apply to every
    band (1 and 0 when absent); a scale that is zero or not finite fails.
 
@@ -77,6 +83,11 @@ mask, or with a `mask` variable shared by all bands (spec 2.3, 2.4).
    through a mask.
 8. Warped COG timesteps use the nearest-neighbour resampling of their validity plane, whatever
    `--resampling` says for the values.
+
+Plan lines from the pixels. The plan reads three timesteps, and from those pixels it adds a `fill:`
+line when a value that no declared nodata or mask covers looks like a fill (`_convert_pixels`
+says how it is judged), and a `range:` line, each band's values after scale and offset, when a band
+declares a scale or offset. Neither changes what is written or refuses a conversion.
 
 Image frames. A sequence of rendered, georeferenced PNGs (Earth Engine thumbnails, QGIS and
 matplotlib exports, drone pipelines) converts like COGs, with no GeoTIFF step; GDAL reads the
@@ -154,11 +165,15 @@ from chronozarr._convert_manifest import (
     Manifest as Manifest,
 )
 from chronozarr._convert_manifest import (
+    ManifestDraft as ManifestDraft,
+)
+from chronozarr._convert_manifest import (
     parse_time as parse_time,
 )
 from chronozarr._convert_manifest import (
     read_manifest as read_manifest,
 )
+from chronozarr._convert_pixels import fill_line, range_line
 from chronozarr._convert_preflight import (
     PreflightError as PreflightError,
 )
@@ -263,6 +278,10 @@ class Plan:
     warped: int
     samples: dict[int, Step] = field(default_factory=dict, repr=False)
     discovered: bool = False  # the files were found by listing, not named by a manifest
+    # From the sampled pixels (None: not sampled, or nothing to say): the value range after
+    # scale and offset, and a likely undeclared fill value.
+    value_range: str | None = None
+    fill: str | None = None
 
     def lines(self, read_ahead: int = 2, list_files: bool = False) -> list[str]:
         info = self.source.info
@@ -275,8 +294,10 @@ class Plan:
         if list_files and self.discovered and isinstance(self.source, CogManifestSource):
             out.append(f"files:      {len(self.source.entries)}, dated from their names")
             out.extend(f"  {show_time(e.time)}  {e.uri}" for e in self.source.entries)
+        longitude = info.grid.longitude_note()
         out += [
             f"grid:       {info.grid.describe()}",
+            *([f"longitude:  {longitude}"] if longitude else []),
             f"data:       {info.n_band} bands ({', '.join(info.band_names)}), {info.dtype.name}",
             "scaling:    "
             + ", ".join(
@@ -285,7 +306,9 @@ class Plan:
                 + (f" [{b.units}]" if b.units else "")
                 for b in info.bands
             ),
+            *([f"range:      {self.value_range}"] if self.value_range else []),
             f"validity:   {info.validity}",
+            *([f"fill:       {self.fill}"] if self.fill else []),
             *self.source.notes,
         ]
         if self.warped:
@@ -466,6 +489,10 @@ def plan_conversion(
         plan.sample_read_s = float(np.mean(seconds))
         plan.sample_ratio = _sample_ratio(list(plan.samples.values()), chunk_size)
         plan.est_output_bytes = int(plan.raw_bytes * plan.sample_ratio * pyramid)
+        if not isinstance(source, LegacySource):  # a migration copies what the store holds
+            steps = list(plan.samples.values())
+            plan.value_range = range_line(steps, info)
+            plan.fill = fill_line(steps, info)
     return plan
 
 
@@ -609,6 +636,29 @@ def _staged_masks(plan: Plan, work: Path) -> Iterator[np.ndarray]:
         yield np.load(_staged_mask_path(work, t))
 
 
+def _write_draft(draft: ManifestDraft, path: Path) -> str:
+    """Write what discovery found although the files have problems; the sentence that says so."""
+    write_manifest(draft.entries, path, undated=draft.undated, bands=draft.bands)
+    n_rows = len(draft.entries) + len(draft.undated)
+    said = f"wrote manifest {path}: {n_rows} row{'s' if n_rows != 1 else ''}"
+    if draft.bands:
+        said += f", band{'s' if len(draft.bands) != 1 else ''} {';'.join(draft.bands)}"
+    if not draft.undated:
+        return f"{said}. Edit it and run convert on it, or fix the files and run again."
+    shown = ", ".join(Path(uri).name for uri in draft.undated[:3])
+    more = f" and {len(draft.undated) - 3} more" if len(draft.undated) > 3 else ""
+    count = (
+        f"{len(draft.undated)} of {n_rows} rows have"
+        if len(draft.undated) > 1
+        else f"1 of {n_rows} rows has"
+    )
+    return (
+        f"{said}. {count} no datetime because a date could not be read from the name "
+        f"({shown}{more}). Fill them in (for example 2024-03-01) or delete those rows, then run "
+        "convert on the manifest; problems in the files themselves need the fixes listed above."
+    )
+
+
 @_tolerate_unlocated_frames
 def convert(
     source: str | Path,
@@ -644,9 +694,12 @@ def convert(
 
     A directory, glob or S3 prefix of GeoTIFFs is listed and each file dated from its name, like
     a manifest of those files (module docstring, "Discovered GeoTIFFs"). `date_pattern` is a
-    strptime-like pattern (`%Y %m %d %H %M %S`) that says where the date is; `write_manifest_to`
+    strptime-like pattern (`%Y %m %d %H %M %S`, or `%Y%j` for a day of year) that says where the
+    date is; `write_manifest_to`
     writes the files and dates found as a `.csv` or `.json` manifest (`convert` reads it back),
-    also on a dry run, and refuses to overwrite a file.
+    with a `bands` column or entry when the files name their bands. It is written on a dry
+    run too, and also when the checks raise a `PreflightError` (a file with no date gets an
+    empty datetime; the error carries a note saying so). It refuses to overwrite a file.
 
     Image frames (PNG) are manifest sources. `crs` names the CRS of frames that carry none (a
     world file has none). `bounds` is `(west, south, east, north)` in the units of `crs`, the
@@ -674,37 +727,44 @@ def convert(
         raise ValueError(f"read_ahead must be >= 1, got {read_ahead}")
     if write_manifest_to is not None:
         check_manifest_target(Path(write_manifest_to))
+        if not is_discovery_source(str(source)):
+            raise ValueError(
+                "--write-manifest exports the files found in a directory, glob or S3 prefix; "
+                "this source is already a manifest or is not a set of GeoTIFFs"
+            )
     out_path = Path(out)
     if not dry_run and out_path.exists() and any(out_path.iterdir()):
         raise FileExistsError(
             f"{out_path} already exists and is not empty; stores are immutable, write to a "
             "new path"
         )
-    plan = plan_conversion(
-        source,
-        variable=variable,
-        dims=dims,
-        crs=crs,
-        transform=transform,
-        shape=shape,
-        resampling=resampling,
-        nodata=nodata,
-        mask_var=mask_var,
-        bounds=bounds,
-        chunk_size=encode_options.get("chunk_size", 512),
-        n_lods=encode_options.get("n_lods"),
-        date_pattern=date_pattern,
-    )
+    try:
+        plan = plan_conversion(
+            source,
+            variable=variable,
+            dims=dims,
+            crs=crs,
+            transform=transform,
+            shape=shape,
+            resampling=resampling,
+            nodata=nodata,
+            mask_var=mask_var,
+            bounds=bounds,
+            chunk_size=encode_options.get("chunk_size", 512),
+            n_lods=encode_options.get("n_lods"),
+            date_pattern=date_pattern,
+        )
+    except PreflightError as exc:
+        if write_manifest_to is not None and exc.draft is not None:
+            exc.wrote_manifest(_write_draft(exc.draft, Path(write_manifest_to)))
+        raise
     bands = list(plan.source.info.bands)
     if band_roles:
         bands = list(assign_roles(bands, band_roles))
     if write_manifest_to is not None:
-        if not plan.discovered or not isinstance(plan.source, CogManifestSource):
-            raise ValueError(
-                "--write-manifest exports the files found in a directory, glob or S3 prefix; "
-                "this source is already a manifest or is not a set of GeoTIFFs"
-            )
-        write_manifest(plan.source.entries, Path(write_manifest_to))
+        assert isinstance(plan.source, CogManifestSource)
+        draft = plan.source.draft
+        write_manifest(draft.entries, Path(write_manifest_to), bands=draft.bands)
     if on_plan is not None:
         on_plan(plan)
     if dry_run:
