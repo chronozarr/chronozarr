@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from importlib.metadata import version
 
 import numpy as np
 import pytest
@@ -164,8 +165,9 @@ def test_geotiff_input_without_rasterio_names_the_geo_extra(tmp_path, monkeypatc
     result = CliRunner().invoke(main, ["encode", str(tmp_path / "*.tif"), str(tmp_path / "o")])
     assert result.exit_code == 1
     # An installed package has no project to sync: the hint names the installed routes too.
-    assert "uv tool install --python 3.13 'chronozarr[geo]'" in result.output
-    assert "uv add 'chronozarr[geo]'" in result.output
+    pin = version("chronozarr")
+    assert f"uv tool install --python 3.13 'chronozarr[geo]=={pin}'" in result.output
+    assert f"uv add 'chronozarr[geo]=={pin}'" in result.output
     assert "uv sync --extra geo" in result.output
 
 
