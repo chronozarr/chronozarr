@@ -1345,14 +1345,16 @@ def _view_center(
     default=None,
     metavar="LOW,HIGH",
     help="Display limits of the single-band product, in physical units (the band's scale and "
-    "offset applied). Needs --product band.",
+    "offset applied). Needs --product band unless the single band is the only product the "
+    "store has, which link then uses.",
 )
 @click.option(
     "--colormap",
     type=click.Choice(COLORMAPS),
     default=None,
     help="Colormap of the single-band product (the viewer's default is gray). "
-    "Needs --product band.",
+    "Needs --product band unless the single band is the only product the store has, which "
+    "link then uses.",
 )
 @click.option("--time", "t", type=int, default=None, help="Initial timestep index.")
 @click.option(
@@ -1408,10 +1410,13 @@ def link_command(
             "use chronozarr.view()"
         )
     low_high = _parse_numbers(limits, 2, "--range", float)
-    if low_high is not None and product != "band":
-        raise click.UsageError("--range sets the single-band product: add --product band")
-    if colormap is not None and product != "band":
-        raise click.UsageError("--colormap colors the single-band product: add --product band")
+    needs_band = []
+    if low_high is not None:
+        needs_band.append("--range sets the single-band product")
+    if colormap is not None:
+        needs_band.append("--colormap colors the single-band product")
+    if needs_band and product not in (None, "band"):
+        raise click.UsageError(f"{needs_band[0]}: add --product band")
     lon_lat = _parse_numbers(lonlat, 2, "--lonlat", float)
     store_xy = _parse_numbers(xy, 2, "--xy", float)
     if lon_lat is not None and store_xy is not None:
@@ -1420,6 +1425,19 @@ def link_command(
         opened = open_store(store_url)
         bands = opened.attrs.bands
         statuses = {s.id: s for s in product_status(bands)}
+        if product is None and needs_band:
+            others = [i for i, s in statuses.items() if s.available and i != "band"]
+            if others:
+                raise click.UsageError(
+                    f"{needs_band[0]}: add --product band (this store also has "
+                    f"{', '.join(others)}, so the product is ambiguous)"
+                )
+            product = "band"
+            click.echo(
+                "no --product: this store has no product but the single band, so using "
+                "--product band",
+                err=True,
+            )
         if product is not None:
             if product not in statuses:
                 raise click.BadParameter(
