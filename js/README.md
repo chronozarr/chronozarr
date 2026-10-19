@@ -4,7 +4,7 @@ Browser and Node reader for [chronozarr](https://github.com/chronozarr/chronozar
 
 A chronozarr store is a Zarr v3 time series of rasters with a multiscale pyramid. The writer makes one object per chunk by default and can shard the chunks. A client reads one timestep of one map cell with one HTTP request. For an unsharded store that request is a plain `GET` of one chunk. For a sharded store it is one range read of a shard, once the shard index is cached.
 
-The reader turns `(lod, row, col, t)` into a typed array. It caches the shard indexes of sharded stores, decodes in a worker pool and prefetches a window of the time axis around the current timestep. It reads spec 0.3 stores ([spec](https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md)). The Python package `chronozarr` writes them.
+The reader turns `(lod, row, col, t)` into a typed array. It caches the shard indexes of sharded stores, decodes in a worker pool and prefetches a window of the time axis around the current timestep. It reads spec 0.3 and 0.4 stores ([spec](https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md)). The Python package `chronozarr` writes them.
 
 The package is plain ES modules with no build step and no runtime dependency, because zarrita and numcodecs are vendored (see [Licenses](#licenses)).
 
@@ -79,6 +79,8 @@ store.close(); // aborts in-flight requests and releases the decode workers
 
 `getCell` returns the exact stored values at every timestep. `store.levels[lod]` describes each pyramid level with `gridRows`, `gridCols`, `width`, `height`, `resolution` and `transform`. `store.prefetch({ lod, cells, t })` fills the caches around a timestep. `store.stats()` reports requests, bytes and cache hits.
 
+`store.crs` is the authority code the arrays declare as `proj:code`, or `null` for a store that declares none (spec 0.4 allows a CRS with no code). `store.wkt2` and `store.projjson` hold `proj:wkt2` and `proj:projjson`, `null` where absent. At least one of the three is set, and where they disagree the WKT2 outranks PROJJSON, which outranks the code.
+
 `prefetch` takes `playing: true` to extend the window to the whole loop. It takes `masks: true` to fetch the masks alongside the chunks.
 
 `openStore` takes these options. `chronozarr/decoder.js` documents all of them.
@@ -120,11 +122,11 @@ map.on('click', async (event) => console.log(await layer.getValueAt(event.lngLat
 
 The layer needs MapLibre GL JS 5 or later. The host page loads MapLibre, which is not a dependency of this package. The tested version is in [evidence.md](https://github.com/chronozarr/chronozarr/blob/main/docs/evidence.md#javascript-dependencies).
 
-The layer draws on the Web Mercator projection. It supports stores in UTM, EPSG:3857 and EPSG:4326. Options, events, limits and the level-of-detail rule are in [js/maplibre/README.md](https://github.com/chronozarr/chronozarr/blob/main/js/maplibre/README.md).
+The layer draws on the Web Mercator projection. It supports stores in UTM, EPSG:3857 and EPSG:4326, and stores whose arrays carry the CRS as `proj:wkt2` or `proj:projjson` in the Lambert conformal conic, sinusoidal, Albers, Lambert azimuthal, stereographic and transverse Mercator projections. Only those stores load proj4 (24 KB gzipped), by `import()`. Options, events, limits and the level-of-detail rule are in [js/maplibre/README.md](https://github.com/chronozarr/chronozarr/blob/main/js/maplibre/README.md).
 
 ## Licenses
 
-chronozarr is Apache-2.0 (`LICENSE`). The package vendors four MIT-licensed packages.
+chronozarr is Apache-2.0 (`LICENSE`). The package vendors six MIT-licensed packages.
 
 Trevor Manz wrote three of them: zarrita, @zarrita/storage and numcodecs. They are vendored unmodified apart from a header comment, and their licenses sit beside them. The header of each file records the package version and the SHA-256 of the published file.
 
@@ -134,7 +136,11 @@ Trevor Manz wrote three of them: zarrita, @zarrita/storage and numcodecs. They a
 | `vendor/zarrita-storage/` | [@zarrita/storage](https://github.com/manzt/zarrita.js) | 0.2.0 | MIT |
 | `vendor/numcodecs/` | [numcodecs](https://github.com/manzt/numcodecs.js) | 0.3.2 | MIT |
 | `vendor/gifenc.esm.js` | [gifenc](https://github.com/mattdesl/gifenc) | 1.0.3 | MIT |
+| `vendor/proj4/` | [proj4js](https://github.com/proj4js/proj4js) | 2.22.0 | MIT |
+| `vendor/proj4/` | [wkt-parser](https://github.com/proj4js/wkt-parser) | 1.5.6 | MIT |
 
 The viewer export uses gifenc, written by Matt DesLauriers. It ships as one file, and its license text is in the header of that file.
 
 `vendor/numcodecs/blosc.js`, `lz4.js` and `zstd.js` embed WebAssembly builds of Blosc (with its bundled zlib and snappy), LZ4 and Zstandard. Those C libraries carry their own permissive upstream licenses, BSD-style and zlib. numcodecs ships no separate notice for them.
+
+`vendor/proj4/proj4.js` is not a copy of a published file. esbuild bundles and minifies proj4's core, wkt-parser and the projections stores use (`js/support/proj4-entry.js`), which is 24.8 KB gzipped against 42.3 KB for proj4's own build. Its header records both versions, the esbuild version and a SHA-256 over every source file, and both licenses sit beside it. `node js/support/vendor.mjs` regenerates it and `--check` verifies it.

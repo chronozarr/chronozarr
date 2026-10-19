@@ -1,4 +1,4 @@
-// Map projections for the MapLibre adapter, in plain JS (no dependencies).
+// Map projections for the MapLibre adapter, in plain JS.
 //
 // A chronozarr store lives in one projected CRS (normally a UTM zone). MapLibre draws in spherical Web
 // Mercator, normalised so the world is the unit square (x east, y south), the same convention as
@@ -6,7 +6,9 @@
 // `lonLatToMercator` / `mercatorToLonLat` give the lon/lat <-> MapLibre step. All in float64.
 //
 // UTM uses Karney's (2011) Kruger n-series to 6th order, the same series PROJ's `etmerc` evaluates:
-// accurate to nanometres within several thousand km of the central meridian.
+// accurate to nanometres within several thousand km of the central meridian. EPSG:3857 and EPSG:4326 are
+// closed forms. Any other CRS goes through the proj4 build in js/vendor/proj4, loaded by `import()` only when a
+// store needs it, so a UTM or Web Mercator store fetches nothing extra.
 
 const DEG = Math.PI / 180;
 const WGS84_A = 6378137;
@@ -115,23 +117,75 @@ const webMercatorProjection = {
 
 const geographicProjection = { crs: 'EPSG:4326', kind: 'geographic', toLonLat: (x, y) => [x, y], fromLonLat: (lon, lat) => [lon, lat] };
 
-export const SUPPORTED_CRS = 'EPSG:326zz and EPSG:327zz (WGS84 UTM zones 1-60 north and south), EPSG:3857, EPSG:4326';
+const PROJ4_PROJECTIONS = 'aea, laea, lcc, sinu, stere, tmerc, merc and longlat';
+export const SUPPORTED_CRS = `EPSG:326zz and EPSG:327zz (WGS84 UTM zones 1-60 north and south), EPSG:3857 and EPSG:4326 by code; any other CRS by its proj:wkt2 or proj:projjson, in the ${PROJ4_PROJECTIONS} projections`;
 
-/**
- * The store CRS <-> lon/lat (degrees, WGS84). Supports WGS84 UTM (EPSG:326zz north, 327zz south), EPSG:3857
- * and EPSG:4326; anything else throws, naming the supported set.
- *
- * @returns {{crs:string, kind:string, toLonLat:(x:number,y:number)=>[number,number], fromLonLat:(lon:number,lat:number)=>[number,number]}}
- */
-export function createProjection(crs) {
-  const utm = /^EPSG:32([67])(\d{2})$/.exec(crs);
+function builtinProjection(code) {
+  const utm = /^EPSG:32([67])(\d{2})$/.exec(code);
   if (utm) {
     const zone = Number(utm[2]);
-    if (zone >= 1 && zone <= 60) return utmProjection(crs, zone, utm[1] === '7');
+    if (zone >= 1 && zone <= 60) return utmProjection(code, zone, utm[1] === '7');
   }
-  if (crs === 'EPSG:3857') return webMercatorProjection;
-  if (crs === 'EPSG:4326') return geographicProjection;
-  throw new Error(`chronozarr maplibre: unsupported store CRS "${crs}". Supported: ${SUPPORTED_CRS}. Re-encode the store in one of these, or add the projection to js/maplibre/projection.js.`);
+  if (code === 'EPSG:3857') return webMercatorProjection;
+  if (code === 'EPSG:4326') return geographicProjection;
+  return null;
+}
+
+/** The authority code the CRS definition gives itself: the ID that ends a WKT2 root node, or a PROJJSON id; else the declared code. */
+function identify({ crs, wkt2, projjson }) {
+  if (wkt2 !== null) {
+    const root = /(?:ID|AUTHORITY)\[\s*"([^"]+)"\s*,\s*"?([^"\],\s]+)"?\s*\]\s*\]$/.exec(wkt2.trim());
+    return root ? `${root[1]}:${root[2]}` : null;
+  }
+  if (projjson !== null) return projjson.id ? `${projjson.id.authority}:${projjson.id.code}` : null;
+  return crs;
+}
+
+async function loadProj4() {
+  try {
+    return (await import('../vendor/proj4/proj4.js')).default;
+  } catch (error) {
+    throw new Error(`chronozarr maplibre: could not load js/vendor/proj4/proj4.js, which this store's CRS needs (${error.message})`);
+  }
+}
+
+/** WGS84 lon/lat <-> the CRS that `definition` (WKT2 text or a PROJJSON object) describes, through the vendored proj4 build. */
+async function proj4Projection(definition, crs) {
+  const proj4 = await loadProj4();
+  let converter;
+  try {
+    converter = proj4(definition);
+  } catch (reason) {
+    // proj4 throws strings that echo the whole definition.
+    throw new Error(`chronozarr maplibre: cannot place a store in this CRS: ${String(reason?.message ?? reason).slice(0, 100)}. The bundled proj4 reads WKT2 and PROJJSON in the ${PROJ4_PROJECTIONS} projections; re-encode the store in a CRS that uses one of them, or add the projection to js/support/proj4-entry.js and run node js/support/vendor.mjs.`);
+  }
+  return {
+    crs,
+    kind: 'proj4',
+    toLonLat: (x, y) => converter.inverse([x, y]),
+    fromLonLat: (lon, lat) => converter.forward([lon, lat]),
+  };
+}
+
+/**
+ * The store CRS <-> lon/lat (degrees, WGS84), from what the store declares: `source` is a code string, or an object
+ * with any of `crs` (the `proj:code`), `wkt2` and `projjson` (a ChronoStore has all three). WGS84 UTM
+ * (EPSG:326zz north, 327zz south), EPSG:3857 and EPSG:4326 are built in, matched by the code, or by the ID that
+ * ends the WKT2 or PROJJSON when there is one; no other code is a definition. A WKT2 or PROJJSON that names none of
+ * them is read by proj4, fetched by `import()` the first time it is needed, so EPSG stores load nothing extra. When
+ * the WKT2 and the code disagree, the WKT2 wins, and PROJJSON outranks the code.
+ *
+ * @param {string | {crs?: string|null, wkt2?: string|null, projjson?: object|null}} source
+ * @returns {Promise<{crs:string|null, kind:string, toLonLat:(x:number,y:number)=>[number,number], fromLonLat:(lon:number,lat:number)=>[number,number]}>}
+ */
+export async function createProjection(source) {
+  const { crs = null, wkt2 = null, projjson = null } = typeof source === 'string' ? { crs: source } : source;
+  const code = identify({ crs, wkt2, projjson });
+  const builtin = code === null ? null : builtinProjection(code);
+  if (builtin) return builtin;
+  if (wkt2 !== null || projjson !== null) return proj4Projection(wkt2 ?? projjson, code);
+  if (crs === null) throw new Error('chronozarr maplibre: the store declares no CRS (proj:code, proj:wkt2 and proj:projjson are all absent).');
+  throw new Error(`chronozarr maplibre: unsupported store CRS "${crs}" and no proj:wkt2 or proj:projjson to read it from. Supported: ${SUPPORTED_CRS}. Re-encode the store with its CRS as proj:wkt2, as the chronozarr writer does.`);
 }
 
 /** lon/lat in degrees to MapLibre mercator coordinates in [0, 1] (x east from -180, y south from the north limit). */

@@ -1,3 +1,4 @@
+import { DAYMET_LCC, MODIS_SINUSOIDAL } from '../support/crs-fixtures.js';
 import { expect, test } from './fixtures.js';
 import { storedValue } from './stores.js';
 
@@ -6,6 +7,10 @@ import { storedValue } from './stores.js';
 const EMPTY_STYLE = { version: 8, sources: {}, layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#1b2233' } }] };
 
 test('MapLibre demo: the layer opens a synthetic store, reports ready, follows time and product, and reads values under a click', async ({ page, servers, storeUrl }) => {
+  const proj4Requests = [];
+  page.on('request', (request) => {
+    if (request.url().includes('/vendor/proj4/')) proj4Requests.push(request.url());
+  });
   await page.route(/^https:\/\/cdn\.jsdelivr\.net\//, (route) => route.continue());
   await page.route('https://demotiles.maplibre.org/style.json', (route) => route.fulfill({ json: EMPTY_STYLE }));
   const storeName = 'u16_sharded';
@@ -43,7 +48,70 @@ test('MapLibre demo: the layer opens a synthetic store, reports ready, follows t
   for (const [band, name] of ['B02', 'B03', 'B04', 'B08'].entries()) {
     expect(rows[name], `${name} under the click at col ${col}, row ${row}`).toMatch(new RegExp(`^${storedValue(storeName, 3, band, Number(row), Number(col))}\\s`));
   }
+  expect(proj4Requests, 'a UTM store fetches no proj4').toEqual([]);
 });
+
+// A store with no EPSG code is placed from the proj:wkt2 its arrays carry. The expected numbers are pyproj's
+// (support/crs-fixtures.js): the outline of the 200 x 200 grid and the lon/lat of four pixel centres.
+for (const [storeName, label, fixture] of [['u16_lcc', 'Daymet LCC', DAYMET_LCC], ['u16_sinusoidal', 'MODIS sinusoidal', MODIS_SINUSOIDAL]]) {
+  test(`MapLibre demo: a ${label} store with no EPSG code is placed by pyproj's coordinates, reads the stored values there, and is the only one to load proj4`, async ({ page, servers, storeUrl }) => {
+    const proj4Requests = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/vendor/proj4/')) proj4Requests.push(request.url());
+    });
+    await page.route(/^https:\/\/cdn\.jsdelivr\.net\//, (route) => route.continue());
+    await page.route('https://demotiles.maplibre.org/style.json', (route) => route.fulfill({ json: EMPTY_STYLE }));
+    await page.goto(`${servers.appUrl}/maplibre/index.html?store=${encodeURIComponent(await storeUrl(storeName))}`);
+    await expect(page.locator('#status')).toHaveAttribute('data-state', 'ready', { timeout: 30_000 });
+    await expect(page.locator('#error')).toBeEmpty();
+    expect(proj4Requests, 'proj4 is fetched once, for this store').toEqual([`${servers.appUrl}/vendor/proj4/proj4.js`]);
+
+    const { bounds, crs, wkt2 } = await page.evaluate(() => ({ bounds: window.chronozarrDemo.layer.bounds, crs: window.chronozarrDemo.layer.store.crs, wkt2: window.chronozarrDemo.layer.store.wkt2 }));
+    expect(crs).toBeNull();
+    expect(wkt2).toBe(fixture.wkt2);
+    const [west, south, east, north] = fixture.grid.outline;
+    expect(bounds[0][0]).toBeCloseTo(west, 7);
+    expect(bounds[0][1]).toBeCloseTo(south, 7);
+    expect(bounds[1][0]).toBeCloseTo(east, 7);
+    expect(bounds[1][1]).toBeCloseTo(north, 7);
+
+    for (const [col, row, lon, lat] of fixture.grid.centres) {
+      const value = await page.evaluate(([lng, lat]) => window.chronozarrDemo.layer.getValueAt({ lng, lat }, { t: 2 }), [lon, lat]);
+      expect(value, `pixel centre (${col}, ${row})`).not.toBeNull();
+      expect([value.col, value.row]).toEqual([col, row]);
+      expect(value.lngLat.lng).toBeCloseTo(lon, 8);
+      expect(value.lngLat.lat).toBeCloseTo(lat, 8);
+      for (const [band, bandValue] of value.bands.entries()) expect(bandValue.stored, `band ${band} at (${col}, ${row})`).toBe(storedValue(storeName, 2, band, row, col));
+    }
+    // Half a pixel outside the grid is outside the store.
+    const [, , lonOut, latOut] = fixture.grid.centres[0];
+    expect(await page.evaluate(([lng, lat]) => window.chronozarrDemo.layer.getValueAt({ lng, lat }), [lonOut - 5, latOut])).toBeNull();
+
+    // The raster is drawn where pyproj puts it: the middle of the footprint is painted, and the map beyond its western edge is not.
+    const painted = await page.evaluate(
+      ([lon, lat, outLon]) =>
+        new Promise((resolve) => {
+          const { map } = window.chronozarrDemo;
+          map.once('render', () => {
+            const canvas = map.getCanvas();
+            const gl = canvas.getContext('webgl2');
+            const colorAt = ([lng, lat]) => {
+              const { x, y } = map.project([lng, lat]);
+              const pixel = new Uint8Array(4);
+              gl.readPixels(Math.round(x * (canvas.width / canvas.clientWidth)), Math.round(canvas.height - y * (canvas.height / canvas.clientHeight)), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+              return [...pixel.slice(0, 3)];
+            };
+            resolve({ inside: colorAt([lon, lat]), outside: colorAt([outLon, lat]) });
+          });
+          map.triggerRepaint();
+        }),
+      [fixture.grid.centres[1][2], fixture.grid.centres[1][3], fixture.grid.outline[0] - 0.05 * (fixture.grid.outline[2] - fixture.grid.outline[0])],
+    );
+    const BACKGROUND = [0x1b, 0x22, 0x33];
+    expect(painted.outside, 'beyond the footprint is the map background').toEqual(BACKGROUND);
+    expect(painted.inside, 'inside the footprint is not').not.toEqual(BACKGROUND);
+  });
+}
 
 test('MapLibre demo: a SAR store with HH and HV offers the dual-pol composite and draws it in color', async ({ page, servers, storeUrl }) => {
   await page.route(/^https:\/\/cdn\.jsdelivr\.net\//, (route) => route.continue());

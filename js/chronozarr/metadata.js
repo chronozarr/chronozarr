@@ -8,7 +8,9 @@ export const DTYPES = {
   float32: { Array: Float32Array, bytes: 4 },
 };
 
-const SUPPORTED_SPEC = /^0\.3\.\d+$/;
+const SUPPORTED_SPEC = /^0\.[34]\.\d+$/;
+/** An authority code of any authority: "EPSG:32631", "ESRI:54008", "IAU_2015:30100". */
+const CRS_CODE = /^[A-Za-z][A-Za-z0-9_]*:\S+$/;
 export const CONVENTIONS = Object.fromEntries([
   ['multiscales', 'd35379db-88df-4056-af3a-620245f8e347'],
   ['proj', 'f17cb550-5864-4468-aeb7-f3180cfb622f'],
@@ -43,10 +45,10 @@ export function parseRoot(root, baseUrl) {
   const attrs = root.attributes;
   const cz = attrs?.chronozarr;
   requireStore(cz, baseUrl, 'root attributes have no "chronozarr" entry; use chronozarr convert');
-  requireStore(typeof cz.spec_version === 'string' && SUPPORTED_SPEC.test(cz.spec_version), baseUrl, `unsupported spec_version ${cz.spec_version}; use chronozarr convert to convert this store to v0.3`);
+  requireStore(typeof cz.spec_version === 'string' && SUPPORTED_SPEC.test(cz.spec_version), baseUrl, `unsupported spec_version ${cz.spec_version}; this reader opens 0.3.x and 0.4.x stores, use chronozarr convert to write a current one`);
   requireStore(!('temporal' in cz), baseUrl, 'temporal encoding is outside the v0.3 baseline; use chronozarr convert');
   requireStore(Array.isArray(cz.times) && cz.times.length > 0 && cz.times.every((t, i) => typeof t === 'string' && Number.isFinite(Date.parse(t)) && (i === 0 || Date.parse(t) > Date.parse(cz.times[i - 1]))), baseUrl, 'chronozarr.times must contain increasing ISO timestamps');
-  requireStore(/^EPSG:[1-9]\d*$/.test(cz.crs), baseUrl, 'chronozarr.crs must be an EPSG code');
+  requireStore(cz.crs === undefined || (typeof cz.crs === 'string' && CRS_CODE.test(cz.crs)), baseUrl, 'chronozarr.crs must be a CRS code such as "EPSG:32631" when present');
   requireStore(cz.nodata === null || Number.isFinite(cz.nodata), baseUrl, 'chronozarr.nodata must be a number or null');
   requireStore(cz.volatility_path === undefined || cz.volatility_path === 'volatility', baseUrl, 'volatility_path must equal volatility');
   for (const name of ['mask', 'coverage']) requireStore(cz[`${name}_variable`] === undefined || cz[`${name}_variable`] === name, baseUrl, `${name}_variable must equal ${name}`);
@@ -77,16 +79,34 @@ export function normalizeBands(cz, baseUrl) {
   return { bands, bandNames: names };
 }
 
-/** P/S are authoritative; mirrors may only agree, never replace them. */
+/** The CRS an array declares: `proj:code`, `proj:wkt2` and `proj:projjson`, null where absent, at least one present. */
+function declaredCrs(attrs, lod, baseUrl) {
+  const crs = attrs['proj:code'] ?? null;
+  const wkt2 = attrs['proj:wkt2'] ?? null;
+  const projjson = attrs['proj:projjson'] ?? null;
+  requireStore(crs === null || (typeof crs === 'string' && CRS_CODE.test(crs)), baseUrl, `level ${lod} proj:code must be a CRS code such as "EPSG:32631", got ${JSON.stringify(crs)}`);
+  requireStore(wkt2 === null || (typeof wkt2 === 'string' && wkt2.length > 0), baseUrl, `level ${lod} proj:wkt2 must be a non-empty string`);
+  requireStore(projjson === null || (typeof projjson === 'object' && !Array.isArray(projjson)), baseUrl, `level ${lod} proj:projjson must be an object`);
+  requireStore(crs !== null || wkt2 !== null || projjson !== null, baseUrl, `level ${lod} declares no CRS: it needs proj:code, proj:wkt2 or proj:projjson`);
+  return { crs, wkt2, projjson };
+}
+
+/** Whether two spatial declarations name the same CRS, field for field. */
+export const sameCrs = (a, b) => a.crs === b.crs && a.wkt2 === b.wkt2 && JSON.stringify(a.projjson) === JSON.stringify(b.projjson);
+
+/**
+ * P/S are authoritative; mirrors may only agree, never replace them. The `crs` mirror is optional, and without a
+ * `proj:code` there is nothing to compare it with.
+ */
 export function parseSpatial(meta, cz, lod, baseUrl) {
   const attrs = meta.attributes;
   registration(attrs, 'proj', baseUrl);
   registration(attrs, 'spatial', baseUrl);
-  const crs = attrs['proj:code'];
+  const declared = declaredCrs(attrs, lod, baseUrl);
   const transform = attrs['spatial:transform'];
-  requireStore(crs === cz.crs && /^EPSG:[1-9]\d*$/.test(crs), baseUrl, `level ${lod} proj:code disagrees with chronozarr.crs`);
+  requireStore(declared.crs === null || cz.crs === undefined || declared.crs === cz.crs, baseUrl, `level ${lod} proj:code disagrees with chronozarr.crs`);
   requireStore(JSON.stringify(attrs['spatial:dimensions']) === '["y","x"]' && attrs['spatial:registration'] === 'pixel' && (attrs['spatial:transform_type'] === undefined || attrs['spatial:transform_type'] === 'affine'), baseUrl, `level ${lod} must use pixel-registered affine y/x geometry`);
-  requireStore(Array.isArray(transform) && transform.length === 6 && transform.every(Number.isFinite) && transform[0] > 0 && transform[4] < 0 && transform[1] === 0 && transform[3] === 0, baseUrl, `level ${lod} must use an EPSG north-up grid`);
+  requireStore(Array.isArray(transform) && transform.length === 6 && transform.every(Number.isFinite) && transform[0] > 0 && transform[4] < 0 && transform[1] === 0 && transform[3] === 0, baseUrl, `level ${lod} must use a north-up grid`);
   const shape = meta.shape.slice(-2);
   requireStore(attrs['spatial:shape'] === undefined || JSON.stringify(attrs['spatial:shape']) === JSON.stringify(shape), baseUrl, `level ${lod} spatial:shape disagrees with array`);
   if (attrs['spatial:bbox'] !== undefined) {
@@ -98,7 +118,7 @@ export function parseSpatial(meta, cz, lod, baseUrl) {
   if (mirror) {
     for (const [key, value] of Object.entries({path: String(lod), transform, shape: meta.shape, resolution: transform[0]})) requireStore(JSON.stringify(mirror[key]) === JSON.stringify(value), baseUrl, `level ${lod} mirror ${key} disagrees with array`);
   }
-  return { crs, transform, resolution: transform[0] };
+  return { ...declared, transform, resolution: transform[0] };
 }
 
 function parseFillValue(value, dtype) {
