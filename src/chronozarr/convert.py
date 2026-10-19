@@ -38,8 +38,11 @@ Scale, offset and units:
    objects. Scale and offset are always written (1 and 0 when the source sets none). A store
    holds one value per band for every timestep, so each must be identical in all sources, band by
    band; the first source that differs fails the conversion and is named. Descriptions name the
-   bands unless the manifest does, and must agree too. An alpha band (colour interpretation
-   alpha) is not a data band: it is not stored as data and becomes the mask (rule 4).
+   bands unless the manifest does, and must agree too, except that a single-band series
+   whose descriptions differ only by a date (WorldClim's `wc2.1_10m_tmax_2020-01.tif`, the
+   file's own name) is taken for file labels: the band is named by what they share, else
+   `1`, and the plan says so. An alpha band (colour interpretation alpha) is not a data
+   band: it is not stored as data and becomes the mask (rule 4).
 2. Zarr and NetCDF: the variable's CF `scale_factor`, `add_offset` and `units` apply to every
    band (1 and 0 when absent); a scale that is zero or not finite fails.
 

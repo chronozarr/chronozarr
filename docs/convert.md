@@ -41,7 +41,9 @@ scenes/readme_copy.tif
 
 Files on another grid fail with a suggestion to pass `--resampling`, which warps them to the grid of the first file.
 
-The store takes each band's description (its name), scale, offset and units from the files, so a Sentinel-2 file with a scale of 0.0001 gives reflectance. These must be identical in every file. A file whose bands have no description gives bands named `1`, `2` and so on. To name them, write the files and dates to a manifest with `--write-manifest found.csv`, add a `bands` column such as `ndvi`, and convert the manifest. The store also takes the nodata value that the files declare. Files that declare none give a store with no nodata, so a stored 0 is data. `--nodata 0` sets one.
+The store takes each band's description (its name), scale, offset and units from the files, so a Sentinel-2 file with a scale of 0.0001 gives reflectance. These must be identical in every file. A file whose bands have no description gives bands named `1`, `2` and so on. To name them, write the files and dates to a manifest with `--write-manifest found.csv`, add a `bands` column such as `ndvi`, and convert the manifest. A `bands` column replaces whatever the files say, so it is also the way to rename a band.
+
+Some files carry a description that is the file's own name, such as the one band of a WorldClim file `wc2.1_10m_tmax_2020-01.tif`. When every file has one band and the descriptions are identical once the dates in them are left out, `convert` takes them for file labels and not for a band name. The band is named by the part they share (`wc2.1_10m_tmax`), or `1` when nothing is left, and the dry run prints a `bands:` line that says what it chose and how to change it. Descriptions that differ in anything but the date, such as `B04` and `B08` or `tmax` and `tmin`, are refused, and so are differing descriptions in files with more than one band. In those cases name the bands in a manifest. The store also takes the nodata value that the files declare. Files that declare none give a store with no nodata, so a stored 0 is data. `--nodata 0` sets one.
 
 ## From a manifest of URLs
 

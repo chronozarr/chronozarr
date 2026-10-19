@@ -686,3 +686,138 @@ def test_a_month_name_in_a_file_name_points_to_a_manifest_that_works(tmp_path, t
     done = run("convert", str(manifest), str(tmp_path / "store"), "--chunk-size", "16")
     assert done.exit_code == 0, done.output
     assert np.array_equal(stored(tmp_path / "store"), truth[:2])
+
+
+# --- band descriptions that are labels of their files ---------------------------------------
+
+
+def labelled_series(folder: Path, truth: np.ndarray, label: Any) -> Path:
+    """One-band files wc2.1_10m_tmax_<month>.tif; `label(name, month)` is each band description,
+    None for a file with no description."""
+    for t, month in enumerate(MONTHS):
+        name = f"wc2.1_10m_tmax_{month}.tif"
+        text = label(name, month)
+        write_tif(folder / name, truth[t][:1], descriptions=[text] if text else None)
+    return folder
+
+
+@pytest.mark.parametrize(
+    ("text", "masked"),
+    [
+        ("wc2.1_10m_tmax_2020-01.tif", "wc2.1_10m_tmax_#.tif"),
+        ("a_20210102_b", "a_#_b"),
+        ("a_2021_01_02", "a_#"),
+        ("2021-01-02_2021-02", "#_#"),
+        ("NDVI 2021-01 composite", "NDVI # composite"),
+        ("B04_B08", "B04_B08"),
+        ("tile_123456", "tile_123456"),
+        ("v202101", "v202101"),
+        ("scene_20211340", "scene_20211340"),
+    ],
+)
+def test_mask_dates_replaces_the_dates_file_names_are_read_for(text, masked):
+    assert discovery.mask_dates(text).replace(discovery.DATE_MARK, "#") == masked
+
+
+@pytest.mark.parametrize(
+    ("label", "band"),
+    [
+        (lambda name, month: name, "wc2.1_10m_tmax"),
+        (lambda name, month: name.removesuffix(".tif"), "wc2.1_10m_tmax"),
+        (lambda name, month: f"tmax {month}", "tmax"),
+        (lambda name, month: f"tmax {month} mean", "tmax mean"),
+        (lambda name, month: month, "1"),
+    ],
+    ids=["file name", "file stem", "name and date", "name, date and more", "date only"],
+)
+def test_single_band_descriptions_that_differ_only_by_date_are_labels_not_a_band_name(
+    tmp_path, truth, label, band
+):
+    folder = labelled_series(tmp_path / "wc", truth, label)
+    plan = plan_conversion(folder, sample=False)
+    assert plan.source.info.band_names == (band,)
+    (note,) = [line for line in plan.lines() if line.startswith("bands:")]
+    assert f"named '{band}'" in note
+    assert "--write-manifest" in note
+    assert "bands column" in note
+    out = tmp_path / "store"
+    convert(folder, out, **OPTIONS)
+    assert np.array_equal(stored(out), truth[:, :1])
+    assert list(chronozarr.open_store(out).to_xarray().coords["band"].values) == [band]
+    assert chronozarr.validate(out) == []
+
+
+def test_the_note_shows_two_of_the_descriptions_it_took_for_labels(tmp_path, truth):
+    folder = labelled_series(tmp_path / "wc", truth, lambda name, month: name)
+    plan = plan_conversion(folder, sample=False)
+    (note,) = [line for line in plan.lines() if line.startswith("bands:")]
+    assert "'wc2.1_10m_tmax_2024-01.tif'" in note
+    assert "'wc2.1_10m_tmax_2024-02.tif'" in note
+
+
+def test_identical_single_band_descriptions_name_the_band_and_say_nothing(tmp_path, truth):
+    folder = labelled_series(tmp_path / "wc", truth, lambda name, month: "tmax")
+    plan = plan_conversion(folder, sample=False)
+    assert plan.source.info.band_names == ("tmax",)
+    assert not any(line.startswith("bands:") for line in plan.lines())
+
+
+@pytest.mark.parametrize(
+    "descriptions",
+    [
+        ["B04", "B04", "B08", "B04"],
+        ["S2_2024-01_B04", "S2_2024-02_B08", "S2_2024-03_B04", "S2_2024-04_B04"],
+        ["tmax 2024-01", "tmin 2024-02", "tmax 2024-03", "tmax 2024-04"],
+        [None, "tmax 2024-02", "tmax 2024-03", "tmax 2024-04"],
+        ["tmax 2024-01", "tmax 2024-02", "tmax 2024-03", "tmax"],
+    ],
+    ids=[
+        "codes",
+        "codes beside dates",
+        "variables beside dates",
+        "one has none",
+        "one has no date",
+    ],
+)
+def test_single_band_descriptions_that_may_name_different_bands_are_still_refused(
+    tmp_path, truth, descriptions
+):
+    folder = labelled_series(
+        tmp_path / "wc", truth, lambda name, month: descriptions[MONTHS.index(month)]
+    )
+    with pytest.raises(PreflightError, match="band descriptions"):
+        plan_conversion(folder, sample=False)
+
+
+def test_two_band_descriptions_that_differ_by_date_are_still_refused(tmp_path, truth):
+    folder = tmp_path / "two"
+    for t, month in enumerate(MONTHS):
+        write_tif(
+            folder / f"x_{month}.tif", truth[t], descriptions=[f"red {month}", f"nir {month}"]
+        )
+    with pytest.raises(PreflightError, match="band descriptions") as error:
+        plan_conversion(folder, sample=False)
+    assert len(error.value.problems) == len(MONTHS) - 1
+
+
+def test_a_bands_column_names_the_band_and_the_file_labels_are_ignored(tmp_path, truth):
+    folder = labelled_series(tmp_path / "wc", truth, lambda name, month: name)
+    manifest = tmp_path / "m.csv"
+    rows = [f"{e.uri},{str(e.time)[:10]},tmax" for e in discover(str(folder)).entries]
+    manifest.write_text("\n".join(["uri,datetime,bands", *rows]) + "\n")
+    plan = plan_conversion(manifest, sample=False)
+    assert plan.source.info.band_names == ("tmax",)
+    assert not any(line.startswith("bands:") for line in plan.lines())
+
+
+def test_cli_dry_run_says_which_band_name_it_chose_and_how_to_change_it(tmp_path, truth):
+    folder = labelled_series(tmp_path / "wc", truth, lambda name, month: name)
+    result = run("convert", str(folder), str(tmp_path / "store"), "--dry-run")
+    assert result.exit_code == 0, result.output
+    text = " ".join(result.output.split())
+    assert "data: 1 bands (wc2.1_10m_tmax)" in text
+    assert "looks like a file label" in text
+    assert "named 'wc2.1_10m_tmax'" in text
+    assert "--write-manifest found.csv" in text
+    assert "bands column" in text
+    assert not (tmp_path / "store").exists()

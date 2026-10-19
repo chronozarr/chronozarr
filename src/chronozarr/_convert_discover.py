@@ -247,24 +247,43 @@ def find_dates(
                 continue
             found.setdefault(moment, match.group(0))
         return found, invalid
+    for start, end, moment in _default_date_spans(stem):
+        found.setdefault(moment, stem[start:end])
+    return found, invalid
+
+
+def _default_date_spans(text: str) -> list[tuple[int, int, np.datetime64]]:
+    """Where `text` holds a date by the default rules: (start, end, moment), days before months."""
+    spans: list[tuple[int, int, np.datetime64]] = []
     covered: list[tuple[int, int]] = []
-    for match in _DAY.finditer(stem):
+    for match in _DAY.finditer(text):
         year, _, month, day = match.groups()
         try:
             moment = _moment(int(year), int(month), int(day), 0, 0, 0)
         except ValueError:
             continue
         covered.append(match.span())
-        found.setdefault(moment, match.group(0))
-    for match in _MONTH.finditer(stem):
+        spans.append((*match.span(), moment))
+    for match in _MONTH.finditer(text):
         if any(start < match.end() and match.start() < end for start, end in covered):
             continue
         try:
             moment = _moment(int(match.group(1)), int(match.group(2)), 1, 0, 0, 0)
         except ValueError:
             continue
-        found.setdefault(moment, match.group(0))
-    return found, invalid
+        spans.append((*match.span(), moment))
+    return spans
+
+
+DATE_MARK = "\x00"
+
+
+def mask_dates(text: str) -> str:
+    """`text` with every date the default rules read replaced by `DATE_MARK`: the part of a
+    band description or file name that is the same from file to file once the date is taken out."""
+    for start, end, _ in sorted(_default_date_spans(text), key=lambda span: span[0], reverse=True):
+        text = text[:start] + DATE_MARK + text[end:]
+    return text
 
 
 def show_time(moment: np.datetime64) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import warnings
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +14,7 @@ from typing import Any, NoReturn, ParamSpec, TypeVar
 import numpy as np
 
 from chronozarr import schema
+from chronozarr._convert_discover import DATE_MARK, mask_dates
 from chronozarr._convert_manifest import Entry
 from chronozarr._convert_preflight import PreflightError, Problem
 from chronozarr._convert_source import (
@@ -197,6 +199,39 @@ def _read_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader
         raise ValueError(str(exc)) from exc
 
 
+@dataclass(frozen=True)
+class _FileLabels:
+    """Single-band descriptions that label their files instead of naming the band."""
+
+    name: str | None  # what the descriptions share once the dates are taken out; None: nothing
+    examples: tuple[str, str]  # two descriptions that differ, for the dry run to show
+
+
+def _file_labels(good: list[tuple[str, _CogHeader]]) -> _FileLabels | None:
+    """Whether the band descriptions of a single-band series are labels of their files.
+
+    A store holds one band for every timestep, so descriptions that disagree are refused. A label
+    such as WorldClim's `wc2.1_10m_tmax_2020-01.tif` says which file it came from, not which band
+    it is. Descriptions are taken for labels only when every file has one and they are identical
+    once the dates in them (read as in file names) are masked: they can then differ only in the
+    date, so they cannot name different bands (B04 and B08, tmax and tmin). Files with several
+    bands are never taken for labelled: a band's description is its only identity there.
+    """
+    if any(header.count != 1 for _, header in good):
+        return None
+    described = [header.descriptions[0] for _, header in good]
+    descriptions = [d for d in described if d is not None]
+    if len(descriptions) != len(described) or len(set(descriptions)) == 1:
+        return None
+    shapes = {mask_dates(d) for d in descriptions}
+    if len(shapes) != 1:
+        return None
+    other = next(d for d in descriptions if d != descriptions[0])
+    shared = re.sub(r"\.tiff?$", "", shapes.pop(), flags=re.IGNORECASE).replace(DATE_MARK, "")
+    shared = re.sub(r"([ _.:/-])\1+", r"\1", shared).strip(" _-.:/")
+    return _FileLabels(shared or None, (descriptions[0], other))
+
+
 def _open_fix(uri: str, exc: ValueError) -> str | None:
     """A remedy for a source GDAL could not open; None when the error already says what to do."""
     from rasterio.errors import RasterioIOError
@@ -267,10 +302,13 @@ class CogManifestSource(Source):
         if not good:
             self._raise(problems, uris)
         first_uri, first = good[0]
+        labels = _file_labels(good) if band_names is None else None
         if bounds is not None:
             problems += self._size_problems(good)
         self.grid = self._target_grid(first, target_crs, target_transform, target_shape)
-        problems += self._consistency_problems(good, band_names is None)
+        problems += self._consistency_problems(
+            good, compare_labels=band_names is None, compare_descriptions=labels is None
+        )
         if resampling is None:
             problems += self._grid_problems(good, first_uri)
         if problems:
@@ -281,14 +319,15 @@ class CogManifestSource(Source):
             self.kind = "manifest of PNG frames"
         if band_names is None:
             # a description names the band; else a colour band is named by its colour and says so
-            labels = [
+            descriptions = first.descriptions if labels is None else (labels.name,)
+            named = [
                 (d, None) if d else (c, c) if c else (str(i + 1), None)
-                for i, (d, c) in enumerate(zip(first.descriptions, first.colors, strict=True))
+                for i, (d, c) in enumerate(zip(descriptions, first.colors, strict=True))
             ]
         else:
-            labels = [(n, None) for n in band_names]
-        names = tuple(name for name, _ in labels)
-        common_names = tuple(common for _, common in labels)
+            named = [(n, None) for n in band_names]
+        names = tuple(name for name, _ in named)
+        common_names = tuple(common for _, common in named)
         if len(names) != first.count:
             raise ValueError(
                 f"{entries[0].uri} has {first.count} bands but {len(names)} band names were "
@@ -314,7 +353,10 @@ class CogManifestSource(Source):
             explicit=explicit,
             footprint=bool(self.warped),
         )
-        self.notes = self._nodata_notes(good) if nodata == "auto" else ()
+        self.notes = (
+            *(self._nodata_notes(good) if nodata == "auto" else ()),
+            *self._label_notes(labels, names),
+        )
         self._auto_nodata = nodata == "auto"
         # Values equal to an explicit --nodata are invalid; declared nodata is GDAL's to judge.
         self._sentinels: tuple[float | int, ...] = (
@@ -401,10 +443,11 @@ class CogManifestSource(Source):
 
     @staticmethod
     def _consistency_problems(
-        good: list[tuple[str, _CogHeader]], compare_labels: bool
+        good: list[tuple[str, _CogHeader]], *, compare_labels: bool, compare_descriptions: bool
     ) -> list[Problem]:
         """What differs from the first source: band count, dtype, scale, offset, units and
-        (unless the manifest names the bands) band descriptions and colours."""
+        (unless the manifest names the bands) band colours and descriptions, the latter unless
+        they are labels of their files."""
         first_uri, first = good[0]
         problems = []
         for uri, header in good:
@@ -435,7 +478,8 @@ class CogManifestSource(Source):
                 ("units", header.units, first.units),
             ]
             if compare_labels:
-                fields.append(("band descriptions", header.descriptions, first.descriptions))
+                if compare_descriptions:
+                    fields.append(("band descriptions", header.descriptions, first.descriptions))
                 fields.append(("band colours", header.colors, first.colors))
             for what, found, wanted in fields:
                 if found == wanted:
@@ -480,6 +524,20 @@ class CogManifestSource(Source):
             for uri, header in good
             if not _same_grid(header.grid, self.grid)
         ]
+
+    @staticmethod
+    def _label_notes(labels: _FileLabels | None, names: tuple[str, ...]) -> tuple[str, ...]:
+        """One line when the band's description differs per file and was taken for a file label."""
+        if labels is None:
+            return ()
+        first, second = labels.examples
+        shared = ", the part the descriptions share" if labels.name else ""
+        return (
+            f"bands:      the band description differs per file ('{first}', '{second}', ...) and "
+            "looks like a file label, not a band name, so the band is named "
+            f"'{names[0]}'{shared}. To name it yourself, run again with --write-manifest "
+            "found.csv, add a bands column to the manifest it writes, and convert the manifest",
+        )
 
     @staticmethod
     def _nodata_notes(good: list[tuple[str, _CogHeader]]) -> tuple[str, ...]:
