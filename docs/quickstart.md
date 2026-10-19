@@ -11,7 +11,7 @@ chronozarr --version
 
 The first command puts the `chronozarr` command on your `PATH`. `--python 3.13` makes uv use Python 3.13 even when an older Python comes first on your computer. uv downloads Python 3.13 if it is not installed. The second command prints `chronozarr, version 0.4.1`. On macOS the first command after an install can take 10 to 25 seconds while the system checks the new files; later commands start in about a second.
 
-chronozarr supports Python 3.11 and newer; this page uses 3.13. The `geo` extra adds GeoTIFF support. To install with pip instead, use an environment with Python 3.11 or newer, such as a virtual environment or a conda environment:
+chronozarr supports Python 3.11 and newer; this page uses 3.13. The `geo` extra adds GeoTIFF support. NetCDF files need the `netcdf` extra as well; see [From NetCDF or Zarr](convert.md#from-netcdf-or-zarr). To install with pip instead, use an environment with Python 3.11 or newer, such as a virtual environment or a conda environment:
 
 ```bash
 python -m pip install 'chronozarr[geo]==0.4.1'
