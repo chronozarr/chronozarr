@@ -19,7 +19,7 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 
 | Message | Cause and fix |
 |---|---|
-| `no date in the file name` | Put one date in each name, as `20240131`, `2024-01-31` or `2024-01`. Or pass `--date-pattern`, such as `--date-pattern "ndvi_%Y%m%d"`, or list the files in a [manifest](convert.md#from-a-manifest-of-urls) |
+| `no date in the file name` | Put one date in each name, as `20240131`, `2024-01-31` or `2024-01`. Or pass `--date-pattern`, such as `--date-pattern "ndvi_%Y%m%d"` (`%Y%j` reads a year and day of year, as in MODIS and HLS names: `--date-pattern "MOD13A1.A%Y%j"`), or list the files in a [manifest](convert.md#from-a-manifest-of-urls) |
 | `several dates` in one name | Pass `--date-pattern` to say which part is the date |
 | A month name, such as `scene_Jan2024.tif` | `--date-pattern` reads numbers only. Write a CSV manifest with the columns `uri,datetime`, one row per file, and convert the manifest |
 | `Got unexpected extra arguments` | The shell expanded an unquoted glob into many files. Quote it: `"scenes/*.tif"` |

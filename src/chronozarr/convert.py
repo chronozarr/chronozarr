@@ -23,7 +23,8 @@ searched recursively unless a glob says so, and only `.tif` and `.tiff` files co
 dated from its name only when the name holds exactly one date: YYYYMMDD, YYYY-MM-DD or YYYY_MM_DD
 (a day), YYYY-MM or YYYY_MM (the first of the month). A bare six-digit YYYYMM is not read because
 it cannot be told from YYMMDD. `date_pattern` (`--date-pattern`, strptime-like with `%Y %m %d %H
-%M %S`) replaces these rules and finds the date where the pattern says. A name with no date, with
+%M %S`, or `%Y` and `%j` for a year and day of year) replaces these rules and finds the date where
+the pattern says. A name with no date, with
 several different dates or with an impossible one, and two files with the same date, are reported;
 none is guessed or dropped. What the files hold is checked as for a manifest, and everything found
 wrong, in the names and in the files, is reported together, per file, in one `PreflightError`
@@ -675,7 +676,8 @@ def convert(
 
     A directory, glob or S3 prefix of GeoTIFFs is listed and each file dated from its name, like
     a manifest of those files (module docstring, "Discovered GeoTIFFs"). `date_pattern` is a
-    strptime-like pattern (`%Y %m %d %H %M %S`) that says where the date is; `write_manifest_to`
+    strptime-like pattern (`%Y %m %d %H %M %S`, or `%Y%j` for a day of year) that says where the
+    date is; `write_manifest_to`
     writes the files and dates found as a `.csv` or `.json` manifest (`convert` reads it back),
     with a `bands` column or entry when the files name their bands. It is written on a dry
     run too, and also when the checks raise a `PreflightError` (a file with no date gets an

@@ -25,6 +25,15 @@ The dry run runs the same discovery and checks as conversion. It prints each fil
 
 A date is read from a name only when the name holds exactly one. A name with no date, with several (`20240215_2024-03`), or two files with the same date are reported, never guessed. `--date-pattern` says where the date is, for example `--date-pattern "ndvi_%Y%m%d"`. `--write-manifest found.csv` saves discovered files and dates as a manifest that `convert` reads back; it is the one output allowed with `--dry-run`. The manifest is written even when the checks find problems, and the problems are reported after it. A file whose date was not found gets a row with an empty `datetime`, and the report says which rows; fill them in or delete them, then convert the manifest. When the files name their bands, the manifest has a `bands` column with those names to edit.
 
+MODIS and HLS name a file by year and day of year. `MOD13A1.A2020001.h12v04.061.2020326023424_500m_16_days_NDVI.tif` is 1 January 2020, and `HLS.S30.T17SQV.2020061T155151.v2.0.B04.tif` is 1 March 2020 at 15:51:51. `%j` reads the three-digit day of year, 001 to 366, and goes with `%Y`, alone or with `%H%M%S`:
+
+```bash
+chronozarr convert "modis/*.tif" my_store --date-pattern "MOD13A1.A%Y%j" --dry-run
+chronozarr convert "hls/*.tif" my_store --date-pattern "HLS.S30.T17SQV.%Y%jT%H%M%S" --dry-run
+```
+
+`%j` cannot be combined with `%m` or `%d`, and day 366 is refused in a year that has 365 days. Such a name has no date by the default rules, because seven digits can be anything. When one holds seven digits that read as a year and a day of year, the fix line under `no date in the file name` shows the pattern for that name, with the date it reads.
+
 Before it reads any pixels in bulk, `convert` checks every file for its date, grid and CRS, bands, dtype, scale, offset, units and nodata. It reports all problems at once, grouped by file, each with a suggested fix, and writes nothing:
 
 ```text

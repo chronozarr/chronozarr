@@ -1,0 +1,20 @@
+{
+  "chirps-africa-monthly": {"stage": "fix2", "input": "raw", "flags": ["--date-pattern", "chirps-v2.0.%Y.%m", "--nodata=-9999"], "truth_nodata": -9999, "note": "date pattern plus the undeclared fill value -9999 declared as nodata"},
+  "worldclim-tmax-monthly": {"stage": "fix", "input": "fixed/manifest.csv", "flags": [], "note": "hand-written manifest uri,datetime,bands (one band name for all files)"},
+  "nsidc-seaice-n-daily": {"stage": "fix", "input": "raw/**/*.tif", "flags": [], "note": "recursive glob"},
+  "nsidc-seaice-s-monthly": {"stage": "fix", "input": "raw/**/*.tif", "flags": ["--date-pattern", "S_%Y%m_"], "note": "recursive glob and a YYYYMM date pattern"},
+  "prism-daily-bil-zip": {"stage": "fix", "input": "fixed", "flags": [], "truth": "fixed", "note": "BIL copied to GeoTIFF (gdal_translate) first"},
+  "modis-13a1-pc-cog-julian": {"stage": "fix2", "input": "fixed2/manifest.csv", "flags": [], "truth": "fixed2", "note": "warped to EPSG:4326, scale re-tagged 0.0001, dated in a manifest"},
+  "landsat-c2-productid": {"stage": "fix", "input": "raw", "flags": ["--date-pattern", "LC08_L2SP_015035_%Y%m%d_", "--resampling", "nearest"], "note": "date pattern around the acquisition date, resample the shifted scenes"},
+  "landsat-ndvi-derived-nan": {"stage": "fix", "input": "raw", "flags": ["--nodata", "nan"], "note": "treat NaN as invalid"},
+  "gee-multiband-dates": {"stage": "fix", "input": "fixed", "flags": ["--date-pattern", "ndvi_%Y_%m_%d"], "truth": "fixed", "note": "bands split to files, warped to EPSG:4326"},
+  "gee-tiled-per-date": {"stage": "fix", "input": "fixed", "flags": ["--date-pattern", "ndvi_%Y_%m_%d"], "truth": "fixed", "note": "tiles mosaicked per date, warped to EPSG:4326"},
+  "hls-s30-julian": {"stage": "fix", "input": "fixed/manifest.csv", "flags": [], "truth": "fixed", "note": "two files re-tagged EPSG:32617, dated in a manifest from the day of year"},
+  "hrrr-t2m-grib2": {"stage": "fix2", "input": "fixed", "flags": ["--date-pattern", "hrrr_t2m_%Y%m%d"], "truth": "fixed", "note": "GRIB2 to GeoTIFF, warped to EPSG:4326, cast to float32"},
+  "daymet-lcc-nc": {"stage": "fix", "input": "fixed", "flags": ["--date-pattern", "daymet_tmax_%Y%m%d", "--nodata", "nan"], "truth": "fixed", "note": "each day warped from Lambert conformal to EPSG:4326 GeoTIFF"},
+  "oisst-psl-daily": {"stage": "fix2", "input": "fixed2/sst_lon180.nc", "flags": ["--variable", "sst", "--crs", "EPSG:4326"], "truth": "fixed2", "note": "longitudes wrapped to -180..180"},
+  "oisst-ncei-daily-files": {"stage": "fix2", "input": "fixed2/oisst_lon180.nc", "flags": ["--variable", "sst", "--crs", "EPSG:4326"], "truth": "fixed2", "note": "60 files concatenated, longitudes wrapped to -180..180"},
+  "cmip6-hadgem3-360day-nc": {"stage": "fix3", "input": "fixed3/tas_lon180.nc", "flags": ["--variable", "tas", "--crs", "EPSG:4326"], "truth": "fixed3", "note": "cftime installed, calendar converted to standard (same Y-M-D), longitudes wrapped to -180..180"},
+  "cmip6-cesm2-noleap-zarr": {"stage": "fix3", "input": "fixed3/tas_lon180.zarr", "flags": ["--variable", "tas", "--crs", "EPSG:4326"], "truth": "fixed3", "note": "cftime installed, calendar converted to standard (same Y-M-D), longitudes wrapped to -180..180"},
+  "era5-fiji-antimeridian-nc": {"stage": "fix2", "input": "fixed2", "flags": ["--date-pattern", "era5_t2m_%Y%m%d_%H%M", "--nodata", "nan"], "truth": "fixed2", "note": "each step warped from lon/lat across 180 to EPSG:3832 GeoTIFF"}
+}
