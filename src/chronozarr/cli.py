@@ -18,9 +18,17 @@ import numpy as np
 import xarray as xr
 
 from chronozarr import schema
+from chronozarr._calendar import (
+    RULES,
+    CalendarMapping,
+    calendar_name,
+    is_cftime,
+    provenance_with_note,
+    to_gregorian,
+)
 from chronozarr._convert_discover import TIFF_SUFFIXES, is_discovery_source
 from chronozarr._convert_source import UndeclaredNaNError
-from chronozarr._convert_xarray import open_netcdf
+from chronozarr._convert_xarray import open_netcdf, open_zarr
 from chronozarr._install import extra_hint
 from chronozarr.append import append, is_store
 from chronozarr.bands import (
@@ -221,15 +229,26 @@ def _check_validity_matches_store(store: Path, stack: _GeotiffStack) -> None:
         )
 
 
-def _read_xarray(path: str, variable: str | None) -> xr.DataArray:
+def _read_xarray(
+    path: str,
+    variable: str | None,
+    calendar_to_gregorian: str | None = None,
+    *,
+    can_choose: bool = True,
+) -> tuple[xr.DataArray, CalendarMapping | None]:
+    """The variable as (time, band, y, x), and how its time axis was mapped to Gregorian.
+
+    A time axis on a calendar that numpy cannot hold (360_day, noleap, ...) needs
+    `calendar_to_gregorian`; `can_choose` is False for a command that has no such option.
+    """
     source = Path(path)
     if not source.exists():
         raise click.ClickException(f"input '{path}' does not exist")
-    if source.suffix == ".nc":
-        with _command_errors():
+    with _command_errors():
+        if source.suffix == ".nc":
             dataset = open_netcdf(source)
-    else:
-        dataset = xr.open_zarr(source, chunks=None, consolidated=False)
+        else:
+            dataset = open_zarr(source, chunks=None, consolidated=False)
     if variable is None:
         names = list(dataset.data_vars)
         if len(names) != 1:
@@ -248,7 +267,18 @@ def _read_xarray(path: str, variable: str | None) -> xr.DataArray:
     for key in ("crs", "transform"):
         if key not in da.attrs and key in dataset.attrs:
             da.attrs[key] = dataset.attrs[key]
-    return da
+    mapping = None
+    if is_cftime(da["time"].values):
+        with _command_errors():
+            mapping = to_gregorian(
+                da["time"].values,
+                calendar_name(da["time"]),
+                calendar_to_gregorian,
+                name="time",
+                can_choose=can_choose,
+            )
+        da = da.assign_coords(time=mapping.stored)
+    return da, mapping
 
 
 @contextmanager
@@ -275,6 +305,20 @@ _band_role_option = click.option(
     help="Give band NAME the STAC common name ROLE (red, green, blue, nir, ...), so the "
     "viewer's products find it; 'none' removes one. Repeatable or comma-separated: "
     "--band-role B04=red,B08=nir. Only unambiguous names are detected without it.",
+)
+
+
+_calendar_option = click.option(
+    "--calendar-to-gregorian",
+    "calendar_to_gregorian",
+    type=click.Choice(RULES),
+    default=None,
+    help="Zarr/NetCDF on a 360_day, noleap, all_leap or julian calendar (needs the cftime "
+    "extra). date: keep each step's date and time of day as its Gregorian timestamp (30-day "
+    "months become 28 to 31 days apart); stops at a date Gregorian lacks, such as 360_day "
+    "Feb 30. date-or-month-end: move such a date to the last day of its month. The store's "
+    "provenance records the calendar, the rule and the dates moved. Without it such a source "
+    "is refused.",
 )
 
 
@@ -389,12 +433,14 @@ def main() -> None:
     help="CRS such as EPSG:32631, or WKT2 text (default: from the input).",
 )
 @click.option("--variable", default=None, help="Variable to encode from a Zarr/NetCDF input.")
+@_calendar_option
 @_band_role_option
 def encode_command(
     input: str,
     out: Path,
     crs: str | None,
     variable: str | None,
+    calendar_to_gregorian: str | None,
     band_roles: tuple[str, ...],
     **options: Any,
 ) -> None:
@@ -419,13 +465,17 @@ def encode_command(
     file_options: dict[str, Any] = {}
     _refuse_files_for_convert(input, out)
     if any(ch in input for ch in _GLOB_CHARS):
+        if calendar_to_gregorian is not None:
+            raise click.UsageError("--calendar-to-gregorian applies to Zarr and NetCDF input")
         with _command_errors():
             stack = _read_geotiffs(input, crs)
         da = stack.data
         crs = None  # da.attrs holds the files' CRS, which --crs had to match
         file_options = {"bands": stack.bands, "nodata": stack.nodata, "mask": stack.mask}
     else:
-        da = _read_xarray(input, variable)
+        da, mapping = _read_xarray(input, variable, calendar_to_gregorian)
+        if mapping is not None:
+            file_options["provenance"] = provenance_with_note(input, mapping, None)
     with _command_errors():
         if roles:
             named = file_options.get("bands") or [Band(str(n)) for n in da.coords["band"].values]
@@ -471,7 +521,8 @@ def append_command(
             _check_validity_matches_store(store, stack)
             report = append(store, stack.data, workers=workers, bands=stack.bands, mask=stack.mask)
         else:
-            report = append(store, _read_xarray(input, variable), crs=crs, workers=workers)
+            da, _ = _read_xarray(input, variable, can_choose=False)
+            report = append(store, da, crs=crs, workers=workers)
     click.echo(
         f"appended {report.n_appended} timestep(s) to {store}: {report.n_time} in total, "
         f"wrote {report.objects_written} objects ({report.bytes_written / 1e6:.1f} MB) "
@@ -520,6 +571,9 @@ def info_command(store: str) -> None:
     ]
     if extras:
         click.echo(f"extras:    {', '.join(extras)}")
+    notes = attrs.provenance.get("notes") if attrs.provenance else None
+    if notes:
+        click.echo(f"notes:     {notes}")
     click.echo("levels:")
     for level in opened.levels:
         layout = f"shards {level.data.shards}" if level.data.shards else "unsharded"
@@ -885,6 +939,7 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     show_default=True,
     help="Timesteps read concurrently while staging; memory is about this many timesteps.",
 )
+@_calendar_option
 @_band_role_option
 def convert_command(
     source: str,
@@ -902,6 +957,7 @@ def convert_command(
     resume: bool,
     dry_run: bool,
     read_ahead: int,
+    calendar_to_gregorian: str | None,
     band_roles: tuple[str, ...],
     date_pattern: str | None,
     write_manifest: Path | None,
@@ -973,6 +1029,7 @@ def convert_command(
             dry_run=dry_run,
             read_ahead=read_ahead,
             date_pattern=date_pattern,
+            calendar_to_gregorian=calendar_to_gregorian,
             write_manifest_to=write_manifest,
             on_plan=show_plan,
             progress=show_progress,
