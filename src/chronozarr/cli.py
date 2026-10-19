@@ -575,10 +575,11 @@ def info_command(store: str) -> None:
     if notes:
         click.echo(f"notes:     {notes}")
     click.echo("levels:")
+    unit = schema.axis_unit(opened.crs.to_string())
     for level in opened.levels:
         layout = f"shards {level.data.shards}" if level.data.shards else "unsharded"
         click.echo(
-            f"  {level.index}: shape {level.shape}, {level.resolution:g} m/px, "
+            f"  {level.index}: shape {level.shape}, {level.resolution:.10g} {unit} pixels, "
             f"grid {level.grid[0]}x{level.grid[1]}, chunks {level.data.chunks}, {layout}"
         )
 
