@@ -41,6 +41,7 @@ Run `chronozarr <command> --help` for every option. In a uv project, run `uv run
 |-------|------|
 | `geo` | GeoTIFF input and output, and `link --lonlat` for a store in a projected coordinate system |
 | `notebook` | `chronozarr.view(store)` for Jupyter. See [notebooks](notebooks.md) |
-| `netcdf`, `dask` | NetCDF input and dask arrays |
+| `netcdf`, `dask` | NetCDF input (with cftime) and dask arrays |
+| `cftime` | Zarr time axes on a `360_day`, `noleap`, `all_leap` or `julian` calendar, without a NetCDF reader |
 | `s3` | Listing of an `s3://` prefix for `convert` |
 | `publish`, `publish-gcs`, `publish-azure` | The SDK that `publish` uses for S3 or R2, Google Cloud Storage or Azure. See [Publish a permanent link](publish.md) |

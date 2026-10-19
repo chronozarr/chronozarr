@@ -92,6 +92,34 @@ In a uv project, run `uv add 'chronozarr[netcdf]==0.4.1'`. With pip, install `'c
 
 For an array that fits in memory, `chronozarr encode FILE my_store --variable NAME` is the shorter route.
 
+### Climate model calendars
+
+Climate models often write time on a calendar with no Gregorian equivalent: `360_day` (twelve months of 30 days), `noleap` or `365_day`, `all_leap` or `366_day`, and `julian`. CMIP6 files from HadGEM3 (`360_day`) and CESM2 (`noleap`) are examples. A store holds Gregorian timestamps ([specification](../spec/CHRONOZARR.md), section 2.2), so `convert` stops and names the choice:
+
+```text
+Error: the time coordinate 'time' uses the 360_day calendar, and a store holds Gregorian timestamps. Pass --calendar-to-gregorian date to keep each step's date and time of day as its Gregorian timestamp; the store then records the source calendar in its provenance. The time elapsed between steps is not kept: steps 30 days apart in the source are 28 to 31 days apart in the store (519 of 779 gaps change). Use it when the dates matter more than that.
+```
+
+`--calendar-to-gregorian date` keeps each step's year, month, day and time of day as the Gregorian timestamp, so a step stamped 16 January stays 16 January. It cannot keep the time between steps: months of 30 days become 28 to 31 days apart. The dry run prints a `calendar:` line with that change in numbers. Use it when the date, the month or the season is what matters. For rates per day over a span, compute from the source file, where the days are the model's own.
+
+```bash
+chronozarr convert tas_Amon_HadGEM3.nc my_store --variable tas --crs EPSG:4326 --calendar-to-gregorian date --dry-run
+```
+
+A date that Gregorian does not have, such as 30 February on a `360_day` calendar or 29 February in a `julian` century year, stops the conversion and is listed. `--calendar-to-gregorian date-or-month-end` moves each such date to the last day of its month instead. If a move puts two steps on the same day, as daily `360_day` data does on 28, 29 and 30 February, the conversion stops again: drop one step of each pair first, for example with xarray, and convert the result.
+
+The store records what was done in its provenance: the source calendar, the option, the change in spacing and the dates that moved. `chronozarr info STORE` prints it as `notes:`, and `chronozarr stac` copies it into the STAC item. In Python it is `chronozarr.open_store("STORE").attrs.provenance["notes"]`. A `provenance=` that you pass to `chronozarr.convert` keeps its fields and gets the note added to its `notes`.
+
+These calendars need cftime. The `netcdf` extra installs it with the NetCDF reader. A Zarr store needs no NetCDF reader, so cftime is also an extra of its own. Add it to the extras that you already use:
+
+```bash
+uv tool install --python 3.13 'chronozarr[geo,netcdf,cftime]==0.4.1'
+```
+
+In a uv project, run `uv add 'chronozarr[cftime]==0.4.1'`. With pip, install `'chronozarr[cftime]==0.4.1'` in your environment. Without the extra, `convert` stops with `the time coordinate 'time' uses the 360_day calendar, which needs cftime` and these commands.
+
+`chronozarr encode` takes the same option for a file with dimensions `(time, band, y, x)`. `chronozarr append` does not convert calendars, because it cannot record the conversion in the store you append to; convert the whole series instead. The option has no effect on a Gregorian time axis. In Python, `convert` has `calendar_to_gregorian="date"`. `chronozarr.encode` of a `DataArray` whose time coordinate holds cftime dates stops and says so; map the dates yourself, for example with `da.convert_calendar("proleptic_gregorian", align_on="date")`, which drops a date that Gregorian lacks, and describe that in `provenance=`.
+
 ## From xarray
 
 In a script or notebook, write a `DataArray` with dimensions `(time, band, y, x)`:
