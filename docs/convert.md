@@ -8,6 +8,7 @@
 | BIL, GRIB2, HDF5 or any other raster that GDAL reads, or zips that hold one | [From other raster formats](#from-other-raster-formats) |
 | COGs at URLs, with dates in a table | [From a manifest of URLs](#from-a-manifest-of-urls) |
 | A NetCDF file or a Zarr store with a time axis | [From NetCDF or Zarr](#from-netcdf-or-zarr) |
+| A folder or glob of NetCDF files, one per day or month | [A series of NetCDF files](#a-series-of-netcdf-files) |
 | An xarray `DataArray` in Python | [From xarray](#from-xarray) |
 | Rendered PNG frames | [PNG frames](png-frames.md) |
 
@@ -74,7 +75,7 @@ The dry run also reads three timesteps and checks their pixels. A `fill:` line n
 | GDAL virtual raster | `.vrt` |
 | One raster in a zip, local files only | `.zip` |
 
-A file with another extension goes in a [manifest](#from-a-manifest-of-urls), which takes any path that GDAL opens. NetCDF is not in the list: a NetCDF file keeps its own route, [From NetCDF or Zarr](#from-netcdf-or-zarr). The dates, the checks and the dry run are those of [dated GeoTIFFs](#from-dated-geotiffs); the first line of the plan says `dated rasters`. A date is read from the file name only, not from the folders above it. If the date is only in a folder name, as in `hrrr.20240115/conus/hrrr.t00z.wrfsfcf00.grib2`, run `--write-manifest found.csv`, fill in the `datetime` column and convert the manifest.
+A file with another extension goes in a [manifest](#from-a-manifest-of-urls), which takes any path that GDAL opens. NetCDF is not in the list: NetCDF files keep their own route, [From NetCDF or Zarr](#from-netcdf-or-zarr), for one file as well as for a [series](#a-series-of-netcdf-files). The dates, the checks and the dry run are those of [dated GeoTIFFs](#from-dated-geotiffs); the first line of the plan says `dated rasters`. A date is read from the file name only, not from the folders above it. If the date is only in a folder name, as in `hrrr.20240115/conus/hrrr.t00z.wrfsfcf00.grib2`, run `--write-manifest found.csv`, fill in the `datetime` column and convert the manifest.
 
 A BIL or FLT file needs its `.hdr`, which carries the grid and the nodata value, beside it, and a `.prj` for the CRS. An ASCII grid takes its CRS from a `.prj`.
 
@@ -154,6 +155,51 @@ In a uv project, run `uv add 'chronozarr[netcdf]==0.4.1'`. With pip, install `'c
 `--variable` names the array to convert. Its dimensions must be time, y and x, with an optional band dimension. `--dims time=NAME,y=NAME,x=NAME[,band=NAME]` names them when they are not `time`, `y`, `x` or common aliases such as `lat` and `lon`. The coordinate system comes from a `crs`, `crs_wkt` or `spatial_ref` attribute, or from the CF grid mapping variable that the variable names in `grid_mapping`; reading a grid mapping needs pyproj. `--crs` gives it, as an EPSG code or WKT2 text, when the file does not declare it. A CRS with no EPSG code, such as Daymet's Lambert conformal conic, is stored as it is and is never reprojected. The CF `scale_factor`, `add_offset` and `units` of the variable apply to every band. `--mask-var` names a variable whose nonzero values mark valid pixels.
 
 For an array that fits in memory, `chronozarr encode FILE my_store --variable NAME` is the shorter route.
+
+### Dimensions of length 1
+
+Many products keep a length-1 dimension next to time, y and x: OISST has `zlev`, others have `height` or `level`. `convert` squeezes it, and the dry run says which dimension it dropped and the coordinate value it held:
+
+```text
+squeezed:   zlev (length 1, value 0 meters)
+```
+
+A dimension that is longer than 1 is not squeezed, because choosing among its values is a decision about your data. The error names it. If its values are the bands of your series, pass `--dims band=level`. If you want one of them, select it first, for example with xarray: `ds.isel(level=0)`.
+
+### A series of NetCDF files
+
+NOAA, NASA and ESGF deliver a time series as one file per day, month or decade. Give `convert` the folder, or a quoted glob, and it reads the files as one series:
+
+```bash
+chronozarr convert "oisst/**/*.nc" oisst_store --variable sst --crs EPSG:4326 --dry-run
+chronozarr convert "oisst/**/*.nc" oisst_store --variable sst --crs EPSG:4326
+```
+
+A folder is not searched recursively; the glob `"oisst/**/*.nc"` searches its subfolders. The folder or glob must hold NetCDF files (`.nc`, `.nc4` or `.cdf`) and no rasters. A file can hold one step or many.
+
+Each file is dated by the time coordinate inside it, not by its name, so `--date-pattern` does not apply. The store lists the steps in time order, whatever the order of the names. The dry run prints one line per file with its dates, so you can see the order before anything is written.
+
+Before it writes anything, `convert` checks every file against the first. The files must have the same variable, dimensions, `x` and `y` values, data type, `scale_factor`, `add_offset`, `units`, declared nodata and calendar, and the same CRS if they declare one. It reports every file that differs, with the same grouping as for [dated GeoTIFFs](#from-dated-geotiffs):
+
+```text
+2 problem(s) in 2 of 4 source file(s); nothing was written:
+
+/data/oisst/202001/oisst-avhrr-v02r01.20200117.nc
+  - has scale_factor 0.1 and add_offset 0; /data/oisst/202001/oisst-avhrr-v02r01.20200101.nc has 0.01 and 0. A store holds one value per band for every timestep, so the files must agree
+    fix: if the attributes are wrong, correct them; otherwise convert the files that share them in separate stores
+
+/data/oisst/202002/oisst-avhrr-v02r01.20200203.nc
+  - has times 2020-02-02T12:00:00 that overlap those of /data/oisst/202002/oisst-avhrr-v02r01.20200202.nc (2020-02-02T12:00:00). Each time must come from one file
+    fix: drop one of the two files, or narrow the glob so every time is in one file
+```
+
+Two files that share a time, or whose times interleave, are an error. Which one to keep is your decision.
+
+Packed data stays packed. OISST stores sea surface temperature as `int16` with a `scale_factor` of 0.01 and a `_FillValue` of -999; the store holds the same integers, the band has a scale of 0.01, and -999 is the store's nodata. This is also what a single file gives.
+
+Each timestep is read from the file that holds it, and the files are opened as they are needed. Memory does not grow with the number of files: the reading holds a few files open at a time, and the encoder sets the peak, as it does for a single file. Opening a NetCDF file takes about as long as reading one step from it (22 ms against 9 ms for an OISST day), so a series of many small files takes longer than the same data in one file.
+
+Model output split by decade, as in CMIP6, is one series too. The files must use the same calendar, and `--calendar-to-gregorian` applies to the joined time axis ([climate model calendars](#climate-model-calendars)). Zarr stores are not read as a series.
 
 ### Climate model calendars
 
