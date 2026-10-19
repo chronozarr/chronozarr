@@ -95,7 +95,10 @@ mask, or with a `mask` variable shared by all bands (spec 2.3, 2.4).
 Plan lines from the pixels. The plan reads three timesteps, and from those pixels it adds a `fill:`
 line when a value that no declared nodata or mask covers looks like a fill (`_convert_pixels`
 says how it is judged), and a `range:` line, each band's values after scale and offset, when a band
-declares a scale or offset. Neither changes what is written or refuses a conversion.
+declares a scale or offset. The `range:` line changes nothing. A `fill:` line only names the value
+and the option that marks it, unless the value holds 5 % of the valid pixels (1 % for -9999, -999,
+-3000 and -32768): then the conversion is refused, a dry run too, until `--nodata VALUE` marks it
+or `--nodata none` keeps every value as data. Any explicit `--nodata` ends the refusal.
 
 Calendars. A Zarr or NetCDF time axis on a 360_day, noleap (365_day), all_leap (366_day) or
 julian calendar is decoded by cftime (`chronozarr[cftime]`) and refused unless
@@ -191,7 +194,7 @@ from chronozarr._convert_manifest import (
 from chronozarr._convert_manifest import (
     read_manifest as read_manifest,
 )
-from chronozarr._convert_pixels import fill_line, range_line
+from chronozarr._convert_pixels import fill_line, fill_refusal, likely_fills, range_line
 from chronozarr._convert_preflight import (
     PreflightError as PreflightError,
 )
@@ -259,6 +262,9 @@ Validity is either one nodata sentinel (judged per band, no mask) or one mask sh
             --nodata gives one. A pixel invalid in any band is invalid for all.
   NaN is never stored: under a mask it becomes 0. A float source with undeclared NaN fails;
   --nodata nan treats NaN as invalid. --nodata N replaces the declared nodata; none ignores it.
+  A value that looks like a fill and that the files do not declare fails too, a dry run included,
+  when it holds 5 % of the pixels (1 % for -9999, -999, -3000 and -32768): --nodata N marks it
+  invalid, --nodata none keeps it as data. Smaller findings are named in the plan only.
 
 \b
 Time: a Zarr or NetCDF time axis on a 360_day, noleap, all_leap or julian calendar needs the
@@ -532,8 +538,13 @@ def plan_conversion(
         plan.est_output_bytes = int(plan.raw_bytes * plan.sample_ratio * pyramid)
         if not isinstance(source, LegacySource):  # a migration copies what the store holds
             steps = list(plan.samples.values())
+            fills = likely_fills(steps, info)
+            if nodata == "auto":
+                refusal = fill_refusal(fills, len(steps), info)
+                if refusal is not None:
+                    raise ValueError(refusal)
             plan.value_range = range_line(steps, info)
-            plan.fill = fill_line(steps, info)
+            plan.fill = fill_line(fills, len(steps), info, nodata)
     return plan
 
 

@@ -10,9 +10,10 @@ import pytest
 import xarray as xr
 from click.testing import CliRunner
 
+import chronozarr
 from chronozarr import _convert_pixels
 from chronozarr.cli import main
-from chronozarr.convert import Plan, plan_conversion
+from chronozarr.convert import Plan, convert, plan_conversion
 from tests.synthetic import CRS, TRANSFORM, make_times
 
 pytestmark = pytest.mark.unit
@@ -132,17 +133,46 @@ def rain(fill_share: float, fill: float = -9999.0) -> list[np.ndarray]:
 # --- an undeclared fill value -------------------------------------------------------------------
 
 
-def test_a_large_undeclared_fill_is_named_with_its_fix(tmp_path):
-    plan = plan_for(tmp_path, rain(0.45))
-    fill = line(plan, "fill:")
+def refusal(tmp_path: Path, steps: list[np.ndarray], **plan_options) -> str:
+    """The message of the ValueError that planning `steps` raises."""
+    with pytest.raises(ValueError) as caught:
+        plan_for(tmp_path, steps, **plan_options)
+    return str(caught.value)
+
+
+def flags(second_share: float = 0.02) -> list[np.ndarray]:
+    """uint16 sea-ice concentration (0 to 1000), a 20 % land flag 2540 and a coast flag 2530."""
+    random = rng()
+    steps = []
+    for _ in range(N_TIME):
+        concentration = (random.integers(0, 251, size=(1, HEIGHT, WIDTH)) * 4).astype(np.uint16)
+        concentration[random.random(concentration.shape) < 0.6] = 0
+        put(concentration, 2540, 0.2)
+        put(concentration, 2530, second_share, after=0.2)
+        steps.append(concentration)
+    return steps
+
+
+def test_a_large_undeclared_fill_is_refused_with_the_fix_and_the_way_out(tmp_path):
+    message = refusal(tmp_path, rain(0.45))
     assert (
-        "-9999 (45 % of the valid pixels sampled) lies far outside the other values (0 to " in fill
+        "-9999 (45 % of the valid pixels in the 3 sampled timesteps) lies far outside the other "
+        "values (0 to " in message
     )
-    assert "The store keeps it as data" in fill
-    assert "pass --nodata -9999" in fill
-    validity = line(plan, "validity:")
-    assert "every pixel is valid" not in validity
-    assert validity == "validity:   no nodata declared and no mask: every pixel is stored as data"
+    assert "nothing marks it invalid, so the store would keep it as data" in message
+    assert "If it marks missing pixels, pass --nodata -9999." in message
+    assert "If it is data, pass --nodata none to keep every value." in message
+
+
+def test_the_refusal_names_a_fill_in_one_band(tmp_path):
+    random = rng()
+    steps = []
+    for _ in range(N_TIME):
+        two = random.gamma(2.0, 50.0, size=(2, HEIGHT, WIDTH)).astype(np.float32)
+        put(two[1:], -9999.0, 0.3)
+        steps.append(two)
+    message = refusal(tmp_path, steps, descriptions=["rain", "snow"])
+    assert "-9999 in snow (30 % of the valid pixels in the 3 sampled timesteps)" in message
 
 
 def test_naming_the_fill_with_nodata_ends_the_finding(tmp_path):
@@ -151,49 +181,97 @@ def test_naming_the_fill_with_nodata_ends_the_finding(tmp_path):
     assert line(plan, "validity:") == "validity:   nodata -9999.0 sentinel, no mask"
 
 
-def test_two_flag_values_are_both_named_and_nodata_takes_one(tmp_path):
-    random = rng()
-    steps = []
-    for _ in range(N_TIME):
-        concentration = (random.integers(0, 251, size=(1, HEIGHT, WIDTH)) * 4).astype(np.uint16)
-        concentration[random.random(concentration.shape) < 0.6] = 0
-        put(concentration, 2540, 0.2)
-        put(concentration, 2530, 0.02, after=0.2)
-        steps.append(concentration)
-    fill = line(plan_for(tmp_path, steps), "fill:")
-    assert (
-        "2540 (20 % of the valid pixels sampled) and 2530 (2 %) lie far outside the other values"
-        in fill
+def test_nodata_none_answers_the_refusal_and_is_recorded(tmp_path):
+    plan = plan_for(tmp_path, rain(0.45), nodata=None)
+    assert line(plan, "validity:") == (
+        "validity:   no nodata (--nodata none) and no mask: every pixel is stored as data"
     )
-    assert "(0 to 1000)" in fill
-    assert "pass --nodata 2540; it takes one value, so 2530 stays data" in fill
+    fill = line(plan, "fill:")
+    assert fill.startswith("fill:       -9999 (45 % of the valid pixels sampled) lies far outside")
+    assert fill.endswith("The store keeps it as data, as --nodata none asks")
+    assert "pass --nodata -9999" not in fill
 
 
-def test_a_common_fill_inside_the_range_is_named_as_a_common_fill(tmp_path):
+@pytest.mark.parametrize(
+    ("share", "refused"),
+    [(0.04, False), (0.06, True)],
+    ids=["below-five-percent-is-named", "from-five-percent-is-refused"],
+)
+def test_an_isolated_value_is_refused_from_five_percent(tmp_path, share, refused):
+    steps = rain(share, fill=-8888.0)
+    if refused:
+        assert "-8888 (6 % of the valid pixels in the 3 sampled timesteps)" in refusal(
+            tmp_path, steps
+        )
+        return
+    fill = line(plan_for(tmp_path, steps), "fill:")
+    assert "-8888 (4 % of the valid pixels sampled) lies far outside" in fill
+    assert "pass --nodata -8888" in fill
+
+
+def test_a_conventional_fill_value_is_refused_from_one_percent(tmp_path):
+    assert "-9999 (2 % of the valid pixels in the 3 sampled timesteps)" in refusal(
+        tmp_path, rain(0.02)
+    )
+    other = tmp_path / "ordinary"
+    other.mkdir()
+    named = line(plan_for(other, rain(0.02, fill=-8888.0)), "fill:")
+    assert "-8888 (2 % of the valid pixels sampled)" in named
+    small = tmp_path / "small"
+    small.mkdir()
+    assert "-9999 (0.5 % of the valid pixels sampled)" in line(
+        plan_for(small, rain(0.005)), "fill:"
+    )
+
+
+def test_a_common_fill_inside_the_range_is_refused_as_a_common_fill(tmp_path):
     random = rng()
     steps = []
     for _ in range(N_TIME):
         scaled = random.integers(-4000, 10000, size=(1, HEIGHT, WIDTH)).astype(np.int16)
         put(scaled, -3000, 0.03)
         steps.append(scaled)
-    fill = line(plan_for(tmp_path, steps), "fill:")
-    assert "-3000 (3 % of the valid pixels sampled) is a common fill value" in fill
-    assert "far outside" not in fill
-    assert "pass --nodata -3000" in fill
+    message = refusal(tmp_path, steps)
+    assert "-3000 (3 % of the valid pixels in the 3 sampled timesteps) is a common fill" in message
+    assert "far outside" not in message
+    assert "If it marks missing pixels, pass --nodata -3000." in message
 
 
-def test_a_fill_in_one_band_names_the_band(tmp_path):
-    random = rng()
-    steps = []
-    for _ in range(N_TIME):
-        two = random.gamma(2.0, 50.0, size=(2, HEIGHT, WIDTH)).astype(np.float32)
-        put(two[1:], -9999.0, 0.3)
-        steps.append(two)
-    fill = line(plan_for(tmp_path, steps, descriptions=["rain", "snow"]), "fill:")
-    assert "-9999 in snow (30 % of the valid pixels sampled)" in fill
+def test_two_flag_values_are_refused_and_the_message_says_nodata_takes_one(tmp_path):
+    message = refusal(tmp_path, flags())
+    assert (
+        "2540 (20 % of the valid pixels in the 3 sampled timesteps) and 2530 (2 %) lie far "
+        "outside the other values (0 to 1000)" in message
+    )
+    assert "nothing marks them invalid, so the store would keep them as data" in message
+    assert (
+        "If they mark missing pixels, pass --nodata 2540: a store takes one nodata value, so "
+        "2530 stays data." in message
+    )
+    assert (
+        "To mark both, rewrite 2530 as 2540 in the files first, or give the files a mask (an "
+        "alpha band or an internal mask)." in message
+    )
+    assert "If they are data, pass --nodata none to keep every value." in message
 
 
-def test_a_fill_that_replaces_a_declared_nodata_says_so(tmp_path):
+def test_the_second_flag_value_stays_a_finding_once_nodata_names_the_first(tmp_path):
+    fill = line(plan_for(tmp_path, flags(), nodata=2540), "fill:")
+    assert fill.startswith("fill:       2530 (2.5 % of the valid pixels sampled) lies far outside")
+    assert fill.endswith(
+        "The store keeps it as data; a store takes one nodata value and --nodata gave 2540"
+    )
+
+
+def test_both_flags_end_the_finding_when_the_second_is_rewritten_as_the_first(tmp_path):
+    steps = flags()
+    for step in steps:
+        step[step == 2530] = 2540
+    plan = plan_for(tmp_path, steps, nodata=2540)
+    assert not has_line(plan, "fill:")
+
+
+def test_a_fill_that_would_replace_a_declared_nodata_says_so(tmp_path):
     random = rng()
     steps = []
     for _ in range(N_TIME):
@@ -201,9 +279,30 @@ def test_a_fill_that_replaces_a_declared_nodata_says_so(tmp_path):
         put(counts, 0, 0.1)
         put(counts, 65535, 0.2, after=0.1)
         steps.append(counts)
-    fill = line(plan_for(tmp_path, steps, file_nodata=0), "fill:")
-    assert "65535 (22 %" in fill
-    assert "it replaces the declared nodata 0" in fill
+    message = refusal(tmp_path, steps, file_nodata=0)
+    assert "65535 (22 % of the valid pixels in the 3 sampled timesteps)" in message
+    assert "pass --nodata 65535: it replaces the declared nodata 0, so 0 becomes data." in message
+
+
+def test_an_explicit_nodata_for_another_value_is_never_refused(tmp_path):
+    plan = plan_for(tmp_path, rain(0.45), nodata=-1)
+    fill = line(plan, "fill:")
+    assert "-9999 (45 % of the valid pixels sampled)" in fill
+    assert fill.endswith(
+        "The store keeps it as data; a store takes one nodata value and --nodata gave -1"
+    )
+
+
+def test_a_common_fill_is_named_when_nodata_names_another_value(tmp_path):
+    random = rng()
+    steps = []
+    for _ in range(N_TIME):
+        scaled = random.integers(-4000, 10000, size=(1, HEIGHT, WIDTH)).astype(np.int16)
+        put(scaled, -3000, 0.03)
+        steps.append(scaled)
+    fill = line(plan_for(tmp_path, steps, nodata=-4001), "fill:")
+    assert "-3000 (3 % of the valid pixels sampled) is a common fill value" in fill
+    assert "far outside" not in fill
 
 
 def two_clusters() -> np.ndarray:
@@ -266,8 +365,10 @@ def test_infinite_values_do_not_hide_a_fill(tmp_path):
     steps = rain(0.45)
     for step in steps:
         step[0, 0, :3] = np.inf
-    fill = line(plan_for(tmp_path, steps), "fill:")
-    assert "-9999 (45 % of the valid pixels sampled) lies far outside the other values" in fill
+    message = refusal(tmp_path, steps)
+    assert (
+        "-9999 (45 % of the valid pixels in the 3 sampled timesteps) lies far outside" in message
+    )
 
 
 def test_the_sample_is_bounded(tmp_path, monkeypatch):
@@ -278,8 +379,8 @@ def test_the_sample_is_bounded(tmp_path, monkeypatch):
 
 
 def test_a_single_file_is_one_sampled_timestep(tmp_path):
-    found = plan_for(tmp_path, rain(0.45)[:1])
-    assert "-9999 (45 % of the valid pixels sampled)" in line(found, "fill:")
+    found = refusal(tmp_path, rain(0.45)[:1])
+    assert "-9999 (45 % of the valid pixels in the 1 sampled timestep)" in found
     other = tmp_path / "clean"
     other.mkdir()
     none = line(plan_for(other, rain(0.0)[:1], scales=[0.5]), "fill:")
@@ -347,9 +448,10 @@ def test_a_fill_in_a_zarr_variable_is_found_too(tmp_path):
         name="v",
     ).to_dataset()
     ds.to_zarr(tmp_path / "in.zarr", zarr_format=2, consolidated=True)
-    assert "-9999 (40 % of the valid pixels sampled)" in line(
-        plan_conversion(tmp_path / "in.zarr", chunk_size=16), "fill:"
-    )
+    with pytest.raises(ValueError, match=r"-9999 \(40 % of the valid pixels in the 3 sampled"):
+        plan_conversion(tmp_path / "in.zarr", chunk_size=16)
+    none = plan_conversion(tmp_path / "in.zarr", chunk_size=16, nodata=None)
+    assert "-9999 (40 % of the valid pixels sampled)" in line(none, "fill:")
     ds["v"].attrs["_FillValue"] = np.float32(-9999)
     ds.to_zarr(tmp_path / "declared.zarr", zarr_format=2, consolidated=True)
     assert not has_line(plan_conversion(tmp_path / "declared.zarr", chunk_size=16), "fill:")
@@ -357,24 +459,60 @@ def test_a_fill_in_a_zarr_variable_is_found_too(tmp_path):
 
 def test_detection_works_on_a_sample_of_the_pixels(tmp_path, monkeypatch):
     monkeypatch.setattr(_convert_pixels, "SAMPLE_PIXELS", 400)  # of 2000 per timestep
-    fill = line(plan_for(tmp_path, rain(0.45)), "fill:")
-    assert "-9999 (4" in fill
-    assert "pass --nodata -9999" in fill
+    message = refusal(tmp_path, rain(0.45))
+    assert "-9999 (4" in message
+    assert "pass --nodata -9999" in message
 
 
-def test_the_cli_dry_run_prints_the_fill_and_the_fix_works(tmp_path):
+def scenes(tmp_path: Path, steps: list[np.ndarray]) -> Path:
     folder = tmp_path / "scenes"
     folder.mkdir()
-    for t, array in enumerate(rain(0.45)):
+    for t, array in enumerate(steps):
         write_tif(folder / f"rain_{DATES[t]}.tif", array)
-    command = ["convert", str(folder), str(tmp_path / "out"), "--dry-run", "--chunk-size", "16"]
-    dry = CliRunner().invoke(main, command)
-    assert dry.exit_code == 0, dry.output
-    assert "fill:       -9999 (45 % of the valid pixels sampled)" in dry.output
-    fixed = CliRunner().invoke(main, [*command, "--nodata", "-9999"])
-    assert fixed.exit_code == 0, fixed.output
-    assert "fill:" not in fixed.output
-    assert "validity:   nodata -9999.0 sentinel, no mask" in fixed.output
+    return folder
+
+
+def test_the_cli_dry_run_refuses_a_large_fill_and_both_answers_work(tmp_path):
+    folder = scenes(tmp_path, rain(0.45))
+    out = tmp_path / "out"
+    command = ["convert", str(folder), str(out), "--dry-run", "--chunk-size", "16"]
+    refused = CliRunner().invoke(main, command)
+    assert refused.exit_code == 1, refused.output
+    assert refused.output.startswith(
+        "Error: -9999 (45 % of the valid pixels in the 3 sampled timesteps) lies far outside"
+    )
+    assert "If it marks missing pixels, pass --nodata -9999." in refused.output
+    marked = CliRunner().invoke(main, [*command, "--nodata", "-9999"])
+    assert marked.exit_code == 0, marked.output
+    assert "fill:" not in marked.output
+    assert "validity:   nodata -9999.0 sentinel, no mask" in marked.output
+    kept = CliRunner().invoke(main, [*command, "--nodata", "none"])
+    assert kept.exit_code == 0, kept.output
+    assert "validity:   no nodata (--nodata none) and no mask" in kept.output
+    assert "The store keeps it as data, as --nodata none asks" in kept.output
+
+
+def test_a_refused_fill_writes_nothing_and_each_answer_writes_the_store_it_names(tmp_path):
+    steps = rain(0.45)
+    folder = scenes(tmp_path, steps)
+    out = tmp_path / "out"
+    with pytest.raises(ValueError, match="pass --nodata -9999"):
+        convert(folder, out, chunk_size=16)
+    assert not out.exists()
+    assert not (tmp_path / "out.convert-work").exists()
+
+    convert(folder, tmp_path / "marked", nodata=-9999, chunk_size=16)
+    marked = chronozarr.open_store(tmp_path / "marked")
+    assert marked.attrs.nodata == -9999
+    physical = marked.to_xarray(physical=True).values
+    source = np.stack(steps)
+    assert np.isnan(physical[source == -9999]).all()
+    assert np.array_equal(physical[source != -9999], source[source != -9999])
+
+    convert(folder, tmp_path / "kept", nodata=None, chunk_size=16)
+    kept = chronozarr.open_store(tmp_path / "kept")
+    assert kept.attrs.nodata is None
+    assert np.array_equal(kept.to_xarray().values, source)
 
 
 # --- the value range after scale and offset -----------------------------------------------------

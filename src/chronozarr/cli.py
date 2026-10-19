@@ -894,7 +894,10 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     "--nodata",
     default=None,
     help="Nodata value, 'none', or 'nan' (float data). Default: what the sources declare; none "
-    "declared means no nodata, not 0. An explicit value replaces the declared one.",
+    "declared means no nodata, not 0. An explicit value replaces the declared one. A value the "
+    "files do not declare that looks like a fill and holds a large share of the sampled pixels "
+    "(-9999 in rainfall) is refused until you pass this option: a number marks it invalid, "
+    "'none' keeps every value as data.",
 )
 @click.option(
     "--mask-var",

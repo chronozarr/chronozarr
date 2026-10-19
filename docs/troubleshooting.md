@@ -28,7 +28,8 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 | A file on another grid or CRS | All timesteps of a store share one grid. Fix the files, or pass `--resampling` to warp every file to the grid of the first |
 | Different scale, offset, units or band names | A store holds one value of each per band. Correct the metadata, for example with `gdal_edit.py -scale -offset -units` |
 | A float file with undeclared NaN | Pass `--nodata nan` to treat NaN as invalid |
-| A `fill:` line names a value such as `-9999` | The files declare no nodata, and the value looks like a fill. Pass `--nodata -9999` to mark it invalid. Leave it out if the value is data |
+| `-9999 (48 % of the valid pixels in the 3 sampled timesteps) lies far outside the other values`, and the command stops | The files declare no nodata, and a value that looks like a fill holds a large share of the pixels. If it marks missing pixels, pass `--nodata -9999`. If it is data, pass `--nodata none`. `--nodata` takes one value: with two flag values the message says which stays data and how to mark both |
+| A `fill:` line names a value such as `-9999` | The files declare no nodata, and the value looks like a fill but holds a small share of the pixels. Pass `--nodata -9999` to mark it invalid. Leave it out if the value is data |
 | A `range:` line shows values far outside the physical range | The scale is applied as stored * scale + offset. Correct the scale in the files, for example with `gdal_edit.py -scale -offset` |
 | A palette PNG is refused | Expand it to RGB first: `gdal_translate -expand rgba` |
 | The output folder exists | A store is never overwritten. Choose a new folder |
