@@ -447,10 +447,10 @@ def _decode_level(source: Any, store: ChronoStore, lod: int, full_read_limit: in
     name = f"decode level {lod}"
     rows, cols = level.grid
     row, col = rows // 2, cols // 2
-    cs = level.chunk_size
+    cell_rows, cell_cols = level.cell_shape
     height, width = level.shape[2:]
-    ys = slice(row * cs, min((row + 1) * cs, height))
-    xs = slice(col * cs, min((col + 1) * cs, width))
+    ys = slice(row * cell_rows, min((row + 1) * cell_rows, height))
+    xs = slice(col * cell_cols, min((col + 1) * cell_cols, width))
     y, x = (ys.start + ys.stop) // 2, (xs.start + xs.stop) // 2
     t_last = len(store.times) - 1
     started = time.perf_counter()

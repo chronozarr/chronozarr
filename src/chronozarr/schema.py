@@ -180,7 +180,7 @@ class Chronozarr:
     times: tuple[str, ...]
     bands: tuple[Band, ...]
     crs: str | None  # the code as a mirror of proj:code; None when the store carries no mirror
-    spec_version: str = SPEC_VERSION
+    spec_version: str | None = SPEC_VERSION  # None for a store that has no chronozarr block
     variable: str = VARIABLE
     nodata: int | float | None = NODATA
     volatility_path: str | None = None
@@ -464,10 +464,14 @@ class Findings:
     _shoulds: dict[str, list[str]] = field(default_factory=dict)
 
     def must(self, where: str, text: str) -> None:
-        self._musts.setdefault(text, []).append(where)
+        places = self._musts.setdefault(text, [])
+        if where not in places:
+            places.append(where)
 
     def should(self, where: str, text: str) -> None:
-        self._shoulds.setdefault(text, []).append(where)
+        places = self._shoulds.setdefault(text, [])
+        if where not in places:
+            places.append(where)
 
     @property
     def breaks(self) -> list[str]:
@@ -478,7 +482,7 @@ class Findings:
     def advice(self) -> list[str]:
         """The SHOULDs left out and the assumptions made, one entry per distinct text."""
         shoulds = [f"{_places(places)}: {text}" for text, places in self._shoulds.items()]
-        return [*shoulds, *self.notes]
+        return [*self.notes, *shoulds]
 
 
 def _fail(where: str, message: str) -> SchemaError:
@@ -629,7 +633,7 @@ def parse_provenance(raw: Any, where: str = "chronozarr.provenance") -> dict[str
     return parsed
 
 
-def _parse_transform(raw: Any, where: str) -> Transform:
+def parse_transform(raw: Any, where: str) -> Transform:
     if not isinstance(raw, list) or len(raw) != 6 or not all(_is_number(v) for v in raw):
         raise _fail(where, f"expected 6 numbers [a, b, c, d, e, f], got {raw!r}")
     return (
@@ -670,7 +674,7 @@ def _parse_levels(raw: Any, where: str) -> tuple[LevelSummary, ...]:
             LevelSummary(
                 path=path,
                 resolution=float(resolution),
-                transform=_parse_transform(_require(entry, "transform", at), f"{at}.transform"),
+                transform=parse_transform(_require(entry, "transform", at), f"{at}.transform"),
                 shape=cast("tuple[int, int, int, int]", shape),
                 grid=cast("tuple[int, int]", grid),
             )
@@ -856,7 +860,7 @@ def parse_level_attrs(attrs: Mapping[str, Any], where: str) -> LevelAttrs:
     crs = attrs.get("crs")
     if crs is not None and (not isinstance(crs, str) or not crs):
         raise _fail(f"{where}.crs", "expected a non-empty string")
-    transform = _parse_transform(_require(attrs, "transform", where), f"{where}.transform")
+    transform = parse_transform(_require(attrs, "transform", where), f"{where}.transform")
     resolution = _require(attrs, "resolution", where)
     if not _is_number(resolution) or resolution <= 0:
         raise _fail(f"{where}.resolution", f"expected a positive number, got {resolution!r}")
@@ -888,7 +892,7 @@ def read_geometry(data: zarr.Array, where: str, found: Findings) -> LevelGeometr
     a = data.attrs.asdict()
     read_registrations(a, ("proj", "spatial"), where, found)
     crs = parse_crs(a, where)
-    transform = _parse_transform(_require(a, "spatial:transform", where), where)
+    transform = parse_transform(_require(a, "spatial:transform", where), where)
     if not all(math.isfinite(v) for v in transform) or not (
         transform[0] > 0 and transform[4] < 0 and transform[1] == transform[3] == 0
     ):
@@ -1090,41 +1094,40 @@ def _check_crs_attr(
 
 
 def _check_layout(
-    array: zarr.Array,
-    name: str,
-    lead: tuple[int, ...],
-    cs: int,
-    state: _LevelState,
-    problems: list[str],
+    array: zarr.Array, name: str, lead: tuple[int, ...], cs: int, state: _LevelState
 ) -> None:
-    """Chunks (1, *lead, cs, cs) and, if sharded, shards (shard_time, *lead, cs, cs)."""
+    """Chunks (1, *lead, cs, cs) and, if sharded, shards (shard_time, *lead, cs, cs).
+
+    A reader reads any chunking through Zarr, so a deviation breaks a MUST of the spec and is
+    reported as a finding that `validate` fails on.
+    """
+    must = state.found.must
     metadata = array.metadata.to_dict()
     if metadata.get("chunk_grid", {}).get("name") != "regular":
-        problems.append(f"{name}: grid must be regular")
+        must(name, "grid must be regular")
     if metadata.get("chunk_key_encoding") != {
         "name": "default",
         "configuration": {"separator": "/"},
     }:
-        problems.append(f"{name}: chunk keys must use default slash encoding")
+        must(name, "chunk keys must use default slash encoding")
     chunks = (1, *lead, cs, cs)
     if tuple(array.chunks) != chunks:
-        problems.append(f"{name}: chunks must be {chunks}, got {tuple(array.chunks)}")
+        must(name, f"chunks must be {chunks}, got {tuple(array.chunks)}")
     if array.shards is None:
         if state.sharded:
-            problems.append(f"{name}: must be sharded like the data array")
+            must(name, "must be sharded like the data array")
         return
     if state.sharded is False:
-        problems.append(f"{name}: must not be sharded when the data array is not")
+        must(name, "must not be sharded when the data array is not")
     shards = tuple(array.shards)
     if shards[1:] != (*lead, cs, cs) or shards[0] < 1:
-        problems.append(
-            f"{name}: shards must be (shard_time, {', '.join(str(n) for n in (*lead, cs, cs))}) "
-            f"with shard_time >= 1, got {shards}"
+        must(
+            name,
+            f"shards must be (shard_time, {', '.join(str(n) for n in (*lead, cs, cs))}) "
+            f"with shard_time >= 1, got {shards}",
         )
     elif state.shard_time is not None and shards[0] != state.shard_time:
-        problems.append(
-            f"{name}: shard_time {shards[0]} differs from level 0 ({state.shard_time})"
-        )
+        must(name, f"shard_time {shards[0]} differs from level 0 ({state.shard_time})")
 
 
 def _check_plane(
@@ -1150,7 +1153,7 @@ def _check_plane(
     if tuple(array.shape) != shape:
         problems.append(f"{where}: shape must be {shape}, got {tuple(array.shape)}")
         return
-    _check_layout(array, where, (), cs, state, problems)
+    _check_layout(array, where, (), cs, state)
     if array.fill_value != 0:
         problems.append(f"{where}: fill_value must be 0, got {array.fill_value}")
     _check_crs_attr(array.attrs.asdict(), crs, where, problems)
@@ -1195,8 +1198,8 @@ def _check_data_array(
     if state.cs is None:
         state.cs = int(data.chunks[2])  # the cell size is the chunk size of the first level read
     if state.cs < 2 or state.cs % 2:
-        problems.append(f"{where}: cell size must be positive and even")
-    _check_layout(data, where, (n_band,), state.cs, state, problems)
+        state.found.must(where, "cell size must be positive and even")
+    _check_layout(data, where, (n_band,), state.cs, state)
     names = _codec_names(data)
     if len(names) != 2 or names[0] != "bytes" or names[1] not in CODECS:
         problems.append(f"{where}: codecs must be bytes plus one of {list(CODECS)}, got {names}")
@@ -1453,7 +1456,10 @@ def _check_levels_attr(root: zarr.Group, attrs: RootAttrs, problems: list[str]) 
             problems.append(
                 f"{where}: shape {list(summary.shape)} differs from {list(data.shape)}"
             )
-        elif summary.grid != grid_shape(summary.shape[2], summary.shape[3], int(data.chunks[2])):
+        elif summary.grid != (
+            math.ceil(summary.shape[2] / data.chunks[2]),
+            math.ceil(summary.shape[3] / data.chunks[3]),
+        ):
             problems.append(f"{where}: grid {list(summary.grid)} does not match shape and chunks")
 
 
