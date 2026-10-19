@@ -6,12 +6,13 @@ by cell. Peak memory is about one timestep times `read_ahead`; disk is the raw s
 work directory, once more in `encode`'s cell-major spill, plus the output. Staged timesteps are
 the unit of `resume`: an interrupted run keeps them, and a rerun reads only the missing ones.
 
-Four input kinds are recognised from SOURCE:
+Five input kinds are recognised from SOURCE:
 
 * a manifest (`.csv` or `.json`) of COG, raster or image-frame (PNG) URIs with timestamps, one URI
   per timestep;
 * a directory, a glob or an S3 prefix of rasters, listed and dated from their file names (the
   manifest, written for you);
+* one raster whose bands are dates, with `bands_are_dates` (`--bands-are-dates`);
 * a Zarr store (local path or http(s) URL) with a chosen variable;
 * a NetCDF file (`.nc`, `.nc4`, `.cdf`) with a chosen variable (needs an xarray NetCDF engine).
 
@@ -39,6 +40,18 @@ wrong, in the names and in the files, is reported together, per file, in one `Pr
 (`--dry-run` writes nothing and reports the same). `write_manifest_to` exports the files, their
 dates and the band names the files agree on, also when the checks report problems: a file
 with no date gets a row with an empty datetime for the user to fill in.
+
+Bands as dates. One raster whose bands are dates, as Earth Engine's `ee.ImageCollection.toBands()`
+exports a series (`2020_01_01_NDVI`, `2020_01_17_NDVI`, ...), is a series only when the caller
+says so with `bands_are_dates`: a file with several bands is normally bands. The date of each band
+is read from its description, as a file name's date is (`date_pattern` then reads the
+descriptions); the part of a description besides its date names the band and must be the same on
+every date. Several bands per date become the bands of one timestep, and every date must have the
+same ones. The plan says what was read (`bands:`) and every problem in the descriptions is
+reported together (`_convert_band_dates`). A single undated multi-band file whose descriptions
+would make a series is refused with the option that reads them. The file is read once per date,
+which for a pixel-interleaved GeoTIFF decodes every band each time; the plan says so when that is
+large (`interleave:`). `write_manifest_to` does not apply: the source is one file.
 
 Fidelity rules. The store carries the source's scale, offset, units and validity, or the
 conversion fails; nothing is guessed.
@@ -157,20 +170,22 @@ from chronozarr._convert_cog import (
     SIDECAR_SUFFIXES as SIDECAR_SUFFIXES,
 )
 from chronozarr._convert_cog import (
+    BandSeries,
+    _tolerate_unlocated_frames,
+    open_band_series,
+)
+from chronozarr._convert_cog import (
     CogManifestSource as CogManifestSource,
 )
 from chronozarr._convert_cog import (
     _gdal_env as _gdal_env,
-)
-from chronozarr._convert_cog import (
-    _tolerate_unlocated_frames,
 )
 from chronozarr._convert_discover import (
     TIFF_SUFFIXES,
     check_manifest_target,
     discover,
     is_discovery_source,
-    show_time,
+    list_rasters,
     write_manifest,
 )
 from chronozarr._convert_discover import (
@@ -317,8 +332,7 @@ class Plan:
             f"{np.datetime_as_string(times[-1], unit='D')})",
         ]
         if list_files and self.discovered and isinstance(self.source, CogManifestSource):
-            out.append(f"files:      {len(self.source.entries)}, dated from their names")
-            out.extend(f"  {show_time(e.time)}  {e.uri}" for e in self.source.entries)
+            out.extend(self.source.listing())
         longitude = info.grid.longitude_note()
         out += [
             f"grid:       {info.grid.describe()}",
@@ -395,6 +409,7 @@ def plan_conversion(
     sample: bool = True,
     date_pattern: str | None = None,
     calendar_to_gregorian: str | None = None,
+    bands_are_dates: bool = False,
 ) -> Plan:
     """Open the source, check it is consistent and estimate the conversion.
 
@@ -407,6 +422,10 @@ def plan_conversion(
     suffix = Path(text).suffix.lower()
     is_manifest = suffix in (".csv", ".json")
     discovered = not is_manifest and is_discovery_source(text)
+    if bands_are_dates and not discovered:
+        raise ValueError(
+            f"--bands-are-dates applies to one raster file whose bands are dates, not to {text}"
+        )
     if date_pattern is not None and not discovered:
         raise ValueError(
             f"--date-pattern applies to a directory, glob or S3 prefix of rasters, not to {text}"
@@ -419,12 +438,21 @@ def plan_conversion(
                 "not manifests or rasters"
             )
         manifest_bounds: Bounds | None = None
+        band_series: BandSeries | None = None
         if is_manifest:
             manifest = read_manifest(Path(text))
             entries, band_names = manifest.entries, manifest.bands
             undated: list[str] = []
             prior: list[Problem] = []
             manifest_bounds = manifest.bounds
+        elif bands_are_dates:
+            files = list_rasters(text)
+            if len(files) != 1:
+                raise ValueError(
+                    f"--bands-are-dates reads one raster file whose bands are dates; {text} "
+                    f"holds {len(files)} files"
+                )
+            entries, band_names, undated, prior = [], None, [], []
         else:
             found = discover(text, date_pattern)
             entries, band_names, undated, prior = (
@@ -440,6 +468,9 @@ def plan_conversion(
         frame_bounds = manifest_bounds if bounds is None else check_bounds(bounds, "--bounds")
         if frame_bounds is not None and crs is None:
             raise ValueError("bounds need crs (--crs EPSG:xxxxx), the CRS they are in")
+        if bands_are_dates:
+            band_series = open_band_series(files[0], crs, frame_bounds, variable, date_pattern)
+            entries, band_names = band_series.entries, band_series.dates.names
         source = CogManifestSource(
             entries,
             band_names,
@@ -455,8 +486,13 @@ def plan_conversion(
             chunk_size=chunk_size,
             bounds=frame_bounds,
             variable=variable,
+            band_series=band_series,
+            band_date_pattern=date_pattern,
         )
-        if discovered and source.kind == CogManifestSource.kind:
+        if band_series is not None:
+            kind = "GeoTIFF" if band_series.uri.lower().endswith(TIFF_SUFFIXES) else "raster"
+            source.kind = f"{kind} with a date per band"
+        elif discovered and source.kind == CogManifestSource.kind:
             # The plan's first line names what the user gave: files found by name, not a manifest.
             tiffs_only = all(e.uri.lower().endswith(TIFF_SUFFIXES) for e in entries)
             source.kind = "dated GeoTIFFs" if tiffs_only else "dated rasters"
@@ -720,6 +756,7 @@ def convert(
     dry_run: bool = False,
     read_ahead: int = 2,
     date_pattern: str | None = None,
+    bands_are_dates: bool = False,
     calendar_to_gregorian: str | None = None,
     write_manifest_to: str | Path | None = None,
     on_plan: Callable[[Plan], None] | None = None,
@@ -742,6 +779,12 @@ def convert(
     with a `bands` column or entry when the files name their bands. It is written on a dry
     run too, and also when the checks raise a `PreflightError` (a file with no date gets an
     empty datetime; the error carries a note saying so). It refuses to overwrite a file.
+
+    `bands_are_dates` converts one raster file whose bands are dates, as Earth Engine's
+    `toBands()` exports a series: the date of each band is read from its description
+    (`2020_01_01_NDVI`; `date_pattern` then reads the descriptions), and the part besides the date
+    names the band. Several bands per date become the bands of one timestep. The file is refused
+    without this argument, since a multi-band file is normally bands; the refusal names it.
 
     Image frames (PNG) are manifest sources. `crs` names the CRS of frames that carry none (a
     world file has none). `bounds` is `(west, south, east, north)` in the units of `crs`, the
@@ -779,6 +822,11 @@ def convert(
         raise ValueError(f"read_ahead must be >= 1, got {read_ahead}")
     if write_manifest_to is not None:
         check_manifest_target(Path(write_manifest_to))
+        if bands_are_dates:
+            raise ValueError(
+                "--write-manifest lists files with their dates, and a file whose bands are dates "
+                "is one file: leave --write-manifest out"
+            )
         if not is_discovery_source(str(source)):
             raise ValueError(
                 "--write-manifest exports the files found in a directory, glob or S3 prefix; "
@@ -806,6 +854,7 @@ def convert(
             n_lods=encode_options.get("n_lods"),
             date_pattern=date_pattern,
             calendar_to_gregorian=calendar_to_gregorian,
+            bands_are_dates=bands_are_dates,
         )
     except PreflightError as exc:
         if write_manifest_to is not None and exc.draft is not None:

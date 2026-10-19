@@ -915,7 +915,17 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     help="Directory, glob or S3 prefix only: where the date is in each file name, with %Y %m "
     "%d %H %M %S (for example 'ndvi_%Y%m%d'), or %Y %j for a year and day of year (for example "
     "'MOD13A1.A%Y%j' or 'HLS.S30.T17SQV.%Y%jT%H%M%S'). Default: YYYYMMDD, YYYY-MM-DD or "
-    "YYYY-MM, read only when a name holds exactly one date.",
+    "YYYY-MM, read only when a name holds exactly one date. With --bands-are-dates it reads "
+    "the band descriptions instead of the file name.",
+)
+@click.option(
+    "--bands-are-dates",
+    is_flag=True,
+    help="SOURCE is one raster file whose bands are dates, as Earth Engine's toBands() exports "
+    "a time series: read the date of each band from its description (2020_01_01_NDVI) and "
+    "convert the bands as a series. The part of the description besides the date names the "
+    "band; several bands per date (2020_01_01_NDVI, 2020_01_01_EVI) become the bands of each "
+    "timestep. Never assumed: a multi-band file is normally bands.",
 )
 @click.option(
     "--write-manifest",
@@ -960,6 +970,7 @@ def convert_command(
     calendar_to_gregorian: str | None,
     band_roles: tuple[str, ...],
     date_pattern: str | None,
+    bands_are_dates: bool,
     write_manifest: Path | None,
     **options: Any,
 ) -> None:
@@ -970,6 +981,7 @@ def convert_command(
     \b
       a directory, quoted glob or s3:// prefix of rasters (GeoTIFF, BIL, GRIB2, HDF5, ...),
         or local zips that hold one raster each, dated from their file names
+      one raster whose bands are dates (Earth Engine toBands()), with --bands-are-dates
       a manifest (.csv with columns uri,datetime[,bands] or .json) of raster or PNG frame URIs
       a Zarr store (path or URL) or a NetCDF file, the last two with --variable
 
@@ -981,7 +993,9 @@ def convert_command(
     the file is reported and --date-pattern or a manifest says where the date is. MODIS and HLS
     names carry a year and day of year, which --date-pattern reads with %Y%j (for example
     'MOD13A1.A%Y%j'). --write-manifest saves what was found, also when the checks report
-    problems, so you can edit it and run convert on it.
+    problems, so you can edit it and run convert on it. One multi-band file whose band
+    descriptions each hold a date (2020_01_01_NDVI, as toBands() names them) is refused with
+    the option that reads it, --bands-are-dates; it is never assumed.
 
     Every file is checked before anything is read in bulk: dates, grid and CRS, bands, dtype,
     scale, offset, units and nodata. All problems are reported together, per file, with a
@@ -1029,6 +1043,7 @@ def convert_command(
             dry_run=dry_run,
             read_ahead=read_ahead,
             date_pattern=date_pattern,
+            bands_are_dates=bands_are_dates,
             calendar_to_gregorian=calendar_to_gregorian,
             write_manifest_to=write_manifest,
             on_plan=show_plan,
