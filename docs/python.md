@@ -48,6 +48,17 @@ da = store.to_xarray(lod=0, times=[0], physical=False)
 
 `store.crs` is the CRS the store declares: an authority code, WKT2 text, PROJJSON, or several of them. `store.crs.to_string()` returns the code when there is one and otherwise the WKT2 or PROJJSON text, which pyproj and rasterio accept. When representations disagree, the WKT2 is used and a warning says so.
 
+## Read a store that chronozarr did not write
+
+`open_store` also reads a pyramid written by ndpyramid or by ESA's EOPF, or any Zarr v3 store whose root `multiscales` lists the levels. It finds the levels, the geometry and the CRS in the store's own metadata, and `store.notes` says what it had to assume: scale and offset taken as 1 and 0, no time axis (one timestep dated 1970-01-01), the fill value that marks a missing pixel, levels left out or in another order. Level 0 is the finest level whatever order the layout lists.
+
+```python
+store = chronozarr.open_store("https://example.org/product.zarr/measurements/reflectance")
+store.notes
+```
+
+A store of this kind never conforms: `chronozarr validate` reports the missing `chronozarr` block and says that the store decodes. `chronozarr info` prints its levels and notes. The JavaScript reader and the viewer still open only chronozarr stores. [Spec section 9.4](../spec/CHRONOZARR.md#94-stores-with-no-chronozarr-block) has the rules.
+
 ## Open a store in xarray
 
 ```python
