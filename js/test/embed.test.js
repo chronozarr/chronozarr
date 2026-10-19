@@ -254,8 +254,8 @@ test('resolveSet rejects what the store does not have, with the choices in the m
 // The 200 x 200 synthetic stores: 10 m pixels, upper left corner at (500000, 4000000) in UTM zone 31 north.
 const TRANSFORM = [10, 0, 500000, 0, -10, 4000000];
 
-test('makeGeo with a transform and a projection: pixel <-> store coordinates <-> lon/lat', () => {
-  const geo = makeGeo({ transform: TRANSFORM, projection: createProjection('EPSG:32631') });
+test('makeGeo with a transform and a projection: pixel <-> store coordinates <-> lon/lat', async () => {
+  const geo = makeGeo({ transform: TRANSFORM, projection: await createProjection('EPSG:32631') });
   assert.equal(geo.geoReferenced, true);
   assert.equal(geo.hasLonLat, true);
   const corner = geo.fromPixel(0, 0);
@@ -271,8 +271,8 @@ test('makeGeo with a transform and a projection: pixel <-> store coordinates <->
   assert.ok(Math.abs(lonLat.col - 100) < 0.01 && Math.abs(lonLat.row - 100) < 0.01, `round trip: ${JSON.stringify(lonLat)}`);
 });
 
-test('makeGeo without a transform: x and y are level-0 pixels, there is no lon/lat', () => {
-  const geo = makeGeo({ projection: createProjection('EPSG:32631') });
+test('makeGeo without a transform: x and y are level-0 pixels, there is no lon/lat', async () => {
+  const geo = makeGeo({ projection: await createProjection('EPSG:32631') });
   assert.equal(geo.geoReferenced, false);
   assert.equal(geo.hasLonLat, false);
   assert.deepEqual(geo.fromPixel(12.34, 56.78), { x: 12.3, y: 56.8, lon: null, lat: null });
@@ -285,7 +285,7 @@ test('makeGeo with a transform but a CRS the viewer cannot project: coordinates 
   assert.equal(geo.hasLonLat, false);
   assert.deepEqual(geo.fromPixel(0, 0), { x: 500000, y: 4000000, lon: null, lat: null });
   assert.deepEqual(geo.toPixel({ x: 500010, y: 3999990 }), { col: 1, row: 1 });
-  assert.throws(() => geo.toPixel({ lon: 3, lat: 36 }), /WGS84 UTM, EPSG:3857 or EPSG:4326/);
+  assert.throws(() => geo.toPixel({ lon: 3, lat: 36 }), /needs a store CRS the viewer can project.*use \{x, y\}/);
 });
 
 // ---- messages ----

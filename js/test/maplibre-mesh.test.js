@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { FLOATS_PER_VERTEX, MAX_DIVISIONS, buildMesh, originMatrix } from '../maplibre/mesh.js';
 import { createProjection, levelTransform, lonLatToMercator, pixelToCrs } from '../maplibre/projection.js';
 
-const projection = createProjection('EPSG:32718');
+const projection = await createProjection('EPSG:32718');
 const LEVEL0 = [10, 0, 485650, 0, -10, 9169880]; // the live Ucayali store
 const FULL = { x0: 0, y0: 0, x1: 512, y1: 512 };
 

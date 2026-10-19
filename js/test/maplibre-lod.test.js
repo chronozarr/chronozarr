@@ -38,10 +38,10 @@ test('bias 0 is the spec rule (largest level whose texels are no bigger than a p
   assert.equal(selectLod({ mercatorPerTexel0: UCAYALI, levelCount: 9, zoom: 3 }), 8);
 });
 
-test('LOD depends on the store latitude through mercatorPerTexel: the same 10 m store needs a finer level at 60 N than at the equator', () => {
-  const at = (epsg, x, y) => mercatorPerTexel(createProjection(epsg), [10, 0, x, 0, -10, y], 200, 200);
-  const equator = at('EPSG:32631', 499000, 1000);
-  const north = at('EPSG:32631', 499000, 6_650_000);
+test('LOD depends on the store latitude through mercatorPerTexel: the same 10 m store needs a finer level at 60 N than at the equator', async () => {
+  const at = async (epsg, x, y) => mercatorPerTexel(await createProjection(epsg), [10, 0, x, 0, -10, y], 200, 200);
+  const equator = await at('EPSG:32631', 499000, 1000);
+  const north = await at('EPSG:32631', 499000, 6_650_000);
   assert.ok(north / equator > 1.9 && north / equator < 2.1, `ratio ${north / equator}`);
   const zoom = 12;
   assert.ok(selectLod({ mercatorPerTexel0: north, levelCount: LEVELS, zoom }) < selectLod({ mercatorPerTexel0: equator, levelCount: LEVELS, zoom }));
