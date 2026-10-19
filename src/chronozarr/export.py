@@ -183,7 +183,7 @@ def export_cog(
                 height=height,
                 count=n_band,
                 dtype=values.dtype,
-                crs=opened.attrs.crs,
+                crs=opened.crs.to_string(),
                 transform=Affine(*lod.transform),
                 nodata=tag,
                 tiled=True,

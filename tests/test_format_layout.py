@@ -444,6 +444,14 @@ def _fake_pyproj(monkeypatch, *, known: bool = True):
                 raise CRSError(code)
             return cls(code)
 
+        @classmethod
+        def from_user_input(cls, text: str) -> CRS:
+            """The code in `EPSG:n` or in the fake WKT below: what validation compares."""
+            return cls(int("".join(c for c in text.split("EPSG:")[-1] if c.isdigit())))
+
+        def __eq__(self, other: object) -> bool:
+            return isinstance(other, CRS) and self.code == other.code
+
         def to_wkt(self) -> str:
             return f'PROJCRS["fake EPSG:{self.code}"]'
 

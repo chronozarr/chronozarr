@@ -227,7 +227,7 @@ class PublishPlan:
     def summary(self, adapter: StorageAdapter, state: str = "") -> str:
         immutable = sum(o.cache_control == IMMUTABLE for o in self.objects)
         lines = [
-            f"store        {self.store} (conforms to chronozarr {schema.SPEC_VERSION})",
+            f"store        {self.store} (conforms to the chronozarr spec)",
             f"destination  {self.destination.uri} via {adapter.endpoint_description()}",
             f"public URL   {self.public_url} "
             + (
@@ -293,7 +293,7 @@ def plan_store(
         shown = "\n".join(f"  {p}" for p in problems[:10])
         more = f"\n  ... {len(problems) - 10} more" if len(problems) > 10 else ""
         raise PublishError(
-            f"{store} does not conform to chronozarr {schema.SPEC_VERSION}; nothing was "
+            f"{store} does not conform to the chronozarr spec; nothing was "
             f"uploaded.\n{shown}{more}\nRun `chronozarr validate {store}` for the full list."
         )
     derived = public_url is None

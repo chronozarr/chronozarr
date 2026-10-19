@@ -1,16 +1,16 @@
-# chronozarr v0.3.0
+# chronozarr v0.4.0
 
 Status: Draft
 
-Date: 2026-10-03
+Date: 2026-10-19
 
-Spec version string: `0.3.0`
+Spec version string: `0.3.0` for a store whose CRS has an EPSG code, `0.4.0` for any other store (§3.2)
 
-Supersedes: chronozarr v0.2.0. A v0.2.0 store becomes a v0.3.0 store through explicit conversion.
+Supersedes: chronozarr v0.3.0, whose stores stay valid under this document. A v0.2.0 store becomes a v0.3.0 store through explicit conversion.
 
 ## 0. Scope and upstream references
 
-chronozarr defines a profile of Zarr v3 for raster time series with true stored values. The profile covers a multiscale pyramid, band descriptions, validity planes, metadata mirrors and static publishing rules. Every array holds ordinary stored values. Applying the declared band scale and offset gives physical units. Stored values need no chronozarr-specific reconstruction. Each store has one EPSG north-up grid. The profile composes the zarr-conventions multiscales, proj and spatial conventions. It is aligned with this GeoZarr convention work. It is not certified against an adopted OGC GeoZarr standard.
+chronozarr defines a profile of Zarr v3 for raster time series with true stored values. The profile covers a multiscale pyramid, band descriptions, validity planes, metadata mirrors and static publishing rules. Every array holds ordinary stored values. Applying the declared band scale and offset gives physical units. Stored values need no chronozarr-specific reconstruction. Each store has one north-up grid in one CRS, with or without an EPSG code. The profile composes the zarr-conventions multiscales, proj and spatial conventions. It is aligned with this GeoZarr convention work. It is not certified against an adopted OGC GeoZarr standard.
 
 MUST, MUST NOT, SHOULD, SHOULD NOT and MAY express requirements as in RFC 2119. Sections 0.3 and 10 are informative. So are examples explicitly labelled informative and implementation observations. All other sections are normative. Upstream requirements incorporated below apply in addition to chronozarr restrictions. Registration URLs identify the literal v0.1 conventions. Snapshot identities record documentation provenance. Stores do not carry them as attributes.
 
@@ -105,11 +105,11 @@ Every array, including coordinates and optional volatility, MUST declare `dimens
 
 The ISO timestamp and band-name mirrors MUST agree exactly with their coordinate sources (§3.4). If `band` contains integer indices, `band_names` MUST instead agree with the ordered `bands[].name`. Names are not compared with those integer indices. Readers MUST NOT require int64 or variable-length string coordinate reads when valid mirrors supply the needed information.
 
-### 2.3 EPSG north-up grid restriction
+### 2.3 North-up grid in any CRS
 
-All spatial arrays MUST use the same EPSG CRS and north-up affine geometry. Non-EPSG CRSs and rotated grids are outside this profile. In the S coefficient notation, horizontal pixel scale MUST be positive, vertical pixel scale negative, and both rotation/shear coefficients zero. This restricts S's transform. It leaves S's coefficient ordering and mapping unchanged (§0.2).
+All spatial arrays MUST use the same CRS and north-up affine geometry. The CRS is any that P allows: an authority code in `proj:code` (EPSG or another authority), WKT2 in `proj:wkt2`, or PROJJSON in `proj:projjson`. At least one MUST be present. When they disagree, `proj:wkt2` takes precedence, as P says, and a validator MUST report the disagreement. Rotated and south-up grids are outside this profile. In the S coefficient notation, horizontal pixel scale MUST be positive, vertical pixel scale negative, and both rotation/shear coefficients zero. This restricts S's transform. It leaves S's coefficient ordering and mapping unchanged (§0.2).
 
-Writers SHOULD retain the native projected CRS of the AOI, for example its UTM zone. Writers SHOULD NOT reproject storage to Web Mercator. Web Mercator does not preserve pixel ground area. This affects area-sensitive block means and statistics. Geometry and mirror agreement follow §3.3.
+Writers MUST write `proj:wkt2` when the CRS has no authority code, and SHOULD write it whenever they can. They MUST write `proj:code` when the CRS has an EPSG code. Writers SHOULD retain the native CRS of the source, for example a UTM zone, a Lambert conformal conic or a sinusoidal grid, and SHOULD NOT reproject storage. Reprojecting to Web Mercator does not preserve pixel ground area, which affects area-sensitive block means and statistics, and any reprojection resamples every value. Geometry and mirror agreement follow §3.3.
 
 ## 3. chronozarr attributes and mirrors
 
@@ -133,13 +133,13 @@ The root MUST carry a `chronozarr` object (§3.2) and a `multiscales` object con
 
 | Field | Type | Profile rule |
 |---|---|---|
-| `spec_version` | string | Writers MUST write exactly `"0.3.0"`. Readers MUST reject every other value, including missing values, before returning data, with a message directing the user to `chronozarr convert` (§9.1). |
+| `spec_version` | string | Writers MUST write `"0.3.0"` when the store's CRS has an EPSG code and `"0.4.0"` when it has none. Readers MUST accept both. They MUST reject every other value, including missing values, before returning data, with a message that names the versions they accept (§9.1). Releases up to 0.4.1 accept only `"0.3.0"`, so every store with an EPSG code stays readable by them. |
 | `variable` | string | Data-array name inside each level, default `"data"`. Writers MUST declare it. |
 | `times` | string[] | MUST be written, with length `n_time`. Each entry MUST be the ISO-8601 rendering of the corresponding time coordinate. |
 | `bands` | object[] | MUST be written, with length `n_band`. Entries are band-description objects (§4.4). |
 | `band_names` | string[] | Writers MUST write the ordered `bands[].name`. Readers that find only `bands` MUST derive the names rather than read the band coordinate. |
 | `nodata` | number or null | MUST be declared (§4.1). |
-| `crs` | string | MUST be an `EPSG:<code>` mirror equal to canonical P metadata on every spatial array. |
+| `crs` | string | SHOULD be written when the CRS has a code, as the `proj:code` string such as `EPSG:32631`, and absent otherwise. When present it MUST equal the canonical P code on every spatial array. Readers MUST NOT require it. |
 | `levels` | object[] | Writers MUST write the ordered mirrors in §3.4. Readers MUST support their absence through §9.2. |
 | `mask_variable` | string | MUST equal `"mask"` if and only if masks are present at every level. Otherwise MUST be absent. |
 | `coverage_variable` | string | MUST equal `"coverage"` if and only if coverage is present at every level. Otherwise MUST be absent. |
@@ -167,11 +167,11 @@ Informative example of a two-level object:
 }
 ```
 
-Every spatial array MUST carry `proj:code: "EPSG:<code>"`, `spatial:dimensions: ["y","x"]`, `spatial:transform` and `spatial:registration: "pixel"`, and satisfy P/S. If `spatial:transform_type` is supplied, it MUST be `"affine"`. Writers SHOULD also supply matching `proj:wkt2`. Optional `proj:projjson`, when supplied, MUST describe the same CRS. Optional `spatial:shape` MUST equal `[H_k,W_k]`. Optional `spatial:bbox` MUST agree with the array's shape and S geometry. Equivalent properties supplied on M layout entries MUST agree with the spatial arrays. P/S are the authoritative CRS and geometry sources. chronozarr mirrors MUST NOT override them.
+Every spatial array MUST carry its CRS as §2.3 says, `spatial:dimensions: ["y","x"]`, `spatial:transform` and `spatial:registration: "pixel"`, and satisfy P/S. If `spatial:transform_type` is supplied, it MUST be `"affine"`. Every representation present MUST describe the same CRS. Optional `spatial:shape` MUST equal `[H_k,W_k]`. Optional `spatial:bbox` MUST agree with the array's shape and S geometry. Equivalent properties supplied on M layout entries MUST agree with the spatial arrays. P/S are the authoritative CRS and geometry sources. chronozarr mirrors MUST NOT override them.
 
-Level `k` MUST have the same origin as level 0 and both pixel scales multiplied by `2^k`. All spatial arrays in a level MUST agree geometrically. Each level group MUST retain `crs`, `transform` and `resolution` mirrors. `crs` MUST equal `proj:code`. `transform` MUST equal the canonical S coefficient list without introducing another mapping. `resolution` MUST equal the positive horizontal ground sample distance at that level. Group and root mirrors MUST be validated against canonical array metadata.
+Level `k` MUST have the same origin as level 0 and both pixel scales multiplied by `2^k`. All spatial arrays in a level MUST agree geometrically. Each level group MUST retain `transform` and `resolution` mirrors and SHOULD retain a `crs` mirror. `crs` is written when the CRS has a code and MUST then equal `proj:code`. Readers MUST NOT require it. `transform` MUST equal the canonical S coefficient list without introducing another mapping. `resolution` MUST equal the positive horizontal ground sample distance at that level. Group and root mirrors MUST be validated against canonical array metadata.
 
-Spatial arrays MAY repeat `crs` and `transform` aliases. When present, these MUST agree with P/S. Readers MUST NOT require them. Writers SHOULD emit `_CRS` on data, mask and coverage arrays for GDAL versions below 3.13, with `{"url":"http://www.opengis.net/def/crs/EPSG/0/<code>"}` and an optional matching string `wkt`. Readers MUST NOT require `_CRS`. If present, `_CRS` MUST agree with `proj:code`. [evidence.md](../docs/evidence.md#reader-checks) records the GDAL checks.
+Spatial arrays MAY repeat `crs` and `transform` aliases. When present, these MUST agree with P/S. Readers MUST NOT require them. Writers SHOULD emit `_CRS` on data, mask and coverage arrays for GDAL versions below 3.13. For a CRS with an EPSG code it is `{"url":"http://www.opengis.net/def/crs/EPSG/0/<code>"}` with an optional matching string `wkt`. For a CRS with no EPSG code it is `{"wkt":"<WKT2>"}`. Readers MUST NOT require `_CRS`. If present, `_CRS` MUST agree with the CRS in P. [evidence.md](../docs/evidence.md#reader-checks) records the GDAL checks.
 
 ### 3.4 Mirrors and validation
 
@@ -187,7 +187,7 @@ Readers MUST use the available `times`, `band_names` and `levels` mirrors as pri
 | `shape` | integer[4] | MUST equal the data array shape `[n_time,n_band,H_k,W_k]`. |
 | `grid` | integer[2] | MUST equal `[ceil(H_k/cs),ceil(W_k/cs)]`. |
 
-Writers MUST emit the mirrors specified above. The reader fallbacks in §§3.2 and 9.2 support discovery of baseline values. They need no legacy parser. A validator MUST distinguish a missing required writer field from a decodable fallback path.
+Writers MUST emit the mirrors specified above, except that the `crs` mirrors are SHOULD (§§3.2, 3.3). The reader fallbacks in §§3.2 and 9.2 support discovery of baseline values. They need no legacy parser. A validator MUST distinguish a missing required writer field from a decodable fallback path. It SHOULD report an absent `crs` mirror as a note, and not as a failure.
 
 ## 4. Validity, units and provenance
 
@@ -412,9 +412,9 @@ Readers MUST keep array shapes consistent with their selected metadata snapshot.
 
 ### 9.1 Profile and version rejection
 
-A conforming reader MUST first GET `{store}/zarr.json` (or open the equivalent local root metadata) and check `attributes.chronozarr.spec_version`. It MUST accept exactly `"0.3.0"`. It MUST reject any other or missing value before producing data. The error MUST name the unsupported or missing version and direct the user to `chronozarr convert`, for example: `Unsupported chronozarr spec_version 0.2.0; convert the store with chronozarr convert before opening it with a v0.3 reader.`
+A conforming reader MUST first GET `{store}/zarr.json` (or open the equivalent local root metadata) and check `attributes.chronozarr.spec_version`. It MUST accept `"0.3.0"` and `"0.4.0"`. It MUST reject any other or missing value before producing data. The error MUST name the unsupported or missing version and the versions accepted. It SHOULD say what to do: a v0.2 store is converted with `chronozarr convert`, and a store of a later version needs a later reader. For example: `Unsupported chronozarr spec_version 0.2.0; expected 0.3.0 or 0.4.0. Convert a v0.2 store with chronozarr convert before opening it.`
 
-v0.3 readers do not read v0.2 stores. A v0.2 store is converted first. There is no dual-version parser, automatic URL fallback, legacy band-string scale inference or legacy multiscales-list path. The conversion operation is outside the normal reader contract.
+Readers of this document do not read v0.2 stores. A v0.2 store is converted first. There is no dual-version parser, automatic URL fallback, legacy band-string scale inference or legacy multiscales-list path. The conversion operation is outside the normal reader contract.
 
 Readers MUST enforce the ordinary-value baseline and inherited Z extension rules before returning measurements. Mandatory-extension handling is inherited from Z, Extensions. This profile does not substitute an ignorable attribute flag for that mechanism.
 
@@ -452,9 +452,22 @@ Readers MUST apply §4.1 validity in math, statistics and charts, and §4.4 scal
 
 Readers SHOULD cache decoded data chunks for the session. They SHOULD prefetch ordinary frames to reduce interaction latency. They MUST retain the per-shard index cache and array-handle reuse rules in §7.2, while recovering correctly for mutable trailing shards (§8.4). Consolidated root discovery and mirrors preserve a single-root-request metadata path.
 
-## 10. Changes from 0.2
+## 10. Changes from 0.3 and 0.2
 
-This table is informative. It lists the removals and changes. Retained chronozarr requirements are normative in §§1–9. v0.2 stores require explicit conversion. They are not baseline v0.3 reader inputs.
+These tables are informative. They list the removals and changes. Retained chronozarr requirements are normative in §§1–9. v0.2 stores require explicit conversion. They are not baseline reader inputs.
+
+### Changes from 0.3.0
+
+Every 0.3.0 store remains valid. A reader of this document opens it unchanged.
+
+| v0.3.0 rule | Change in this document | Section |
+|---|---|---|
+| Every CRS MUST be an EPSG code in `proj:code`. | Any CRS that P allows: `proj:code` of any authority, `proj:wkt2` or `proj:projjson`. `proj:wkt2` takes precedence when they disagree. Writers MUST write `proj:wkt2` when there is no authority code and SHOULD write it always. Rotated grids stay excluded. | §§2.3, 3.3. |
+| `spec_version` MUST be `"0.3.0"`. | Writers write `"0.3.0"` when the CRS has an EPSG code and `"0.4.0"` when it has none. Readers accept both. The split keeps every store with an EPSG code readable by releases up to 0.4.1, which refuse `"0.4.0"`. | §§3.2, 9.1. |
+| The root `crs` and the level-group `crs` MUST be `EPSG:<code>` mirrors. | SHOULD, written when the CRS has a code. Readers MUST NOT require them. A validator reports an absent mirror as a note. | §§3.2–3.4. |
+| `_CRS` is `{"url": ...}` for an EPSG code. | Also `{"wkt": ...}` for a CRS with no EPSG code. | §3.3. |
+
+### Changes from 0.2
 
 | v0.2 rule or surface | Removal / change in v0.3.0 | New section / authority |
 |---|---|---|
@@ -479,7 +492,7 @@ This table is informative. It lists the removals and changes. Retained chronozar
 | `pixels_per_tile` emission/ignore/legacy acceptance rules | Removed. No legacy tile-size hint or parser. Cell size is derived from inner chunks. | §§2.1, 3.3, 9.1. |
 | Implicit convention composition | Explicit root chronozarr/M and spatial-array P/S registrations with literal v0.1 URLs. Snapshots recorded only as informative references. | §§0.3, 3.1. |
 | Optional proj/spatial aliases and nonrequirement | Canonical array P/S metadata and registrations required. EPSG `proj:code`, affine geometry and explicit pixel registration required. | §§2.3, 3.3. |
-| EPSG/native CRS mirrors interpreted as authorities | EPSG north-up scope fixed. P/S authoritative, and mirrors validated against them. Rotated and non-EPSG grids excluded. | §§2.3, 3.3–3.4. |
+| EPSG/native CRS mirrors interpreted as authorities | EPSG north-up scope fixed. P/S authoritative, and mirrors validated against them. Rotated and non-EPSG grids excluded; the non-EPSG exclusion ended in 0.4.0. | §§2.3, 3.3–3.4. |
 | `_CRS` compatibility alias | Writers SHOULD emit it for GDAL below 3.13. It is not a v0.3 reader requirement. Reader observations distinguish CRS assignment from overview attachment. | §§0.3, 3.3. |
 | Levels mirrors tied to legacy datasets paths | Paths now match M layout assets. Geometry equality uses canonical S and Z shape. | §3.4. |
 | String-only bands and implicit source-specific physical scaling | Removed. Object-only bands, explicit scale/offset advice and consumer physical-value rules retained. | §§4.4, 9.1. |

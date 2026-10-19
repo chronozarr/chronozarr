@@ -20,7 +20,9 @@ import chronozarr
 chronozarr.encode(da, "my_store", crs="EPSG:32631")
 ```
 
-`da` is an xarray `DataArray` with dims `(time, band, y, x)`. Its dtype is uint8, uint16, int16 or float32. Its `x` and `y` coordinates are the projected pixel centres of an EPSG grid with north up.
+`da` is an xarray `DataArray` with dims `(time, band, y, x)`. Its dtype is uint8, uint16, int16 or float32. Its `x` and `y` coordinates are the projected pixel centres of a grid with north up.
+
+`crs` is an authority code such as `EPSG:32631`, or WKT2 text for a CRS with no code, such as a Lambert conformal conic or a sinusoidal grid. Without `crs`, `encode` reads `da.attrs["crs"]`. WKT1, PROJJSON and PROJ strings are converted to WKT2 when pyproj is installed. A store whose CRS has an EPSG code is written as spec 0.3.0 and any other as 0.4.0. `convert` keeps the CRS of its sources as it finds it and does not reproject unless you pass `--crs` for another CRS with `--resampling`.
 
 The output directory must not exist, or it must be empty. The store is unsharded unless you pass `shard=True`.
 
@@ -41,6 +43,8 @@ da = store.to_xarray(lod=0, times=[0], physical=False)
 `read`, `read_cell` and `to_xarray` return the stored values in the stored dtype. With `physical=True`, `to_xarray` returns float32 values, as `physical()` does. Each physical value is `stored * scale + offset` for its band. Invalid pixels are NaN.
 
 `to_xarray` loads the requested level into memory.
+
+`store.crs` is the CRS the store declares: an authority code, WKT2 text, PROJJSON, or several of them. `store.crs.to_string()` returns the code when there is one and otherwise the WKT2 or PROJJSON text, which pyproj and rasterio accept. When representations disagree, the WKT2 is used and a warning says so.
 
 ## Open a store in xarray
 

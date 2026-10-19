@@ -1,6 +1,6 @@
 # Examples: SWOT, NISAR, model output and other data
 
-A store holds any raster time series on one north-up grid in an EPSG coordinate system. This page lists the worked examples in the repository and the route for each kind of data. Each example has a README with its commands, run from a checkout of the repository.
+A store holds any raster time series on one north-up grid in one coordinate system, with or without an EPSG code. This page lists the worked examples in the repository and the route for each kind of data. Each example has a README with its commands, run from a checkout of the repository.
 
 ## Worked examples
 

@@ -395,7 +395,20 @@ On 2026-10-09 jsDelivr and unpkg both returned `access-control-allow-origin: *` 
 
 ### Vendored packages
 
-The headers of the files in `js/vendor/` record these versions: zarrita 0.7.5, @zarrita/storage 0.2.0, numcodecs 0.3.2 and gifenc 1.0.3. Each header also holds the SHA-256 of the published file, except the gifenc header, which holds its license text.
+The headers of the files in `js/vendor/` record these versions: zarrita 0.7.5, @zarrita/storage 0.2.0, numcodecs 0.3.2, gifenc 1.0.3, proj4 2.22.0 and wkt-parser 1.5.6. Each header also holds the SHA-256 of the published file, except the gifenc header, which holds its license text, and the proj4 header, which holds a SHA-256 over the source files of the bundle.
+
+### proj4 for stores without a built-in projection (2026-10-19)
+
+`js/vendor/proj4/proj4.js` is proj4 2.22.0 and wkt-parser 1.5.6 bundled by esbuild 0.28.2 with the aea, laea, lcc, sinu, stere, tmerc, merc and longlat projections. It is 73,096 bytes minified, 24,820 gzipped and 21,454 with brotli. proj4's own `dist/proj4.js` is 129,733 bytes and 42,267 gzipped. The npm tarball grew from 687,242 to 716,021 bytes. The layer and the embed bridge load it with `import()` only for a store whose CRS is not UTM, EPSG:3857 or EPSG:4326.
+
+Accuracy against pyproj 3.8.0 (PROJ 9.8.1), 7 points each: Daymet LCC and the MODIS sinusoidal grid (from their proj strings) and EPSG:3413, each read from its WKT2, and the Daymet one also from its PROJJSON. The forward transform differed by at most 4.3 micrometres, which is the rounding of the reference values. The inverse differed by less than 0.04 mm.
+
+Browser check, headless Chromium under Playwright 1.63.0, local server `RangeHTTPServer`. Two stores of 700 x 600 pixels, 4 bands, 3 timesteps and 3 levels, in the Daymet LCC and the MODIS sinusoidal grid, were written by the Python package at `90c73c5`. That version refuses a CRS with no EPSG code, so each store was encoded as EPSG:32631 over x and y in the target projection's metres, and the attributes were rewritten the way the 0.4.0 writer writes them: `proj:code` became `proj:wkt2`, the `crs` mirrors and `_CRS` url went, and `spec_version` became 0.4.0. A third store in EPSG:32631 was the control.
+
+- `layer.getValueAt` at 3 pixel centres per store returned the same cell and the same four stored values as zarr-python 3.4.0 (`zarr.open_group(path)["0/data"][t, :, row, col]`), and the longitude and latitude it reported for the pixel centre differed from pyproj by at most 1.4e-12 degrees.
+- `layer.bounds` differed from the pyproj outline of the grid by at most 1.5e-12 degrees. On a screenshot over the MapLibre demo tiles the LCC store lies on the US Atlantic coast, and the edges of the sinusoidal store at 50 and 47.5 degrees north straddle the border drawn along the 49th parallel.
+- Network: the two non-EPSG stores each fetched `vendor/proj4/proj4.js` once (73,396 bytes transferred without compression, 3.5 to 4.3 ms on loopback). The EPSG:32631 store fetched nothing from `vendor/proj4/`. The viewer (`demo/index.html`) opened all three, drew the native grid and fetched no proj4. With `embed=1` it fetches proj4 for a store without a built-in projection, to report longitude and latitude.
+- `createProjection` for the Daymet WKT2 took 4.6 to 5.3 ms the first time in a page (fetch from loopback, evaluation, WKT parse) and 0.3 to 0.4 ms the second time. For `EPSG:32631` it took 0.1 to 0.2 ms.
 
 ## Comparison notes
 

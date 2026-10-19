@@ -95,7 +95,7 @@ A `set` changes the view, and every field is optional. The viewer applies the fi
 | `colormap` | string | `gray`, `viridis`, `magma` or `turbo`: the colormap of the single-band product. Other products keep their own colors. |
 | `range` | `null` or `[low, high]` | Display limits in physical units for a single band that is shown with a linear stretch. `low` must be below `high`. `null` returns to the range that the viewer measures from the pixels on screen. |
 | `zoom` | number above 0 | CSS pixels per full-resolution data pixel, as in `z=`. The limits are the same as for the mouse: out to half of the fitted view, in to 16 canvas pixels per data pixel. |
-| `center` | `{x, y}` or `{lon, lat}` | View center. `x` and `y` are in the store's coordinates, as in `c=`, or in level-0 pixels for a store with no georeferencing. `lon` and `lat` are WGS84 degrees. They need a georeferenced store whose CRS is WGS84 UTM, EPSG:3857 or EPSG:4326. When `x` and `y` are both present they win, so you can send the `center` of a `chronozarr:view` message back unchanged. |
+| `center` | `{x, y}` or `{lon, lat}` | View center. `x` and `y` are in the store's coordinates, as in `c=`, or in level-0 pixels for a store with no georeferencing. `lon` and `lat` are WGS84 degrees. They need a georeferenced store whose CRS the viewer can project: WGS84 UTM, EPSG:3857, EPSG:4326, or a `proj:wkt2` or `proj:projjson` in the Lambert conformal conic, sinusoidal, Albers, Lambert azimuthal, stereographic or transverse Mercator projection. When `x` and `y` are both present they win, so you can send the `center` of a `chronozarr:view` message back unchanged. |
 | `playing` | boolean | Starts or stops playback. |
 | `speed` | number above 0 | Playback speed in timesteps per second. The viewer snaps it to its steps: 1 to 15, 20, 24, 30, 40, 48 and 60. |
 
@@ -183,7 +183,7 @@ The values belong to the frame on screen. `t` and `time` are the timestep of tha
 }
 ```
 
-`pixel` is the column and row of the clicked data pixel at full resolution. `lon` and `lat` are the WGS84 coordinates of the center of that pixel. They are `null` when the store is not georeferenced or its CRS is not WGS84 UTM, EPSG:3857 or EPSG:4326.
+`pixel` is the column and row of the clicked data pixel at full resolution. `lon` and `lat` are the WGS84 coordinates of the center of that pixel. They are `null` when the store is not georeferenced or its CRS is not one of those the viewer can project (see `center`).
 
 `values` holds the physical value of each band, keyed by band name. The physical value is the stored value times the band's `scale`, plus its `offset`. For Sentinel-2 bands it is reflectance. `valid` is `false`, and every value is `null`, for a pixel at the store's nodata value or masked out.
 

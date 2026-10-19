@@ -113,8 +113,8 @@ test('every v0.3 timestep is one data-chunk read', async () => {
   for (let t = 0; t < 5; t++) await assertLossless(store, spec, t);
 });
 
-test('only numeric v0.3.x versions are accepted; every rejection points to conversion', async () => {
-  for (const version of ['0.1.0', '0.2.0', '1.0.0', '0.4.0', '0.3.x', '0.3.0-extra', undefined]) {
+test('only numeric v0.3.x and v0.4.x versions are accepted; every rejection points to conversion', async () => {
+  for (const version of ['0.1.0', '0.2.0', '1.0.0', '0.5.0', '0.3.x', '0.4.x', '0.3.0-extra', '0.4.0-rc1', undefined]) {
     const readable = buildSyntheticStore(base);
     const root = JSON.parse(new TextDecoder().decode(readable.files.get('/zarr.json')));
     root.attributes.chronozarr.spec_version = version;
@@ -122,7 +122,9 @@ test('only numeric v0.3.x versions are accepted; every rejection points to conve
     await assert.rejects(openStore('memory://version', { store: readable, workers: 0 }), /unsupported spec_version.*chronozarr convert/);
     assert.equal(readable.log.length, 1, 'reject before fetching arrays');
   }
-  assert.ok(await openStore('memory://patch', { store: buildSyntheticStore({...base, specVersion: '0.3.7'}), workers: 0 }));
+  for (const specVersion of ['0.3.7', '0.4.0', '0.4.12']) {
+    assert.ok(await openStore('memory://patch', { store: buildSyntheticStore({...base, specVersion}), workers: 0 }), specVersion);
+  }
 });
 
 test('pixels_per_tile is ignored whatever its value; the cell size is the chunk shape', async () => {

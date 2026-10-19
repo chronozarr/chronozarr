@@ -1,7 +1,7 @@
 {
   "name": "chronozarr",
   "version": "0.4.1",
-  "description": "Read chronozarr v0.3 stores in the browser and Node, draw them on MapLibre GL JS, and self-host the chronozarr viewer",
+  "description": "Read chronozarr v0.3 and v0.4 stores in the browser and Node, draw them on MapLibre GL JS, and self-host the chronozarr viewer",
   "homepage": "https://chronozarr.org/reference/javascript",
   "keywords": [
     "chronozarr",
@@ -49,6 +49,7 @@
     "support/viewer-bundle.mjs",
     "vendor/gifenc.esm.js",
     "vendor/numcodecs/",
+    "vendor/proj4/",
     "vendor/zarrita/",
     "vendor/zarrita-storage/",
     "geolibre/"
@@ -69,6 +70,8 @@
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
+    "esbuild": "0.28.2",
+    "proj4": "2.22.0",
     "zarrita": "0.7.5"
   }
 }

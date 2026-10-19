@@ -226,7 +226,7 @@ const roundTo = (value, decimals) => Number(value.toFixed(decimals));
 
 /**
  * Level-0 pixel <-> the store's coordinates <-> lon/lat. `transform` is the level-0 affine (or null), `projection`
- * the store CRS <-> lon/lat of maplibre/projection.js (or null when the CRS is not one it knows). Without a
+ * the store CRS <-> lon/lat of maplibre/projection.js (or null when it cannot read the CRS). Without a
  * transform, x and y are level-0 pixels and there is no lon/lat; without a projection there is no lon/lat.
  */
 export function makeGeo({ transform = null, projection = null } = {}) {
@@ -245,7 +245,7 @@ export function makeGeo({ transform = null, projection = null } = {}) {
     toPixel(center) {
       if (center.x !== undefined) return geoReferenced ? projectedToPixel(transform, center.x, center.y) : { col: center.x, row: center.y };
       if (!geoReferenced) throw new Error('center {lon, lat} needs a georeferenced store; this one has no affine transform. Use {x, y} in level-0 pixels.');
-      if (!projection) throw new Error('center {lon, lat} needs a store CRS the viewer can project (WGS84 UTM, EPSG:3857 or EPSG:4326); use {x, y} in the store coordinates.');
+      if (!projection) throw new Error('center {lon, lat} needs a store CRS the viewer can project (WGS84 UTM, EPSG:3857, EPSG:4326, or a WKT2 or PROJJSON in one of the common projections); use {x, y} in the store coordinates.');
       const [x, y] = projection.fromLonLat(center.lon, center.lat);
       return projectedToPixel(transform, x, y);
     },
@@ -362,10 +362,10 @@ export class EmbedBridge {
 
 // ---- the viewer side ----
 
-async function loadProjection(crs) {
+async function loadProjection(store) {
   try {
     const { createProjection } = await import('../maplibre/projection.js');
-    return createProjection(crs);
+    return await createProjection(store);
   } catch (error) {
     console.warn(`chronozarr embed: no lon/lat for this store (${error.message})`);
     return null;
@@ -379,7 +379,7 @@ async function loadProjection(crs) {
  *
  * @param {object} viewer
  * @param {ReturnType<typeof parseEmbedParams>} params
- * @param {{win?: Window, loadProjection?: (crs: string) => Promise<object|null>}} [options]
+ * @param {{win?: Window, loadProjection?: (store: {crs: string|null, wkt2: string|null, projjson: object|null}) => Promise<object|null>}} [options]
  */
 export function connectEmbed(viewer, params, { win = window, loadProjection: projectionFor = loadProjection } = {}) {
   if (params.originError) console.warn(`chronozarr embed: ${params.originError} The postMessage API is off.`);
@@ -470,7 +470,7 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
     ready: () => {
       readySent = false;
       const store = viewer.store;
-      const projected = store.transform && store.crs ? projectionFor(store.crs) : Promise.resolve(null);
+      const projected = store.transform && (store.crs || store.wkt2 || store.projjson) ? projectionFor(store) : Promise.resolve(null);
       projected.then((loaded) => {
         if (viewer.store !== store) return;
         geo = makeGeo({ transform: store.transform, projection: loaded });

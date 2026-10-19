@@ -32,7 +32,7 @@ A chronozarr store is also a plain Zarr store. xarray, zarr-python and GDAL 3.13
 - It does not host your data. The viewer page comes from chronozarr.org. The data comes from your computer or from storage that you control.
 - It does not process imagery. Compositing, cloud masking and reprojection happen before conversion. The [Sentinel-2 guide](sentinel2.md) shows one pipeline that does these steps for one sensor.
 - It does not make Web Mercator map tiles. A store keeps the projection of your data.
-- It does not take every raster. All timesteps of a store share one north-up grid in an EPSG coordinate system. The values are uint8, uint16, int16 or float32.
+- It does not take every raster. All timesteps of a store share one north-up grid in one coordinate system, with or without an EPSG code. The values are uint8, uint16, int16 or float32.
 
 ## Versions
 
@@ -41,9 +41,9 @@ There are two version numbers:
 | Item | Version | Meaning |
 |---|---|---|
 | Python package and npm package `chronozarr` | 0.4.1 | The software that writes, checks, serves and reads stores |
-| Store format specification | v0.3.0, draft | The layout of the files in a store |
+| Store format specification | v0.4.0, draft | The layout of the files in a store. A store whose CRS has an EPSG code declares `0.3.0`. A store whose CRS has none declares `0.4.0` |
 
-A package release does not change the stores that you already wrote. Package 0.4.1 reads and writes v0.3 stores. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. The [release notes](release-0.4.1.md) list the changes in 0.4.1.
+A package release does not change the stores that you already wrote. Package 0.4.1 reads and writes v0.3 stores, and refuses a v0.4 store: see [Opening a store](troubleshooting.md#opening-a-store). Later releases read both. Because a store with an EPSG code is always written as v0.3, every release opens it. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. The [release notes](release-0.4.1.md) list the changes in 0.4.1.
 
 ## Next steps
 

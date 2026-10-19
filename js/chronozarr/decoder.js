@@ -28,7 +28,7 @@ import { BandwidthEstimator } from './bandwidth.js';
 import { ChunkCache, SpeculativeBudget } from './cache.js';
 import { FetchError, HttpStore, LimitedReadable, abortError, isAbort, sleep } from './http.js';
 import { RequestLimiter } from './limiter.js';
-import { DTYPES, decodeSpec, normalizeBands, parseSpatial, parseRoot, parseStorage, requireStore } from './metadata.js';
+import { DTYPES, decodeSpec, normalizeBands, parseSpatial, parseRoot, parseStorage, requireStore, sameCrs } from './metadata.js';
 import { DecodePool, MainThreadDecoder, leaseDecodePool } from './pool.js';
 import { ShardIndexError, parseShardIndex, shardIndexRange } from './shard.js';
 import { registry } from '../vendor/zarrita/codecs.js';
@@ -261,11 +261,12 @@ export async function openStore(baseUrl, options = {}) {
   for (let lod = 0; lod < geometry.length; lod++) {
     const expected = [transform[0] * 2 ** lod, 0, transform[2], 0, transform[4] * 2 ** lod, transform[5]];
     requireStore(JSON.stringify(geometry[lod].transform) === JSON.stringify(expected), baseUrl, `level ${lod} is not a factor-two north-up overview`);
+    requireStore(sameCrs(geometry[lod], geometry[0]), baseUrl, `level ${lod} CRS differs from level 0`);
     const shape = dataMetas[lod].shape;
     requireStore(shape[2] === Math.ceil(dataMetas[0].shape[2] / 2 ** lod) && shape[3] === Math.ceil(dataMetas[0].shape[3] / 2 ** lod), baseUrl, `level ${lod} shape does not match factor-two pyramid`);
     for (const metas of [maskMetas, coverageMetas]) if (metas) {
       const aux = parseSpatial(metas[lod], { ...cz, levels: undefined }, lod, baseUrl);
-      requireStore(JSON.stringify(aux.transform) === JSON.stringify(expected) && JSON.stringify(metas[lod].shape) === JSON.stringify([shape[0], shape[2], shape[3]]), baseUrl, `level ${lod} auxiliary geometry or shape disagrees with data`);
+      requireStore(JSON.stringify(aux.transform) === JSON.stringify(expected) && sameCrs(aux, geometry[0]) && JSON.stringify(metas[lod].shape) === JSON.stringify([shape[0], shape[2], shape[3]]), baseUrl, `level ${lod} auxiliary geometry, CRS or shape disagrees with data`);
     }
   }
 
@@ -294,6 +295,7 @@ export async function openStore(baseUrl, options = {}) {
     names,
     levelMirror: cz.levels ?? null,
     transform,
+    crs: geometry[0],
     dataMetas,
     storage,
     specs,
@@ -352,11 +354,15 @@ export class ChronoStore {
   /** Called with {type:'chunk', key, background, requestedAt, fetchedAt, decodedAt, bytes} per loaded chunk. */
   probe = null;
 
-  constructor({ url, cz, datasets, names, levelMirror, transform, dataMetas, storage, specs, readable, decoder, network, bandwidth, limiter, clock, budgets, policy }) {
+  constructor({ url, cz, datasets, names, levelMirror, transform, crs, dataMetas, storage, specs, readable, decoder, network, bandwidth, limiter, clock, budgets, policy }) {
     this.url = url;
     this.variable = names.data;
     this.times = cz.times;
-    this.crs = cz.crs;
+    /** The authority code of the CRS (`proj:code`, "EPSG:32631"), or null when the store declares none. */
+    this.crs = crs.crs;
+    /** `proj:wkt2` and `proj:projjson` as the arrays declare them, or null. At least one of crs, wkt2 and projjson is set; wkt2 outranks projjson, and both outrank the code. */
+    this.wkt2 = crs.wkt2;
+    this.projjson = crs.projjson;
     /** Affine [a, b, c, d, e, f] from level-0 pixel (col, row) to projected x, y. */
     this.transform = transform;
     this.#readable = readable;

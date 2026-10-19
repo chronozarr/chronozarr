@@ -52,7 +52,7 @@ from chronozarr.doctor import DEFAULT_ORIGIN, diagnose, is_url
 from chronozarr.encode import EncodeReport, encode
 from chronozarr.export import export_cog, select_times
 from chronozarr.place import check_xy, lonlat_to_xy
-from chronozarr.schema import Band, SchemaError, validate
+from chronozarr.schema import Band, SchemaError, validate_report
 from chronozarr.share import share
 from chronozarr.stac import write_stac
 from chronozarr.store import redact_url
@@ -170,7 +170,7 @@ def _refuse_files_for_convert(input: str, out: Path) -> None:
     elif lowered.startswith("s3://") or (
         not any(ch in input for ch in _GLOB_CHARS) and is_discovery_source(input)
     ):
-        kind = "a directory, S3 prefix or file of GeoTIFFs"
+        kind = "a directory, S3 prefix or file of rasters"
     else:
         return
     raise click.ClickException(
@@ -427,7 +427,11 @@ def main() -> None:
 @click.argument("input", metavar="INPUT")
 @click.argument("out", type=click.Path(path_type=Path))
 @_encode_options
-@click.option("--crs", default=None, help="CRS such as EPSG:32631 (default: from the input).")
+@click.option(
+    "--crs",
+    default=None,
+    help="CRS such as EPSG:32631, or WKT2 text (default: from the input).",
+)
 @click.option("--variable", default=None, help="Variable to encode from a Zarr/NetCDF input.")
 @_calendar_option
 @_band_role_option
@@ -530,13 +534,17 @@ def append_command(
 @click.argument("store")
 def validate_command(store: str) -> None:
     """Check STORE against the chronozarr spec. Exit status 1 if it does not conform."""
-    problems = validate(store)
-    if problems:
-        for problem in problems:
+    report = validate_report(store)
+    if report.problems:
+        for problem in report.problems:
             click.echo(problem, err=True)
-        click.echo(f"{store}: {len(problems)} problem(s)", err=True)
+        for note in report.notes:
+            click.echo(f"note: {note}", err=True)
+        click.echo(f"{store}: {len(report.problems)} problem(s)", err=True)
         sys.exit(1)
-    click.echo(f"{store}: conforms to chronozarr {schema.SPEC_VERSION}")
+    click.echo(f"{store}: conforms to chronozarr {report.spec_version}")
+    for note in report.notes:
+        click.echo(f"note: {note}")
 
 
 @main.command("info")
@@ -548,7 +556,7 @@ def info_command(store: str) -> None:
     attrs = opened.attrs
     click.echo(f"store:     {redact_url(store)}")
     click.echo(f"version:   chronozarr {attrs.spec_version}")
-    click.echo(f"crs:       {attrs.crs}")
+    click.echo(f"crs:       {opened.crs.describe()}")
     click.echo(f"times:     {len(opened.times)} ({attrs.times[0]} .. {attrs.times[-1]})")
     click.echo(f"bands:     {', '.join(opened.bands)}")
     click.echo(f"nodata:    {attrs.nodata}")
@@ -845,7 +853,12 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
 @click.argument("source")
 @click.argument("out", type=click.Path(path_type=Path))
 @_encode_options
-@click.option("--variable", default=None, help="Variable to convert from a Zarr or NetCDF source.")
+@click.option(
+    "--variable",
+    default=None,
+    help="Variable to convert from a Zarr or NetCDF source; for rasters, the subdataset to read "
+    "from files that hold several, such as HDF5 (Group/name, or the name alone when unique).",
+)
 @click.option(
     "--dims",
     default=None,
@@ -855,9 +868,9 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
 @click.option(
     "--crs",
     default=None,
-    help="EPSG:xxxxx. Manifest: the target CRS (default: the first source's) and the CRS of "
-    "sources that declare none (a PNG with a world file). Zarr/NetCDF: the CRS of the data "
-    "when the file does not declare one.",
+    help="EPSG:xxxxx, or WKT2 text. Manifest: the target CRS (default: the first source's) "
+    "and the CRS of sources that declare none (a PNG with a world file). Zarr/NetCDF: the CRS "
+    "of the data when the file does not declare one.",
 )
 @click.option(
     "--transform",
@@ -955,17 +968,20 @@ def convert_command(
     This is the command for files on disk or in S3. SOURCE is one of:
 
     \b
-      a directory, quoted glob or s3:// prefix of GeoTIFFs, each dated from its file name
-      a manifest (.csv with columns uri,datetime[,bands] or .json) of COG or PNG frame URIs
+      a directory, quoted glob or s3:// prefix of rasters (GeoTIFF, BIL, GRIB2, HDF5, ...),
+        or local zips that hold one raster each, dated from their file names
+      a manifest (.csv with columns uri,datetime[,bands] or .json) of raster or PNG frame URIs
       a Zarr store (path or URL) or a NetCDF file, the last two with --variable
 
     A directory or S3 prefix is not searched recursively; use a glob such as 'dir/**/*.tif'
     for subdirectories. S3 prefixes are listed with your AWS credentials and need
-    `pip install 'chronozarr[s3]'`. A date is read from a name only when it holds exactly one
-    (YYYYMMDD, YYYY-MM-DD or YYYY-MM); otherwise the file is reported and --date-pattern or a
-    manifest says where the date is. MODIS and HLS names carry a year and day of year, which
-    --date-pattern reads with %Y%j (for example 'MOD13A1.A%Y%j'). --write-manifest saves what
-    was found, also when the checks report problems, so you can edit it and run convert on it.
+    `pip install 'chronozarr[s3]'`. A file that holds subdatasets and no band (HDF5, HDF-EOS5)
+    needs --variable to pick one; one without georeferencing needs --crs and --bounds. A date is
+    read from a name only when it holds exactly one (YYYYMMDD, YYYY-MM-DD or YYYY-MM); otherwise
+    the file is reported and --date-pattern or a manifest says where the date is. MODIS and HLS
+    names carry a year and day of year, which --date-pattern reads with %Y%j (for example
+    'MOD13A1.A%Y%j'). --write-manifest saves what was found, also when the checks report
+    problems, so you can edit it and run convert on it.
 
     Every file is checked before anything is read in bulk: dates, grid and CRS, bands, dtype,
     scale, offset, units and nodata. All problems are reported together, per file, with a
@@ -1286,11 +1302,12 @@ def _view_center(
     """
     level = opened.levels[0]
     extent = schema.bounds(level.transform, level.shape[2], level.shape[3])
-    crs = opened.attrs.crs
+    crs = opened.crs.to_string()
+    shown = opened.crs.describe()
     if store_xy is not None:
         x, y = store_xy
         try:
-            check_xy(crs, extent, x, y)
+            check_xy(shown, extent, x, y)
         except ValueError as exc:
             raise click.BadParameter(str(exc), param_hint="--xy") from exc
         return x, y
@@ -1303,14 +1320,14 @@ def _view_center(
         if exc.name != "pyproj":
             raise
         raise click.BadParameter(
-            f"a store in {crs} needs pyproj to place a longitude and latitude: "
-            f"{extra_hint('geo')}. Or give --xy, a point in {crs}",
+            f"a store in {shown} needs pyproj to place a longitude and latitude: "
+            f"{extra_hint('geo')}. Or give --xy, a point in {shown}",
             param_hint="--lonlat",
         ) from exc
     except ValueError as exc:
         raise click.BadParameter(str(exc), param_hint="--lonlat") from exc
     click.echo(
-        f"centre: longitude {lon:.12g}, latitude {lat:.12g} is x {x:.12g}, y {y:.12g} in {crs}, "
+        f"centre: longitude {lon:.12g}, latitude {lat:.12g} is x {x:.12g}, y {y:.12g} in {shown}, "
         "inside the store",
         err=True,
     )
