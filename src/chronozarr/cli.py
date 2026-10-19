@@ -383,7 +383,11 @@ def main() -> None:
 @click.argument("input", metavar="INPUT")
 @click.argument("out", type=click.Path(path_type=Path))
 @_encode_options
-@click.option("--crs", default=None, help="CRS such as EPSG:32631 (default: from the input).")
+@click.option(
+    "--crs",
+    default=None,
+    help="CRS such as EPSG:32631, or WKT2 text (default: from the input).",
+)
 @click.option("--variable", default=None, help="Variable to encode from a Zarr/NetCDF input.")
 @_band_role_option
 def encode_command(
@@ -805,9 +809,9 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
 @click.option(
     "--crs",
     default=None,
-    help="EPSG:xxxxx. Manifest: the target CRS (default: the first source's) and the CRS of "
-    "sources that declare none (a PNG with a world file). Zarr/NetCDF: the CRS of the data "
-    "when the file does not declare one.",
+    help="EPSG:xxxxx, or WKT2 text. Manifest: the target CRS (default: the first source's) "
+    "and the CRS of sources that declare none (a PNG with a world file). Zarr/NetCDF: the CRS "
+    "of the data when the file does not declare one.",
 )
 @click.option(
     "--transform",

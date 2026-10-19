@@ -39,6 +39,7 @@ from chronozarr._writer import (
     _spill_timesteps,
     _write_time_coord,
 )
+from chronozarr.crs import Crs, same_crs
 from chronozarr.decode import ChronoStore, open_store
 from chronozarr.schema import Band, Chronozarr, LevelRef, SchemaError, Transform
 
@@ -79,6 +80,11 @@ class _Target:
     datasets: tuple[LevelRef, ...]
     groups: list[zarr.Group]
     arrays: list[_LevelArrays]
+
+    @property
+    def crs(self) -> Crs:
+        """The CRS level 0 declares, as readers resolve it."""
+        return schema.canonical_level(self.arrays[0].data, "level 0/data").crs.resolved()
 
     @property
     def n_time(self) -> int:
@@ -160,12 +166,27 @@ def _request_from_store(source: str | Path | ChronoStore) -> _Request:
         coverage=None
         if level0.coverage is None
         else (store.read_coverage(t) for t in range(count)),
-        crs=store.attrs.crs,
+        crs=store.crs.to_string(),
         transform=level0.transform,
         bands=store.attrs.bands,
         strict_bands=True,
         nodata=store.nodata,
     )
+
+
+def _crs_mismatch(given_text: str, stored: Crs) -> list[str]:
+    """The `crs:` finding when the input is not the store's CRS, or cannot be shown to be."""
+    try:
+        given = Crs.from_string(given_text)
+    except ValueError as exc:
+        return [f"crs: {exc}"]
+    match = same_crs(given, stored)
+    if match.same:
+        return []
+    found = f"crs: the input is {given.describe()!r}, the store is {stored.describe()!r}"
+    if match.same is None:
+        found += " (a code and a WKT2 can only be compared with pyproj, which is not installed)"
+    return [found]
 
 
 def _mismatches(
@@ -186,8 +207,8 @@ def _mismatches(
             "(chronozarr never converts dtype)"
         )
     crs = request.crs if request.crs is not None else prepared.attrs.get("crs")
-    if crs is not None and str(crs) != meta.crs:
-        found.append(f"crs: the input is {str(crs)!r}, the store is {meta.crs!r}")
+    if crs is not None:
+        found.extend(_crs_mismatch(str(crs), target.crs))
 
     georeferenced = request.transform is not None or (
         prepared.da is not None

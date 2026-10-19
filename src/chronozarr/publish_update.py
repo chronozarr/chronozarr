@@ -26,6 +26,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Protocol, runtime_checkable
 
 from chronozarr import schema
+from chronozarr.crs import Crs, same_crs
 from chronozarr.doctor import DEFAULT_ORIGIN, USER_AGENT, Check, diagnose
 from chronozarr.publish import (
     SHORT_TTL,
@@ -101,7 +102,7 @@ def _chronozarr_block(document: dict[str, Any], where: str) -> schema.Chronozarr
         return schema.parse_chronozarr(document["attributes"]["chronozarr"])
     except (KeyError, TypeError, schema.SchemaError) as exc:
         raise PublishError(
-            f"{where} is not a chronozarr {schema.SPEC_VERSION} root group "
+            f"{where} is not a chronozarr {' or '.join(schema.SPEC_VERSIONS)} root group "
             f"({type(exc).__name__}: {exc}). --update appends to a published store of this "
             "version; publish to an empty prefix instead."
         ) from exc
@@ -155,6 +156,39 @@ def _prefix_problems(hosted: schema.Chronozarr, local: schema.Chronozarr) -> lis
     return problems
 
 
+def _stored_crs(document: dict[str, Any], variable: str) -> Crs | None:
+    """The CRS in level 0's data array, from the consolidated metadata of a root document."""
+    try:
+        attributes = document["consolidated_metadata"]["metadata"][f"0/{variable}"]["attributes"]
+        return schema.parse_crs(attributes, "level 0")
+    except (KeyError, TypeError, schema.SchemaError):
+        return None
+
+
+def _crs_problems(hosted: dict[str, Any], local: dict[str, Any], variable: str) -> list[str]:
+    """The stored CRS of the hosted and local store must be the same.
+
+    A store without an EPSG code has no `crs` mirror to compare, and a hosted `zarr.json` may
+    change in place, so the CRS is read from level 0 of both. A store without consolidated
+    metadata has nothing to read and is not compared.
+    """
+    theirs, ours = _stored_crs(hosted, variable), _stored_crs(local, variable)
+    if theirs is None or ours is None:
+        return []
+    match = same_crs(theirs.resolved(), ours.resolved())
+    if match.same is True:
+        return []
+    why = (
+        f"compared by {match.method}"
+        if match.same is False
+        else "a code and a WKT2 can only be compared with pyproj, which is not installed"
+    )
+    return [
+        f"the stored CRS differs: {theirs.describe()} on the host and {ours.describe()} "
+        f"locally ({why})"
+    ]
+
+
 def _named(keys: list[str]) -> str:
     shown = ", ".join(keys[:_LISTED])
     return shown + (f" and {len(keys) - _LISTED} more" if len(keys) > _LISTED else "")
@@ -187,13 +221,13 @@ def plan_update(plan: PublishPlan, adapter: StorageAdapter) -> UpdatePlan:
     raw = adapter.read_object(root_key)
     if raw is None:
         raise PublishError(f"{root_key} was listed and then could not be read; run it again.")
-    hosted = _chronozarr_block(_read_json(raw, f"{dest.uri}/zarr.json"), f"{dest.uri}/zarr.json")
-    local = _chronozarr_block(
-        _read_json((plan.store / "zarr.json").read_bytes(), f"{plan.store}/zarr.json"),
-        f"{plan.store}/zarr.json",
-    )
+    hosted_document = _read_json(raw, f"{dest.uri}/zarr.json")
+    local_document = _read_json((plan.store / "zarr.json").read_bytes(), f"{plan.store}/zarr.json")
+    hosted = _chronozarr_block(hosted_document, f"{dest.uri}/zarr.json")
+    local = _chronozarr_block(local_document, f"{plan.store}/zarr.json")
 
     problems = _prefix_problems(hosted, local)
+    problems += _crs_problems(hosted_document, local_document, local.variable)
     by_key = {dest.key(o.key): o for o in plan.objects}
     foreign = sorted(set(remote) - set(by_key))
     if foreign:

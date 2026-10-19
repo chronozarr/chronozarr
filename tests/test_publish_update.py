@@ -41,6 +41,7 @@ from chronozarr.publish_update import (
     publish_update,
 )
 from chronozarr.view import VIEWER_URL, StoreRequestHandler
+from tests.crs_samples import LCC_WKT2, SINUSOIDAL_WKT2
 from tests.synthetic import BANDS, make_da, make_truth
 from tests.test_doctor import serving
 from tests.test_publish import PUBLIC, FakeAdapter
@@ -339,6 +340,31 @@ def test_refuses_a_hosted_store_on_another_grid(stores, truth, tmp_path, bucket)
     publish_first(narrow, bucket)
     message = refusal(stores["v2"], bucket)
     assert "another grid" in message
+
+
+def test_refuses_a_hosted_store_in_another_crs_that_has_no_code_to_compare(
+    truth, tmp_path, bucket
+):
+    """Stores without an EPSG code carry no `crs` mirror, so the CRS is read from level 0."""
+    first, second = tmp_path / "lcc", tmp_path / "sinusoidal"
+    chronozarr.encode(make_da(truth[:4], BANDS), first, crs=LCC_WKT2, chunk_size=CHUNK)
+    chronozarr.encode(make_da(truth[:4], BANDS), second, crs=SINUSOIDAL_WKT2, chunk_size=CHUNK)
+    publish_first(first, bucket)
+    message = refusal(second, bucket)
+    assert "stored CRS differs" in message
+    assert "WKT2" in message
+
+
+def test_updates_a_hosted_store_that_has_no_epsg_code(truth, tmp_path, bucket):
+    first = tmp_path / "lcc"
+    chronozarr.encode(make_da(truth[:4], BANDS), first, crs=LCC_WKT2, chunk_size=CHUNK)
+    publish_first(first, bucket)
+    later = tmp_path / "later"
+    shutil.copytree(first, later)
+    append(later, make_da(truth, BANDS).isel(time=slice(4, 6)), crs=LCC_WKT2)
+    update = plan_update(plan_for(later, bucket), bucket)
+    assert update.hosted_times == 4
+    assert update.local_times == 6
 
 
 def test_refuses_a_hosted_store_with_other_times(stores, truth, tmp_path, bucket):

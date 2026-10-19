@@ -16,6 +16,7 @@ from zarr.errors import ZarrUserWarning
 from chronozarr import schema
 from chronozarr._convert_source import Grid, Source, SourceInfo, Step
 from chronozarr._writer import _mean_comparison, _shard_bytes
+from chronozarr.crs import Crs
 from chronozarr.encode import EncodeReport, LevelReport, _tree_stats
 
 
@@ -160,7 +161,7 @@ def migrate(source: LegacySource, out: Path, progress: Any = None) -> EncodeRepo
                 if name is not None:
                     array = schema.get_array(group, name, "destination")
                     new_attrs = schema.data_array_attrs(
-                        _legacy_crs(attrs, "destination"),
+                        Crs.from_string(_legacy_crs(attrs, "destination")).with_wkt2(),
                         attrs.transform,
                         h,
                         w,

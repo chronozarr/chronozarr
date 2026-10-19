@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 
+from chronozarr.crs import Crs, is_code_text
 from chronozarr.schema import Band, Transform, axis_unit
 
 Bounds = tuple[float, float, float, float]  # west, south, east, north in the units of the CRS
@@ -17,7 +18,8 @@ _EDGE_TOLERANCE = 1e-6  # degrees; a pixel edge at 180 that arithmetic puts a ha
 
 @dataclass(frozen=True)
 class Grid:
-    """Target pixel grid: a CRS (EPSG string), a north-up transform and a shape."""
+    """Target pixel grid: a CRS (`EPSG:<code>`, or WKT2 text when it has no code), a north-up
+    transform and a shape."""
 
     crs: str
     transform: Transform
@@ -26,7 +28,7 @@ class Grid:
 
     def describe(self) -> str:
         return (
-            f"{self.crs}, {self.height} x {self.width} px, "
+            f"{_crs_label(self.crs)}, {self.height} x {self.width} px, "
             f"{abs(self.transform[0]):.10g} {axis_unit(self.crs)} pixels (transform origin "
             f"{self.transform[2]:.10g}, {self.transform[5]:.10g})"
         )
@@ -116,14 +118,24 @@ def check_bounds(values: object, where: str) -> Bounds:
     return (west, south, east, north)
 
 
-def _epsg(crs: Any, where: str) -> str:
-    code = crs.to_epsg() if crs is not None else None
-    if code is None:
-        raise ValueError(
-            f"{where}: the CRS has no EPSG code; chronozarr stores declare EPSG:<code>. "
-            "Pass --crs EPSG:xxxxx"
-        )
-    return f"EPSG:{code}"
+def _crs_string(crs: Any) -> str:
+    """A rasterio CRS as the text a `Grid` carries: `EPSG:<code>` if it has a code, else WKT2."""
+    code = crs.to_epsg()
+    return f"EPSG:{code}" if code is not None else crs.to_wkt(version="WKT2_2019")
+
+
+def _crs_label(crs: str) -> str:
+    """A short name of a `Grid` CRS for messages: the code, or the name in its WKT2."""
+    return crs if is_code_text(crs) else Crs(wkt2=crs).describe()
+
+
+def _same_crs(a: str, b: str) -> bool:
+    """Whether two `Grid` CRS texts name the same CRS; rasterio compares them, names aside."""
+    if a == b:
+        return True
+    from rasterio.crs import CRS  # ty: ignore[unresolved-import]  # compiled, no stubs
+
+    return bool(CRS.from_user_input(a) == CRS.from_user_input(b))
 
 
 def _bounds_grid(bounds: Bounds, crs: str, height: int, width: int) -> Grid:
@@ -145,7 +157,7 @@ def _check_north_up(transform: Sequence[float], where: str) -> Transform:
 
 
 def _same_grid(a: Grid, b: Grid) -> bool:
-    if a.crs != b.crs or (a.height, a.width) != (b.height, b.width):
+    if (a.height, a.width) != (b.height, b.width) or not _same_crs(a.crs, b.crs):
         return False
     tolerance = 1e-6 * abs(a.transform[0])
     return all(abs(x - y) <= tolerance for x, y in zip(a.transform, b.transform, strict=True))
@@ -153,8 +165,8 @@ def _same_grid(a: Grid, b: Grid) -> bool:
 
 def _grid_difference(found: Grid, wanted: Grid) -> str:
     parts = []
-    if found.crs != wanted.crs:
-        parts.append(f"CRS {found.crs} vs {wanted.crs}")
+    if not _same_crs(found.crs, wanted.crs):
+        parts.append(f"CRS {_crs_label(found.crs)} vs {_crs_label(wanted.crs)}")
     if (found.height, found.width) != (wanted.height, wanted.width):
         parts.append(f"shape {found.height}x{found.width} vs {wanted.height}x{wanted.width}")
     if not all(

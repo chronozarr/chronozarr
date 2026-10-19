@@ -9,7 +9,6 @@ conversion.
 
 from __future__ import annotations
 
-import importlib
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -27,7 +26,8 @@ from chronozarr.crs import CODE_RE, Crs, same_crs
 from chronozarr.store import IndexStore, as_store, check_extensions
 
 SPEC_VERSION = "0.3.0"
-SPEC_VERSIONS = ("0.3.0", "0.4.0")  # what readers accept; 0.4.0 is for a CRS with no EPSG code
+SPEC_VERSION_ANY_CRS = "0.4.0"
+SPEC_VERSIONS = (SPEC_VERSION, SPEC_VERSION_ANY_CRS)  # what readers accept
 VARIABLE = "data"
 MASK_VARIABLE = "mask"
 COVERAGE_VARIABLE = "coverage"
@@ -314,25 +314,30 @@ class LevelGeometry:
 _EPSG_RE = re.compile(r"^EPSG:(\d+)$")
 
 
-def crs_attr(crs: str) -> dict[str, str] | None:
-    """The `_CRS` array attribute GDAL's Zarr driver reads: an OGC URL, plus WKT if pyproj exists.
+def spec_version_for(crs: Crs) -> str:
+    """The version a writer declares: 0.3.0 for a CRS with an EPSG code, else 0.4.0.
 
-    Only `EPSG:<code>` strings map to a URL; any other CRS string returns None (no `_CRS`).
+    Readers up to chronozarr 0.4.1 refuse any other version, and they need an EPSG code, so a
+    store keeps the version they open whenever it can.
     """
-    match = _EPSG_RE.match(crs)
-    if match is None:
-        return None
-    code = int(match.group(1))
-    attr = {"url": f"http://www.opengis.net/def/crs/EPSG/0/{code}"}
-    try:
-        # Resolve optional pyproj at runtime so minimal installations remain supported.
-        CRS = importlib.import_module("pyproj").CRS
-        CRSError = importlib.import_module("pyproj.exceptions").CRSError
-    except ImportError:
-        return attr
-    with suppress(CRSError):  # an EPSG code pyproj does not know: the URL alone still names it
-        attr["wkt"] = CRS.from_epsg(code).to_wkt()
-    return attr
+    return SPEC_VERSION if crs.epsg is not None else SPEC_VERSION_ANY_CRS
+
+
+def _epsg_url(epsg: int) -> str:
+    return f"http://www.opengis.net/def/crs/EPSG/0/{epsg}"
+
+
+def crs_attr(crs: Crs) -> dict[str, str] | None:
+    """The `_CRS` array attribute GDAL's Zarr driver reads: an OGC URL for an EPSG code, and WKT.
+
+    The WKT is the CRS's WKT2 when it has one. A CRS with neither returns None (no `_CRS`).
+    """
+    attr: dict[str, str] = {}
+    if crs.epsg is not None:
+        attr["url"] = _epsg_url(crs.epsg)
+    if crs.wkt2 is not None:
+        attr["wkt"] = crs.wkt2
+    return attr or None
 
 
 _UNIT_SYMBOLS = {"metre": "m", "meter": "m"}
@@ -353,7 +358,7 @@ def axis_unit(crs: str) -> str:
 
 
 def data_array_attrs(
-    crs: str,
+    crs: Crs,
     transform: Transform,
     height: int,
     width: int,
@@ -363,22 +368,30 @@ def data_array_attrs(
 ) -> dict[str, Any]:
     """Attributes of a level's data-like array: `proj:`, `spatial:` and GDAL's `_CRS`.
 
-    `nodata` is omitted for arrays that are not the data variable (mask, coverage).
+    `proj:wkt2` is written whenever the CRS has one and `proj:code` and the `crs` alias whenever
+    it has a code. `nodata` is omitted for arrays that are not the data variable (mask, coverage).
     """
-    attrs: dict[str, Any] = {
-        "_ARRAY_DIMENSIONS": list(dimensions),
-        "nodata": nodata,
-        "crs": crs,
-        "transform": list(transform),
-        "proj:code": crs,
-        "zarr_conventions": [registration("proj"), registration("spatial")],
-        "spatial:registration": "pixel",
-        "spatial:transform_type": "affine",
-        "spatial:dimensions": ["y", "x"],
-        "spatial:shape": [height, width],
-        "spatial:transform": list(transform),
-        "spatial:bbox": list(bounds(transform, height, width)),
-    }
+    attrs: dict[str, Any] = {"_ARRAY_DIMENSIONS": list(dimensions), "nodata": nodata}
+    if crs.code is not None:
+        attrs["crs"] = crs.code
+    attrs["transform"] = list(transform)
+    if crs.code is not None:
+        attrs["proj:code"] = crs.code
+    if crs.wkt2 is not None:
+        attrs["proj:wkt2"] = crs.wkt2
+    if crs.projjson is not None:
+        attrs["proj:projjson"] = dict(crs.projjson)
+    attrs.update(
+        {
+            "zarr_conventions": [registration("proj"), registration("spatial")],
+            "spatial:registration": "pixel",
+            "spatial:transform_type": "affine",
+            "spatial:dimensions": ["y", "x"],
+            "spatial:shape": [height, width],
+            "spatial:transform": list(transform),
+            "spatial:bbox": list(bounds(transform, height, width)),
+        }
+    )
     if nodata is None:
         attrs.pop("nodata")
     gdal_crs = crs_attr(crs)
@@ -620,7 +633,7 @@ def parse_chronozarr(block: Any, where: str = "chronozarr") -> Chronozarr:
         raise _fail(
             f"{where}.spec_version",
             f"unsupported or missing version {version!r}; expected {' or '.join(SPEC_VERSIONS)}; "
-            "use chronozarr convert before opening with a v0.3 reader",
+            "a v0.2 store needs chronozarr convert, a newer store needs a newer chronozarr",
         )
     if "temporal" in block:
         raise _fail(where, "temporal encoding is outside v0.3; use chronozarr convert")
@@ -900,12 +913,12 @@ def _check_crs_attr(
     if "_CRS" not in attrs:
         return
     value = attrs["_CRS"]
-    expected = crs_attr(crs.code) if crs is not None and crs.code is not None else None
+    expected_url = _epsg_url(crs.epsg) if crs is not None and crs.epsg is not None else None
     if not isinstance(value, Mapping):
         problems.append(f"{where}: attribute _CRS must be an object, got {value!r}")
-    elif expected is not None and value.get("url") != expected["url"]:
+    elif expected_url is not None and "url" in value and value["url"] != expected_url:
         problems.append(
-            f"{where}: attribute _CRS url must be {expected['url']!r}, got {value.get('url')!r}"
+            f"{where}: attribute _CRS url must be {expected_url!r}, got {value['url']!r}"
         )
     elif "wkt" in value and not isinstance(value["wkt"], str):
         problems.append(f"{where}: attribute _CRS wkt must be a string, got {value['wkt']!r}")
@@ -1317,7 +1330,7 @@ def _crs_notes(attrs: RootAttrs, state: _LevelState) -> list[str]:
         return notes
     absent = [*(["chronozarr"] if attrs.chronozarr.crs is None else []), *state.absent]
     version = attrs.chronozarr.spec_version
-    has_epsg = reference.code is not None and _EPSG_RE.fullmatch(reference.code) is not None
+    has_epsg = reference.epsg is not None
     if absent and reference.code is not None:
         refused = (
             " Readers up to chronozarr 0.4.1 refuse a 0.3.0 store without them."
