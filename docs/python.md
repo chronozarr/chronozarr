@@ -100,8 +100,11 @@ The initial product, display limits and colormap are presentation. They are not 
 ```sh
 chronozarr link https://data.example.org/my_store --product band --band B8 --range 0,4000 --colormap viridis
 # https://chronozarr.org/demo/?store=...&p=band&b=B8&r=0,4000&cm=viridis
+
+chronozarr link https://data.example.org/my_store --time 71 --lonlat -64.62,-3.41 --zoom 2
+# https://chronozarr.org/demo/?store=...&t=71&z=2&c=684500,9123350
 ```
 
-`link` checks each value against the store and prints the URL, because the viewer ignores a value that the store cannot honor. A product needs its roles. Display limits only apply to the single-band product of a band that is not reflectance-like: an unsigned 8-bit or 16-bit band whose largest possible physical value is 10 or less is toned with fixed reflectance limits, and every other band has adjustable ones. A colormap only applies to the single-band product. `from chronozarr.view import viewer_url` builds the same URL from Python and refuses an unknown colormap. The viewer keeps the limits you set in its address bar, so copying the address shares them.
+`--lonlat` and `--xy` set the map centre and `--zoom` its zoom; [Choose a date and a place](viewer.md#choose-a-date-and-a-place) explains them. `link` checks each value against the store and prints the URL, because the viewer ignores a value that the store cannot honor. A product needs its roles. Display limits only apply to the single-band product of a band that is not reflectance-like: an unsigned 8-bit or 16-bit band whose largest possible physical value is 10 or less is toned with fixed reflectance limits, and every other band has adjustable ones. A colormap only applies to the single-band product. `from chronozarr.view import viewer_url` builds the same URL from Python and refuses an unknown colormap. Its `zoom` and `center` arguments take the zoom and the centre `(x, y)` in the store's own coordinate system, not longitude and latitude. The viewer keeps the limits you set in its address bar, so copying the address shares them.
 
 `chronozarr.add_chronozarr` adds a store as a layer on a leafmap or geemap MapLibre map. Install the `leafmap` or `geemap` extra. See [examples/leafmap](../examples/leafmap/README.md).
