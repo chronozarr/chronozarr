@@ -44,7 +44,7 @@ from chronozarr.doctor import DEFAULT_ORIGIN, diagnose, is_url
 from chronozarr.encode import EncodeReport, encode
 from chronozarr.export import export_cog, select_times
 from chronozarr.place import check_xy, lonlat_to_xy
-from chronozarr.schema import Band, SchemaError, validate
+from chronozarr.schema import Band, SchemaError, validate_report
 from chronozarr.share import share
 from chronozarr.stac import write_stac
 from chronozarr.store import redact_url
@@ -479,13 +479,17 @@ def append_command(
 @click.argument("store")
 def validate_command(store: str) -> None:
     """Check STORE against the chronozarr spec. Exit status 1 if it does not conform."""
-    problems = validate(store)
-    if problems:
-        for problem in problems:
+    report = validate_report(store)
+    if report.problems:
+        for problem in report.problems:
             click.echo(problem, err=True)
-        click.echo(f"{store}: {len(problems)} problem(s)", err=True)
+        for note in report.notes:
+            click.echo(f"note: {note}", err=True)
+        click.echo(f"{store}: {len(report.problems)} problem(s)", err=True)
         sys.exit(1)
-    click.echo(f"{store}: conforms to chronozarr {schema.SPEC_VERSION}")
+    click.echo(f"{store}: conforms to chronozarr {report.spec_version}")
+    for note in report.notes:
+        click.echo(f"note: {note}")
 
 
 @main.command("info")
@@ -497,7 +501,7 @@ def info_command(store: str) -> None:
     attrs = opened.attrs
     click.echo(f"store:     {redact_url(store)}")
     click.echo(f"version:   chronozarr {attrs.spec_version}")
-    click.echo(f"crs:       {attrs.crs}")
+    click.echo(f"crs:       {opened.crs.describe()}")
     click.echo(f"times:     {len(opened.times)} ({attrs.times[0]} .. {attrs.times[-1]})")
     click.echo(f"bands:     {', '.join(opened.bands)}")
     click.echo(f"nodata:    {attrs.nodata}")
@@ -1229,11 +1233,12 @@ def _view_center(
     """
     level = opened.levels[0]
     extent = schema.bounds(level.transform, level.shape[2], level.shape[3])
-    crs = opened.attrs.crs
+    crs = opened.crs.to_string()
+    shown = opened.crs.describe()
     if store_xy is not None:
         x, y = store_xy
         try:
-            check_xy(crs, extent, x, y)
+            check_xy(shown, extent, x, y)
         except ValueError as exc:
             raise click.BadParameter(str(exc), param_hint="--xy") from exc
         return x, y
@@ -1246,14 +1251,14 @@ def _view_center(
         if exc.name != "pyproj":
             raise
         raise click.BadParameter(
-            f"a store in {crs} needs pyproj to place a longitude and latitude: "
-            f"{extra_hint('geo')}. Or give --xy, a point in {crs}",
+            f"a store in {shown} needs pyproj to place a longitude and latitude: "
+            f"{extra_hint('geo')}. Or give --xy, a point in {shown}",
             param_hint="--lonlat",
         ) from exc
     except ValueError as exc:
         raise click.BadParameter(str(exc), param_hint="--lonlat") from exc
     click.echo(
-        f"centre: longitude {lon:.12g}, latitude {lat:.12g} is x {x:.12g}, y {y:.12g} in {crs}, "
+        f"centre: longitude {lon:.12g}, latitude {lat:.12g} is x {x:.12g}, y {y:.12g} in {shown}, "
         "inside the store",
         err=True,
     )
