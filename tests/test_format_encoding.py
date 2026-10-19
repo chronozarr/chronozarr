@@ -16,6 +16,7 @@ from zarr.storage import LocalStore
 import chronozarr
 from chronozarr import schema
 from chronozarr.convert import convert
+from chronozarr.crs import Crs
 from tests.narrow import array_at, attrs_block, required
 from tests.synthetic import build_store, make_da, make_truth, reference_reduce
 from tests.test_reads import CountingStore
@@ -346,7 +347,7 @@ def test_legacy_null_nodata_replaces_all_copied_attributes(tmp_path, shard):
             assert "nodata" not in array.attrs
             height, width = array.shape[-2:]
             assert array.attrs.asdict() == schema.data_array_attrs(
-                required(attrs.crs),
+                Crs.from_string(required(attrs.crs)).with_wkt2(),
                 attrs.transform,
                 height,
                 width,

@@ -16,12 +16,15 @@ from __future__ import annotations
 import importlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from types import ModuleType
 from typing import Any
 
 CODE_RE = re.compile(r"[^:]+:[^:]+")  # proj v0.1: an authority and a code, one colon between
+_CODE_TEXT_RE = re.compile(r"[A-Za-z][\w.-]*:[^\s:\[\]{}]+")  # `EPSG:32631`, never WKT or JSON
+_EPSG_RE = re.compile(r"EPSG:(\d+)")
+_WKT2_RE = re.compile(r"\s*[A-Z]*CRS\s*\[")  # WKT2 roots end in CRS (PROJCRS); WKT1's in CS
 _WKT_NAME_RE = re.compile(r'\s*[A-Za-z_]+\[\s*"((?:[^"]|"")*)"')
 _BETWEEN_QUOTES_RE = re.compile(r'("(?:[^"]|"")*")|\s+')
 
@@ -37,6 +40,60 @@ class Crs:
     def __post_init__(self) -> None:
         if self.code is None and self.wkt2 is None and self.projjson is None:
             raise ValueError("a Crs needs a code, wkt2 or projjson")
+
+    @classmethod
+    def from_string(cls, text: str) -> Crs:
+        """A CRS given as text: an authority code or WKT2 as they are, anything else via pyproj.
+
+        WKT1, PROJJSON and PROJ strings need pyproj to become WKT2. A code is kept as written
+        (authority in capitals) and a WKT2 gets its EPSG code when pyproj identifies one.
+        """
+        stripped = text.strip()
+        if is_code_text(stripped):
+            authority, _, number = stripped.partition(":")
+            return cls(code=f"{authority.upper()}:{number}")
+        pyproj = _pyproj()
+        if _WKT2_RE.match(stripped) and pyproj is None:
+            return cls(wkt2=stripped)
+        if pyproj is None:
+            raise ValueError(
+                f"cannot read the CRS {_clipped(stripped)}: pass an authority code such as "
+                "EPSG:32631 or WKT2 text, or install pyproj to read other forms"
+            )
+        try:
+            parsed = pyproj.CRS.from_user_input(stripped)
+        except _crs_error() as exc:
+            raise ValueError(
+                f"cannot read the CRS {_clipped(stripped)}: {exc}. Pass an authority code such "
+                "as EPSG:32631 or WKT2 text"
+            ) from exc
+        epsg = parsed.to_epsg()
+        wkt2 = stripped if _WKT2_RE.match(stripped) else parsed.to_wkt("WKT2_2019")
+        return cls(code=None if epsg is None else f"EPSG:{epsg}", wkt2=wkt2)
+
+    @property
+    def epsg(self) -> int | None:
+        """The EPSG number when the code is an EPSG one."""
+        matched = None if self.code is None else _EPSG_RE.fullmatch(self.code)
+        return None if matched is None else int(matched.group(1))
+
+    def with_wkt2(self) -> Crs:
+        """This CRS with the WKT2 of its code added, when it has none and pyproj can supply it.
+
+        A code PROJ does not know, or no pyproj, leaves the CRS as it is: the code still names it.
+        """
+        pyproj = _pyproj()
+        if self.wkt2 is not None or self.code is None or pyproj is None:
+            return self
+        try:
+            known = (
+                pyproj.CRS.from_epsg(self.epsg)
+                if self.epsg is not None
+                else pyproj.CRS.from_user_input(self.code)
+            )
+            return replace(self, wkt2=known.to_wkt())  # pyproj's default is WKT2:2019
+        except _crs_error():
+            return self
 
     def _ranked(self) -> list[tuple[str, Crs]]:
         """Each stored representation on its own, highest precedence first."""
@@ -111,12 +168,27 @@ class CrsMatch:
     method: str
 
 
+def is_code_text(text: str) -> bool:
+    """Whether `text` is an authority code such as `EPSG:32631`, not WKT, JSON or a PROJ string."""
+    return _CODE_TEXT_RE.fullmatch(text) is not None
+
+
+def _clipped(text: str, limit: int = 60) -> str:
+    one_line = " ".join(text.split())
+    return repr(one_line if len(one_line) <= limit else one_line[: limit - 3] + "...")
+
+
 def _pyproj() -> ModuleType | None:
     """pyproj if it is installed. Core does not depend on it."""
     try:
         return importlib.import_module("pyproj")
     except ImportError:
         return None
+
+
+def _crs_error() -> type[Exception]:
+    """pyproj's exception for a CRS it cannot read; only called once pyproj is known present."""
+    return importlib.import_module("pyproj.exceptions").CRSError
 
 
 def _text_of(crs: Crs) -> str:
@@ -143,7 +215,7 @@ def _pyproj_same(first: str, second: str) -> bool | None:
         return None
     try:
         return bool(pyproj.CRS.from_user_input(first) == pyproj.CRS.from_user_input(second))
-    except pyproj.exceptions.CRSError:
+    except _crs_error():
         return None
 
 

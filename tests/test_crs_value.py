@@ -101,3 +101,31 @@ def test_describe_is_short_for_every_representation(pyproj_crs):
     assert Crs(wkt2="not a definition").describe() == "WKT2"
     assert Crs(projjson={"name": "Daymet LCC"}).describe() == 'PROJJSON "Daymet LCC"'
     assert Crs(projjson={"type": "ProjectedCRS"}).describe() == "PROJJSON"
+
+
+def test_from_string_keeps_a_code_with_its_authority_in_capitals(monkeypatch):
+    monkeypatch.setattr("chronozarr.crs._pyproj", lambda: None)
+    parsed = Crs.from_string(" epsg:32631 ")
+    assert (parsed.code, parsed.epsg, parsed.wkt2) == ("EPSG:32631", 32631, None)
+    assert Crs.from_string("ESRI:102003").epsg is None
+
+
+def test_from_string_takes_wkt2_as_it_is_and_refuses_other_forms_without_pyproj(monkeypatch):
+    monkeypatch.setattr("chronozarr.crs._pyproj", lambda: None)
+    assert Crs.from_string(LCC_WKT2) == Crs(wkt2=LCC_WKT2)
+    with pytest.raises(ValueError, match="install pyproj to read other forms"):
+        Crs.from_string('PROJCS["old style WKT1",GEOGCS["x"]]')
+    with pytest.raises(ValueError, match="install pyproj to read other forms"):
+        Crs.from_string("+proj=utm +zone=31")
+
+
+def test_with_wkt2_adds_the_definition_of_a_code_and_leaves_what_it_cannot(pyproj_crs):
+    expected = pyproj_crs.from_epsg(32631).to_wkt("WKT2_2019")
+    assert Crs(code="EPSG:32631").with_wkt2() == Crs(code="EPSG:32631", wkt2=expected)
+    assert Crs(code="EPSG:999999").with_wkt2() == Crs(code="EPSG:999999")
+    assert Crs(wkt2=LCC_WKT2).with_wkt2() == Crs(wkt2=LCC_WKT2)
+
+
+def test_with_wkt2_does_nothing_without_pyproj(monkeypatch):
+    monkeypatch.setattr("chronozarr.crs._pyproj", lambda: None)
+    assert Crs(code="EPSG:32631").with_wkt2() == Crs(code="EPSG:32631")
