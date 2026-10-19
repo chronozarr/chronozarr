@@ -5,6 +5,7 @@
 | Your data | Section |
 |---|---|
 | A folder, a glob or an `s3://` prefix of GeoTIFFs with a date in each name | [From dated GeoTIFFs](#from-dated-geotiffs) |
+| BIL, GRIB2, HDF5 or any other raster that GDAL reads, or zips that hold one | [From other raster formats](#from-other-raster-formats) |
 | COGs at URLs, with dates in a table | [From a manifest of URLs](#from-a-manifest-of-urls) |
 | A NetCDF file or a Zarr store with a time axis | [From NetCDF or Zarr](#from-netcdf-or-zarr) |
 | An xarray `DataArray` in Python | [From xarray](#from-xarray) |
@@ -55,6 +56,68 @@ The store takes each band's description (its name), scale, offset and units from
 Some files carry a description that is the file's own name, such as the one band of a WorldClim file `wc2.1_10m_tmax_2020-01.tif`. When every file has one band and the descriptions are identical once the dates in them are left out, `convert` takes them for file labels and not for a band name. The band is named by the part they share (`wc2.1_10m_tmax`), or `1` when nothing is left, and the dry run prints a `bands:` line that says what it chose and how to change it. Descriptions that differ in anything but the date, such as `B04` and `B08` or `tmax` and `tmin`, are refused, and so are differing descriptions in files with more than one band. In those cases name the bands in a manifest. The store also takes the nodata value that the files declare. Files that declare none give a store with no nodata, so a stored 0 is data. `--nodata 0` sets one.
 
 The dry run also reads three timesteps and checks their pixels. A `fill:` line names a value that the files do not declare as nodata but that looks like a fill: one far outside the other values, such as `-9999` in rainfall, or a common code such as `-3000`. The store keeps it as data, because it could be real. The line gives the option that marks it, such as `--nodata -9999`. A `range:` line gives the values of each band after scale and offset. A scale written as a divisor, such as MODIS NDVI with a scale of 10000, shows up there as a range near 1e8 before anything is written.
+
+## From other raster formats
+
+`convert` reads any raster that GDAL can open through rasterio, not only GeoTIFF. A folder, a quoted glob or an `s3://` prefix is searched for files with these extensions. Everything else is ignored, including the sidecars that GDAL reads for itself (`.hdr`, `.prj`, `.aux.xml`, `.stx`, `.xml`, `.txt`, `.csv`).
+
+| Format | Extensions |
+|---|---|
+| GeoTIFF | `.tif`, `.tiff` |
+| ESRI BIL and FLT, with their `.hdr` and `.prj` | `.bil`, `.flt` |
+| ESRI ASCII grid, with its `.prj` | `.asc` |
+| Erdas Imagine | `.img` |
+| GRIB and GRIB2 | `.grib`, `.grib2`, `.grb`, `.grb2` |
+| HDF5 and HDF-EOS5 | `.h5`, `.hdf5`, `.he5` |
+| HDF4, only with a GDAL that has the driver | `.hdf` |
+| JPEG 2000 | `.jp2` |
+| GDAL virtual raster | `.vrt` |
+| One raster in a zip, local files only | `.zip` |
+
+A file with another extension goes in a [manifest](#from-a-manifest-of-urls), which takes any path that GDAL opens. NetCDF is not in the list: a NetCDF file keeps its own route, [From NetCDF or Zarr](#from-netcdf-or-zarr). The dates, the checks and the dry run are those of [dated GeoTIFFs](#from-dated-geotiffs); the first line of the plan says `dated rasters`. A date is read from the file name only, not from the folders above it. If the date is only in a folder name, as in `hrrr.20240115/conus/hrrr.t00z.wrfsfcf00.grib2`, run `--write-manifest found.csv`, fill in the `datetime` column and convert the manifest.
+
+A BIL or FLT file needs its `.hdr`, which carries the grid and the nodata value, beside it, and a `.prj` for the CRS. An ASCII grid takes its CRS from a `.prj`.
+
+### Zips
+
+PRISM delivers one zip per day, each with a BIL file and its sidecars. Point `convert` at the folder of zips, or a quoted glob such as `"zips/*.zip"`:
+
+```bash
+chronozarr convert zips/ prism_ppt --dry-run
+```
+
+Each raster is read inside its zip, so nothing is unpacked. A zip must hold exactly one raster; its sidecars do not count. The date comes from the zip's name or, when that has none, from the name of the raster inside. A zip with no raster or several, or one that cannot be read, is reported with the other problems and never guessed at. For those, unzip the files and convert the folder. A zip at an `s3://` or `https://` address is not read.
+
+### Files with several variables
+
+An HDF5 or HDF-EOS5 file holds many arrays, which GDAL calls subdatasets, and no raster band of its own. Without `--variable`, `convert` stops once and lists them by group, with their shapes:
+
+```text
+Error: SMAP_L3_SM_P_20200601_R19240_001.h5 has no raster band: it holds 104 subdatasets. Choose one with --variable NAME ...:
+  Soil_Moisture_Retrieval_Data_AM/ [406x964]
+    EASE_column_index, EASE_row_index, albedo, ..., soil_moisture, ...
+```
+
+`--variable Soil_Moisture_Retrieval_Data_AM/soil_moisture` reads that array from every file. The group can be left out when no other group has the name, so `--variable soil_moisture` works here. A name that matches none, or several, is refused with the list. A single-band variable gives a band named after it, and `--variable` is refused for files that have no subdatasets.
+
+HDF5 from NASA often has no geotransform that GDAL can read, and the dry run says so. A file that carries none needs `--crs` and `--bounds` with the grid of the product. SMAP L3 is on the 36 km EASE-Grid 2.0, which is EPSG:6933:
+
+```bash
+chronozarr convert smap/ smap_sm --variable soil_moisture --crs EPSG:6933 \
+  --bounds=-17367530.445,-7314540.795,17367530.445,7314540.795
+```
+
+### GRIB and HDF4
+
+GDAL gives GRIB values as 64-bit floats, which a store does not hold, so the dry run reports `sources are float64`. Write float32 files first with `gdal_translate -ot Float32`. A GRIB file with several messages is read as one band per message.
+
+MODIS products on LP DAAC are HDF4. The GDAL inside the rasterio wheel has no HDF4 driver, so each file is reported as `an HDF4 file and this GDAL build has no HDF4 driver`. Write GeoTIFFs with a GDAL that has the driver (`gdalinfo --formats | grep HDF4` shows whether yours does; conda-forge's `libgdal-hdf4` adds it), and convert those. `gdalinfo FILE` lists the subdatasets to translate:
+
+```bash
+gdal_translate 'HDF4_EOS:EOS_GRID:"MOD13A3.A2020001.h09v05.061.2020328133217.hdf":MOD_Grid_monthly_1km_VI:1 km monthly NDVI' ndvi_2020001.tif
+```
+
+The MODIS names carry a year and day of year, so the GeoTIFFs convert with `--date-pattern`, as under [dated GeoTIFFs](#from-dated-geotiffs).
 
 ## From a manifest of URLs
 
