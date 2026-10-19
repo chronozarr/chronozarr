@@ -563,7 +563,7 @@ The baseline that the [colleague trial](colleague-trial.md#analysis) compares ag
 | Converted, and the store is wrong | 0 |
 | Traceback or timeout | 0 |
 
-After the shortest fix that works, 18 of 20 reach a correct store, at an estimated 2 to 90 minutes each. The other 2 (HDF4, HDF5) were not converted. 5 datasets end with a wrong store if the user stops after the fix that the message names: CHIRPS (-9999 stored as rainfall), MODIS MOD13A1 (the file's scale of 10000 makes NDVI about 1e8), the two OISST sets (longitudes 280 to 360 in EPSG:4326) and ERA5 over Fiji (longitudes 165 to 195).
+After the shortest fix that works, 18 of 20 reach a correct store, at an estimated 2 to 90 minutes each. The other 2 (HDF4, HDF5) were not converted. 2 datasets end with a wrong store if the user stops after the fix that the message names: CHIRPS (-9999 stored as rainfall) and MODIS MOD13A1 (the file's scale of 10000 makes NDVI about 1e8). 3 more keep longitudes beyond 180 in EPSG:4326: the two OISST sets (280 to 360) and ERA5 over Fiji (165 to 195). zarr-layer 0.11.0 and GDAL 3.13.3 place such a store correctly ([GeoZarr review](../spec/review-2026-10-geozarr.md)), but a lookup by a longitude from -180 to 180 in xarray returns the nearest edge column without an error.
 
 ### Simulated newcomers
 
@@ -576,9 +576,9 @@ Codex (gpt-6.1-sol, codex-cli 0.163.0-alpha.10.2) played the tester with an empt
 | 3 | PRISM daily BIL in zips | 1.8 | 3 of 3 | yes | 19 lines: BIL to GeoTIFF | correct, 45 of 46 days |
 | 4 | MODIS 16-day COG, day-of-year names | 2.0 | 3 of 3 | yes | 22 lines: dates, warp, scale | correct |
 | 5 | Landsat NDVI with NaN | 1.6 | 3 of 3 | yes | none | correct |
-| 7 | OISST daily NetCDF | 1.5 | 3 of 3 | yes | none | wrong: longitudes 280 to 360 |
+| 7 | OISST daily NetCDF | 1.5 | 3 of 3 | yes | none | correct values; longitudes 280 to 360, so a lookup at -64.6 in xarray returns an edge column |
 | 8 | CMIP6 360-day NetCDF | 1.9 | 3 of 3 | yes | 10 lines: calendar, wrap | correct; dates relabelled without a note |
-| 9 | ERA5 6-hourly NetCDF over 180° | 1.5 | 3 of 3 | yes | none | wrong: longitudes 165 to 195 |
+| 9 | ERA5 6-hourly NetCDF over 180° | 1.5 | 3 of 3 | yes | none | correct values; longitudes 165 to 195, drawn across 180° by zarr-layer |
 | 10 | Daymet NetCDF, Lambert conformal | 1.7 | 3 of 3 | yes | 19 lines: warp 365 days | correct |
 | 22 | NSIDC monthly GeoTIFF, polar | 1.0 | 3 of 3 | yes | none | correct; flag values 2530 and 2540 kept as data |
 | 26 | Earth Engine 23-band export | 1.5 | 3 of 3 | yes | 25 lines: split, warp | correct; fill -3000 kept as data |
@@ -644,7 +644,6 @@ Ranked by datasets and sessions affected, a wrong store first. Each is a candida
 
 | Problem | Effect | Seen in |
 |---|---|---|
-| Longitudes outside -180 to 180 are accepted in EPSG:4326 with no warning, and `validate` passes the store | Wrong store | OISST, ERA5 (sessions 7, 9); CMIP6 needed its own wrap |
 | A fill value the file does not declare (-9999, -3000, flags) is stored as data; the dry run says "every pixel is valid". Undeclared NaN is refused instead | Wrong or misleading store | CHIRPS, NSIDC, Earth Engine (101, 22, 26) |
 | A file whose scale tag follows the divide convention (MODIS COGs carry 10000) gives values 10000 times too large, with no range check or warning | Wrong store | MODIS MOD13A1 |
 | A CRS with no EPSG code is refused, and the fix in the message (`--crs EPSG:xxxxx`) cannot work; for Daymet the first message says the file declares no CRS | Blocked without own code | MODIS sinusoidal, Daymet, HLS, Earth Engine (4, 10, 26) |
@@ -654,6 +653,7 @@ Ranked by datasets and sessions affected, a wrong store first. Each is a candida
 | 360-day and noleap calendars stop at "the time coordinate 'time' is object" | Blocked without own code | CMIP6 (8) |
 | A band description that differs per file refuses a clean download, and `--write-manifest`, which the message suggests, writes nothing when the dry run finds a problem | Slowed | WorldClim (1) |
 | `docs/analyze.md` selects a band and the nearest x and y in one `.sel` call, which raises `TypeError` with xarray 2026.2.0 and 2026.9.0; its example also reads `band_units`, absent when the source has no units | Documented example fails | every session split the call; 101 |
+| Longitudes outside -180 to 180 are kept in EPSG:4326 with no note; readers place the store, but a lookup by a longitude from -180 to 180 in xarray returns an edge column without an error | Misleading lookups | OISST, ERA5 (sessions 7, 9); CMIP6 needed its own wrap |
 | The dry run prints "m pixels" for a grid in degrees | Misleading | 9 of 11 sessions |
 | `chronozarr link` has no option for centre, zoom or colormap | Slowed | 11 of 11 sessions read the viewer guide for `c`, `z`, `cm` |
 
