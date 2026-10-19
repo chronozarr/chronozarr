@@ -259,7 +259,8 @@ def _decide_validity(
         reasons.append("warped timesteps leave pixels outside the source footprint")
     if not reasons:
         if candidate is None:
-            return Validity(False, None, "no nodata and no mask: every pixel is valid")
+            what = "no nodata declared" if override == "auto" else "no nodata (--nodata none)"
+            return Validity(False, None, f"{what} and no mask: every pixel is stored as data")
         return Validity(False, candidate, f"nodata {candidate} sentinel, no mask")
     kept = None if override == "auto" else candidate
     note = "no nodata" if kept is None else f"nodata {kept}"
