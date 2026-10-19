@@ -22,24 +22,26 @@ The path can be a local folder or the `https://` address of a published store. U
 The dataset is lazy. Nothing is read until you compute a value. For a remote store, each read downloads only the cells it needs.
 
 ```text
-<xarray.Dataset>
+<xarray.Dataset> Size: 92MB
 Dimensions:     (time: 12, band: 4, y: 692, x: 690)
 Coordinates:
-  * time        (time) datetime64[ns] 2024-01-01 2024-02-01 ... 2024-12-01
-  * band        (band) <U3 'B02' 'B03' 'B04' 'B08'
-    band_units  (band) <U11 ...
-  * y           (y) float64 9.17e+06 ... 9.142e+06
-  * x           (x) float64 4.857e+05 ... 5.132e+05
+  * time        (time) datetime64[ns] 96B 2024-01-01 2024-02-01 ... 2024-12-01
+  * band        (band) <U3 48B 'B02' 'B03' 'B04' 'B08'
+    band_units  (band) <U11 176B ...
+  * y           (y) float64 6kB 9.17e+06 9.17e+06 ... 9.142e+06 9.142e+06
+  * x           (x) float64 6kB 4.857e+05 4.857e+05 ... 5.132e+05 5.132e+05
 Data variables:
-    data        (time, band, y, x) float32 ...
+    data        (time, band, y, x) float32 92MB ...
 Attributes:
     crs:                      EPSG:32718
     transform:                [40.0, 0.0, 485650.0, 0.0, -40.0, 9169880.0]
     resolution:               40.0
     lod:                      0
+    chronozarr_spec_version:  0.3.0
+    nodata:                   0
 ```
 
-`x` and `y` are the centres of the pixels, in the coordinate system named by `crs`.
+This is the store from the [quickstart](quickstart.md), whose bands declare units. `band_units` exists only when the source declares units. A store without units has no `band_units` coordinate, and `ds.band_units` raises `AttributeError`. `chronozarr bands my_store` prints the units of each band, or `-` where there are none. `x` and `y` are the centres of the pixels, in the coordinate system named by `crs`.
 
 ## Physical values and stored values
 
@@ -55,10 +57,10 @@ raw = xr.open_dataset("my_store", engine="chronozarr", physical=False)
 
 ## Common tasks
 
-A pixel's values over time:
+A pixel's values over time. Select the band by name first, then the pixel by its nearest coordinates. `method="nearest"` applies to every selector in the call, and a band name is text, so a call that gives it both a band and `x` and `y` raises `TypeError`:
 
 ```python
-series = ds["data"].sel(x=496000, y=9160000, band="B08", method="nearest")
+series = ds["data"].sel(band="B08").sel(x=496000, y=9160000, method="nearest")
 series.to_series()
 ```
 
@@ -71,10 +73,10 @@ ndvi = (nir - red) / (nir + red)
 ndvi.mean(dim=("y", "x")).to_series()
 ```
 
-A coarser level, for a quick look at a large store. Level 0 has the original resolution. Each level halves it:
+A coarser level, for a quick look at a large store. Level 0 has the original resolution. Each level halves it. This store has levels 0 and 1; `chronozarr info my_store` lists the levels of yours, and `lod` beyond the last raises `IndexError`:
 
 ```python
-overview = xr.open_dataset("my_store", engine="chronozarr", lod=2)
+overview = xr.open_dataset("my_store", engine="chronozarr", lod=1)
 ```
 
 Mask and coverage: a store with a validity mask has a `mask` variable (1 is valid). A store with a coverage plane has a `coverage` variable: the number of observations behind each pixel. A coverage of 0 means that no observation is behind the pixel: its value was filled from another timestep, or it was never observed.

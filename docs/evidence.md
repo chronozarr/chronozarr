@@ -399,7 +399,23 @@ The headers of the files in `js/vendor/` record these versions: zarrita 0.7.5, @
 
 ## Comparison notes
 
-The statements about other tools in [format-comparison.md](format-comparison.md) were read from their documentation and source on 2026-09-30. Two were checked again on 2026-10-09. The `mapbox-gl-js` repository has the directory `src/data/mrt`. The README of zarr-layer states arbitrary CRS support through proj4 and lists the WGS84 UTM zones. The other statements were not checked again.
+The statements about other tools in [format-comparison.md](format-comparison.md) were first read from their documentation and source on 2026-09-30. Two were checked again on 2026-10-09: the `mapbox-gl-js` repository has the directory `src/data/mrt`, and the README of zarr-layer stated arbitrary CRS support through proj4 and listed the WGS84 UTM zones.
+
+On 2026-10-19 the page was checked against each tool's repository and rewritten. This was item 6 of the recommendation in the [GeoZarr review](../spec/review-2026-10-geozarr.md). What was read, from the repository named, at the version given:
+
+| Tool | Version, date | What the page now states, and where it was read |
+|---|---|---|
+| zarr-layer | 0.11.0, 2026-10-02 (the latest GitHub release) | Zarr v2 and v3; `multiscales`, `proj` and `spatial` read with no configuration, legacy ndpyramid pyramids too; selectors on a time dimension and `queryData` over several values (README); custom fragment shaders with an NDVI example (README); 8 and 16 bit integers in integer textures when a custom shader reads the bands, everything else float32, 32-bit integers kept as float because the fill comparison is exact only to 2^24 (`src/band-format.ts`); decoded-chunk cache bounded by count and bytes, 2 MiB times 128 regions per store (`src/decoded-chunk-cache.ts`, `src/region-cache.ts`); GPU mesh reprojection of a native CRS (README); scale and offset only from the array attributes `scale_factor` and `add_offset`, nodata from the array `fill_value` (`src/zarr-store.ts`); `store` option for an Icechunk store (README). Nothing in the source reads a `chronozarr` block or a `mask` array. |
+| topozarr | 0.2.0, 2026-10-13 | Coarsens by 2 per level by default and writes `multiscales`, `proj` and `spatial`; no reprojection, "Reproject first, then call `create_pyramid`" (`docs/tips.md`); CarbonPlan's writer for zarr-layer (README). |
+| ndpyramid | 0.4.0, 2024-11-22 (the latest release) | Written for `@carbonplan/maps`, which needs Web Mercator (topozarr `docs/tips.md`). The `zarr-conventions/multiscales` repository was created on 2025-10-15 and tagged v0.1 on 2026-06-12, so the last release predates it. |
+| titiler-multidim | 0.10.2, 2026-10-14 | TiTiler application for NetCDF and Zarr on `titiler.xarray`; `sel` on a dimension, such as `sel=time=nearest::2020-01-06` (README). |
+| OpenLayers | 10.11.0, 2026-10-04 | `ol/source/GeoZarr` reads `multiscales`, `proj` and `spatial`; `variable` and `dimensions` select from a `(time, band, y, x)` array. The file holds no `scale_factor` or `add_offset` handling; openlayers/openlayers#17649 asks for it and was open on 2026-10-19. |
+| deck.gl-raster | 0.8.1, 2026-09-24 | `deck.gl-zarr` and `geozarr` packages read `spatial`, `multiscales` and `geo-proj`; the caller supplies `getTileData` and `renderTile` (package READMEs). |
+| GDAL | 3.13.0, 2026-05-08; 3.13.3, 2026-08-18 | The Zarr driver documents the multiscales convention as overviews for Zarr v3 ("versionadded 3.13"); `NEWS.md` of 3.13.0 lists read support for `multiscales`, `spatial` and `proj`. |
+| Icechunk | 2.3.0, 2026-10-06 | "Transactional storage engine" for Zarr; the format crate holds snapshots, manifests and transaction logs; the README says reads and writes go through it (README). |
+| GeoZarr | geozarr-spec, no GitHub release; last commit 2026-07-06 | The README says the specification will be produced once mature conventions form a suite. `multiscales`, `proj` and `spatial` each state "Extension Maturity Classification: Pilot" and `v1` before the end of 2026 in their READMEs. Open on 2026-10-19: geozarr-spec #136 (time), #131 (layers and bands), zarr-conventions/spatial #33 (non-spatial coordinates). geozarr-spec #52 on scale and offset was closed on 2025-04-08 with the topic deferred to a second phase. `zarr-conventions/missing_value` is classed Proposal. |
+
+The measured statements in the page (zarr-layer on the same stores, the 12 MB/s link, the bytes fetched, the CRS placement, which readers refuse which stores) are from the review's measurements of 2026-10-18 and 2026-10-19, with its sources of 2026-10-18. The page cites the review for each. The statements about PMTiles, Mapbox raster-array and COG + TiTiler were not read again.
 
 ## Live store and publishing
 
