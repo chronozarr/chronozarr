@@ -142,6 +142,74 @@ def _first_present(names: Sequence[Any], aliases: Sequence[str]) -> str | None:
     return next((lowered[a] for a in aliases if a in lowered), None)
 
 
+def _show_value(value: Any) -> str:
+    """A coordinate value as text, without float noise (a float32 0.1 is 0.1)."""
+    return f"{value:.8g}" if isinstance(value, np.floating) else str(value)
+
+
+def _show_time(moment: np.datetime64) -> str:
+    midnight = moment == moment.astype("datetime64[D]")
+    return str(np.datetime_as_string(moment, unit="D" if midnight else "s"))
+
+
+def _squeeze_note(da: xr.DataArray, dropped: Sequence[str]) -> str:
+    """The plan line for the singleton dimensions of `da` that are dropped, with their values."""
+    parts = []
+    for name in dropped:
+        detail = "length 1"
+        if name in da.coords:
+            units = da[name].attrs.get("units")
+            detail += f", value {_show_value(da[name].values.ravel()[0])}"
+            detail += f" {units}" if units else ""
+        parts.append(f"{name} ({detail})")
+    return "squeezed:   " + ", ".join(parts)
+
+
+def _unexpected_dims(variable: str, kept: Sequence[str], sizes: Any, has_band: bool) -> str:
+    listed = ", ".join(f"{d!r} (length {sizes[d]})" for d in kept)
+    select = ", ".join(f"{d}=0" for d in kept)
+    if len(kept) == 1 and not has_band:
+        return (
+            f"{variable} has a dimension {listed} besides time, y and x. Pass --dims "
+            f"band={kept[0]} to store its values as bands, or select one value first (xarray: "
+            f"ds.isel({select})); only a dimension of length 1 is squeezed for you"
+        )
+    return (
+        f"{variable} has the dimensions {listed} besides time, y, x and the band dimension. "
+        f"Select one value of each first (xarray: ds.isel({select})); only a dimension of "
+        "length 1 is squeezed for you"
+    )
+
+
+def _resolve_dims(
+    da: xr.DataArray, dims: dict[str, str], variable: str
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """The dimensions of `da` that play time, y, x and band, and the length-1 ones left over.
+
+    A dimension with none of those roles must have length 1 (OISST's `zlev`, a `height` of one):
+    it is squeezed. A longer one needs `--dims band=NAME` or a selection first.
+    """
+    resolved: dict[str, str] = {}
+    for key, aliases in _DIM_ALIASES.items():
+        found = dims.get(key) or _first_present(list(da.dims), aliases)
+        if found is not None and found not in da.dims:
+            raise ValueError(f"--dims {key}={found}: {variable} has dims {list(da.dims)}")
+        if found is not None:
+            resolved[key] = found
+    for key in ("time", "y", "x"):
+        if key not in resolved:
+            raise ValueError(
+                f"cannot find the {key} dimension of {variable} (dims {list(da.dims)}); "
+                f"name it with --dims {key}=NAME"
+            )
+    extra = [str(d) for d in da.dims if d not in resolved.values()]
+    squeezed = tuple(d for d in extra if da.sizes[d] == 1)
+    kept = [d for d in extra if d not in squeezed]
+    if kept:
+        raise ValueError(_unexpected_dims(variable, kept, da.sizes, "band" in resolved))
+    return resolved, squeezed
+
+
 class XarraySource(Source):
     def __init__(
         self,
@@ -166,29 +234,9 @@ class XarraySource(Source):
             raise ValueError(f"variable {variable!r} is not in {source}: {names}")
         da = dataset[variable]
         self.variable = variable
-        resolved = {}
-        for key, aliases in _DIM_ALIASES.items():
-            found = dims.get(key) or _first_present(list(da.dims), aliases)
-            if found is not None and found not in da.dims:
-                raise ValueError(f"--dims {key}={found}: {variable} has dims {list(da.dims)}")
-            if found is not None:
-                resolved[key] = found
-        for key in ("time", "y", "x"):
-            if key not in resolved:
-                raise ValueError(
-                    f"cannot find the {key} dimension of {variable} (dims {list(da.dims)}); "
-                    f"name it with --dims {key}=NAME"
-                )
-        if "band" not in resolved and len(da.dims) != 3:
-            raise ValueError(
-                f"{variable} has dims {list(da.dims)}; expected time, y, x and optionally a band "
-                "dimension (name it with --dims band=NAME)"
-            )
-        if len(da.dims) != len(resolved):
-            extra = sorted(str(d) for d in set(da.dims) - set(resolved.values()))
-            raise ValueError(
-                f"{variable} has unexpected dimensions {extra}; select or squeeze them first"
-            )
+        resolved, squeezed = _resolve_dims(da, dims, variable)
+        notes = [_squeeze_note(da, squeezed)] if squeezed else []
+        da = da.isel({d: 0 for d in squeezed})
         self._dims = resolved
         if da.dtype.name not in schema.DTYPES:
             raise ValueError(
@@ -207,12 +255,13 @@ class XarraySource(Source):
                 name=time_name,
             )
             time_values = self.calendar.stored
-            self.notes = (self.calendar.plan_line(),)
+            notes.insert(0, self.calendar.plan_line())
         if not np.issubdtype(time_values.dtype, np.datetime64):
             raise ValueError(
                 f"the time coordinate {resolved['time']!r} is {time_values.dtype}, not datetimes; "
                 "decode it (CF units) or convert it to datetime64"
             )
+        self.notes = tuple(notes)
         order = np.argsort(time_values, kind="stable")
         self._order = [int(i) for i in order]
         sorted_times = time_values[order].astype("datetime64[ms]")
@@ -315,6 +364,7 @@ class XarraySource(Source):
             raise ValueError(f"mask variable {name!r} is the data variable; name another")
         mask = dataset[name]
         wanted = {resolved[k] for k in ("time", "y", "x")}
+        mask = mask.isel({d: 0 for d in mask.dims if d not in wanted and mask.sizes[d] == 1})
         if len(mask.dims) != 3 or set(mask.dims) != wanted:
             raise ValueError(
                 f"mask variable {name!r} has dims {list(mask.dims)}; it must have exactly "
