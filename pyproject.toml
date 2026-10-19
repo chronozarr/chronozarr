@@ -56,8 +56,11 @@ leafmap = ["leafmap>=0.63.1"]
 geemap = ["geemap>=0.37.2", "leafmap>=0.63.1"]
 # dask: `chunks=` with the xarray backend and dask-backed input to `encode`.
 dask = ["dask>=2024.1"]
-# h5netcdf and h5py: NetCDF input for `convert` and `encode`.
-netcdf = ["h5netcdf>=1.3", "h5py>=3.10"]
+# h5netcdf and h5py: NetCDF input for `convert` and `encode`. cftime: climate-model files
+# (CMIP6) are NetCDF files on 360_day or noleap calendars, so the NetCDF route installs it too.
+netcdf = ["h5netcdf>=1.3", "h5py>=3.10", "cftime>=1.6"]
+# cftime alone: a Zarr store on a 360_day, noleap, all_leap or julian calendar needs no NetCDF reader.
+cftime = ["cftime>=1.6"]
 # boto3: `convert` lists an s3:// prefix of GeoTIFFs with the caller's AWS credential chain.
 s3 = ["boto3>=1.34"]
 # asf-search, earthaccess, h5py, pyproj: the NISAR GCOV time-series example (examples/nisar/ingest.py).
