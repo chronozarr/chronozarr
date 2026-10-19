@@ -58,5 +58,8 @@
   },
   "/guides/publish": {
     "chronozarr-publish": "/guides/publish#publish"
+  },
+  "/guides/format-comparison": {
+    "ndpyramid-and-zarr-layer": "/guides/format-comparison#zarr-layer-topozarr-and-ndpyramid"
   }
 }
