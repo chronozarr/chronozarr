@@ -13,10 +13,17 @@ source comparison in _check_truth.py. The automatic class is a draft; final clas
 `classes.json` (written after reading every message) and are merged into the results file.
 
     uv run --no-project python scripts/corpus/run_corpus.py [--only ID ...] [--versions A B]
+        [--results PATH]
     uv run --no-project python scripts/corpus/run_corpus.py --fix [--only ID ...] --versions A B
 
 `--fix` runs the verified fix chain of each dataset in fixes.json instead of the newcomer path,
 and records it under the stage named there (`ID|VERSION|STAGE`).
+
+`--results PATH` writes the records to PATH instead of results-2026-10-16.json (the Phase 0
+baseline). Stores, logs and the venvs live under CHRONOZARR_CORPUS (default: data/corpus) and are
+named by version, so a re-run in the same directory replaces them: point CHRONOZARR_CORPUS at a
+directory of its own (symlink each dataset's raw/ into it) to keep the stores and logs of an
+earlier run.
 """
 
 from __future__ import annotations
@@ -41,6 +48,12 @@ CORPUS = Path(
 RESULTS = CORPUS / "results-2026-10-16.json"
 FETCH_PY = CORPUS / ".venv-fetch" / "bin" / "python"
 TIMEOUT = 600
+WORKTREE_SHA = subprocess.run(
+    ["git", "-C", str(WORKTREE), "rev-parse", "--short", "HEAD"],
+    capture_output=True,
+    text=True,
+    check=True,
+).stdout.strip()
 # The released chronozarr wheel built from its git tag; needed only to create the Ax venv.
 TAG_WHEEL_ENV = "CHRONOZARR_TAG_WHEEL"
 TAIL_LINES = 60
@@ -54,9 +67,12 @@ class VersionSpec(TypedDict):
 
 VERSIONS: dict[str, VersionSpec] = {
     "A": {"venv": CORPUS / ".venv-041", "label": "0.4.1 tag wheel [geo]"},
-    "B": {"venv": CORPUS / ".venv-main", "label": "main ca799a1 via uv run [geo]"},
+    "B": {"venv": CORPUS / ".venv-main", "label": f"main {WORKTREE_SHA} via uv run [geo]"},
     "Ax": {"venv": CORPUS / ".venv-041x", "label": "0.4.1 tag wheel [geo,netcdf,s3]"},
-    "Bx": {"venv": CORPUS / ".venv-mainx", "label": "main ca799a1 via uv run [geo,netcdf,s3]"},
+    "Bx": {
+        "venv": CORPUS / ".venv-mainx",
+        "label": f"main {WORKTREE_SHA} via uv run [geo,netcdf,s3]",
+    },
 }
 
 
@@ -346,6 +362,7 @@ def store_record(key: str, rec: dict) -> None:
 
 
 def main(argv: list[str]) -> int:
+    global RESULTS
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--only", action="append", help="dataset id (repeatable)")
     parser.add_argument("--versions", nargs="+", default=["A", "B"], choices=list(VERSIONS))
@@ -357,7 +374,14 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--recheck", action="store_true", help="re-run the source comparison on stored dumps"
     )
+    parser.add_argument(
+        "--results",
+        type=Path,
+        default=RESULTS,
+        help="results file to write (default: the Phase 0 baseline, results-2026-10-16.json)",
+    )
     args = parser.parse_args(argv)
+    RESULTS = args.results.resolve()
     if args.recheck:
         recheck()
         return 0
