@@ -11,6 +11,15 @@ import numpy as np
 import xarray as xr
 
 from chronozarr import schema
+from chronozarr._calendar import (
+    CalendarMapping,
+    MissingCftimeError,
+    calendar_name,
+    check_rule,
+    explain_missing_cftime,
+    is_cftime,
+    to_gregorian,
+)
 from chronozarr._convert_source import (
     Grid,
     Source,
@@ -25,7 +34,7 @@ from chronozarr._convert_source import (
 )
 from chronozarr._install import extra_hint
 from chronozarr.schema import Band
-from chronozarr.store import as_store
+from chronozarr.store import as_store, redact_url
 
 NETCDF_SUFFIXES = (".nc", ".nc4", ".cdf")
 _HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
@@ -49,12 +58,16 @@ def open_netcdf(path: str | Path, **kwargs: Any) -> xr.Dataset:
     A NetCDF4 file is an HDF5 file. It needs netCDF4, or h5netcdf with h5py, which the `netcdf`
     extra installs. xarray's own errors for their absence ("found the following matches ... their
     dependencies may not be installed", or h5netcdf's ImportError for h5py) name no chronozarr
-    extra. Every other failure keeps the error of xarray, including a file that is not HDF5: a
-    NetCDF3 file needs scipy or netCDF4, which the extra does not provide.
+    extra. A time coordinate on a calendar that needs cftime (360_day, noleap, ...) names the
+    `cftime` extra. Every other failure keeps the error of xarray, including a file that is not
+    HDF5: a NetCDF3 file needs scipy or netCDF4, which the extra does not provide.
     """
     try:
         return xr.open_dataset(path, **kwargs)
     except (ValueError, ImportError) as exc:
+        if isinstance(exc, ValueError):
+            undecoded: dict[str, Any] = {**kwargs, "decode_times": False}
+            explain_missing_cftime(exc, lambda: xr.open_dataset(path, **undecoded), str(path))
         has_reader = _is_installed("netCDF4") or (
             _is_installed("h5netcdf") and _is_installed("h5py")
         )
@@ -89,6 +102,19 @@ def _parse_dims(spec: str | None) -> dict[str, str]:
     return out
 
 
+def open_zarr(source: str | Path, **kwargs: Any) -> xr.Dataset:
+    """`xr.open_zarr` for a path or URL; a time coordinate that needs cftime names the extra."""
+    store = as_store(source)
+    try:
+        return xr.open_zarr(store, **kwargs)
+    except ValueError as exc:
+        undecoded: dict[str, Any] = {**kwargs, "decode_times": False}
+        explain_missing_cftime(
+            exc, lambda: xr.open_zarr(store, **undecoded), redact_url(str(source))
+        )
+        raise
+
+
 def _open_dataset(source: str) -> xr.Dataset:
     if source.lower().endswith(NETCDF_SUFFIXES):
         if not Path(source).is_file():
@@ -96,9 +122,10 @@ def _open_dataset(source: str) -> xr.Dataset:
         return open_netcdf(source, mask_and_scale=False)
     if not source.startswith(("http://", "https://")) and not Path(source).exists():
         raise FileNotFoundError(f"input {source} does not exist")
-    store = as_store(source)
     try:
-        return xr.open_zarr(store, chunks=None, consolidated=True, mask_and_scale=False)
+        return open_zarr(source, chunks=None, consolidated=True, mask_and_scale=False)
+    except MissingCftimeError:
+        raise
     except (KeyError, ValueError):
         if source.startswith(("http://", "https://")):
             raise ValueError(
@@ -106,7 +133,7 @@ def _open_dataset(source: str) -> xr.Dataset:
                 "consolidated zarr.json) because HTTP stores cannot be listed"
             ) from None
     # Local store without consolidated metadata: xarray falls back to listing and warns.
-    return xr.open_zarr(store, chunks=None, consolidated=False, mask_and_scale=False)
+    return open_zarr(source, chunks=None, consolidated=False, mask_and_scale=False)
 
 
 def _first_present(names: Sequence[Any], aliases: Sequence[str]) -> str | None:
@@ -123,7 +150,9 @@ class XarraySource(Source):
         crs: str | None,
         nodata: float | int | None | str,
         mask_var: str | None = None,
+        calendar_to_gregorian: str | None = None,
     ) -> None:
+        check_rule(calendar_to_gregorian)
         self.kind = "NetCDF file" if source.lower().endswith(NETCDF_SUFFIXES) else "Zarr store"
         self.source = source
         dataset = _open_dataset(source)
@@ -166,7 +195,18 @@ class XarraySource(Source):
                 "Cast it first"
             )
 
-        time_values = np.asarray(da[resolved["time"]].values)
+        time_name = resolved["time"]
+        time_values = np.asarray(da[time_name].values)
+        self.calendar: CalendarMapping | None = None
+        if is_cftime(time_values):
+            self.calendar = to_gregorian(
+                time_values,
+                calendar_name(da[time_name]),
+                calendar_to_gregorian,
+                name=time_name,
+            )
+            time_values = self.calendar.stored
+            self.notes = (self.calendar.plan_line(),)
         if not np.issubdtype(time_values.dtype, np.datetime64):
             raise ValueError(
                 f"the time coordinate {resolved['time']!r} is {time_values.dtype}, not datetimes; "

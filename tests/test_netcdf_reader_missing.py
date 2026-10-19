@@ -109,12 +109,11 @@ def test_a_netcdf3_file_keeps_the_error_of_xarray_that_names_scipy(tmp_path):
     assert "netcdf]" not in result.stderr
 
 
-def test_an_error_with_a_reader_installed_is_not_blamed_on_the_extra(tmp_path, monkeypatch):
-    """A 360-day calendar without cftime makes xarray raise ValueError for a file that opens."""
+def test_an_error_with_a_reader_installed_is_not_blamed_on_the_extra(tmp_path):
+    """Time units that no one can decode make xarray raise ValueError for a file that opens."""
     pytest.importorskip("h5netcdf")
-    monkeypatch.setitem(sys.modules, "cftime", None)
     source = tmp_path / "model.nc"
-    time = ("time", [0, 1], {"units": "days since 2000-01-01", "calendar": "360_day"})
+    time = ("time", [0, 1], {"units": "days since banana", "calendar": "standard"})
     xr.Dataset({"tas": (("time",), [1.0, 2.0])}, coords={"time": time}).to_netcdf(
         source, engine="h5netcdf"
     )
@@ -126,3 +125,62 @@ def test_an_error_with_a_reader_installed_is_not_blamed_on_the_extra(tmp_path, m
     assert result.exit_code == 1
     assert "unable to decode time units" in result.output
     assert "netcdf]" not in result.output
+
+
+def _model_file(tmp_path: Path, calendar: str, suffix: str) -> Path:
+    """A one-variable model file whose time axis is on `calendar`, as CMIP6 writes them."""
+    path = tmp_path / f"model{suffix}"
+    time = ("time", [15.0, 45.0], {"units": "days since 2000-01-01", "calendar": calendar})
+    ds = xr.Dataset({"tas": (("time",), [1.0, 2.0])}, coords={"time": time})
+    if suffix == ".nc":
+        ds.to_netcdf(path, engine="h5netcdf")
+    else:
+        ds.to_zarr(path, zarr_format=2, consolidated=True)
+    return path
+
+
+@pytest.mark.parametrize("suffix", [".nc", ".zarr"])
+def test_a_non_gregorian_calendar_without_cftime_names_the_cftime_extra(tmp_path, suffix):
+    """xarray's own message names no chronozarr extra and dumps the whole time variable."""
+    pytest.importorskip("h5netcdf")
+    source = _model_file(tmp_path, "360_day", suffix)
+    result = _run("cftime", "convert", str(source), str(tmp_path / "out"), "--variable", "tas")
+    pin = version("chronozarr")
+    assert result.returncode == 1, result.stderr
+    assert "Traceback" not in result.stderr
+    assert (
+        "the time coordinate 'time' uses the 360_day calendar, which needs cftime" in result.stderr
+    )
+    assert f"`uv tool install --python 3.13 'chronozarr[geo,cftime]=={pin}'`" in result.stderr
+    assert f"`uv add 'chronozarr[cftime]=={pin}'`" in result.stderr
+    assert "unable to decode time units" not in result.stderr
+
+
+def test_encode_names_the_cftime_extra(tmp_path):
+    pytest.importorskip("h5netcdf")
+    source = _model_file(tmp_path, "noleap", ".nc")
+    result = _run("cftime", "encode", str(source), str(tmp_path / "out"), "--variable", "tas")
+    assert result.returncode == 1, result.stderr
+    assert "uses the noleap calendar, which needs cftime" in result.stderr
+
+
+def test_a_remote_zarr_on_a_calendar_that_needs_cftime_is_not_blamed_on_its_metadata(monkeypatch):
+    """The HTTP branch turns any ValueError into "needs consolidated metadata"; this is not one."""
+    from chronozarr._calendar import MissingCftimeError
+    from chronozarr._convert_xarray import _open_dataset
+
+    raw = xr.Dataset(
+        coords={
+            "time": ("time", [15.0], {"units": "days since 2000-01-01", "calendar": "360_day"})
+        }
+    )
+
+    def open_zarr(store, **kwargs):
+        if kwargs.get("decode_times", True):
+            raise ValueError("unable to decode time units 'days since 2000-01-01'")
+        return raw
+
+    monkeypatch.setattr(xr, "open_zarr", open_zarr)
+    monkeypatch.setitem(sys.modules, "cftime", None)
+    with pytest.raises(MissingCftimeError, match="uses the 360_day calendar, which needs cftime"):
+        _open_dataset("https://example.org/model.zarr")

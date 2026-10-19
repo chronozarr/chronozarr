@@ -89,6 +89,14 @@ line when a value that no declared nodata or mask covers looks like a fill (`_co
 says how it is judged), and a `range:` line, each band's values after scale and offset, when a band
 declares a scale or offset. Neither changes what is written or refuses a conversion.
 
+Calendars. A Zarr or NetCDF time axis on a 360_day, noleap (365_day), all_leap (366_day) or
+julian calendar is decoded by cftime (`chronozarr[cftime]`) and refused unless
+`calendar_to_gregorian` (`--calendar-to-gregorian`) says how to map it: "date" keeps each step's
+year, month, day and time of day as a Gregorian timestamp and stops at a date that Gregorian lacks
+(360_day Feb 30); "date-or-month-end" moves such a date to the last day of its month. Time
+between steps is not kept (30-day months become 28 to 31 days). The plan has a `calendar:` line
+and the store's provenance notes the source calendar, the rule and the dates that moved.
+
 Image frames. A sequence of rendered, georeferenced PNGs (Earth Engine thumbnails, QGIS and
 matplotlib exports, drone pipelines) converts like COGs, with no GeoTIFF step; GDAL reads the
 frames, so every rule above applies to them. A frame is display values, not measurements: nothing
@@ -130,6 +138,7 @@ import numpy as np
 from numcodecs import Zstd
 
 from chronozarr import schema
+from chronozarr._calendar import check_rule, provenance_with_note
 from chronozarr._convert_cog import (
     GDAL_ENV as GDAL_ENV,
 )
@@ -241,6 +250,13 @@ Validity is either one nodata sentinel (judged per band, no mask) or one mask sh
             --nodata gives one. A pixel invalid in any band is invalid for all.
   NaN is never stored: under a mask it becomes 0. A float source with undeclared NaN fails;
   --nodata nan treats NaN as invalid. --nodata N replaces the declared nodata; none ignores it.
+
+\b
+Time: a Zarr or NetCDF time axis on a 360_day, noleap, all_leap or julian calendar needs the
+cftime extra and --calendar-to-gregorian. `date` keeps each step's date and time of day as a
+Gregorian timestamp (30-day months become 28 to 31 days apart) and stops at a date Gregorian
+lacks, such as 360_day Feb 30; `date-or-month-end` moves it to the last day of its month. The
+store's provenance records the calendar, the rule and the dates moved.
 
 \b
 Image frames (PNG): GDAL reads them like COGs and the rules above apply; the values are stored
@@ -369,6 +385,7 @@ def plan_conversion(
     n_lods: int | None = None,
     sample: bool = True,
     date_pattern: str | None = None,
+    calendar_to_gregorian: str | None = None,
 ) -> Plan:
     """Open the source, check it is consistent and estimate the conversion.
 
@@ -376,6 +393,7 @@ def plan_conversion(
     Raises `PreflightError` with every problem found in the files (and, for a discovered series,
     in their dated names) when the sources cannot be one series.
     """
+    check_rule(calendar_to_gregorian)
     text = str(source_path)
     suffix = Path(text).suffix.lower()
     is_manifest = suffix in (".csv", ".json")
@@ -386,10 +404,15 @@ def plan_conversion(
         )
     source: Source
     if is_manifest or discovered:
-        if variable is not None or dims is not None or mask_var is not None:
+        if (
+            variable is not None
+            or dims is not None
+            or mask_var is not None
+            or calendar_to_gregorian is not None
+        ):
             raise ValueError(
-                "--variable, --dims and --mask-var apply to Zarr and NetCDF input, not "
-                "manifests or GeoTIFFs"
+                "--variable, --dims, --mask-var and --calendar-to-gregorian apply to Zarr and "
+                "NetCDF input, not manifests or GeoTIFFs"
             )
         manifest_bounds: Bounds | None = None
         if is_manifest:
@@ -440,7 +463,17 @@ def plan_conversion(
             if (
                 any(
                     v is not None
-                    for v in (variable, dims, crs, transform, shape, resampling, mask_var, bounds)
+                    for v in (
+                        variable,
+                        dims,
+                        crs,
+                        transform,
+                        shape,
+                        resampling,
+                        mask_var,
+                        bounds,
+                        calendar_to_gregorian,
+                    )
                 )
                 or nodata != "auto"
             ):
@@ -454,7 +487,9 @@ def plan_conversion(
                 "(--crs only declares its CRS)"
             )
         if metadata is None:
-            source = XarraySource(text, variable, _parse_dims(dims), crs, nodata, mask_var)
+            source = XarraySource(
+                text, variable, _parse_dims(dims), crs, nodata, mask_var, calendar_to_gregorian
+            )
 
     info = source.info
     n_time = len(source.times)
@@ -679,6 +714,7 @@ def convert(
     dry_run: bool = False,
     read_ahead: int = 2,
     date_pattern: str | None = None,
+    calendar_to_gregorian: str | None = None,
     write_manifest_to: str | Path | None = None,
     on_plan: Callable[[Plan], None] | None = None,
     progress: Callable[[int, int], None] | None = None,
@@ -712,6 +748,14 @@ def convert(
     number that replaces the declared nodata, None (no nodata) or NaN (float data: NaN pixels are
     invalid, through a mask). `mask_var` names a boolean or integer (time, y, x) variable of a
     Zarr or NetCDF source whose nonzero values are valid; the store then gets a mask.
+
+    `calendar_to_gregorian` ("date" or "date-or-month-end") says how to store a Zarr or NetCDF
+    time axis on a calendar that is not Gregorian (360_day, noleap, all_leap, julian; needs
+    cftime). Without it such a source is refused. "date" keeps each step's date and time of day
+    as a Gregorian timestamp and stops at a date that Gregorian lacks; "date-or-month-end" moves
+    that date to the last day of its month. The plan has a `calendar:` line, and the store's
+    provenance `notes` record the calendar, the rule and the dates moved (added to `provenance`
+    when the caller passes one). It has no effect on a Gregorian axis.
 
     `band_roles` maps band names of the source to a STAC common name (`{"B04": "red"}`; "none"
     clears one) and writes it as the band's `common_name` (see `chronozarr.bands`). An unknown
@@ -753,6 +797,7 @@ def convert(
             chunk_size=encode_options.get("chunk_size", 512),
             n_lods=encode_options.get("n_lods"),
             date_pattern=date_pattern,
+            calendar_to_gregorian=calendar_to_gregorian,
         )
     except PreflightError as exc:
         if write_manifest_to is not None and exc.draft is not None:
@@ -805,6 +850,10 @@ def convert(
     )
     _check_work_dir(work, plan, resume)
     info = plan.source.info
+    if isinstance(plan.source, XarraySource) and plan.source.calendar is not None:
+        encode_options["provenance"] = provenance_with_note(
+            str(source), plan.source.calendar, encode_options.get("provenance")
+        )
     try:
         started = time.perf_counter()
         staged, reused = _stage(plan, work, read_ahead, progress)
