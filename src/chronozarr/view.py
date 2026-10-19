@@ -412,7 +412,13 @@ def serve_store(
         return running
 
 
-def _check_view(t: int | None, range: Sequence[float] | None, colormap: str | None) -> None:
+def _check_view(
+    t: int | None,
+    range: Sequence[float] | None,
+    colormap: str | None,
+    zoom: float | None = None,
+    center: Sequence[float] | None = None,
+) -> None:
     """Raise ValueError for an initial-view value that no viewer accepts."""
     if t is not None and t < 0:
         raise ValueError(f"t must be a timestep index of 0 or more, got {t}")
@@ -422,6 +428,12 @@ def _check_view(t: int | None, range: Sequence[float] | None, colormap: str | No
             raise ValueError(f"range must be two finite increasing limits, got {tuple(range)}")
     if colormap is not None and colormap not in COLORMAPS:
         raise ValueError(f"colormap must be one of {', '.join(COLORMAPS)}, got {colormap!r}")
+    if zoom is not None and not (math.isfinite(zoom) and zoom > 0):
+        raise ValueError(
+            f"zoom must be a positive number of screen pixels per stored pixel, got {zoom}"
+        )
+    if center is not None and not (len(center) == 2 and all(math.isfinite(v) for v in center)):
+        raise ValueError(f"center must be two finite numbers, x and y, got {tuple(center)}")
 
 
 def viewer_url(
@@ -433,17 +445,22 @@ def viewer_url(
     band: str | None = None,
     range: Sequence[float] | None = None,
     colormap: str | None = None,
+    zoom: float | None = None,
+    center: Sequence[float] | None = None,
 ) -> str:
-    """URL that opens `store_url` in the viewer, optionally at a timestep, product and display.
+    """URL that opens `store_url` in the viewer, optionally at a timestep, display and place.
 
     `t` is a timestep index, `product` a viewer product id (`true_color`, `false_color`, `ndvi`,
     `ndwi`, `water`, `band`, `dual_pol`), `band` the band of the single-band product, `range`
     its display limits (low, high) in physical units, and `colormap` its colormap (`gray`,
-    `viridis`, `magma`, `turbo`). They are presentation only: the store is not touched, and
-    anyone who opens the URL sees the same initial view. The viewer ignores a value the store
-    cannot honour, so check them first with `chronozarr link`.
+    `viridis`, `magma`, `turbo`). `zoom` is screen pixels per stored pixel (1 draws each stored
+    pixel as one screen pixel) and `center` the (x, y) at the middle of the map in the store's own
+    coordinate system, its CRS and not longitude and latitude (`chronozarr link --lonlat`
+    converts one). They are presentation only: the store is not touched, and anyone who opens the
+    URL sees the same initial view. The viewer ignores a value the store cannot honour and moves
+    a centre outside the store to its edge, so check them first with `chronozarr link`.
     """
-    _check_view(t, range, colormap)
+    _check_view(t, range, colormap, zoom, center)
     query = [f"store={urllib.parse.quote(store_url, safe='')}"]
     if t is not None:
         query.append(f"t={t}")
@@ -456,6 +473,11 @@ def viewer_url(
         query.append(f"r={low:.12g},{high:.12g}")
     if colormap is not None:
         query.append(f"cm={colormap}")
+    if zoom is not None:
+        query.append(f"z={zoom:.12g}")
+    if center is not None:
+        x, y = center
+        query.append(f"c={x:.12g},{y:.12g}")
     return f"{viewer}?{'&'.join(query)}"
 
 
