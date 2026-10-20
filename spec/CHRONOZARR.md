@@ -419,10 +419,12 @@ A reader MUST NOT refuse a store for a deviation that does not change a value:
 - an absent `levels`, `band_names`, level-group or `crs` mirror,
 - an absent coordinate array, or absent CF attributes on the `time` array,
 - an absent `_ARRAY_DIMENSIONS` attribute where `dimension_names` exist,
-- an absent `chronozarr.variable`, and
-- a patch version of `0.3` or `0.4` (§9.1).
+- an absent `chronozarr.variable`,
+- a patch version of `0.3` or `0.4` (§9.1),
+- a chunk layout other than §2.1 and §7.1: a reader reads any chunking that Zarr decodes, and the one-request guarantee of §1 holds only for the layout the format writes, and
+- a `levels` grid mirror that does not match the stored chunks: the chunks decide.
 
-A reader MUST make each deviation it read through available to its caller as a note, and the note SHOULD say what the deviation means for the values. For example, the overview levels of a store with another `resampling_method` are not block means, and level 0 is unaffected. `chronozarr validate` reports a deviation from a MUST as a problem and a deviation from a SHOULD as a note. A reader MUST still refuse a store whose values it cannot read as declared: a version it does not know (§9.1), a data type or codec it cannot decode, and metadata that contradicts itself (§9.2).
+A reader MUST make each deviation it read through available to its caller as a note, and the note SHOULD say what the deviation means for the values. For example, the overview levels of a store with another `resampling_method` are not block means, and level 0 is unaffected. `chronozarr validate` reports a deviation from a MUST as a problem and a deviation from a SHOULD as a note. A reader SHOULD also decode a store with no `chronozarr` block that declares its levels with multiscales (§9.4). A reader MUST still refuse a store whose values it cannot read as declared: a version it does not know (§9.1), a data type or codec it cannot decode, and metadata that contradicts itself (§9.2).
 
 ### 9.1 Profile and version rejection
 
@@ -466,6 +468,23 @@ Readers MUST apply §4.1 validity in math, statistics and charts, and §4.4 scal
 
 Readers SHOULD cache decoded data chunks for the session. They SHOULD prefetch ordinary frames to reduce interaction latency. They MUST retain the per-shard index cache and array-handle reuse rules in §7.2, while recovering correctly for mutable trailing shards (§8.4). Consolidated root discovery and mirrors preserve a single-root-request metadata path.
 
+### 9.4 Stores with no chronozarr block
+
+A reader SHOULD decode a store that has no `chronozarr` block when its root `multiscales` lists the levels and each level has a geometry and a CRS. The levels come from M's `layout` or from the `datasets` list of ndpyramid 0.4. Level 0 is the finest level, whatever order the layout lists. The levels MUST share their times, dtype and CRS, and a reader refuses a store whose levels differ in them.
+
+A level is a group of arrays. It holds one array with the dimensions (time, band, y, x), (time, y, x), (band, y, x) or (y, x), or one such array per band, which the reader stacks on a band axis in natural name order, so that `b8a` follows `b07`. The reader keeps the bands that every level has. Arrays with other dimensions, shapes or dtypes are left out.
+
+The geometry of a level is the `spatial:transform` found nearest first on its array, its group, its layout entry and the root. Without one it is the x and y coordinate arrays, read as evenly spaced pixel centres. The CRS comes the same way from `proj:code`, `proj:wkt2` or `proj:projjson`, else from a `crs` on the layout entry, else from a CF grid mapping variable. Times come from the CF units of the time array. A grid that is not north-up is refused.
+
+A reader MUST report every value it assumed:
+
+- Scale and offset come from CF `scale_factor` and `add_offset` on the array, and from `_eopf_attrs` only when the array has the dtype that `_eopf_attrs` names, since a float32 array under `<u2` attributes holds decoded values. Without them the scale is 1 and the offset 0, as an assumption.
+- A pixel is missing when it equals `_FillValue`, or the array's `fill_value` when that is not Zarr's default 0. NaN needs no marker. Each level has its own.
+- A store with no time axis is one timestep, dated 1970-01-01 as a placeholder.
+- Overview levels are the writer's own resampling and not the §5 block means. Levels whose pixel size is not a power of two times that of level 0 are listed.
+
+A reader MUST refuse a level whose geometry, CRS, dimension names, time array or dtype it cannot read, and says why. `chronozarr validate` reports such a store as not conforming and says that it decodes.
+
 ## 10. Changes from 0.3 and 0.2
 
 These tables are informative. They list the removals and changes. Retained chronozarr requirements are normative in §§1–9. v0.2 stores require explicit conversion. They are not baseline reader inputs.
@@ -483,6 +502,8 @@ Every 0.3.0 store remains valid. A reader of this document opens it unchanged.
 | A reader refuses a store that does not conform. | A reader decodes every store whose values, geometry and validity it can read as declared, and reports what it read through as notes. A store conforms when `chronozarr validate` finds no problem. | §9. |
 | Registrations MUST be the literal v0.1 entries, and a reader checks them. | Writers still emit the literals. Readers match each convention by `uuid` and ignore the name and URLs, so `refs/tags/v1` and `geo-proj` registrations read. | §3.1. |
 | `resampling_method` MUST be `"average"`, and a reader checks it. | Writers still write it. A reader opens another value or none, and reports that the overview levels are not block means. | §§3.3, 9. |
+| A store with no `chronozarr` block is not a chronozarr store, and a reader refuses it. | A reader decodes a store that declares its levels with multiscales, from its layout and arrays, and reports each assumption. | §9.4. |
+| A reader refuses a chunk layout other than one chunk per timestep and cell. | A reader reads any chunking. Writers keep the layout. | §§2.1, 9. |
 | `spec_version` is `"0.3.0"`, and a reader rejects anything else. | Readers also accept `0.3.x` and `0.4.x`, and report a version they do not know. | §§3.2, 9.1. |
 | Writers MUST write `band_names`, `levels` and the level-group `transform` and `resolution`. | SHOULD. Readers take them from `bands`, the layout and the arrays. A validator reports an absent one as a note. | §§3.2–3.4. |
 | Every array MUST declare `_ARRAY_DIMENSIONS`, and the coordinate arrays and the CF attributes of `time` MUST be present. | SHOULD. `dimension_names` stay required. A coordinate array or CF attribute that is present MUST still be correct. | §§2.1, 2.2. |

@@ -147,7 +147,7 @@ def test_writer_never_emits_pixels_per_tile(good_store):
     assert (
         "pixels_per_tile" not in root_json
     )  # not in the attributes, not in the consolidated copy
-    assert chronozarr.open_store(good_store).levels[0].chunk_size == 512
+    assert chronozarr.open_store(good_store).levels[0].cell_shape == (512, 512)
 
 
 def test_cell_size_is_the_chunk_size_of_the_data_array():

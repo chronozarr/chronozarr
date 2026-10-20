@@ -149,7 +149,7 @@ def test_spec_chunk_sizes_write_a_conforming_store(tmp_path, chunk_size):
     assert store.levels[0].data.chunks == (1, 1, chunk_size, chunk_size)
     assert np.array_equal(store.to_xarray().values, truth)
     assert chronozarr.validate(tmp_path / "s") == []
-    assert {level.chunk_size for level in store.levels} == {chunk_size}
+    assert {level.cell_shape for level in store.levels} == {(chunk_size, chunk_size)}
     multiscale = attrs_block(zarr.open_group(str(tmp_path / "s"), mode="r"), "multiscales")
     assert all("pixels_per_tile" not in d for d in multiscale["layout"])
 

@@ -7,7 +7,7 @@ import inspect
 import re
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +47,7 @@ from chronozarr.convert import (
     Plan,
     convert,
 )
+from chronozarr.crs import Crs
 from chronozarr.decode import ChronoStore, open_store
 from chronozarr.doctor import DEFAULT_ORIGIN, diagnose, is_url
 from chronozarr.encode import EncodeReport, encode
@@ -538,13 +539,42 @@ def validate_command(store: str) -> None:
     if report.problems:
         for problem in report.problems:
             click.echo(problem, err=True)
-        for note in report.notes:
+        for note in [*report.notes, *_decoding_notes(store, [*report.problems, *report.notes])]:
             click.echo(f"note: {note}", err=True)
         click.echo(f"{store}: {len(report.problems)} problem(s)", err=True)
         sys.exit(1)
     click.echo(f"{store}: conforms to chronozarr {report.spec_version}")
     for note in report.notes:
         click.echo(f"note: {note}")
+
+
+def _decoding_notes(store: str, reported: Sequence[str]) -> list[str]:
+    """Whether a store that does not conform still decodes, and what the reader assumed.
+
+    Notes the reader shares with the validation report are not repeated.
+    """
+    try:
+        opened = open_store(store)
+    except (ValueError, OSError) as exc:
+        return [f"does not decode: {exc}"]
+    shape = opened.levels[0].shape
+
+    def count(n: int, noun: str) -> str:
+        return f"{n} {noun}{'' if n == 1 else 's'}"
+
+    summary = (
+        f"decodes: {count(len(opened.levels), 'level')}, {count(shape[1], 'band')}, "
+        f"{count(shape[0], 'timestep')}"
+    )
+    return [summary, *(n for n in opened.notes if not any(n in r for r in reported))]
+
+
+def _resolution_unit(crs: Crs) -> str:
+    """The unit of a pixel size as the CRS names it, or `CRS-unit` when that cannot be told."""
+    try:
+        return schema.axis_unit(crs.to_string())
+    except Exception:  # rasterio raises its own CRSError for a definition it cannot read
+        return "CRS-unit"
 
 
 @main.command("info")
@@ -555,7 +585,12 @@ def info_command(store: str) -> None:
         opened = open_store(store)
     attrs = opened.attrs
     click.echo(f"store:     {redact_url(store)}")
-    click.echo(f"version:   chronozarr {attrs.spec_version}")
+    version = (
+        f"chronozarr {attrs.spec_version}"
+        if attrs.spec_version is not None
+        else "not a chronozarr store (read from its multiscales layout)"
+    )
+    click.echo(f"version:   {version}")
     click.echo(f"crs:       {opened.crs.describe()}")
     click.echo(f"times:     {len(opened.times)} ({attrs.times[0]} .. {attrs.times[-1]})")
     click.echo(f"bands:     {', '.join(opened.bands)}")
@@ -575,11 +610,12 @@ def info_command(store: str) -> None:
     if notes:
         click.echo(f"notes:     {notes}")
     click.echo("levels:")
-    unit = schema.axis_unit(opened.crs.to_string())
+    unit = _resolution_unit(opened.crs)
     for level in opened.levels:
         layout = f"shards {level.data.shards}" if level.data.shards else "unsharded"
+        named = "" if level.path == str(level.index) else f" ({level.path})"
         click.echo(
-            f"  {level.index}: shape {level.shape}, {level.resolution:.10g} {unit} pixels, "
+            f"  {level.index}{named}: shape {level.shape}, {level.resolution:.10g} {unit} pixels, "
             f"grid {level.grid[0]}x{level.grid[1]}, chunks {level.data.chunks}, {layout}"
         )
     for note in opened.notes:
