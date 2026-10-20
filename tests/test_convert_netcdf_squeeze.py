@@ -104,6 +104,7 @@ def test_two_extra_dimensions_longer_than_one_name_both(tmp_path):
 
 def test_a_mask_variable_with_the_same_length_one_dimension_is_squeezed_too(tmp_path):
     ok = np.ones((1, 1, HEIGHT, WIDTH), dtype=np.uint8)
+    ok[0, 0, 0, 0] = 0  # the fixture's fill pixel; left valid, convert refuses it as undeclared
     ok[0, 0, 2, 3] = 0
     ds = xr.Dataset(
         {
