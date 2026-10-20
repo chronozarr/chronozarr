@@ -3,6 +3,7 @@
 // fixture stores.
 
 import http from 'node:http';
+import http2 from 'node:http2';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -16,9 +17,13 @@ const CONTENT_TYPES = {
   '.wasm': 'application/wasm',
 };
 
-export async function startStaticServer(rootDir, port = 0) {
+/**
+ * `tls` ({key, cert}) makes it an https server that speaks HTTP/2 (and HTTP/1.1 to a client that does not): the
+ * field-performance scripts use it so many requests share one connection, as they do on Cloudflare.
+ */
+export async function startStaticServer(rootDir, port = 0, { tls } = {}) {
   const requests = [];
-  const server = http.createServer(async (req, res) => {
+  const handler = async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     const file = path.join(rootDir, decodeURIComponent(url.pathname));
     requests.push({ method: req.method, path: url.pathname, range: req.headers.range ?? null, cacheControl: req.headers['cache-control'] ?? null });
@@ -56,11 +61,12 @@ export async function startStaticServer(rootDir, port = 0) {
       res.writeHead(404);
       res.end();
     }
-  });
+  };
+  const server = tls ? http2.createSecureServer({ ...tls, allowHTTP1: true }, handler) : http.createServer(handler);
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   const { port: boundPort } = server.address();
   return {
-    url: `http://127.0.0.1:${boundPort}`,
+    url: `${tls ? 'https' : 'http'}://127.0.0.1:${boundPort}`,
     requests,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
