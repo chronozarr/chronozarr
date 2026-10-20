@@ -7,14 +7,15 @@ import re
 import warnings
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import wraps
 from typing import Any, NoReturn, ParamSpec, TypeVar
 
 import numpy as np
 
 from chronozarr import schema
-from chronozarr._convert_discover import DATE_MARK, mask_dates
+from chronozarr._convert_band_dates import BandDates, NotBandDates, read_band_dates
+from chronozarr._convert_discover import DATE_MARK, mask_dates, show_time
 from chronozarr._convert_gdal_open import (
     HDF4_DETAIL,
     HDF4_FIX,
@@ -56,6 +57,13 @@ GDAL_ENV = {
 # which GDAL_ENV switches off for everything else.
 SIDECAR_SUFFIXES = (".png", ".bil", ".flt", ".asc")
 
+
+# A file whose bands are dates is read once per date. When it is pixel-interleaved GDAL decodes
+# every band of a tile to give one, so a conversion decodes the whole file once per date: 13 GB
+# against 0.3 GB for a 40-band, 2048 x 2048 px int16 file, and a read of 1.5 s per date instead of
+# 0.08 s once the file is rewritten band-interleaved (measured 2026-10-19). The plan says so from
+# this many decoded bytes on.
+PIXEL_INTERLEAVE_NOTE_BYTES = 2_000_000_000
 
 RESAMPLING_METHODS = ("nearest", "bilinear", "cubic", "average", "mode", "min", "max", "med")
 
@@ -121,6 +129,7 @@ class _CogHeader:
     scales: tuple[float, ...]
     offsets: tuple[float, ...]
     units: tuple[str | None, ...]
+    pixel_interleaved: bool  # GeoTIFF whose bands share each tile, so one band decodes them all
 
     @property
     def count(self) -> int:
@@ -157,11 +166,17 @@ def _tolerate_unlocated_frames(func: Callable[_P, _R]) -> Callable[_P, _R]:
 _COLOR_NAMES = ("red", "green", "blue")
 
 
+def _warp_nodata(tokens: tuple[float | int | str | None, ...]) -> float | int | None:
+    """The nodata value the warper is given for bands with these declared tokens: the first
+    band's, NaN for a token that is the text 'nan'."""
+    return math.nan if isinstance(tokens[0], str) else tokens[0]
+
+
 def _read_header(
     uri: str, crs: str | None, bounds: Bounds | None, variable: str | None
 ) -> _CogHeader:
     import rasterio
-    from rasterio.enums import ColorInterp, MaskFlags
+    from rasterio.enums import ColorInterp, Interleaving, MaskFlags
 
     try:
         with opened(uri, variable, _gdal_env) as (src, dataset, subdataset):
@@ -190,6 +205,7 @@ def _read_header(
             if subdataset is not None and len(indexes) == 1 and descriptions[0] is None:
                 descriptions = (subdataset,)  # the one band of a chosen variable is that variable
             tokens = tuple(_declared_nodata(src.nodatavals[i - 1], dtype) for i in indexes)
+            warp_nodata = _warp_nodata(tokens)
             scaling = [
                 _scaling(float(src.scales[i - 1]), float(src.offsets[i - 1]), f"band {i}")
                 for i in indexes
@@ -204,7 +220,7 @@ def _read_header(
                 internal_mask=internal_mask,
                 dtype=dtype,
                 nodata=tokens,
-                warp_nodata=math.nan if isinstance(tokens[0], str) else tokens[0],
+                warp_nodata=warp_nodata,
                 descriptions=descriptions,
                 colors=tuple(
                     c if (c := src.colorinterp[i - 1].name) in _COLOR_NAMES else None
@@ -213,6 +229,7 @@ def _read_header(
                 scales=tuple(s for s, _ in scaling),
                 offsets=tuple(o for _, o in scaling),
                 units=tuple(src.units[i - 1] or None for i in indexes),
+                pixel_interleaved=src.driver == "GTiff" and src.interleaving == Interleaving.pixel,
             )
     except SubdatasetChoiceError:
         raise
@@ -300,6 +317,81 @@ def _open_header(
         return Problem(uri, f"cannot open source: {exc}", _open_fix(uri, exc))
 
 
+@dataclass(frozen=True)
+class BandSeries:
+    """One file whose bands are dates: the series its band descriptions describe, and for every
+    timestep the file's header restricted to the bands of that date."""
+
+    uri: str
+    dates: BandDates
+    headers: tuple[_CogHeader, ...]
+
+    @property
+    def entries(self) -> list[Entry]:
+        return [Entry(self.uri, time) for time in self.dates.times]
+
+    @property
+    def labels(self) -> list[str]:
+        """What names a timestep in a problem report: the file and the bands of that date."""
+        return [f"{self.uri} ({', '.join(d)})" for d in self.dates.descriptions]
+
+
+def _timestep_header(header: _CogHeader, numbers: tuple[int, ...]) -> _CogHeader:
+    """`header` restricted to the data bands `numbers` (1-based file numbers), in that order."""
+    positions = [header.data_indexes.index(number) for number in numbers]
+    nodata = tuple(header.nodata[i] for i in positions)
+    return replace(
+        header,
+        data_indexes=numbers,
+        nodata=nodata,
+        warp_nodata=_warp_nodata(nodata),
+        descriptions=tuple(header.descriptions[i] for i in positions),
+        colors=tuple(header.colors[i] for i in positions),
+        scales=tuple(header.scales[i] for i in positions),
+        offsets=tuple(header.offsets[i] for i in positions),
+        units=tuple(header.units[i] for i in positions),
+    )
+
+
+def open_band_series(
+    uri: str,
+    crs: str | None,
+    bounds: Bounds | None,
+    variable: str | None,
+    date_pattern: str | None,
+) -> BandSeries:
+    """Open the raster `uri` whose bands are dates and read its series from the band descriptions.
+
+    Raises `PreflightError` when the file cannot be opened or its descriptions do not describe a
+    series (every problem, with a remedy).
+    """
+    header = _open_header(uri, crs, bounds, variable)
+    if isinstance(header, Problem):
+        raise PreflightError([header], 1)
+    try:
+        dates = read_band_dates(uri, header.data_indexes, header.descriptions, date_pattern)
+    except NotBandDates as exc:
+        raise PreflightError(exc.problems, 1) from None
+    return BandSeries(uri, dates, tuple(_timestep_header(header, n) for n in dates.numbers))
+
+
+def _offer_band_dates(
+    problems: list[Problem], uri: str, header: _CogHeader, date_pattern: str | None
+) -> list[Problem]:
+    """`problems` of a single undated file, each with the fix that reads its bands as dates put
+    first when its band descriptions describe a series; else unchanged."""
+    try:
+        dates = read_band_dates(uri, header.data_indexes, header.descriptions, date_pattern)
+    except NotBandDates:
+        return problems
+    return [
+        Problem(p.uri, p.detail, f"{dates.offer()}. Otherwise {p.fix}" if p.fix else dates.offer())
+        if p.uri == uri
+        else p
+        for p in problems
+    ]
+
+
 def _parse_resampling(name: str) -> Any:
     from rasterio.enums import Resampling
 
@@ -326,12 +418,19 @@ class CogManifestSource(Source):
         variable: str | None = None,
         undated: Sequence[str] = (),
         prior_problems: Sequence[Problem] = (),
+        band_series: BandSeries | None = None,
+        band_date_pattern: str | None = None,
     ) -> None:
         """Open every source's header and check the set is one series.
 
         Every incompatibility is collected, per file, and raised together as a `PreflightError`
         (with `prior_problems`, found before this point). `undated` are files that could not be
         given a time: they are checked like the rest but are not timesteps.
+
+        A `band_series` is one file whose bands are dates (`open_band_series`): `entries` and
+        `band_names` come from it, and each timestep reads the bands of its date. A single
+        undated file whose band descriptions would make a series is refused with the option that
+        reads them (`band_date_pattern` is the `--date-pattern` that option would use).
         """
         self.entries = entries
         self.times = [e.time for e in entries]
@@ -339,20 +438,31 @@ class CogManifestSource(Source):
         self.chunk_size = chunk_size
         self.variable = variable
         self.draft = ManifestDraft(entries, tuple(undated))
-        uris = [*(e.uri for e in entries), *undated]
-        workers = min(8, len(uris))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            headers_or_problems = list(
-                pool.map(lambda uri: _open_header(uri, target_crs, bounds, variable), uris)
-            )
-        problems = [*prior_problems, *(r for r in headers_or_problems if isinstance(r, Problem))]
-        good = [
-            (u, h)
-            for u, h in zip(uris, headers_or_problems, strict=True)
-            if isinstance(h, _CogHeader)
-        ]
+        self._band_series = band_series
+        if band_series is None:
+            uris = [*(e.uri for e in entries), *undated]
+            workers = min(8, len(uris))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                headers_or_problems = list(
+                    pool.map(lambda uri: _open_header(uri, target_crs, bounds, variable), uris)
+                )
+            problems = [
+                *prior_problems,
+                *(r for r in headers_or_problems if isinstance(r, Problem)),
+            ]
+            good = [
+                (u, h)
+                for u, h in zip(uris, headers_or_problems, strict=True)
+                if isinstance(h, _CogHeader)
+            ]
+        else:
+            uris = band_series.labels
+            problems = []
+            good = list(zip(uris, band_series.headers, strict=True))
         if not good:
             self._raise(problems, uris)
+        if band_series is None and not entries and len(undated) == 1:
+            problems = _offer_band_dates(problems, *good[0], band_date_pattern)
         first_uri, first = good[0]
         labels = _file_labels(good) if band_names is None else None
         self.draft = ManifestDraft(
@@ -409,6 +519,8 @@ class CogManifestSource(Source):
             footprint=bool(self.warped),
         )
         self.notes = (
+            *(() if band_series is None else (f"bands:      {band_series.dates.note()}",)),
+            *self._interleave_notes(),
             *(self._nodata_notes(good) if nodata == "auto" else ()),
             *self._label_notes(labels, names),
         )
@@ -598,6 +710,26 @@ class CogManifestSource(Source):
             "found.csv, set the bands column of the manifest it writes, and convert the manifest",
         )
 
+    def _interleave_notes(self) -> tuple[str, ...]:
+        """One line when a band-per-date file is pixel-interleaved and big enough for it to cost:
+        each date decodes every band, so the conversion decodes the whole file once per date."""
+        series = self._band_series
+        if series is None or not series.headers[0].pixel_interleaved:
+            return ()
+        header = series.headers[0]
+        plane = header.grid.height * header.grid.width * header.dtype.itemsize
+        file_bytes = series.dates.n_bands * plane
+        decoded = file_bytes * len(series.dates.times)
+        if decoded < PIXEL_INTERLEAVE_NOTE_BYTES:
+            return ()
+        return (
+            f"interleave: the file is pixel-interleaved, so each date decodes all "
+            f"{series.dates.n_bands} bands: {decoded / 1e9:.1f} GB in all, against "
+            f"{file_bytes / 1e9:.1f} GB for one pass. Rewrite it band-interleaved first for a "
+            "much faster read: gdal_translate -co INTERLEAVE=BAND -co TILED=YES "
+            "-co COMPRESS=DEFLATE in.tif out.tif",
+        )
+
     @staticmethod
     def _nodata_notes(good: list[tuple[str, _CogHeader]]) -> tuple[str, ...]:
         """One line when the sources declare different nodata, which makes the store use a mask."""
@@ -618,10 +750,25 @@ class CogManifestSource(Source):
             "none to ignore the declared values",
         )
 
+    def listing(self) -> list[str]:
+        """The `files:` lines of the dry run: every file with its date, or for one file whose
+        bands are dates, every date with its bands."""
+        if self._band_series is not None:
+            return ["files:      1, a band per date", *self._band_series.dates.listing()]
+        return [
+            f"files:      {len(self.entries)}, dated from their names",
+            *(f"  {show_time(e.time)}  {e.uri}" for e in self.entries),
+        ]
+
     def fingerprint(self) -> Any:
         return {
             "kind": "manifest",
             "entries": [[e.uri, str(e.time)] for e in self.entries],
+            **(
+                {"band_indexes": [list(h.data_indexes) for h in self._headers]}
+                if self._band_series is not None
+                else {}
+            ),
             "variable": self.variable,
             "grid": [self.grid.crs, list(self.grid.transform), self.grid.height, self.grid.width],
             "bands": [b.to_attrs() for b in self.info.bands],
