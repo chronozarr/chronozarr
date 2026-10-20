@@ -112,6 +112,14 @@ jobs:
         env:
           PLAYWRIGHT_ARTIFACTS_DIR: ${{ runner.temp }}/playwright
         run: npx playwright test
+      # The site and the package publish the viewer as support/build-viewer.mjs builds it (one script, not 61 modules);
+      # the viewer specs run on that build too. e2e/viewer-built.spec.js, in the run above, measures its script requests.
+      - name: Viewer specs on the built viewer
+        working-directory: js
+        env:
+          CHRONOZARR_E2E_BUILT_VIEWER: "1"
+          PLAYWRIGHT_ARTIFACTS_DIR: ${{ runner.temp }}/playwright-built
+        run: npx playwright test e2e/viewer-
       - name: Installed-package viewer smoke test
         working-directory: js
         run: npm run test:package

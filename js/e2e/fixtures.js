@@ -1,8 +1,11 @@
 // Playwright fixtures: a static server for the site (js/ as the web root, as on Cloudflare), a second one for the
 // synthetic stores written to a temp directory (a separate origin, as data.chronozarr.org is), the check that
 // the browser has WebGL2, and the rule that a test fails on any console error or on a request leaving the machine.
+//
+// CHRONOZARR_E2E_BUILT_VIEWER=1 serves the viewer as the site and the package publish it, built by support/build-viewer.mjs,
+// instead of the modules of js/demo: `CHRONOZARR_E2E_BUILT_VIEWER=1 npx playwright test e2e/viewer-` runs the viewer specs on it.
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { cp, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test as base, expect } from '@playwright/test';
@@ -10,7 +13,18 @@ import { startStaticServer } from '../support/static-server.js';
 import { STORES, writeStore } from './stores.js';
 
 const JS_DIR = path.resolve(import.meta.dirname, '..');
+const BUILT_VIEWER = Boolean(process.env.CHRONOZARR_E2E_BUILT_VIEWER);
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost']);
+
+/** A web root that holds the built viewer: demo/ from the build, the favicon that the page asks the site root for, and the host page of the embed specs. */
+export async function writeBuiltViewerRoot() {
+  const { buildViewer } = await import('../support/build-viewer.mjs');
+  const root = await mkdtemp(path.join(tmpdir(), 'chronozarr-built-viewer-'));
+  await buildViewer(root);
+  await cp(path.join(JS_DIR, 'favicon.svg'), path.join(root, 'favicon.svg'));
+  await cp(path.join(JS_DIR, 'examples'), path.join(root, 'examples'), { recursive: true });
+  return root;
+}
 
 /** What a WebGL2 context of this browser reports, or null when it cannot be created. */
 export function probeWebGL2() {
@@ -63,10 +77,12 @@ export const test = base.extend({
 
   servers: [
     async ({ stores }, use) => {
-      const app = await startStaticServer(JS_DIR);
+      const builtRoot = BUILT_VIEWER ? await writeBuiltViewerRoot() : null;
+      const app = await startStaticServer(builtRoot ?? JS_DIR);
       const data = await startStaticServer(stores.dir);
       await use({ app, data, appUrl: app.url, dataUrl: data.url });
       await Promise.all([app.close(), data.close()]);
+      if (builtRoot) await rm(builtRoot, { recursive: true, force: true });
     },
     { scope: 'worker' },
   ],

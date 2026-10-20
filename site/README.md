@@ -6,6 +6,7 @@ pins the patched parser at 4.2.0; `npm audit` reports zero vulnerabilities.
 ## Develop and deploy
 
 ```sh
+(cd js && npm ci)   # esbuild, for the viewer that the build bundles
 cd site
 npm ci
 npm run dev
@@ -16,7 +17,7 @@ npm run deploy
 
 Deployment uses the repository's pinned Wrangler binary. Install root tooling
 with `npm ci` from the repository root if it is absent. The site has its own
-Worker, `chronozarr-docs`; the browser demo and its shared modules are copied into this same deployment by `scripts/copy-demo.mjs`.
+Worker, `chronozarr-docs`; the browser demo is built (`js/support/build-viewer.mjs`, esbuild, so `npm ci` in `js/` first) and the shared modules are copied into this same deployment by `scripts/copy-demo.mjs`.
 Build output is `docs/dist`. `worker.js` redirects www to the apex, redirects
 the paths of removed pages to their replacements, and forwards other requests to
 static assets. Unknown paths return 404.

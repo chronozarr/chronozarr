@@ -6,7 +6,7 @@ A chronozarr store is a Zarr v3 time series of rasters with a multiscale pyramid
 
 The reader turns `(lod, row, col, t)` into a typed array. It caches the shard indexes of sharded stores, decodes in a worker pool and prefetches a window of the time axis around the current timestep. It reads spec 0.3 and 0.4 stores ([spec](https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md)). The Python package `chronozarr` writes them.
 
-The package is plain ES modules with no build step and no runtime dependency, because zarrita and numcodecs are vendored (see [Licenses](#licenses)).
+The reader and the map layer are plain ES modules with no build step and no runtime dependency, because zarrita and numcodecs are vendored (see [Licenses](#licenses)). The viewer that `chronozarr-viewer` copies is built when the package is packed (`js/support/build-viewer.mjs`, esbuild): one script instead of the 61 modules it is written in.
 
 The viewer loads nothing from a third-party host at runtime and uses no web font. The MapLibre demo page, `js/maplibre/index.html`, loads a pinned version of maplibre-gl from a CDN.
 
@@ -139,7 +139,7 @@ Trevor Manz wrote three of them: zarrita, @zarrita/storage and numcodecs. They a
 | `vendor/proj4/` | [proj4js](https://github.com/proj4js/proj4js) | 2.22.0 | MIT |
 | `vendor/proj4/` | [wkt-parser](https://github.com/proj4js/wkt-parser) | 1.5.6 | MIT |
 
-The viewer export uses gifenc, written by Matt DesLauriers. It ships as one file, and its license text is in the header of that file.
+The viewer export uses gifenc, written by Matt DesLauriers. It is one file, and its license text is in the header of that file, which the viewer build keeps at the end of `viewer.js`. The built viewer has the license texts of the other four packages in `demo/LICENSES.txt`; their header comments stay in its scripts, where the files are bundled.
 
 `vendor/numcodecs/blosc.js`, `lz4.js` and `zstd.js` embed WebAssembly builds of Blosc (with its bundled zlib and snappy), LZ4 and Zstandard. Those C libraries carry their own permissive upstream licenses, BSD-style and zlib. numcodecs ships no separate notice for them.
 

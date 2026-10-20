@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// Copy installed assets to a new static directory. No bundler or network access is needed.
-import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
+// Copy the built viewer to a new static directory. The package carries the viewer as `npm pack` built it (dist/viewer, see
+// build-viewer.mjs); a checkout builds it now, which needs esbuild (`npm ci` in js/). The host needs neither.
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,8 +16,18 @@ if (!outputArg || outputArg === '--help' || (args.length && (args.length !== 2 |
   const store = args[1] ?? null;
   // Reject an existing directory, including symlinks, before writing any assets.
   await mkdir(output);
-  for (const name of ['demo', 'shared', 'chronozarr', 'maplibre', 'vendor']) {
-    await cp(path.join(packageRoot, name), path.join(output, name), { recursive: true });
+  try {
+    if (existsSync(path.join(packageRoot, 'demo/viewer.js'))) {
+      const { buildViewer } = await import('./build-viewer.mjs');
+      await buildViewer(output);
+    } else {
+      await cp(path.join(packageRoot, 'dist/viewer/demo'), path.join(output, 'demo'), { recursive: true });
+    }
+  } catch (error) {
+    await rm(output, { recursive: true, force: true });
+    throw error.code === 'ERR_MODULE_NOT_FOUND' && /esbuild/.test(error.message)
+      ? new Error(`building the viewer from a checkout needs esbuild: run \`npm ci\` in ${packageRoot} first (${error.message})`)
+      : error;
   }
   await cp(path.join(packageRoot, 'favicon.svg'), path.join(output, 'favicon.svg'));
   const htmlPath = path.join(output, 'demo/index.html');
