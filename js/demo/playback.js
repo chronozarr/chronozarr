@@ -402,14 +402,41 @@ export function wireRatio({ compressedBytes, decodedBytes }) {
   return Math.min(1.2, Math.max(0.2, compressedBytes / decodedBytes));
 }
 
+/** Timesteps the playback buffer loads at once, at most; fewer when the link carries less than one step a second (bufferBatch). */
+export const BUFFER_BATCH = 3;
+
+/** The timesteps in flight at once carry about this many seconds of the measured link. */
+export const BUFFER_FLIGHT_SECONDS = 1;
+
 /**
- * The steps per second the link can feed when `coldFraction` (0 to 1) of the frames ahead are not in memory yet and a step
- * is `bytesPerStep` on the wire: the speed at which they stay under LINK_HEADROOM of the measured `bandwidth` (bytes per
- * second). Infinity when nothing has to be fetched or no bandwidth has been measured: the same rule as linkAllows, solved for the speed.
+ * How many timesteps the playback buffer loads at once: as many as the measured link carries in BUFFER_FLIGHT_SECONDS, from 1
+ * to `max`. Loaded side by side they all arrive late together (n steps share the link, so each takes n times as long) and
+ * the one the playhead reaches first is one of them; on a link that carries a step a second the buffer loads them in order.
+ * `max` while no bandwidth has been measured.
  */
-export function linkSteps({ bytesPerStep, coldFraction, bandwidth, headroom = LINK_HEADROOM }) {
-  if (bandwidth === null || bandwidth === undefined || !(bandwidth > 0) || !(coldFraction > 0) || !(bytesPerStep > 0)) return Infinity;
-  return (headroom * bandwidth) / (bytesPerStep * coldFraction);
+export function bufferBatch({ bytesPerStep, bandwidth, max = BUFFER_BATCH }) {
+  if (bandwidth === null || bandwidth === undefined || !(bandwidth > 0) || !(bytesPerStep > 0)) return max;
+  return Math.max(1, Math.min(max, Math.floor((bandwidth * BUFFER_FLIGHT_SECONDS) / bytesPerStep)));
+}
+
+/**
+ * The steps per second at which the link brings every frame ahead that is not in memory before the playhead gets there.
+ * `coldAhead` lists how many steps ahead each of those frames is, nearest first; a step is `bytesPerStep` on the wire and the
+ * link carries LINK_HEADROOM of the measured `bandwidth` (bytes per second). The j-th missing frame is in no sooner than
+ * j x bytesPerStep / (LINK_HEADROOM x bandwidth) seconds from now, and the playhead reaches it after distance / speed seconds, so
+ * the speed is the lowest of distance x LINK_HEADROOM x bandwidth / (j x bytesPerStep) over the missing frames. A loop that is cold
+ * from the next frame on gives LINK_HEADROOM x bandwidth / bytesPerStep (what linkAllows lets through); frames that are missing only
+ * far ahead do not slow the movie yet, and the last few missing frames right ahead of the playhead keep it slow until they are in,
+ * instead of letting it run into them at the speed it had over the frames that were. Infinity when none is missing or no
+ * bandwidth has been measured.
+ */
+export function linkSteps({ bytesPerStep, coldAhead, bandwidth, headroom = LINK_HEADROOM }) {
+  if (bandwidth === null || bandwidth === undefined || !(bandwidth > 0) || !(bytesPerStep > 0)) return Infinity;
+  let steps = Infinity;
+  coldAhead.forEach((distance, index) => {
+    steps = Math.min(steps, (distance * headroom * bandwidth) / ((index + 1) * bytesPerStep));
+  });
+  return steps;
 }
 
 /**

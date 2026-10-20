@@ -6,7 +6,7 @@ import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeF
 import { ASSUMED_BANDWIDTH, ancestorCells, coarseLoopDrifted, coarseLoopSteps, planCoarseStages, stageLeadMs } from './coarse.js';
 import { fetchWithEarlyReads, takeEarlyRootMs } from './early.js';
 import { chooseFrame } from './frames.js';
-import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, START_BUFFER_SECONDS, chooseMovieLevel, describeReason, linkAllows, linkSteps, roundSteps, snapSpeed, wireRatio } from './playback.js';
+import { BUFFER_BATCH, DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, START_BUFFER_SECONDS, bufferBatch, chooseMovieLevel, describeReason, linkAllows, linkSteps, roundSteps, snapSpeed, wireRatio } from './playback.js';
 import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js';
 import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrubLevel, planScrubLoads, readyRun, savesData, scrubLevels, scrubNeed, stepsAhead } from './scrub.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
@@ -62,8 +62,6 @@ const SEEK_DISTANCE = 4;
 const PERF_UPDATE_MS = 250;
 const GAP_HATCH_PX = 8;
 const GAP_MASK_CACHE = 48;
-// Timesteps the playback buffer loads at once, at demand priority.
-const BUFFER_BATCH = 3;
 // The stretch of the loop ahead whose frames not in memory the link has to carry, in seconds of playback at the requested speed.
 const LINK_WINDOW_SECONDS = 8;
 // How long the link's verdict on the speed is kept (it is asked for on every frame).
@@ -1076,7 +1074,7 @@ class Viewer {
       let previous = '';
       while (!signal.aborted) {
         const lod = pump.lod ?? this.#targetLod();
-        const batch = pump.wanted.filter((t) => !this.#frameReady(lod, t)).slice(0, BUFFER_BATCH);
+        const batch = pump.wanted.filter((t) => !this.#frameReady(lod, t)).slice(0, this.#bufferBatch(lod));
         const key = batch.join(',');
         // The same batch again means the cache cannot keep what was loaded: stop rather than load it forever.
         if (batch.length === 0 || key === previous) break;
@@ -1095,6 +1093,12 @@ class Viewer {
     } else if (failed) {
       console.error('scrub: could not load the timesteps ahead:', failed);
     }
+  }
+
+  /** Timesteps the buffer loads at once, at demand priority: BUFFER_BATCH, or fewer while a movie plays on a link that carries less (see bufferBatch). */
+  #bufferBatch(lod) {
+    if (!this.#playing) return BUFFER_BATCH;
+    return bufferBatch({ bytesPerStep: this.#wireBytesPerStep(lod, this.#visibleCells(lod)), bandwidth: this.store.bandwidthEstimate(), max: BUFFER_BATCH });
   }
 
   /** Stop filling the buffer of playback or of a scrub, and the probe: what is in flight and wanted by no one else is cancelled. */
@@ -1277,9 +1281,10 @@ class Viewer {
   }
 
   /**
-   * How many steps per second the link can feed at the level the movie plays at: of the frames in the next LINK_WINDOW_SECONDS
-   * of playback at the requested speed, the share that is not in memory has to come over the link (see linkSteps). A movie
-   * running into frames it has not loaded slows down to what the link feeds, and speeds up again over frames it has.
+   * How many steps per second the link can feed at the level the movie plays at: the frames of the next LINK_WINDOW_SECONDS
+   * of playback at the requested speed that are not in memory have to come over the link before the playhead reaches them
+   * (see linkSteps). A movie running into frames it has not loaded slows down to what the link feeds, and speeds up again
+   * over frames it has.
    * Infinity when nothing is playing, nothing is measured or nothing is missing. The playback object asks on every frame, so the
    * verdict is kept for LINK_STEPS_REFRESH_MS.
    */
@@ -1292,9 +1297,9 @@ class Viewer {
     const cells = this.#visibleCells(lod);
     const requested = this.#playback?.displayStepsPerSecond ?? this.#speed;
     const window = Math.min(count - 1, Math.max(1, Math.ceil(LINK_WINDOW_SECONDS * requested)));
-    let cold = 0;
-    for (let k = 1; k <= window; k++) if (!this.#frameReady(lod, (this.t + k) % count)) cold++;
-    const steps = cells.length === 0 ? Infinity : linkSteps({ bytesPerStep: this.#wireBytesPerStep(lod, cells), coldFraction: window === 0 ? 0 : cold / window, bandwidth: this.store.bandwidthEstimate() });
+    const coldAhead = [];
+    for (let k = 1; k <= window; k++) if (!this.#frameReady(lod, (this.t + k) % count)) coldAhead.push(k);
+    const steps = cells.length === 0 ? Infinity : linkSteps({ bytesPerStep: this.#wireBytesPerStep(lod, cells), coldAhead, bandwidth: this.store.bandwidthEstimate() });
     this.#linkVerdict = { at: now, steps };
     return steps;
   }

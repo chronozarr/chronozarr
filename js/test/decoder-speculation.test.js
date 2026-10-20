@@ -164,6 +164,46 @@ test('speculative requests in flight carry about a second of the measured link: 
   assert.equal(fast, 6);
 });
 
+test('the limit counts the speculative requests of every job together, not each job on its own', async () => {
+  // A movie's prefetch and the coarse loop each sized for the whole link would take twice the link.
+  const both = (store) =>
+    Promise.all([
+      store.prefetch({ lod: 0, cells: [[0, 1]], t: 30, playing: true }),
+      store.prefetch({ lod: 0, cells: [[1, 0]], t: 30, loop: true, playing: true, ambient: true }),
+    ]);
+  const slow = await peakInflight(200_000, both);
+  const fast = await peakInflight(400_000_000, both);
+  assert.equal(slow, 1, 'two jobs on a 0.2 MB/s link still have one request in flight between them');
+  assert.equal(fast, 6, 'and on a fast link six, not twelve');
+});
+
+test('the limit follows the estimate as it settles: a job that started before the link was measured is held to it afterwards', async () => {
+  const readable = buildSyntheticStore({ ...LARGE, delayMs: 20 });
+  const link = simulatedLink(readable, 200_000);
+  let inflight = 0;
+  const log = [];
+  const counted = (read) => async (...args) => {
+    inflight++;
+    log.push({ at: link.now, inflight });
+    try {
+      return await read(...args);
+    } finally {
+      inflight--;
+    }
+  };
+  const store = await openStore('memory://settle', { store: { get: counted(link.store.get), getRange: counted(link.store.getRange) }, workers: 0, clock: link.clock, speculativeBytesInitial: 1e12, idleBytes: 1e12 });
+  // Nothing measured yet: the job gets all six slots for its first requests.
+  const mark = log.length;
+  const job = store.prefetch({ lod: 0, cells: [[0, 1]], t: 30, playing: true });
+  await sleep(5);
+  const burst = inflight;
+  await job;
+  const later = log.slice(mark + 6).map((entry) => entry.inflight);
+  assert.equal(burst, 6, 'six requests start before there is an estimate');
+  assert.ok(later.length > 10, 'the job went on after the burst');
+  assert.equal(Math.max(...later), 1, 'once the link is measured (0.2 MB/s, one slot) a request starts only when none is in flight');
+});
+
 test('chunkWireBytes is what a chunk of the level takes on the wire, estimated from what was fetched', async () => {
   const readable = buildSyntheticStore({ ...LARGE, nLevels: 2 });
   const store = await openStore('memory://wire', { store: readable, workers: 0 });

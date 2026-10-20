@@ -73,7 +73,11 @@ const DEFAULT_HORIZON_STEPS = 12;
 const DEFAULT_IDLE_BYTES = 32 * MIB;
 const DEFAULT_IDLE_SECONDS = 1;
 const DEFAULT_IDLE_MS = 3000;
-/** Speculative requests in flight at once carry about this many seconds of the measured link, so a frame's request does not share it with a long queue of requests nobody waits for. */
+/**
+ * Speculative requests in flight at once, over all jobs, carry about this many seconds of the measured link, so a frame's
+ * request does not share it with a queue of requests nobody waits for: a request that shares a link with n others takes n + 1
+ * times as long, and the frame a viewer is waiting for is one of them.
+ */
 const PREFETCH_FLIGHT_SECONDS = 1;
 /** The mask and coverage cache: a tenth of the joint cap, at least 64 MiB. It is held on top of the cap. */
 const AUX_SHARE = 0.1;
@@ -345,6 +349,7 @@ export class ChronoStore {
   #recoveries = { rootRefetches: 0, retried: 0, suffixFallbacks: 0, suppressed: 0 };
   #demandInflight = 0;
   #demandIdleWaiters = [];
+  #slotWaiters = [];
   #limiter;
   #bandwidth;
   #speculative;
@@ -739,8 +744,9 @@ export class ChronoStore {
    * `maxSteps` plans at most that many timesteps, nearest first, whatever the horizon or the cache would allow: a caller that
    * knows how far ahead anything will be shown (a movie on a slow link) asks for no more. `ambient` marks a job that is not
    * what the viewer is doing (the coarse loop that stays behind a frame): it does not count as a scrub or as playback, so it
-   * neither ends the idle episode of the horizon prefetch nor gives it a new allowance. `concurrency` defaults to as many
-   * requests as the measured link carries in about a second (at most 6, at least 1).
+   * neither ends the idle episode of the horizon prefetch nor gives it a new allowance. Without `concurrency` a job runs up
+   * to 6 workers, but the speculative requests in flight over all jobs are held to what the measured link carries in about a
+   * second (at least 1): a movie's prefetch and the coarse loop together, not each, and with the estimate as it is now.
    *
    * A chunk that an earlier job has in flight and this one still wants is taken over, not fetched twice: the earlier
    * job's abort leaves the request running (which is what a viewer that plans again every 250 ms while playing needs, or
@@ -774,6 +780,8 @@ export class ChronoStore {
     }
     const result = { planned: queue.length, fetched: 0, skipped: 0, compressedOnly: 0, masks: 0, budgetReached: false, errors: [] };
     let next = 0;
+    // With no `concurrency` named, the link limits the speculative requests in flight (#speculativeSlots); a number is taken as it is.
+    const limitInflight = concurrency === undefined;
     const worker = async () => {
       while (next < queue.length && !signal?.aborted && !result.budgetReached) {
         const { row, col, t: tt, free } = queue[next++];
@@ -824,6 +832,23 @@ export class ChronoStore {
               result.skipped++;
               continue;
             }
+            if (limitInflight) {
+              // The test and the start below are one synchronous step: a slot that frees up goes to whichever worker runs first.
+              while (this.#speculativeInflight() >= this.#speculativeSlots(level)) {
+                await this.#slotFreed(signal);
+                if (signal?.aborted) {
+                  this.#speculative.spend(-estimate);
+                  this.#refundIdle(idleCharge);
+                  return;
+                }
+              }
+              if (this.#cache.has(key) || this.#liveEntry(key)) {
+                this.#speculative.spend(-estimate);
+                this.#refundIdle(idleCharge);
+                result.skipped++;
+                continue;
+              }
+            }
           }
           // The mask of the chunk is fetched alongside it, charged to the same allowances once its size is known.
           const maskEntry = withMasks ? this.#prefetchMask(lod, row, col, tt, signal) : null;
@@ -844,15 +869,45 @@ export class ChronoStore {
         }
       }
     };
-    await Promise.all(Array.from({ length: concurrency ?? this.#prefetchConcurrency(level) }, worker));
+    await Promise.all(Array.from({ length: concurrency ?? DEFAULT_PREFETCH_CONCURRENCY }, worker));
     return result;
   }
 
-  /** Speculative requests in flight at once: what the measured link carries in PREFETCH_FLIGHT_SECONDS, from 1 to DEFAULT_PREFETCH_CONCURRENCY, all of them while the link is unknown. */
-  #prefetchConcurrency(level) {
+  /** Speculative data requests in flight, over all jobs: a request that a demand read has joined is not speculative any more. */
+  #speculativeInflight() {
+    let count = 0;
+    for (const entry of this.#inflight.values()) {
+      if (entry.background && entry.kind === 'data' && entry.priority.value !== 0 && !entry.controller.signal.aborted) count++;
+    }
+    return count;
+  }
+
+  /**
+   * How many speculative requests may be in flight at once, over all jobs: what the measured link carries in
+   * PREFETCH_FLIGHT_SECONDS of chunks of this level, from 1 to DEFAULT_PREFETCH_CONCURRENCY, all of them while the link is
+   * unknown. Asked at every start, so it follows the estimate as it settles (a movie that plays for minutes started its job
+   * long before the first estimate was any good) and counts the requests of every job together (a coarse loop and a movie each
+   * sized for the whole link would take twice the link).
+   */
+  #speculativeSlots(level) {
     const rate = this.#bandwidth.estimate;
     if (rate === null) return DEFAULT_PREFETCH_CONCURRENCY;
     return Math.max(1, Math.min(DEFAULT_PREFETCH_CONCURRENCY, Math.floor((rate * PREFETCH_FLIGHT_SECONDS) / this.chunkWireBytes(level.lod))));
+  }
+
+  /** Resolves when any request settles (a slot may be free), or when `signal` aborts. */
+  #slotFreed(signal) {
+    return new Promise((resolve) => {
+      const done = () => {
+        signal?.removeEventListener('abort', done);
+        const at = this.#slotWaiters.indexOf(done);
+        if (at >= 0) this.#slotWaiters.splice(at, 1);
+        resolve();
+      };
+      this.#slotWaiters.push(done);
+      signal?.addEventListener('abort', done, { once: true });
+      if (signal?.aborted) done();
+    });
   }
 
   /** Wait for every promise (absent ones count as resolved with undefined), then throw the first rejection or return the values. */
@@ -1012,7 +1067,7 @@ export class ChronoStore {
    */
   #start(key, meta, { background, owner = null }) {
     const controller = new AbortController();
-    const entry = { controller, waiters: 0, sticky: false, owners: new Set(), releases: [], background, priority: { value: background ? 1 : 0 }, promise: null };
+    const entry = { controller, kind: meta.kind, waiters: 0, sticky: false, owners: new Set(), releases: [], background, priority: { value: background ? 1 : 0 }, promise: null };
     this.#own(entry, owner);
     if (!background) {
       this.#demandInflight++;
@@ -1022,6 +1077,7 @@ export class ChronoStore {
       .finally(() => {
         for (const release of entry.releases) release();
         if (this.#inflight.get(key) === entry) this.#inflight.delete(key);
+        for (const wake of this.#slotWaiters.splice(0)) wake();
         if (!background && --this.#demandInflight === 0) {
           this.#updateSpeculativeShare();
           for (const wake of this.#demandIdleWaiters.splice(0)) wake();
