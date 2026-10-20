@@ -1,9 +1,9 @@
 name: Documentation site
 on:
   push:
-    paths: ['site/**', 'README.md', 'docs/**', 'spec/**', 'examples/bring_your_data/README.md', 'js/README.md', 'js/maplibre/README.md', '.github/workflows/site.yml']
+    paths: ['site/**', 'README.md', 'docs/**', 'spec/**', 'examples/bring_your_data/README.md', 'js/**', '.github/workflows/site.yml']
   pull_request:
-    paths: ['site/**', 'README.md', 'docs/**', 'spec/**', 'examples/bring_your_data/README.md', 'js/README.md', 'js/maplibre/README.md', '.github/workflows/site.yml']
+    paths: ['site/**', 'README.md', 'docs/**', 'spec/**', 'examples/bring_your_data/README.md', 'js/**', '.github/workflows/site.yml']
 permissions:
   contents: read
 jobs:
@@ -18,6 +18,11 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: site/package-lock.json
+          cache-dependency-path: |
+            site/package-lock.json
+            js/package-lock.json
       - run: npm ci
+      # The site build bundles the viewer (js/support/build-viewer.mjs), which needs esbuild from js/.
+      - run: npm ci
+        working-directory: js
       - run: npm run build

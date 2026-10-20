@@ -1,4 +1,4 @@
-/*
+/*!
  * gifenc 1.0.3 (https://github.com/mattdesl/gifenc), vendored as its single-file ES module build.
  * License: MIT, Copyright (c) 2017 Matt DesLauriers.
  *

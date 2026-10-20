@@ -10,10 +10,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '../../js/node_modules/playwright/index.mjs';
 
-// FIELDPERF_SITE and FIELDPERF_STORE point the scripts at a local viewer and a local copy of the store
-// (for example http://127.0.0.1:8231/js/demo/index.html and http://127.0.0.1:8231/stores/ucayali_santa_maria_v03).
+export { scriptLevels } from '../../js/support/script-levels.js';
+
+// FIELDPERF_SITE and FIELDPERF_STORE point the scripts at another viewer page and store, for example the local copies that
+// local_site.mjs serves; FIELDPERF_INSECURE=1 accepts that server's self-signed certificate.
 export const SITE = process.env.FIELDPERF_SITE ?? 'https://chronozarr.org/demo/';
 export const STORE = process.env.FIELDPERF_STORE ?? 'https://data.chronozarr.org/ucayali_santa_maria_v03';
+export const STORE_HOST = new URL(STORE).host;
 
 /** The address of a visit. The catalog's default store is the public one, so a local site (FIELDPERF_SITE) always names its store. */
 export function viewerUrl({ t = null, store = null } = {}) {
@@ -22,6 +25,7 @@ export function viewerUrl({ t = null, store = null } = {}) {
   if (t !== null) query.push(`t=${t}`);
   return query.length ? `${SITE}?${query.join('&')}` : SITE;
 }
+
 // Raw data and summaries go to one directory per measurement date. FIELDPERF_OUT overrides the default (the 2026-10-18 resume),
 // so an analysis script can be pointed at the 2026-10-16 directory, whose data stays as it was written.
 export const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -67,7 +71,7 @@ export function launchOptions() {
  */
 export async function launch({ throttle = null } = {}) {
   const browser = await chromium.launch(launchOptions());
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, serviceWorkers: 'block' });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, serviceWorkers: 'block', ignoreHTTPSErrors: Boolean(process.env.FIELDPERF_INSECURE) });
   const page = await context.newPage();
   const cdp = await context.newCDPSession(page);
   await cdp.send('Network.enable');
@@ -93,6 +97,8 @@ export async function launch({ throttle = null } = {}) {
       method: e.request.method,
       type: e.type,
       initiator: e.initiator?.type,
+      // The script that caused the request: the importing module for a static import, else the top frame of the stack.
+      initiatorUrl: e.initiator?.url ?? e.initiator?.stack?.callFrames?.[0]?.url ?? null,
       wallTime: e.wallTime,
       requestTs: e.timestamp,
       range: e.request.headers?.Range ?? e.request.headers?.range ?? null,
@@ -157,6 +163,7 @@ export function describeRequest(r, t0Ts) {
     method: r.method,
     type: r.type,
     initiator: r.initiator,
+    initiatorUrl: r.initiatorUrl,
     status: r.status ?? null,
     protocol: r.protocol ?? null,
     connectionId: r.connectionId ?? null,

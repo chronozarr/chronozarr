@@ -4,6 +4,7 @@
 import { chunkKey, openStore, samplePixelFrom, scrubCost, windowOrder } from '../chronozarr/decoder.js';
 import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, validAt, windowPixels, xFromTime } from './chart.js';
 import { ASSUMED_BANDWIDTH, ancestorCells, coarseLoopDrifted, coarseLoopSteps, planCoarseStages, stageLeadMs } from './coarse.js';
+import { fetchWithEarlyReads, takeEarlyRootMs } from './early.js';
 import { chooseFrame } from './frames.js';
 import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, START_BUFFER_SECONDS, chooseMovieLevel, describeReason, linkAllows, linkSteps, roundSteps, snapSpeed, wireRatio } from './playback.js';
 import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js';
@@ -289,7 +290,8 @@ class Viewer {
       }
     }
     const openMs = performance.now() - started;
-    this.#roundTripMs = openMs;
+    // A root read that the page started before this script loaded (early.js) took its round trip before `started`.
+    this.#roundTripMs = Math.max(openMs, takeEarlyRootMs() ?? 0);
 
     this.store = store;
     store.evictionScore = (entry) => this.#storeScore(entry);
@@ -2383,9 +2385,9 @@ class Viewer {
   }
 }
 
-async function loadCatalog() {
+async function loadCatalog(fetchEarly) {
   const url = new URL('catalog.json', location.href);
-  const response = await fetch(url);
+  const response = await fetchEarly(url);
   if (response.status === 404) return [];
   if (!response.ok) throw new Error(`catalog.json: HTTP ${response.status}`);
   const entries = await response.json();
@@ -2416,10 +2418,12 @@ async function main() {
     getUrl: () => viewer.shareUrl,
   });
 
+  // The first read of catalog.json and of the store's root zarr.json is the one that index.html started before this script loaded.
+  const fetchEarly = fetchWithEarlyReads();
   // An embed has no catalog selector and must never show another store than the one asked for, so it does not fetch the catalog.
   const catalog = embed.embed
     ? []
-    : await loadCatalog().catch((error) => {
+    : await loadCatalog(fetchEarly).catch((error) => {
         console.warn('catalog.json not usable:', error);
         return [];
       });
@@ -2438,7 +2442,7 @@ async function main() {
     const optionFor = (value) => [...select.options].find((option) => option.value === value);
     // Labels and logs carry the address without a login or signed query (redact.js); the option's value is the URL to read.
     return (window.chronozarr.ready = viewer
-      .loadStore(url, { viewSearch, store, startTime })
+      .loadStore(url, { viewSearch, store, startTime, fetch: fetchEarly })
       .then((result) => {
         $('copy-link').disabled = !viewer.shareUrl;
         if (!inCatalog(url) && catalog.length > 0 && !optionFor(url)) {

@@ -43,11 +43,11 @@
     "maplibre/shader.js",
     "maplibre/slots.js",
     "maplibre/view.js",
-    "demo/",
     "shared/",
     "favicon.svg",
     "support/viewer-bundle.mjs",
-    "vendor/gifenc.esm.js",
+    "support/build-viewer.mjs",
+    "dist/viewer/",
     "vendor/numcodecs/",
     "vendor/proj4/",
     "vendor/zarrita/",
@@ -58,7 +58,7 @@
     "access": "public"
   },
   "scripts": {
-    "prepack": "node support/check-pack.mjs",
+    "prepack": "node support/build-viewer.mjs dist/viewer && node support/check-pack.mjs",
     "pretest": "node e2e/make-node-fixtures.mjs",
     "test": "node --test \"test/*.test.js\"",
     "pretest:coverage": "node e2e/make-node-fixtures.mjs",

@@ -1,6 +1,6 @@
 # Self-host the viewer
 
-The npm package contains the full viewer: the reader, the web workers, the codecs, the GIF encoder and the static assets. The viewer runs in the browser. The host only serves files. Node.js copies the files once and is not needed on the host.
+The npm package contains the full viewer, built: the page, one script for the viewer and the reader, one for the decode worker, the codecs and their licenses. The viewer runs in the browser. The host only serves files. Node.js copies the files once and is not needed on the host.
 
 ## Copy the viewer
 
@@ -58,6 +58,7 @@ The host of the store must send CORS headers. See [hosting requirements](hosting
 ## What the copy command does
 
 - It refuses to overwrite a folder that exists.
+- It copies the viewer as the package carries it: 13 files and 1.8 MB, where the modules the viewer is written in would be 213 files. A browser reads `demo/viewer.js` in one request, not one request per module level. The WebAssembly codecs (`demo/codecs/`) and proj4 (`demo/chunks/`) load only when a store needs them. Run from a checkout of the repository, the command builds the viewer first, which needs `npm ci` in `js/`.
 - It does not check or copy data.
 - It writes an empty catalog. A store that fails to load never falls back to the public sample data.
 

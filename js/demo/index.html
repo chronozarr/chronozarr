@@ -18,6 +18,40 @@
     if (query.get('theme') === 'light') data.theme = 'light';
   })();
 </script>
+<script>
+  // The two reads every visit makes first, started now so that they overlap the download of the viewer script instead of
+  // following it: catalog.json (not for an embed), then the root zarr.json of the store the address names (?store=) or,
+  // with none, of the catalog's first store. early.js hands the responses to the viewer, which reads each address the
+  // same way it always did when no response is waiting, so a read that failed here is simply made again there.
+  (function () {
+    var query = new URLSearchParams(location.search);
+    var reads = (window.chronozarrEarly = new Map());
+    function read(url) {
+      reads.set(url.href, fetch(url).catch(function () { return null; }));
+      return reads.get(url.href);
+    }
+    function readRoot(store) {
+      // The address of the root metadata as the reader builds it (HttpStore): the store's folder, zarr.json, the store's query.
+      var base = new URL(store, location.href);
+      if (!/\/$/.test(base.pathname)) base.pathname += '/';
+      var root = new URL('zarr.json', base);
+      root.search = base.search;
+      // How long the store takes to answer: the viewer paces its coarse stages by it (take-over: early.js).
+      var started = performance.now();
+      read(root).then(function (r) { if (r) reads.rootMs = performance.now() - started; });
+    }
+    var requested = query.get('store');
+    if (requested) readRoot(requested);
+    if (query.get('embed') === '1') return;
+    var catalog = new URL('catalog.json', location.href);
+    var response = read(catalog);
+    if (requested) return;
+    response
+      .then(function (r) { return r && r.ok ? r.clone().json() : null; })
+      .then(function (entries) { if (entries && entries[0]) readRoot(new URL(entries[0].url, catalog).href); })
+      .catch(function () {});
+  })();
+</script>
 <style>
   :root {
     --bg: #090c12;

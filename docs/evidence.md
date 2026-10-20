@@ -669,6 +669,38 @@ Playback for 60 s at the default 4 steps per second, 2026-10-18, three runs each
 | Decode ≤ 5 ms per chunk | 5.8 ms p50 at load 9, 8.0 ms at load 21 | not established under load |
 | 0 wire bytes on a warm switch | 0 bytes in all three warm loops | yes |
 
+### Cold open with the viewer bundled (2026-10-19)
+
+The front of the cold open was a chain, not a transfer: the page read `viewer.js`, then the modules it imports, then theirs (5 levels, 61 scripts), and only then asked for `catalog.json`, then the store's root `zarr.json`, then a chunk, then the codec that decodes it. The viewer is now built into one script, and the page starts the catalog and the root read itself while that script downloads.
+
+Method: the same default store (`ucayali_santa_maria_v03`, 117 timesteps, a root `zarr.json` of 38,338 bytes) from a local HTTP/2 server for the site and a second origin for the data (`scripts/fieldperf/local_site.mjs`), so every request goes through one connection per origin as on Cloudflare. `scripts/fieldperf/latency_sweep.mjs` opened the bare viewer page in a new Chromium process each time (real GPU through Metal, 1440 x 900 at device pixel ratio 2, HTTP cache disabled over CDP), with 0, 100, 200 and 400 ms added to every request by CDP (the worker's scripts included, no bandwidth cap). 9 runs per latency for each build, the two builds alternating run by run, so the load of the machine (16 cores, 1-minute load average 7 to 37 at the start of a run, median 10.3 before and 10.7 after) falls on both. "Before" is the modules of `main` at `cea0f2a` served as the site served them; "after" is `js/support/build-viewer.mjs`. The "before" run reproduces the field model above: 76 requests and 61 scripts before the first frame, and a slope of 11.0 sequential requests per added latency.
+
+First frame from the start of navigation, p50 with [min, max] in ms:
+
+| Added latency | First target-level frame, before | after | First coarse frame, before | after |
+|---:|---|---|---|---|
+| 0 ms | 175 [168, 378] | 141 [114, 222] | 109 [97, 234] | 94 [70, 143] |
+| 100 ms | 1,291 [1,262, 1,326] | 609 [605, 660] | 1,220 [1,194, 1,250] | 451 [447, 495] |
+| 200 ms | 2,404 [2,368, 2,438] | 1,128 [1,114, 1,188] | 2,379 [2,342, 2,426] | 870 [853, 921] |
+| 400 ms | 4,619 [4,562, 4,638] | 2,125 [2,104, 2,146] | 4,619 [4,562, 4,637] | 1,676 [1,651, 1,711] |
+
+| | Before | After |
+|---|---:|---:|
+| Sequential requests in front of the target-level frame (least-squares slope on the added latency, r² 0.999) | 11.0 | 5.0 |
+| Sequential requests in front of the coarse frame | 11.2 | 4.0 |
+| Levels of the script graph (longest chain of "this script started that one") | 5 | 2 |
+| Script requests before the first frame (8 are the same worker script, one per worker, because the cache is off) | 61 | 10 |
+| Requests before the first frame | 76 | 25 to 26 |
+| JavaScript that the main thread loads, brotli level 5 (raw) | 149 KB (465 KB) | 62 KB (184 KB) |
+
+What the 5 sequential requests are now: the page, `catalog.json`, the root `zarr.json`, the coarse chunk (the codec's script loads beside it) and the target-level chunks. The viewer script downloads beside the catalog and the root read, so it is not in the chain. The remaining chain is the design: a catalog to find the store, metadata to find the chunks, a coarse stage before the target level.
+
+Two more changes follow from making the script and the workers load in one round trip. A decode worker used to take about seven round trips to start, so the main thread decoded every chunk of the first frame; now a worker starts in one, and a worker that said `ready` before its codec had loaded held the first chunk (one run at 200 ms: 2.5 s to the first frame, against 1.1 s with the change below). A worker now says `ready` after the codecs of the store's arrays have loaded, and the main-thread decoder that serves jobs until then loads them while the first chunk downloads. And the root metadata read, made before the viewer script ran, no longer shows the viewer a round trip: the viewer paces its coarse stages by the time that read took, which the page now reports (`e2e/viewer-coarse.spec.js` failed until it did).
+
+The speed gates above, run on both builds with the viewer's `bench()` against the same local store (3 runs per build, alternating; 1-minute load average 9 to 10 at the start): cold open at level 0, 36 cells, from the `loadStore` call, median of 5 per run, 120 to 123 ms before and 121 to 133 ms after (gate 500 ms); warm switch 4.3 to 5.2 ms before and 3.6 to 4.1 ms after (gate 16 ms), 0 wire bytes in all six runs; decode 4.4 to 4.6 ms before and 4.3 to 4.6 ms after per 2 MB chunk (gate 5 ms). Movie playback, 30 s at 4 steps per second, unthrottled, 3 runs per build: 120 of 120 steps shown on time and no buffering pause in all six.
+
+Not measured: the deployed site (the sweep is local, so the connection set-up of the data host, which the page now starts at once, is not in it), a repeat visit with the cache on, and Safari and Firefox. The gate "cold open ≤ 500 ms" is read from a call to `loadStore`, as `bench()` does, not from navigation.
+
 ### Speculative bandwidth and playback on a slow link (2026-10-19)
 
 The [GeoZarr review](../spec/review-2026-10-geozarr.md) found the viewer fetching 187 to 226 MB in the 1.5 s after its first frame and playing at 0.85 to 0.89 steps per second with long pauses on a slow link. The viewer now does this:
