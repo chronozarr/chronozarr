@@ -702,3 +702,23 @@ def test_convert_resampling_warps_to_a_new_crs(tmp_path):
     assert result.exit_code == 0, result.output
     assert "resampling: 3 of 3 timesteps are warped" in result.output
     assert chronozarr.open_store(out).attrs.crs == "EPSG:32632"
+
+
+@pytest.mark.parametrize(
+    ("crs", "transform", "pixels"),
+    [
+        ("EPSG:4269", (1 / 24, 0.0, -100.0, 0.0, -1 / 24, 40.0), "0.04166666667 degree pixels"),
+        ("EPSG:2278", (30.0, 0.0, 3.0e6, 0.0, -30.0, 1.0e6), "30 US survey foot pixels"),
+        ("EPSG:32631", TRANSFORM, "10 m pixels"),
+    ],
+)
+def test_info_gives_the_pixel_size_in_the_unit_of_the_crs(tmp_path, crs, transform, pixels):
+    pytest.importorskip("rasterio")
+    da = make_da(make_truth(3, 1, 20, 20), ["B04"])
+    da.attrs.update(crs=crs, transform=transform)
+    chronozarr.encode(da, tmp_path / "store", chunk_size=16)
+    info = _run("info", str(tmp_path / "store"))
+    assert info.exit_code == 0, info.output
+    level_zero = next(ln for ln in info.stdout.splitlines() if ln.startswith("  0:"))
+    assert pixels in level_zero
+    assert "m/px" not in info.stdout

@@ -25,7 +25,7 @@ A store is a [Zarr v3](https://zarr.dev) group. It holds your values at full res
 | A tile server, such as TiTiler or GeoServer | Explore rendered tiles in a browser | A server that runs and is paid for while the link is in use. Most send rendered images, not values |
 | chronozarr | Play, zoom, inspect pixels in a browser. Analyze the same values in Python | A one-time conversion. Static file hosting, or your own computer for a temporary link |
 
-A chronozarr store is also a plain Zarr store. xarray, zarr-python and GDAL 3.13 read it without chronozarr installed.
+A chronozarr store is also a plain Zarr store. xarray, zarr-python and GDAL 3.13 read it without chronozarr installed. They return the stored values: plain xarray and zarr-layer 0.11.0 do not apply its band scale and offset or its mask ([GeoZarr review](../spec/review-2026-10-geozarr.md)).
 
 ## What chronozarr does not do
 
