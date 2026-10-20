@@ -761,7 +761,18 @@ Speed gates, `chronozarr.bench()` 3 runs each (load 5 to 7):
 | Wire bytes on a warm switch (0) | 0 | 0 |
 | Decode per 2 MiB chunk, p50 (≤ 5 ms) | 4.2 to 4.3 ms | 4.2 to 4.5 ms |
 
-What this does not show: a local server and an emulated link, not a CDN: Chromium opens at most 6 HTTP/1.1 connections to the host, where data.chronozarr.org answers over HTTP/2. One store. The throttled first-frame time is unchanged and dominated by the 12.6 MB level-1 frame. Wire bytes of aborted requests are not counted. The warm-step median is 0.3 ms higher after, inside the spread of the runs and with fewer incomplete frames to skip. The deployed site was not measured after the change.
+After the fix above the gates were run again on the built viewers, before and after alternated, but another job had loaded the machine (load average 265 to 314 on 16 cores): the warm step took 2.0 to 2.3 ms and the decode 5.5 to 5.7 ms in both, the upload from the cache 15.6 to 16.6 ms in both, and no warm switch used the network. At that load the 16 ms and 5 ms gates cannot be established, and the two builds do not differ.
+
+On the built viewer (the page bundled, `CHRONOZARR_E2E_BUILT_VIEWER=1`), the slow-link browser test (a store of 12 steps of 524 KB at 1 MB/s and 50 ms) paused twice where it allows one, and passed on the sources. Both open with the same five store requests (2,100,777 bytes), so the early reads of the page are not what differed. The build's first bandwidth estimate was 876 KB/s where the sources read 686 KB/s, because its page no longer shares the throttled link with about 60 modules. The speculative jobs (the coarse loop and the movie's prefetch) had each sized their workers once, at their start, as the estimate over the chunk size (421 KB then, the real chunk is 524 KB): 2 each on the build, 1 each on the sources. With the playback buffer's batch of three that was 5 to 7 requests in flight on the build and 3 or 4 on the sources, and the frame the playhead reached first was one of the requests that shared the link five ways (the four frames after the first three arrived together 4.7 s after play, where on the sources they came in from 3.5 s). Six runs on each of the sources and the build, counting the pauses of the first 14 s after play:
+
+| Reader and viewer | Sources | Build |
+|---|---|---|
+| As merged (5dc1215) | 0 (2 runs) | 2, 2 |
+| Speculative requests limited over all jobs, at every start | 1, 1 | 1, 1 |
+| Speed taken frame by frame instead of as a share of the window | 0, 0, 0 | 0, 0, 1 |
+| Playback buffer loads one step at a time on this link | 0 in 6 runs | 0 in 6 runs |
+
+The share of the window said 3.4 steps/s when three frames were left at the end of a lap, and the movie ran into them. On the real store at 0.7 MB/s the built viewer played 41 steps without a pause before and 40 after (3 runs each; one slot and one step at a time either way). What this does not show: a local server and an emulated link, not a CDN: Chromium opens at most 6 HTTP/1.1 connections to the host, where data.chronozarr.org answers over HTTP/2. One store. The throttled first-frame time is unchanged and dominated by the 12.6 MB level-1 frame. Wire bytes of aborted requests are not counted. The warm-step median is 0.3 ms higher after, inside the spread of the runs and with fewer incomplete frames to skip. The deployed site was not measured after the change.
 
 ### Problems found
 
