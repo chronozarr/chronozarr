@@ -75,7 +75,15 @@ What this does not show: The 60-per-second rows are one run each from before the
 
 ### Comparison with other readers
 
-No head-to-head timings are published. A local benchmark of this viewer, CarbonPlan's zarr-layer and COG-per-date through TiTiler exists (`bench/v03`, 2026-10-09). Its summary is marked provisional: the machine was shared, the servers ran on localhost over HTTP/1.1, and no CDN was involved. It shows that the viewer revisits a date it has cached in 2 to 5 ms, and that over 50 and 10 Mbit/s links its step time at the default (finer) overview level is longer than the other two, because it fetches more bytes per step. Results with matched view resolution are closer. Until the full experiment is run on a quiet machine with a CDN, this page makes no claim of being faster than another tool. Capability statements about other tools are in [format-comparison.md](format-comparison.md) and are dated in [comparison notes](evidence.md#comparison-notes).
+The [GeoZarr review](../spec/review-2026-10-geozarr.md) measured this viewer, chronozarr's MapLibre layer and CarbonPlan's zarr-layer 0.11.0 (on maplibre-gl 6.10.0) on the same local and public stores, with a new browser for every run. It ran on 2026-10-18 and 2026-10-19 on one Apple M3 Max with other work running (load average 5 to 35 on 16 cores).
+
+- On a fast link all three drew 239 or 240 of the 240 steps of a 60 s scrub. A warm timestep switch took one display frame in zarr-layer and in the viewer, with no request.
+- With the link limited to 12 MB/s and 30 ms, the viewer drew 240 of 240 steps by dropping to coarser levels, chronozarr's MapLibre layer drew 128, and zarr-layer drew 45. A new step took 12 to 15 ms in the viewer, and 22 to 77 ms in zarr-layer on the local store and 66 ms on the public one.
+- The viewer downloads more. It fetched 187 to 226 MB in the 1.5 s after the first frame, and 1,450 MB over the 60 s scrub where zarr-layer fetched 544 MB.
+
+These are results from one machine and one link limit. They show how the tools behaved there, not a ranking.
+
+An earlier local benchmark of the viewer, zarr-layer 0.10.0 and COG-per-date through TiTiler exists (`bench/v03`, 2026-10-09). Its summary is marked provisional: the machine was shared, the servers ran on localhost over HTTP/1.1, and no CDN was involved. It shows that the viewer revisits a date it has cached in 2 to 5 ms, and that over 50 and 10 Mbit/s links its step time at the default (finer) overview level is longer than the other two, because it fetches more bytes per step. Results with matched view resolution are closer. The review's slow-link run let the viewer drop to coarser levels. This page makes no claim of being faster than another tool. Capability statements about other tools are in [format-comparison.md](format-comparison.md) and are dated in [comparison notes](evidence.md#comparison-notes).
 
 ## 2. Scientific correctness of stored values
 

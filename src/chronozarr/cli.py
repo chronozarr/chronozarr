@@ -7,7 +7,7 @@ import inspect
 import re
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +47,7 @@ from chronozarr.convert import (
     Plan,
     convert,
 )
+from chronozarr.crs import Crs
 from chronozarr.decode import ChronoStore, open_store
 from chronozarr.doctor import DEFAULT_ORIGIN, diagnose, is_url
 from chronozarr.encode import EncodeReport, encode
@@ -538,13 +539,42 @@ def validate_command(store: str) -> None:
     if report.problems:
         for problem in report.problems:
             click.echo(problem, err=True)
-        for note in report.notes:
+        for note in [*report.notes, *_decoding_notes(store, [*report.problems, *report.notes])]:
             click.echo(f"note: {note}", err=True)
         click.echo(f"{store}: {len(report.problems)} problem(s)", err=True)
         sys.exit(1)
     click.echo(f"{store}: conforms to chronozarr {report.spec_version}")
     for note in report.notes:
         click.echo(f"note: {note}")
+
+
+def _decoding_notes(store: str, reported: Sequence[str]) -> list[str]:
+    """Whether a store that does not conform still decodes, and what the reader assumed.
+
+    Notes the reader shares with the validation report are not repeated.
+    """
+    try:
+        opened = open_store(store)
+    except (ValueError, OSError) as exc:
+        return [f"does not decode: {exc}"]
+    shape = opened.levels[0].shape
+
+    def count(n: int, noun: str) -> str:
+        return f"{n} {noun}{'' if n == 1 else 's'}"
+
+    summary = (
+        f"decodes: {count(len(opened.levels), 'level')}, {count(shape[1], 'band')}, "
+        f"{count(shape[0], 'timestep')}"
+    )
+    return [summary, *(n for n in opened.notes if not any(n in r for r in reported))]
+
+
+def _resolution_unit(crs: Crs) -> str:
+    """The unit of a pixel size as the CRS names it, or `CRS-unit` when that cannot be told."""
+    try:
+        return schema.axis_unit(crs.to_string())
+    except Exception:  # rasterio raises its own CRSError for a definition it cannot read
+        return "CRS-unit"
 
 
 @main.command("info")
@@ -555,7 +585,12 @@ def info_command(store: str) -> None:
         opened = open_store(store)
     attrs = opened.attrs
     click.echo(f"store:     {redact_url(store)}")
-    click.echo(f"version:   chronozarr {attrs.spec_version}")
+    version = (
+        f"chronozarr {attrs.spec_version}"
+        if attrs.spec_version is not None
+        else "not a chronozarr store (read from its multiscales layout)"
+    )
+    click.echo(f"version:   {version}")
     click.echo(f"crs:       {opened.crs.describe()}")
     click.echo(f"times:     {len(opened.times)} ({attrs.times[0]} .. {attrs.times[-1]})")
     click.echo(f"bands:     {', '.join(opened.bands)}")
@@ -575,12 +610,16 @@ def info_command(store: str) -> None:
     if notes:
         click.echo(f"notes:     {notes}")
     click.echo("levels:")
+    unit = _resolution_unit(opened.crs)
     for level in opened.levels:
         layout = f"shards {level.data.shards}" if level.data.shards else "unsharded"
+        named = "" if level.path == str(level.index) else f" ({level.path})"
         click.echo(
-            f"  {level.index}: shape {level.shape}, {level.resolution:g} m/px, "
+            f"  {level.index}{named}: shape {level.shape}, {level.resolution:.10g} {unit} pixels, "
             f"grid {level.grid[0]}x{level.grid[1]}, chunks {level.data.chunks}, {layout}"
         )
+    for note in opened.notes:
+        click.echo(f"note: {note}")
 
 
 _STATUS_LABEL = {"ok": "[ ok ]", "info": "[info]", "warn": "[warn]", "fail": "[FAIL]"}
@@ -933,7 +972,17 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     help="Directory, glob or S3 prefix only: where the date is in each file name, with %Y %m "
     "%d %H %M %S (for example 'ndvi_%Y%m%d'), or %Y %j for a year and day of year (for example "
     "'MOD13A1.A%Y%j' or 'HLS.S30.T17SQV.%Y%jT%H%M%S'). Default: YYYYMMDD, YYYY-MM-DD or "
-    "YYYY-MM, read only when a name holds exactly one date.",
+    "YYYY-MM, read only when a name holds exactly one date. With --bands-are-dates it reads "
+    "the band descriptions instead of the file name.",
+)
+@click.option(
+    "--bands-are-dates",
+    is_flag=True,
+    help="SOURCE is one raster file whose bands are dates, as Earth Engine's toBands() exports "
+    "a time series: read the date of each band from its description (2020_01_01_NDVI) and "
+    "convert the bands as a series. The part of the description besides the date names the "
+    "band; several bands per date (2020_01_01_NDVI, 2020_01_01_EVI) become the bands of each "
+    "timestep. Never assumed: a multi-band file is normally bands.",
 )
 @click.option(
     "--write-manifest",
@@ -980,6 +1029,7 @@ def convert_command(
     calendar_to_gregorian: str | None,
     band_roles: tuple[str, ...],
     date_pattern: str | None,
+    bands_are_dates: bool,
     write_manifest: Path | None,
     **options: Any,
 ) -> None:
@@ -990,6 +1040,7 @@ def convert_command(
     \b
       a directory, quoted glob or s3:// prefix of rasters (GeoTIFF, BIL, GRIB2, HDF5, ...),
         or local zips that hold one raster each, dated from their file names
+      one raster whose bands are dates (Earth Engine toBands()), with --bands-are-dates
       a manifest (.csv with columns uri,datetime[,bands] or .json) of raster or PNG frame URIs
       a Zarr store (path or URL) or a NetCDF file, the last two with --variable
 
@@ -1001,7 +1052,9 @@ def convert_command(
     the file is reported and --date-pattern or a manifest says where the date is. MODIS and HLS
     names carry a year and day of year, which --date-pattern reads with %Y%j (for example
     'MOD13A1.A%Y%j'). --write-manifest saves what was found, also when the checks report
-    problems, so you can edit it and run convert on it.
+    problems, so you can edit it and run convert on it. One multi-band file whose band
+    descriptions each hold a date (2020_01_01_NDVI, as toBands() names them) is refused with
+    the option that reads it, --bands-are-dates; it is never assumed.
 
     Every file is checked before anything is read in bulk: dates, grid and CRS, bands, dtype,
     scale, offset, units and nodata. All problems are reported together, per file, with a
@@ -1051,6 +1104,7 @@ def convert_command(
             dry_run=dry_run,
             read_ahead=read_ahead,
             date_pattern=date_pattern,
+            bands_are_dates=bands_are_dates,
             calendar_to_gregorian=calendar_to_gregorian,
             write_manifest_to=write_manifest,
             on_plan=show_plan,
@@ -1366,14 +1420,16 @@ def _view_center(
     default=None,
     metavar="LOW,HIGH",
     help="Display limits of the single-band product, in physical units (the band's scale and "
-    "offset applied). Needs --product band.",
+    "offset applied). Needs --product band unless the single band is the only product the "
+    "store has, which link then uses.",
 )
 @click.option(
     "--colormap",
     type=click.Choice(COLORMAPS),
     default=None,
     help="Colormap of the single-band product (the viewer's default is gray). "
-    "Needs --product band.",
+    "Needs --product band unless the single band is the only product the store has, which "
+    "link then uses.",
 )
 @click.option("--time", "t", type=int, default=None, help="Initial timestep index.")
 @click.option(
@@ -1429,10 +1485,13 @@ def link_command(
             "use chronozarr.view()"
         )
     low_high = _parse_numbers(limits, 2, "--range", float)
-    if low_high is not None and product != "band":
-        raise click.UsageError("--range sets the single-band product: add --product band")
-    if colormap is not None and product != "band":
-        raise click.UsageError("--colormap colors the single-band product: add --product band")
+    needs_band = []
+    if low_high is not None:
+        needs_band.append("--range sets the single-band product")
+    if colormap is not None:
+        needs_band.append("--colormap colors the single-band product")
+    if needs_band and product not in (None, "band"):
+        raise click.UsageError(f"{needs_band[0]}: add --product band")
     lon_lat = _parse_numbers(lonlat, 2, "--lonlat", float)
     store_xy = _parse_numbers(xy, 2, "--xy", float)
     if lon_lat is not None and store_xy is not None:
@@ -1441,6 +1500,19 @@ def link_command(
         opened = open_store(store_url)
         bands = opened.attrs.bands
         statuses = {s.id: s for s in product_status(bands)}
+        if product is None and needs_band:
+            others = [i for i, s in statuses.items() if s.available and i != "band"]
+            if others:
+                raise click.UsageError(
+                    f"{needs_band[0]}: add --product band (this store also has "
+                    f"{', '.join(others)}, so the product is ambiguous)"
+                )
+            product = "band"
+            click.echo(
+                "no --product: this store has no product but the single band, so using "
+                "--product band",
+                err=True,
+            )
         if product is not None:
             if product not in statuses:
                 raise click.BadParameter(

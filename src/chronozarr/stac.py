@@ -175,6 +175,11 @@ def build_stac(
     item_href: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """The Collection and Item documents for `store`, whose Zarr root is at `href`."""
+    if store.attrs.spec_version is None:
+        raise ValueError(
+            "this store has no chronozarr block, and the STAC documents describe chronozarr "
+            "stores: write one with chronozarr convert"
+        )
     level = store.levels[0]
     a, _, c, _, e, f = level.transform
     height, width = level.shape[2:]

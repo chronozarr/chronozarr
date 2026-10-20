@@ -6,6 +6,7 @@
 |---|---|
 | A folder, a glob or an `s3://` prefix of GeoTIFFs with a date in each name | [From dated GeoTIFFs](#from-dated-geotiffs) |
 | BIL, GRIB2, HDF5 or any other raster that GDAL reads, or zips that hold one | [From other raster formats](#from-other-raster-formats) |
+| One GeoTIFF whose bands are dates, such as an Earth Engine `toBands()` export | [From Earth Engine exports](#from-earth-engine-exports) |
 | COGs at URLs, with dates in a table | [From a manifest of URLs](#from-a-manifest-of-urls) |
 | A NetCDF file or a Zarr store with a time axis | [From NetCDF or Zarr](#from-netcdf-or-zarr) |
 | An xarray `DataArray` in Python | [From xarray](#from-xarray) |
@@ -118,6 +119,53 @@ gdal_translate 'HDF4_EOS:EOS_GRID:"MOD13A3.A2020001.h09v05.061.2020328133217.hdf
 ```
 
 The MODIS names carry a year and day of year, so the GeoTIFFs convert with `--date-pattern`, as under [dated GeoTIFFs](#from-dated-geotiffs).
+
+## From Earth Engine exports
+
+`ee.ImageCollection.toBands()` stacks a collection into one image, and exporting it gives one GeoTIFF whose bands are the dates. Each band is named `<image id>_<band>`. For a collection of dated composites the image id is the date, so a year of MODIS NDVI has bands `2020_01_01_NDVI`, `2020_01_17_NDVI` and so on. GDAL keeps the names as band descriptions.
+
+A file with several bands is normally several bands, not several dates, so `convert` does not assume the second. Without an option it stops at the file name, and when the descriptions would make a series it names the option and what it would read:
+
+```text
+/data/modis_ndvi_2020.tif
+  - no date in the file name
+    fix: pass --bands-are-dates to read the file as a series: its 23 bands read as 23 dates from their descriptions ('2020_01_01_NDVI' to '2020_12_18_NDVI'), as one band named NDVI. Otherwise name the date ...
+```
+
+`--bands-are-dates` says that the bands of the file are its dates. The dry run prints each date with the band it reads, and a `bands:` line that says what was read:
+
+```bash
+chronozarr convert modis_ndvi_2020.tif my_store --bands-are-dates --dry-run
+chronozarr convert modis_ndvi_2020.tif my_store --bands-are-dates
+```
+
+```text
+source:     GeoTIFF with a date per band, 23 timesteps (2020-01-01 .. 2020-12-18)
+files:      1, a band per date
+  2020-01-01  band 1   2020_01_01_NDVI
+  ...
+bands:      23 bands read as 23 dates from their descriptions ('2020_01_01_NDVI' to '2020_12_18_NDVI'); the band is named 'NDVI', the part they share
+```
+
+The rules:
+
+- Every band needs a description with exactly one date, written as a file name's date is: `20200101`, `2020-01-01`, `2020_01_01`, `2020-01` or `2020_01`. `--date-pattern` reads other forms from the descriptions, not from the file name, for example `--date-pattern "A%Y%j"` for `A2020001_NDVI`. See [dated GeoTIFFs](#from-dated-geotiffs) for the directives. The default forms read the day and drop a time of day, as in `20200101T184731_T10SEG_B4`; `--date-pattern "%Y%m%dT%H%M%S"` keeps it.
+- The part of a description besides the date names the band. It must be the same in every description: `NDVI` in `2020_01_01_NDVI`. The bands need not be in date order; the store is.
+- Several variables per date, such as `2020_01_01_NDVI` and `2020_01_01_EVI`, become the bands of each timestep, in the order the file first lists them. Every date must have the same variables. A file that lists all the NDVI dates and then all the EVI dates works the same way.
+- Scale, offset, units and nodata come from the file, as for any raster, and must agree for a variable on every date. An export often leaves the fill undeclared, as MODIS NDVI does with `-3000`: the `fill:` line names it, and `--nodata -3000` marks it invalid.
+- The store keeps the CRS of the file, including a CRS with no EPSG code such as MODIS's sinusoidal grid.
+
+When the descriptions cannot be read as dates, `convert` lists every reason at once, grouped as for other files: bands with no description, descriptions with no date or with several, two bands that are the same date and name, and dates that do not have the same bands, which includes descriptions that differ in more than the date, such as `LC08_...` on one date and `LC09_...` on the next. Fix the descriptions, or write one file per date with `gdal_translate -b` and convert the folder.
+
+`--bands-are-dates` takes one raster file. A manifest, and a folder or glob that holds more than one file, are refused, and so is `--write-manifest`, because a manifest lists files and this is one.
+
+### Reading a file with many bands
+
+`convert` reads the file once for each date. A multi-band GeoTIFF is pixel-interleaved unless it was written otherwise, which is GDAL's default, so GDAL decodes every band of a tile to give one, and a conversion decodes the whole file once per date. On a deflate-compressed int16 file of 40 bands and 2048 by 2048 pixels in 256 pixel tiles, reading took 1.5 s per date, against 0.03 s for the same data as 40 files and 0.08 s once the file was rewritten band-interleaved. The total grows with the square of the number of dates. For a file this size or larger the dry run adds an `interleave:` line with the command:
+
+```bash
+gdal_translate -co INTERLEAVE=BAND -co TILED=YES -co COMPRESS=DEFLATE in.tif band_interleaved.tif
+```
 
 ## From a manifest of URLs
 
