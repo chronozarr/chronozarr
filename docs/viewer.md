@@ -31,6 +31,8 @@ Any other address starts where it says. A link with a timestep (`t`) opens at th
 | Save the loop as a video | Click Export, choose MP4, WebM or GIF and the range, click Export, then click the Download link. Firefox records WebM and GIF only. Embedded viewers have Export too |
 | Show load and decode statistics | Press D |
 
+Playback buffers two seconds of frames before it starts. On a link that cannot carry the speed you chose, it plays at the speed the link can feed instead of pausing again and again. It measures the link as the store loads, and counts only the frames ahead that are not in memory yet. The speed label then shows both speeds (`4 /s → 0.7`) and a hint says why (`0.7 step/s: link too slow for 4`). Playback speeds up over frames that are already loaded, and returns to your speed once the loop is in memory.
+
 ## Products
 
 The viewer computes each product on your graphics card from the stored bands. A product appears in the list when the store has the bands it needs.

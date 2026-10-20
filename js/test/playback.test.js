@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_STEPS_PER_SECOND, DEFAULT_WIRE_RATIO, LINK_HEADROOM, Playback, SPEEDS, chooseMovieLevel, describeReason, linkAllows, snapSpeed, wireRatio } from '../demo/playback.js';
+import { DEFAULT_STEPS_PER_SECOND, DEFAULT_WIRE_RATIO, LINK_HEADROOM, MIN_LINK_STEPS_PER_SECOND, Playback, SPEEDS, chooseMovieLevel, describeReason, linkAllows, linkSteps, roundSteps, snapSpeed, wireRatio } from '../demo/playback.js';
 
 const FRAME_60 = 1000 / 60;
 
@@ -457,4 +457,126 @@ test('hint text names the rule: fits memory, link, or both', () => {
   assert.equal(describeReason('link'), 'link');
   assert.equal(describeReason('memory+link'), 'fits memory + link');
   assert.equal(describeReason(null), '');
+});
+
+// ---- the link sets the speed ----
+
+test('link steps: the speed at which bytes per step x speed x share not in memory reach LINK_HEADROOM of the bandwidth; the inverse of the link rule', () => {
+  const link = { bytesPerStep: 700_000, coldFraction: 0.9, bandwidth: 660_000 };
+  const steps = linkSteps(link);
+  assert.ok(Math.abs(steps - (LINK_HEADROOM * 660_000) / (700_000 * 0.9)) < 1e-9);
+  assert.equal(linkAllows({ ...link, stepsPerSecond: steps * 0.99 }), true, 'a little below it the rule lets the movie through');
+  assert.equal(linkAllows({ ...link, stepsPerSecond: steps * 1.01 }), false, 'a little above it the rule refuses');
+  assert.equal(linkSteps({ ...link, coldFraction: 0 }), Infinity, 'nothing to fetch: the link does not limit');
+  assert.equal(linkSteps({ ...link, bandwidth: null }), Infinity, 'no bandwidth measured: nothing to go on');
+  assert.equal(linkSteps({ ...link, bandwidth: 0 }), Infinity);
+  assert.ok(linkSteps({ ...link, coldFraction: 0.45 }) > 1.99 * steps, 'half as much to fetch, twice the speed');
+});
+
+test('the effective speed is the lowest of the requested speed, the display rate and what the link feeds, never below the floor', () => {
+  let feeds = Infinity;
+  const { playback, display } = setup({ count: 100, stepsPerSecond: 4, linkSteps: () => feeds });
+  assert.equal(playback.effectiveStepsPerSecond, 4, 'not playing: nothing is limited');
+  assert.equal(playback.linkLimited, false);
+  playback.play();
+  display.runUntil(500);
+  assert.equal(playback.linkLimited, false, 'a link that feeds more than asked changes nothing');
+  assert.equal(playback.effectiveStepsPerSecond, 4);
+  feeds = 0.7;
+  assert.equal(playback.effectiveStepsPerSecond, 0.7);
+  assert.equal(playback.displayStepsPerSecond, 4, 'what the display would deliver on a link that feeds it');
+  assert.equal(playback.linkStepsPerSecond, 0.7);
+  assert.equal(playback.linkLimited, true);
+  feeds = 0.01;
+  assert.equal(playback.effectiveStepsPerSecond, MIN_LINK_STEPS_PER_SECOND, 'a link slower than the floor is not followed further down');
+  feeds = 9;
+  assert.equal(playback.effectiveStepsPerSecond, 4, 'a faster link does not raise it above the request');
+  assert.equal(playback.linkLimited, false);
+  playback.pause();
+  feeds = 0.7;
+  assert.equal(playback.effectiveStepsPerSecond, 4, 'paused: the link rule is off');
+});
+
+test('rounded for the interface: whole steps per second from 2, tenths below', () => {
+  assert.equal(roundSteps(0.74), 0.7);
+  assert.equal(roundSteps(1.96), 2);
+  assert.equal(roundSteps(2.4), 2);
+  assert.equal(roundSteps(59.94), 60);
+});
+
+test('a link-limited movie steps at the speed the link feeds and starts on two frames, not eight', () => {
+  // Frames 1 and 2 are there, nothing after: two seconds at 1 step/s is all it waits for.
+  const { playback, state, display } = setup({ count: 100, stepsPerSecond: 4, linkSteps: () => 1, ready: (index) => index <= 2 });
+  playback.play();
+  assert.equal(playback.buffered.needed, 2, 'two seconds at the speed that is delivered');
+  assert.equal(playback.buffering, false, 'it starts on those two');
+  assert.equal(state.steps.length, 1, 'the first step is at once');
+  display.runUntil(1500);
+  assert.deepEqual(state.steps.map((s) => s.index), [1, 2], 'then a step a second');
+  assert.ok(Math.abs(state.steps[1].at - state.steps[0].at - 1000) < FRAME_60);
+
+  const full = setup({ count: 100, stepsPerSecond: 4, ready: (index) => index <= 2 });
+  full.playback.play();
+  assert.equal(full.playback.buffering, true, 'at the speed asked for it would wait for eight');
+  assert.equal(full.playback.buffered.needed, 8);
+});
+
+/**
+ * A link that delivers one frame every `periodMs`, in the order the player asked for them, once it has something to deliver
+ * (an idle link does not bank time). Frames 0 and 1 are loaded already.
+ */
+function slowLink(periodMs) {
+  const link = { delivered: new Set([0, 1]), queue: [], nextAt: 0 };
+  const pump = (now) => {
+    while (link.queue.length > 0 && link.nextAt <= now) {
+      link.delivered.add(link.queue.shift());
+      link.nextAt += periodMs;
+    }
+    if (link.queue.length === 0) link.nextAt = Math.max(link.nextAt, now);
+  };
+  return {
+    prepare: (indices) => {
+      link.queue = indices.filter((index) => !link.delivered.has(index));
+    },
+    isReady: (index, now) => {
+      pump(now);
+      return link.delivered.has(index);
+    },
+  };
+}
+
+/** 60 s of playback of 117 timesteps at 4 steps/s over a link that delivers a frame every 1.25 s (0.8 steps/s), with the link rule saying `linkStepsPerSecond`. */
+function playOverSlowLink(linkStepsPerSecond) {
+  const net = slowLink(1250);
+  const state = { index: 0, steps: 0 };
+  const display = fakeDisplay();
+  const playback = new Playback({
+    count: 117,
+    stepsPerSecond: 4,
+    getIndex: () => state.index,
+    goTo: (index) => {
+      state.index = index;
+      state.steps++;
+    },
+    isReady: (index) => net.isReady(index, display.now()),
+    prepare: net.prepare,
+    linkSteps: () => linkStepsPerSecond,
+    now: display.now,
+    requestFrame: display.requestFrame,
+    cancelFrame: display.cancelFrame,
+  });
+  playback.play();
+  display.runUntil(60_000);
+  return { stats: playback.stats, steps: state.steps };
+}
+
+test('on a link that cannot keep up with the speed asked for, lowering the speed replaces repeated pauses with a steady slower pace', () => {
+  // The link rule keeps 30 % in hand: 0.7 steps per second for a link that delivers 0.8.
+  const uncapped = playOverSlowLink(Infinity);
+  const capped = playOverSlowLink(0.7);
+  assert.ok(uncapped.stats.bufferingPauses >= 4, `at the speed asked for it pauses again and again (${uncapped.stats.bufferingPauses} pauses, ${Math.round(uncapped.stats.bufferingMs)} ms)`);
+  assert.equal(capped.stats.bufferingPauses, 0, 'at the speed the link feeds it never runs dry');
+  assert.ok(capped.steps >= 38, `and it keeps a steady 0.7 steps per second: ${capped.steps} steps in 60 s`);
+  assert.ok(capped.stats.initialBufferMs < 4000, `it starts after two frames, not eight (${Math.round(capped.stats.initialBufferMs)} ms)`);
+  assert.ok(uncapped.stats.initialBufferMs > 7000, `eight frames take over seven seconds on that link (${Math.round(uncapped.stats.initialBufferMs)} ms)`);
 });

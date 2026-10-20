@@ -10,7 +10,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { OUT_DIR, SITE, launch, rafMedian, sleep, systemState } from './lib.mjs';
+import { OUT_DIR, launch, rafMedian, sleep, systemState, viewerUrl } from './lib.mjs';
 
 const tag = process.argv[2] ?? 'deployed';
 const { browser, page, requests, errors, consoleErrors } = await launch();
@@ -18,7 +18,7 @@ try {
   await page.goto('about:blank');
   const rafBefore = await rafMedian(page, 600);
   const state = systemState();
-  await page.goto(`${SITE}?t=30`, { waitUntil: 'commit' });
+  await page.goto(viewerUrl({ t: 30 }), { waitUntil: 'commit' });
   await page.waitForFunction(() => window.chronozarr?.ready, null, { timeout: 180000, polling: 50 });
   await page.evaluate(() => window.chronozarr.ready);
   await page.waitForFunction(() => window.chronozarr.viewer.viewTiming?.fullMs != null, null, { timeout: 180000, polling: 50 });

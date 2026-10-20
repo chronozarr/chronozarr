@@ -51,6 +51,12 @@ export const STORES = {
     spec: { ...BASE, nTime: 4, sharded: false, nBand: 4, bands: S2_BANDS, nodata: 0, transform: GEOREFERENCE, values: wobbled(0) },
     enabledProducts: ALL_PRODUCTS,
   },
+  // A step is 2 x 2 chunks of 524 KB at level 0 and one chunk at level 1: more than a link of 1 MB/s carries at the speed of a movie, at either level.
+  link_plain: {
+    dtype: 'uint16',
+    spec: { ...BASE, height: 512, width: 512, chunk: 256, nTime: 12, sharded: false, nBand: 4, bands: S2_BANDS, nodata: 0, transform: GEOREFERENCE, values: wobbled(0) },
+    enabledProducts: ALL_PRODUCTS,
+  },
   // Display-ready 8-bit true-value RGB.
   u8_rgb: {
     dtype: 'uint8',

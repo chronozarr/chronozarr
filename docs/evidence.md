@@ -660,7 +660,7 @@ Edge samples from Globalping probes in data centres, first byte of a level-1 chu
 
 Probes in Singapore were answered by Hong Kong for 21 of 67 requests on 2026-10-16, and a request answered by another location than the one before it was always a miss.
 
-Playback for 60 s at the default 4 steps per second, 2026-10-18, three runs each: unthrottled, 239 of 240 steps on time and 1 frame in 10,797 over 33 ms. With the link limited to 0.7 MB/s and 100 ms latency, the first step came after 18.4 to 18.9 s, then 0.85 to 0.89 steps per second with four pauses of about 7.5 s; the viewer was already at its coarsest level and does not lower the speed.
+Playback for 60 s at the default 4 steps per second, 2026-10-18, three runs each: unthrottled, 239 of 240 steps on time and 1 frame in 10,797 over 33 ms. With the link limited to 0.7 MB/s and 100 ms latency, the first step came after 18.4 to 18.9 s, then 0.85 to 0.89 steps per second with four pauses of about 7.5 s; the viewer was already at its coarsest level and did not lower the speed (it does since 2026-10-19: [Speculative bandwidth and playback on a slow link](#speculative-bandwidth-and-playback-on-a-slow-link-2026-10-19)).
 
 | Speed gate | Measured | Holds |
 |---|---|---|
@@ -668,6 +668,68 @@ Playback for 60 s at the default 4 steps per second, 2026-10-18, three runs each
 | Warm switch ≤ 16 ms | 2.2 to 2.5 ms p50, but 29 or 30 of 30 frames were incomplete: the 36-cell, 117-step working set does not fit | not established |
 | Decode ≤ 5 ms per chunk | 5.8 ms p50 at load 9, 8.0 ms at load 21 | not established under load |
 | 0 wire bytes on a warm switch | 0 bytes in all three warm loops | yes |
+
+### Speculative bandwidth and playback on a slow link (2026-10-19)
+
+The [GeoZarr review](../spec/review-2026-10-geozarr.md) found the viewer fetching 187 to 226 MB in the 1.5 s after its first frame and playing at 0.85 to 0.89 steps per second with long pauses on a slow link. The viewer now does this:
+
+- The coarse loop (every timestep at the coarsest level) counted as the user playing, so the idle byte cap of the level-1 horizon never applied for the first 3 s. It is an ambient job now and does not count.
+- Idle prefetch may start at most 32 MiB per idle episode (64 MiB before) and no more than the measured link delivers in 1 s. Two options set it (`idleBytes`, `idleSeconds`).
+- The coarse loop plans as many timesteps as the measured link carries in 20 s (the whole loop from about 4 MB/s up), nearest first, and is planned again when the playhead moves a quarter of the window away. Speculative requests in flight carry about a second of the link (1 to 6 of them).
+- A request is not sent twice. A worker that had waited for the speculative allowance started a chunk that a demand read had started meanwhile (9 repeats among 57 chunk requests in a 45 s run at 0.7 MB/s), and every re-plan of a playing movie (every 250 ms) cancelled the speculative requests in flight, so a speculative request that needed longer than that (every one, at 0.7 MB/s) was dropped with what it had moved, unless a demand read had joined it. A new plan now takes over the requests it shares with the old one.
+- When the link cannot feed the speed even at the coarsest level, playback runs at the speed it can feed (0.7 of the measured bandwidth, over the wire bytes of a step times the share of the frames in the next 8 s that are not in memory), starts after two seconds of frames at that speed, and says so: `4 /s → 0.8` and `0.8 step/s: link too slow for 4`. It speeds up over frames that are loaded.
+
+Method: the local Ucayali store (117 steps, 4 bands, 2765 x 2759; level 1 is 9 chunks of 1.39 MB, level 3 one chunk of 0.69 MB) served by `js/support/static-server.js`, the viewer of `origin/main` (cea0f2a) and of the branch served side by side, and the runs of the two alternated. Playwright Chromium 153 on an Apple M3 Max (16 cores) with other work running, 1440 x 900 at pixel ratio 2, a new browser for every run, the HTTP cache off, link limits by CDP `Network.emulateNetworkConditions` from the first request (the page and its modules included). `scripts/fieldperf/` (`browser_opens.mjs`, `scrub.mjs`, `playback.mjs`, `bench_gates.mjs`) with `FIELDPERF_SITE` and `FIELDPERF_STORE` pointing at the local copies. Wire bytes are the encoded sizes CDP reports for requests to the store that started in the window. Medians with ranges.
+
+After the first frame, 10 opens each (1.5 s window; load average 7.5 to 14.7):
+
+| | Before | After |
+|---|---|---|
+| Wire bytes | 270 MB (227 to 280) | 113 MB (112 to 116) |
+| Requests | 282 (242 to 287) | 144 (143 to 147) |
+| Level-1 chunks (1.39 MB) and level-3 chunks (0.69 MB) | 166 (126 to 171) and 116 | 28 (27 to 31) and 116 |
+| Time to the level-1 frame | 89 ms (83 to 96) | 92 ms (85 to 112) |
+
+The 116 level-3 chunks are the coarse loop (80 MB); the level-1 chunks are the horizon. 30 s with no input after the first frame, on a slower link (2 runs each, load 5 to 10):
+
+| Link | Before | After |
+|---|---|---|
+| 3 MB/s, 30 ms | 86.7 MB: 43 level-1 and 58 level-3 chunks, 4 aborted | 59.4 MB: 2 level-1 and 82 level-3 chunks, 0 aborted |
+| 0.7 MB/s, 100 ms | 15.8 MB: 10 level-1 and 17 level-3 chunks, 4 aborted | 13.8 MB: 0 level-1 and 20 level-3 chunks, 0 aborted |
+
+A 60 s scrub at 4 steps per second (ping-pong over the 117 steps from t = 0, `goToTime` every 250 ms; 3 runs unthrottled, 2 at 12 MB/s, load 4.6 to 10.7):
+
+| | Idle 1.5 s | Scrub | Steps drawn | Levels drawn | Requests (aborted) |
+|---|---|---|---|---|---|
+| Unthrottled, before | 206 MB | 1,448 MB | 239 of 240, all before the next step | level 1: 717 | 1,222 (0) |
+| Unthrottled, after | 113 MB | 1,542 MB | 239 of 240, all before the next step | level 1: 717 | 1,303 (0) |
+| 12 MB/s, before | 18 MB | 595 MB | 240 of 240 | 1: 10, 2: 273, 3: 196 | 1,026 (278) |
+| 12 MB/s, after | 19 MB | 637 MB | 240 of 240 | 1: 7, 2: 275, 3: 198 | 932 (151) |
+
+The scrub draws level 1 at every step on a fast link, which takes 117 steps x 9 chunks x 1.39 MB = 1.46 GB, so what the change removes from the idle window arrives in the scrub instead (206 + 1,448 and 113 + 1,542 MB are the same 1.65 GB). The 12 MB/s run still draws 240 of 240 steps by dropping to levels 2 and 3. An aborted request reports no bytes over CDP, so these totals leave out what the 278 and 151 aborted requests had already moved.
+
+Playback for 60 s at 4 steps per second, the viewer opened and fully drawn first (3 runs each; load 11 to 71 before and 30 to 53 after, because another job loaded the machine, which the link-bound runs hardly show):
+
+| | First step after play | Steps in 60 s | Pauses (total) | Longest pause | Paused share of the 60 s | Speed at the end | MB in the window (aborted requests) |
+|---|---|---|---|---|---|---|---|
+| Unthrottled, before | 0.1 s | 240 | 0 | 0 | 0 % | 4 | 370 (7) |
+| Unthrottled, after | 0.1 s | 240 | 0 | 0 | 0 % | 4 | 316 (0) |
+| 0.7 MB/s, 100 ms, before | 23.5 s | 25 (25 to 26) | 3 (19.7 s) | 12.3 s | 72 % | 4 | 37.6 (9) |
+| 0.7 MB/s, 100 ms, after | 5.0 s | 42 (42 to 43) | 0 | 0 | 8 % | 0.9 (0.8 to 0.9 over the run) | 36.6 (0) |
+
+At 0.7 MB/s the link moves 0.66 MB/s (as measured) and a level-3 frame is 0.69 MB, so 4 steps per second cannot be had. Before, the viewer played bursts of 9 steps in 2 s and then waited 7 to 14 s for the next ones. After, it keeps 30 % of the measured link in hand and plays about 0.8 steps per second without a pause (the median step takes 1.25 s; one step in each run took 3 s when the measured bandwidth dipped). The paused share after is the wait for the first two frames. The page itself still takes 25 s to its first frame on this link (the 12.6 MB level-1 frame and the 61 uncompressed modules of a local server), and the run starts playing after that.
+
+Speed gates, `chronozarr.bench()` 3 runs each (load 5 to 7):
+
+| Gate | Before | After |
+|---|---|---|
+| Warm switch, stepping, p50 (≤ 16 ms) | 4.4 to 4.8 ms (3, 25 and 12 of 30 frames incomplete) | 4.7 to 5.1 ms (3, 3 and 6 incomplete) |
+| Warm switch, jumping, p50 | 1.3 to 1.6 ms | 1.4 to 1.6 ms |
+| Upload from the decoded cache, p50 | 11.4 to 11.8 ms | 11.0 to 12.2 ms |
+| Wire bytes on a warm switch (0) | 0 | 0 |
+| Decode per 2 MiB chunk, p50 (≤ 5 ms) | 4.2 to 4.3 ms | 4.2 to 4.5 ms |
+
+What this does not show: a local server and an emulated link, not a CDN: Chromium opens at most 6 HTTP/1.1 connections to the host, where data.chronozarr.org answers over HTTP/2. One store. The throttled first-frame time is unchanged and dominated by the 12.6 MB level-1 frame. Wire bytes of aborted requests are not counted. The warm-step median is 0.3 ms higher after, inside the spread of the runs and with fewer incomplete frames to skip. The deployed site was not measured after the change.
 
 ### Problems found
 
