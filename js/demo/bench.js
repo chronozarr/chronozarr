@@ -1,5 +1,6 @@
 // Benchmarks for the chronozarr decoder and the chronozarr viewer, run against the store that is
-// currently open. From the page console: `await chronozarr.bench()`.
+// currently open. From the page console: `await chronozarr.bench()`, or `await chronozarr.bench({ coldRuns: 1, switches: 10 })`
+// for fewer cold opens per variant (default 5) and switches per warm loop (default 30).
 //
 //   cold open       loadStore -> first complete frame at LOD 0, HTTP cache bypassed, with and without
 //                   consolidated metadata in the root zarr.json.

@@ -2410,7 +2410,7 @@ async function main() {
   const bridge = embed.embed ? connectEmbed(viewer, embed) : null;
   window.chronozarr = {
     viewer,
-    bench: () => import('./bench.js').then((m) => m.runBenchmarks(viewer)),
+    bench: (options) => import('./bench.js').then((m) => m.runBenchmarks(viewer, options)),
     scrubBench: (options) => import('./bench.js').then((m) => m.runScrubBenchmarks(viewer, options)),
     playBench: (options) => import('./bench.js').then((m) => m.playBench(viewer, options)),
     interactionBench: (options) => import('./bench.js').then((m) => m.interactionBench(viewer, options)),
