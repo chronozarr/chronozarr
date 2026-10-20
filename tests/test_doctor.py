@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import itertools
 import json
+import math
 import re
 import shutil
 import threading
 import urllib.error
 import urllib.request
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import partial
@@ -19,14 +22,17 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import zarr
 from zarr.abc.store import OffsetByteRequest, RangeByteRequest, SuffixByteRequest
 from zarr.core.buffer import default_buffer_prototype
 
 import chronozarr
 import chronozarr.doctor as doctor_module
+import chronozarr.schema as schema_module
 import chronozarr.store as store_module
 from chronozarr.decode import HttpStore
 from chronozarr.doctor import DEFAULT_ORIGIN, Check, diagnose
+from chronozarr.schema import validate
 from chronozarr.view import StoreRequestHandler, serve_store, view
 from tests.round_trips import RoundTrips
 from tests.synthetic import build_store, make_truth
@@ -366,6 +372,124 @@ def test_layout_problems_in_the_local_copy_fail_validate(unsharded_store, tmp_pa
         checks = by_name(diagnose(url, local_copy=copy))
     assert checks["validate"].status == "fail"
     assert not any(name.startswith("decode level") for name in checks)
+
+
+# --- validate over HTTP: `chronozarr doctor <url>` and `chronozarr validate <url>` -----------
+
+
+@pytest.fixture(scope="module")
+def sharded_masked_store(tmp_path_factory) -> Path:
+    path = tmp_path_factory.mktemp("doctor") / "sharded-masked"
+    mask = np.ones((4, 40, 50), dtype=np.uint8)
+    mask[:, :5, :5] = 0
+    build_store(path, make_truth(4, 1, 40, 50), shard=True, shard_time=2, chunk_size=16, mask=mask)
+    return path
+
+
+def object_paths(store: Path, variable: str) -> set[str]:
+    """URL path of every chunk object (shard, when sharded) of `variable`, stored or not."""
+    paths: set[str] = set()
+    for level in zarr.open_group(store, mode="r").group_keys():
+        array = zarr.open_array(store / level / variable, mode="r")
+        extent = array.shards or array.chunks
+        grid = (range(math.ceil(n / e)) for n, e in zip(array.shape, extent, strict=True))
+        paths |= {
+            f"/{store.name}/{level}/{variable}/c/{'/'.join(map(str, index))}"
+            for index in itertools.product(*grid)
+        }
+    return paths
+
+
+def test_remote_validate_reads_each_metadata_object_once(unsharded_store, monkeypatch):
+    with serving(StoreRequestHandler, unsharded_store) as url:
+        trips = RoundTrips(monkeypatch)
+        problems = validate(url)
+    assert problems == []
+    reads = Counter(path for path in trips.paths() if path.endswith("zarr.json"))
+    assert max(reads.values()) == 1, {path: n for path, n in reads.items() if n > 1}
+    # The root; every node it names, at once; each level's coordinates together (three levels);
+    # the volatility array.
+    assert trips.rounds() <= 6, trips.paths()
+
+
+def test_remote_validate_reads_every_mask_chunk_once_and_many_at_a_time(masked_store, monkeypatch):
+    with serving(StoreRequestHandler, masked_store) as url:
+        trips = RoundTrips(monkeypatch)
+        problems = validate(url)
+    assert problems == []
+    reads = Counter(path for path in trips.paths() if "/mask/c/" in path)
+    assert set(reads) == object_paths(masked_store, "mask")  # the check still reads every chunk
+    assert max(reads.values()) == 1
+    # Six as for an unmasked store, plus the mask: level 0's 48 chunks in two rounds of up to 32
+    # requests, then 16 and 4 chunks in one round each.
+    assert trips.rounds() <= 10, trips.paths()
+
+
+def test_remote_validate_reads_each_mask_shard_once(sharded_masked_store, monkeypatch):
+    with serving(StoreRequestHandler, sharded_masked_store) as url:
+        trips = RoundTrips(monkeypatch)
+        problems = validate(url)
+    assert problems == []
+    reads = Counter(path for path in trips.paths() if "/mask/c/" in path)
+    assert set(reads) == object_paths(sharded_masked_store, "mask")
+    # A batch spans whole time shards, so each shard is read whole: no index read, and no read
+    # per timestep.
+    assert max(reads.values()) == 1, reads
+
+
+def test_remote_validate_holds_no_more_mask_than_the_budget(masked_store, monkeypatch):
+    monkeypatch.setattr(schema_module, "_MASK_BYTES", 40 * 50)  # one level-0 mask timestep
+    with serving(StoreRequestHandler, masked_store) as url:
+        trips = RoundTrips(monkeypatch)
+        problems = validate(url)
+    assert problems == []
+    level_0 = [
+        (started, ended, path.split("/mask/c/")[1].split("/")[0])
+        for started, ended, _, path in trips.requests
+        if f"/{masked_store.name}/0/mask/c/" in path
+    ]
+    assert len(level_0) == 48
+    overlapping = [
+        (a[2], b[2])
+        for a, b in itertools.combinations(level_0, 2)
+        if a[2] != b[2] and a[0] < b[1] and b[0] < a[1]
+    ]
+    assert not overlapping  # two timesteps of level 0 were never read at the same time
+
+
+@pytest.mark.parametrize("remote", [False, True], ids=["local", "http"])
+def test_a_mask_value_other_than_0_or_1_fails_validate(masked_store, tmp_path, remote):
+    copy = tmp_path / masked_store.name
+    shutil.copytree(masked_store, copy)
+    plane = zarr.open_array(copy / "0" / "mask", mode="r+")
+    plane[3, 39, 49] = 2  # the last timestep, last chunk
+    if remote:
+        with serving(StoreRequestHandler, copy) as url:
+            problems = validate(url)
+    else:
+        problems = validate(copy)
+    assert problems == ["level 0/mask: mask must contain only 0 and 1"]
+
+
+def test_remote_validate_sizes_shards_with_head_requests(sharded_store, monkeypatch):
+    with serving(StoreRequestHandler, sharded_store) as url:
+        trips = RoundTrips(monkeypatch)
+        problems = validate(url)
+    assert problems == []
+    shards = [(method, path) for _, _, method, path in trips.requests if "/data/c/" in path]
+    assert {path for _, path in shards} == object_paths(sharded_store, "data")
+    assert {method for method, _ in shards} == {"HEAD"}  # shard_bytes: no shard downloaded
+    # Six as for an unsharded store, plus every shard's HEAD at once.
+    assert trips.rounds() <= 7, trips.paths()
+
+
+def test_doctor_on_a_masked_store_over_http_takes_eighteen_round_trips(masked_store, monkeypatch):
+    with serving(StoreRequestHandler, masked_store) as url:
+        trips = RoundTrips(monkeypatch)
+        checks = diagnose(url, full_read_limit_mb=0)
+    assert not failures(checks), failures(checks)
+    # Three for the HTTP checks, ten to validate, one to open the store, four to decode.
+    assert trips.rounds() <= 18, trips.paths()
 
 
 # --- chronozarr.decode.HttpStore against the local range server -----------------------------

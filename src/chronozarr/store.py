@@ -9,6 +9,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import AsyncIterator, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -19,7 +20,7 @@ from zarr.abc.store import (
     Store,
     SuffixByteRequest,
 )
-from zarr.core.buffer import Buffer, BufferPrototype
+from zarr.core.buffer import Buffer, BufferPrototype, default_buffer_prototype
 from zarr.storage import LocalStore, WrapperStore
 
 # --- HTTP reading without fsspec --------------------------------------------------------------
@@ -27,6 +28,10 @@ from zarr.storage import LocalStore, WrapperStore
 _RETRY_DELAYS_S = (0.2, 0.6, 1.5)
 # Some CDNs reject urllib's default "Python-urllib" agent with a 403.
 _USER_AGENT = "chronozarr (+https://github.com/chronozarr/chronozarr)"
+# Requests wait on the network, not the CPU, so they get threads of their own: asyncio's default
+# pool has cores + 4 threads, which holds a 4-core machine to 8 requests at once.
+REQUESTS_AT_ONCE = 32
+_REQUESTS = ThreadPoolExecutor(max_workers=REQUESTS_AT_ONCE, thread_name_prefix="chronozarr-http")
 
 
 def _base_url(url: str) -> str:
@@ -139,10 +144,17 @@ class HttpStore(Store):
             time.sleep(_RETRY_DELAYS_S[attempt])
         raise AssertionError("unreachable")  # the loop returns or raises on its last attempt
 
+    async def _request(
+        self, key: str, method: str, byte_range: ByteRequest | None = None
+    ) -> tuple[bytes, Any] | None:
+        """`_fetch` on the request threads, up to `REQUESTS_AT_ONCE` at the same time."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(_REQUESTS, self._fetch, key, method, byte_range)
+
     async def get(
         self, key: str, prototype: BufferPrototype, byte_range: ByteRequest | None = None
     ) -> Buffer | None:
-        fetched = await asyncio.to_thread(self._fetch, key, "GET", byte_range)
+        fetched = await self._request(key, "GET", byte_range)
         return None if fetched is None else prototype.buffer.from_bytes(fetched[0])
 
     async def get_partial_values(
@@ -153,10 +165,10 @@ class HttpStore(Store):
         )
 
     async def exists(self, key: str) -> bool:
-        return await asyncio.to_thread(self._fetch, key, "HEAD") is not None
+        return await self._request(key, "HEAD") is not None
 
     async def getsize(self, key: str) -> int:
-        fetched = await asyncio.to_thread(self._fetch, key, "HEAD")
+        fetched = await self._request(key, "HEAD")
         if fetched is None:
             raise FileNotFoundError(key)
         length = fetched[1].get("Content-Length")
@@ -218,6 +230,10 @@ class IndexStore(WrapperStore):
     def invalidate_indices(self) -> None:
         self.cache.clear()
 
+    async def getsize(self, key: str) -> int:
+        # WrapperStore does not pass getsize on; zarr's fallback would download the object.
+        return await self._store.getsize(key)
+
     async def get(
         self, key: str, prototype: BufferPrototype, byte_range: ByteRequest | None = None
     ) -> Buffer | None:
@@ -253,7 +269,7 @@ class IndexStore(WrapperStore):
             token: object = None
             if time_shard == mutable:
                 if isinstance(underlying, HttpStore):
-                    head = await asyncio.to_thread(underlying._fetch, key, "HEAD")
+                    head = await underlying._request(key, "HEAD")
                     if head is None:
                         self.cache.pop(key, None)
                         return None
@@ -287,6 +303,37 @@ class IndexStore(WrapperStore):
             if result is not None:
                 self.cache[key] = token, result.to_bytes()
             return result
+
+
+class MetadataCache(WrapperStore):
+    """Read each `zarr.json` once and serve it from memory after that, absent ones included.
+
+    For validation, which opens a node from several checks: one read per node, and every check
+    sees the same metadata. `prefetch` reads many nodes at the same time, so a remote store
+    answers them in one round trip, not one each. Chunks are never cached.
+    """
+
+    def __init__(self, store: Store) -> None:
+        super().__init__(store)
+        self.metadata: dict[str, bytes | None] = {}
+
+    async def get(
+        self, key: str, prototype: BufferPrototype, byte_range: ByteRequest | None = None
+    ) -> Buffer | None:
+        if byte_range is not None or not key.endswith("zarr.json"):
+            return await self._store.get(key, prototype, byte_range)
+        if key not in self.metadata:
+            result = await self._store.get(key, prototype)
+            self.metadata[key] = None if result is None else result.to_bytes()
+        cached = self.metadata[key]
+        return None if cached is None else prototype.buffer.from_bytes(cached)
+
+    async def getsize(self, key: str) -> int:
+        return await self._store.getsize(key)  # WrapperStore does not pass getsize on
+
+    async def prefetch(self, keys: Iterable[str]) -> None:
+        missing = dict.fromkeys(key for key in keys if key not in self.metadata)
+        await asyncio.gather(*(self.get(key, default_buffer_prototype()) for key in missing))
 
 
 def check_extensions(metadata: dict[str, Any]) -> None:

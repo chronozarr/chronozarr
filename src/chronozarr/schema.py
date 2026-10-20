@@ -15,9 +15,11 @@ SHOULD it leaves out, which `validate` reports as a note. A reader keeps both as
 
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass, field
 from itertools import pairwise
@@ -29,7 +31,13 @@ from zarr.core.sync import sync
 from zarr.errors import GroupNotFoundError
 
 from chronozarr.crs import CODE_RE, Crs, same_crs
-from chronozarr.store import IndexStore, as_store, check_extensions
+from chronozarr.store import (
+    REQUESTS_AT_ONCE,
+    IndexStore,
+    MetadataCache,
+    as_store,
+    check_extensions,
+)
 
 SPEC_VERSION = "0.3.0"
 SPEC_VERSION_ANY_CRS = "0.4.0"
@@ -1253,6 +1261,40 @@ def _check_time_coordinate(
         )
 
 
+# Decoded mask values validation holds at once; as many timesteps as fit are read together.
+_MASK_BYTES = 64 * 2**20
+
+
+def _mask_is_binary(plane: zarr.Array) -> bool:
+    """Whether every value of the mask `plane` is 0 or 1.
+
+    The timesteps are read in batches, several at once, holding at most `_MASK_BYTES` of values:
+    a remote store waits a round trip per wave of reads, not per timestep. A batch spans a whole
+    time shard when one fits, so each shard object is read once.
+    """
+    n_time = plane.shape[0]
+    step_bytes = max(1, math.prod(plane.shape[1:]) * plane.dtype.itemsize)
+    fit = max(1, _MASK_BYTES // step_bytes)  # timesteps held at once
+    span = min(plane.shards[0] if plane.shards is not None else 1, fit)
+    batches = [slice(t, min(t + span, n_time)) for t in range(0, n_time, span)]
+
+    def binary(batch: slice) -> bool:
+        return bool(np.isin(np.asarray(plane[batch]), (0, 1)).all())
+
+    pool = ThreadPoolExecutor(max_workers=max(1, min(len(batches), fit // span, REQUESTS_AT_ONCE)))
+    try:
+        return all(pool.map(binary, batches))
+    finally:
+        pool.shutdown(cancel_futures=True)  # after a bad batch the rest need not be read
+
+
+def _read_together(arrays: Mapping[str, zarr.Array]) -> dict[str, np.ndarray]:
+    """The values of `arrays`, read at the same time: one round trip for a remote store."""
+    with ThreadPoolExecutor(max_workers=max(1, len(arrays))) as pool:
+        values = pool.map(lambda array: np.asarray(array[:]), arrays.values())
+        return dict(zip(arrays, values, strict=True))
+
+
 def _check_level(
     root: zarr.Group,
     index: int,
@@ -1400,29 +1442,28 @@ def _check_level(
             plane = get_array(group, variable, prefix)
             if _compression_config(plane) != _compression_config(data):
                 problems.append(f"{prefix}/{variable}: compression differs from data")
-            if variable == meta.mask_variable:
-                for t in range(plane.shape[0]):
-                    values = np.asarray(plane[t])
-                    if not np.isin(values, [0, 1]).all():
-                        problems.append(f"{prefix}/{variable}: mask must contain only 0 and 1")
-                        break
-    if "time" in members:
-        stored = np.asarray(members["time"][:])
+            if variable == meta.mask_variable and not _mask_is_binary(plane):
+                problems.append(f"{prefix}/{variable}: mask must contain only 0 and 1")
+    coordinates = _read_together(
+        {name: members[name] for name in ("time", "band", "x", "y") if name in members}
+    )
+    if "time" in coordinates:
+        stored = coordinates["time"]
         expected_ms = np.array([parse_time(t) for t in meta.times], dtype="datetime64[ms]")
         if stored.shape != expected_ms.shape or not np.array_equal(
             stored.astype("datetime64[ms]"), expected_ms
         ):
             problems.append(f"{prefix}/time: values differ from chronozarr.times")
-    if "band" in members and np.asarray(members["band"][:]).tolist() != (
+    if "band" in coordinates and coordinates["band"].tolist() != (
         list(range(len(meta.bands)))
         if members["band"].dtype == np.dtype("int32")
         else list(meta.band_names)
     ):
         problems.append(f"{prefix}/band: values differ from chronozarr.bands")
-    if "x" in members and "y" in members:
+    if "x" in coordinates and "y" in coordinates:
         y, x = pixel_centers(attrs.transform, height, width)
         for name, expected_axis in (("y", y), ("x", x)):
-            stored = np.asarray(members[name][:])
+            stored = coordinates[name]
             if stored.shape != expected_axis.shape or not np.allclose(stored, expected_axis):
                 problems.append(
                     f"{prefix}/{name}: values differ from pixel centres of the transform"
@@ -1469,6 +1510,7 @@ def _check_shard_bytes(root: zarr.Group, attrs: RootAttrs, problems: list[str]) 
     if shard_bytes is None:
         return
     variable = attrs.chronozarr.variable
+    listed: list[tuple[str, str, int]] = []  # where, store key, bytes listed
     for level, shards in shard_bytes.items():
         if level not in {d.path for d in attrs.datasets}:
             problems.append(f"chronozarr.shard_bytes: unknown level '{level}'")
@@ -1476,16 +1518,23 @@ def _check_shard_bytes(root: zarr.Group, attrs: RootAttrs, problems: list[str]) 
         for key, expected in shards.items():
             t_shard, row, col = (int(p) for p in key.split("/"))
             store_key = shard_key(level, variable, t_shard, row, col)
-            try:
-                actual = sync(root.store.getsize(store_key))
-            except (FileNotFoundError, KeyError):
-                problems.append(f"chronozarr.shard_bytes[{level}][{key}]: {store_key} is missing")
-                continue
-            if actual != expected:
-                problems.append(
-                    f"chronozarr.shard_bytes[{level}][{key}]: {expected} bytes listed, "
-                    f"{store_key} has {actual}"
-                )
+            listed.append((f"chronozarr.shard_bytes[{level}][{key}]", store_key, expected))
+
+    async def size(store_key: str) -> int | None:
+        try:
+            return await root.store.getsize(store_key)
+        except (FileNotFoundError, KeyError):
+            return None
+
+    async def sizes() -> list[int | None]:
+        # All at the same time: a remote store answers every HEAD in one round trip.
+        return await asyncio.gather(*(size(store_key) for _, store_key, _ in listed))
+
+    for (where, store_key, expected), actual in zip(listed, sync(sizes()), strict=True):
+        if actual is None:
+            problems.append(f"{where}: {store_key} is missing")
+        elif actual != expected:
+            problems.append(f"{where}: {expected} bytes listed, {store_key} has {actual}")
 
 
 def _check_consolidated(store: Any, direct: zarr.Group) -> list[str]:
@@ -1579,12 +1628,14 @@ def _validate_into(store: Any, problems: list[str], notes: list[str]) -> str | N
 
     if isinstance(store, str | Path):
         store = LocalStore(store, read_only=True)
-    store = IndexStore(store)
+    source = store
+    metadata = MetadataCache(store)
+    store = IndexStore(metadata)
     state = _LevelState()
     try:
         root = zarr.open_group(store, mode="r", zarr_format=3, use_consolidated=False)
     except (GroupNotFoundError, FileNotFoundError):
-        problems.append(f"{store}: no Zarr v3 group found (is this a chronozarr store?)")
+        problems.append(f"{source}: no Zarr v3 group found (is this a chronozarr store?)")
         return None
     except ValueError as exc:
         problems.append(str(exc))
@@ -1601,6 +1652,7 @@ def _validate_into(store: Any, problems: list[str], notes: list[str]) -> str | N
     except ValueError as exc:
         problems.append(str(exc))
         return None
+    sync(metadata.prefetch(_metadata_keys(attrs)))
 
     for index, dataset in enumerate(attrs.datasets):
         try:
@@ -1620,6 +1672,18 @@ def _validate_into(store: Any, problems: list[str], notes: list[str]) -> str | N
     notes.extend(state.found.advice)
     notes.extend(_crs_notes(attrs, state))
     return attrs.chronozarr.spec_version
+
+
+def _metadata_keys(attrs: RootAttrs) -> list[str]:
+    """The `zarr.json` of every node the checks open, known from the root attributes alone."""
+    meta = attrs.chronozarr
+    arrays = {meta.variable, "time", "band", "x", "y", MASK_VARIABLE, COVERAGE_VARIABLE}
+    arrays |= {name for name in (meta.mask_variable, meta.coverage_variable) if name is not None}
+    keys = [f"{meta.volatility_path or VOLATILITY_PATH}/zarr.json"]
+    for dataset in attrs.datasets:
+        keys.append(f"{dataset.path}/zarr.json")
+        keys.extend(f"{dataset.path}/{name}/zarr.json" for name in sorted(arrays))
+    return keys
 
 
 def _check_volatility(
