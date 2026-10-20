@@ -17,7 +17,7 @@ src/chronozarr/           Python package; CLI `chronozarr` (commands: append | e
   decode.py               open_store() / ChronoStore: lazy reads, to_xarray(); HttpStore (stdlib HTTP range store)
   backend.py              xarray backend: xr.open_dataset(path_or_url, engine="chronozarr")
   convert.py              streaming conversion of dated GeoTIFFs (directory, glob, s3:// prefix), COG manifests, Zarr variables and NetCDF into a store;
-                          _convert_discover.py lists and dates the files, _convert_band_dates.py reads the dates of a file whose bands are dates (`--bands-are-dates`), _convert_preflight.py collects every incompatibility per file
+                          _convert_discover.py lists and dates the files, _convert_band_dates.py reads the dates of a file whose bands are dates (`--bands-are-dates`), _convert_tiles.py decides whether files that share a date tile one grid (`--mosaic-tiles`), _convert_preflight.py collects every incompatibility per file
   stac.py                 static STAC Collection and Item JSON for a store (datacube extension)
   bands.py                band roles: which bands answer to red, green, blue, nir, the products that follow, `set_band_roles` (CLI `bands`, `--band-role`); mirrors js/shared/products.js
   export.py               export_cog(): true-value Cloud Optimized GeoTIFFs for GDAL and QGIS

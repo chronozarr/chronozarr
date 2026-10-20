@@ -390,7 +390,7 @@ def test_discover_dates_and_sorts_a_clean_series(tmp_path):
     assert str(found.entries[0].time) == "2024-01-01T00:00:00.000"
 
 
-def test_discover_reports_missing_ambiguous_impossible_and_duplicate_dates(tmp_path):
+def test_discover_reports_missing_ambiguous_and_impossible_dates(tmp_path):
     touch(
         tmp_path / "ok_2024-01.tif",
         tmp_path / "nodate.tif",
@@ -404,8 +404,11 @@ def test_discover_reports_missing_ambiguous_impossible_and_duplicate_dates(tmp_p
     assert "several dates" in by_name["both_20240215_2024-03.tif"]
     assert "'20240215' (2024-02-15)" in by_name["both_20240215_2024-03.tif"]
     assert "'2024-03' (2024-03-01)" in by_name["both_20240215_2024-03.tif"]
-    assert "same date 2024-04-01 as" in by_name["twin_2024-04-01.tif"]
-    assert "same date 2024-04-01 as" in by_name["twin_copy_20240401.tif"]
+    # files that share a date are left to the converter, which reads their grids
+    assert "twin_2024-04-01.tif" not in by_name
+    assert "twin_copy_20240401.tif" not in by_name
+    twins = [Path(e.uri).name for e in found.entries if str(e.time).startswith("2024-04-01")]
+    assert twins == ["twin_2024-04-01.tif", "twin_copy_20240401.tif"]
     assert "ok_2024-01.tif" not in by_name
     assert sorted(Path(u).name for u in found.undated) == [
         "both_20240215_2024-03.tif",

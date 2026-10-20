@@ -986,6 +986,15 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     "timestep. Never assumed: a multi-band file is normally bands.",
 )
 @click.option(
+    "--mosaic-tiles",
+    is_flag=True,
+    help="Directory, glob or S3 prefix only: files that share a date are tiles of one image, as "
+    "Earth Engine splits a large export into name-0000000000-0000000000.tif files; join the "
+    "tiles of each date into one timestep. They must share one CRS, pixel size and pixel grid; "
+    "where two overlap, their valid values must be equal. Pixels no tile of a date covers are "
+    "invalid. Never assumed: files that share a date can also be copies.",
+)
+@click.option(
     "--write-manifest",
     type=click.Path(path_type=Path),
     default=None,
@@ -1031,6 +1040,7 @@ def convert_command(
     band_roles: tuple[str, ...],
     date_pattern: str | None,
     bands_are_dates: bool,
+    mosaic_tiles: bool,
     write_manifest: Path | None,
     **options: Any,
 ) -> None:
@@ -1057,7 +1067,9 @@ def convert_command(
     'MOD13A1.A%Y%j'). --write-manifest saves what was found, also when the checks report
     problems, so you can edit it and run convert on it. One multi-band file whose band
     descriptions each hold a date (2020_01_01_NDVI, as toBands() names them) is refused with
-    the option that reads it, --bands-are-dates; it is never assumed.
+    the option that reads it, --bands-are-dates; it is never assumed. Files that share a date and
+    tile one grid (Earth Engine splits a large export into name-0000000000-0000000000.tif files)
+    are refused with the option that joins them, --mosaic-tiles; that is never assumed either.
 
     Every file is checked before anything is read in bulk: dates, grid and CRS, bands, dtype,
     scale, offset, units and nodata. All problems are reported together, per file, with a
@@ -1108,6 +1120,7 @@ def convert_command(
             read_ahead=read_ahead,
             date_pattern=date_pattern,
             bands_are_dates=bands_are_dates,
+            mosaic_tiles=mosaic_tiles,
             calendar_to_gregorian=calendar_to_gregorian,
             write_manifest_to=write_manifest,
             on_plan=show_plan,

@@ -13,7 +13,6 @@ import json
 import os
 import re
 import zipfile
-from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -449,9 +448,10 @@ def _file_name_stem(uri: str) -> str:
 class Discovery:
     """Rasters found by `discover`, dated from their names.
 
-    `entries` are the files with exactly one date, by time (two files may share one: those are in
-    `problems`). `undated` have no date or several. `problems` are the date findings of every
-    file: missing, ambiguous, impossible or duplicate; empty when the series is dated cleanly.
+    `entries` are the files with exactly one date, by time and name. Several files may share a
+    date: whether they are tiles of one image or copies takes their grids, which the converter
+    reads (`_convert_tiles`). `undated` have no date or several. `problems` are the date findings
+    of every file: missing, ambiguous or impossible; empty when every name is dated cleanly.
     """
 
     entries: list[Entry]
@@ -529,23 +529,6 @@ def discover(spec: str, date_pattern: str | None = None) -> Discovery:
             ((moment, _),) = found.items()
             dated.append(Entry(uri, moment))
     dated.sort(key=lambda e: (e.time, e.uri))
-    by_time: dict[np.datetime64, list[str]] = defaultdict(list)
-    for entry in dated:
-        by_time[entry.time].append(entry.uri)
-    for moment, uris in by_time.items():
-        if len(uris) == 1:
-            continue
-        for uri in uris:
-            others = ", ".join(u for u in uris if u != uri)
-            problems.append(
-                Problem(
-                    uri,
-                    f"has the same date {show_time(moment)} as {others}; a store has one timestep "
-                    "per time",
-                    "leave one out (narrow the glob), or if the names carry a time of day pass "
-                    "--date-pattern with %H%M%S, or write a manifest with distinct datetimes",
-                )
-            )
     return Discovery(dated, undated, problems)
 
 

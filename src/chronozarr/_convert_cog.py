@@ -38,11 +38,14 @@ from chronozarr._convert_source import (
     _decide_validity,
     _declared_nodata,
     _grid_difference,
+    _same_crs,
     _same_grid,
     _scaling,
     _settle_nan,
     _value_valid,
 )
+from chronozarr._convert_tiles import OPTION as TILES_OPTION
+from chronozarr._convert_tiles import TileLayout, _name, _names, lay_out, same_date_problems
 from chronozarr.schema import Band, Transform
 
 GDAL_ENV = {
@@ -392,6 +395,11 @@ def _offer_band_dates(
     ]
 
 
+def _values(values: np.ndarray) -> str:
+    """One pixel's values, one per band."""
+    return ", ".join(str(v) for v in values.tolist())
+
+
 def _parse_resampling(name: str) -> Any:
     from rasterio.enums import Resampling
 
@@ -422,6 +430,7 @@ class CogManifestSource(Source):
         offset_given: bool = False,
         band_series: BandSeries | None = None,
         band_date_pattern: str | None = None,
+        mosaic_tiles: bool = False,
     ) -> None:
         """Open every source's header and check the set is one series.
 
@@ -433,6 +442,12 @@ class CogManifestSource(Source):
         `band_names` come from it, and each timestep reads the bands of its date. A single
         undated file whose band descriptions would make a series is refused with the option that
         reads them (`band_date_pattern` is the `--date-pattern` that option would use).
+
+        Files that share a date are refused, each with the fix that is true of it
+        (`same_date_problems`), unless `mosaic_tiles` says they are tiles: then they must tile one
+        grid (`lay_out`), which becomes the target grid, and each timestep joins the tiles of its
+        date. Tiles are never warped, so `target_transform`, `target_shape`, `resampling` and
+        `bounds` do not apply, and `target_crs` may only name the CRS the tiles have.
         """
         self.entries = entries
         self.times = [e.time for e in entries]
@@ -441,6 +456,7 @@ class CogManifestSource(Source):
         self.variable = variable
         self.draft = ManifestDraft(entries, tuple(undated))
         self._band_series = band_series
+        self._layout: TileLayout | None = None
         if band_series is None:
             uris = [*(e.uri for e in entries), *undated]
             workers = min(8, len(uris))
@@ -472,7 +488,24 @@ class CogManifestSource(Source):
         )
         if bounds is not None:
             problems += self._size_problems(good)
-        self.grid = self._target_grid(first, target_crs, target_transform, target_shape)
+        excused: frozenset[str] = frozenset()
+        if band_series is None:
+            dated = [(e.time, e.uri) for e in entries]
+            grids = {uri: header.grid for uri, header in good}
+            if mosaic_tiles:
+                files = [(time, uri, grids[uri]) for time, uri in dated if uri in grids]
+                layout = lay_out(files) if files else None
+                if isinstance(layout, TileLayout):
+                    self._layout = layout
+                elif layout is not None:
+                    problems += layout
+            else:
+                shared, excused = same_date_problems(dated, grids)
+                problems += shared
+        if self._layout is None:
+            self.grid = self._target_grid(first, target_crs, target_transform, target_shape)
+        else:
+            self.grid = self._tiles_grid(self._layout, target_crs)
         problems += self._consistency_problems(
             good,
             compare_labels=band_names is None,
@@ -480,12 +513,15 @@ class CogManifestSource(Source):
             compare_scales=not scale_given,
             compare_offsets=not offset_given,
         )
-        if resampling is None:
-            problems += self._grid_problems(good, first_uri)
+        if resampling is None and not mosaic_tiles:
+            problems += [p for p in self._grid_problems(good, first_uri) if p.uri not in excused]
         if problems:
             self._raise(problems, uris)
         headers = [h for _, h in good]
         self._headers = headers
+        self._tile_headers = dict(good)
+        if self._layout is not None:
+            self.times = list(self._layout.times)
         if all(h.driver == "PNG" for h in headers):
             self.kind = "manifest of PNG frames"
         if band_names is None:
@@ -507,7 +543,9 @@ class CogManifestSource(Source):
         if len(set(names)) != len(names):
             raise ValueError(f"band names must be unique, got {list(names)}")
         self.warped = frozenset(
-            i for i, h in enumerate(headers) if not _same_grid(h.grid, self.grid)
+            i
+            for i, h in enumerate(headers)
+            if self._layout is None and not _same_grid(h.grid, self.grid)
         )
         if self.warped:
             assert resampling is not None
@@ -517,15 +555,20 @@ class CogManifestSource(Source):
             explicit.append("alpha band")
         if any(h.internal_mask for h in headers):
             explicit.append("internal mask")
+        if self.warped:
+            footprint = "warped timesteps leave pixels outside the source footprint"
+        else:
+            footprint = None if self._layout is None else self._layout.footprint()
         validity = _decide_validity(
             first.dtype,
             {token for h in headers for token in h.nodata},
             override=nodata,
             explicit=explicit,
-            footprint=bool(self.warped),
+            footprint=footprint,
         )
         self.notes = (
             *(() if band_series is None else (f"bands:      {band_series.dates.note()}",)),
+            *(() if self._layout is None else (self._layout.note(),)),
             *self._interleave_notes(),
             *(self._nodata_notes(good) if nodata == "auto" else ()),
             *self._label_notes(labels, names),
@@ -599,6 +642,22 @@ class CogManifestSource(Source):
             height,
             width,
         )
+
+    @staticmethod
+    def _tiles_grid(layout: TileLayout, crs: str | None) -> Grid:
+        """The grid that holds every tile; `crs` must be the tiles' own, since tiles are not
+        warped."""
+        from rasterio.crs import CRS  # ty: ignore[unresolved-import]  # compiled, no stubs
+
+        if crs is not None and not _same_crs(
+            _crs_string(CRS.from_user_input(crs)), layout.grid.crs
+        ):
+            raise ValueError(
+                f"--crs {crs} is not the CRS of the tiles ({_crs_label(layout.grid.crs)}), and "
+                f"{TILES_OPTION} joins the tiles on their own grid. Leave --crs out, or join and "
+                "warp the tiles yourself first"
+            )
+        return layout.grid
 
     @staticmethod
     def _size_problems(good: list[tuple[str, _CogHeader]]) -> list[Problem]:
@@ -766,6 +825,8 @@ class CogManifestSource(Source):
         bands are dates, every date with its bands."""
         if self._band_series is not None:
             return ["files:      1, a band per date", *self._band_series.dates.listing()]
+        if self._layout is not None:
+            return self._layout.listing()
         return [
             f"files:      {len(self.entries)}, dated from their names",
             *(f"  {show_time(e.time)}  {e.uri}" for e in self.entries),
@@ -778,6 +839,16 @@ class CogManifestSource(Source):
             **(
                 {"band_indexes": [list(h.data_indexes) for h in self._headers]}
                 if self._band_series is not None
+                else {}
+            ),
+            **(
+                {
+                    "tiles": [
+                        [[uri, window.row, window.col] for uri, window in date]
+                        for date in self._layout.tiles
+                    ]
+                }
+                if self._layout is not None
                 else {}
             ),
             "variable": self.variable,
@@ -794,6 +865,8 @@ class CogManifestSource(Source):
     def read(self, t: int) -> Step:
         import rasterio
 
+        if self._layout is not None:
+            return self._read_tiles(t)
         entry, header = self.entries[t], self._headers[t]
         grid, info = self.grid, self.info
         data = np.empty((info.n_band, grid.height, grid.width), dtype=info.dtype)
@@ -815,6 +888,73 @@ class CogManifestSource(Source):
             raise OSError(f"reading {entry.uri} (timestep {t}): {exc}") from exc
         _settle_nan(data, valid, info.nodata, f"{entry.uri} (timestep {t})")
         return Step(data, valid)
+
+    def _read_tiles(self, t: int) -> Step:
+        """Timestep `t` joined from the tiles of its date, in file order.
+
+        A tile fills the pixels that no earlier tile covers, and those where it is valid and the
+        earlier tiles are not; where an earlier tile and this one are both valid, their values
+        must be equal, else ValueError. Pixels no tile covers hold the fill value and are invalid.
+        """
+        import rasterio
+
+        assert self._layout is not None
+        grid, info = self.grid, self.info
+        fill = 0 if info.nodata is None else info.nodata
+        data = np.full((info.n_band, grid.height, grid.width), fill, dtype=info.dtype)
+        covered = np.zeros((grid.height, grid.width), dtype=bool)
+        valid = np.zeros((grid.height, grid.width), dtype=bool)
+        tiles = self._layout.tiles[t]
+        for i, (uri, window) in enumerate(tiles):
+            header = self._tile_headers[uri]
+            differ_count, example = 0, None
+            try:
+                with (
+                    rasterio.Env(**_gdal_env(header.dataset)),
+                    rasterio.open(header.dataset) as src,
+                ):
+                    for top in range(0, window.height, self.chunk_size):
+                        rows = min(self.chunk_size, window.height - top)
+                        read_window = ((top, top + rows), (0, window.width))
+                        block = src.read(list(header.data_indexes), window=read_window)
+                        block_valid = self._declared_valid(src, header, read_window)
+                        block_valid &= _value_valid(block, self._sentinels)
+                        ys = slice(window.row + top, window.row + top + rows)
+                        xs = slice(window.col, window.col + window.width)
+                        # views into the timestep: assignments below write through
+                        target, seen, good = data[:, ys, xs], covered[ys, xs], valid[ys, xs]
+                        differ = good & block_valid & (target != block).any(axis=0)
+                        if differ.any():
+                            differ_count += int(differ.sum())
+                            if example is None:
+                                y, x = (int(v) for v in np.argwhere(differ)[0])
+                                example = (
+                                    ys.start + y,
+                                    xs.start + x,
+                                    target[:, y, x].copy(),
+                                    block[:, y, x].copy(),
+                                )
+                        take = ~seen | (block_valid & ~good)
+                        target[:, take] = block[:, take]
+                        seen[:] = True
+                        good |= block_valid
+            except rasterio.errors.RasterioError as exc:
+                raise OSError(f"reading {uri} (timestep {t}): {exc}") from exc
+            if example is not None:
+                row, col, before, here = example
+                earlier = [u for u, w in tiles[:i] if w.overlaps(window)]
+                raise ValueError(
+                    f"{show_time(self.times[t])}: {_name(uri)} overlaps "
+                    f"{_names(earlier)}, and they hold different values at {differ_count} "
+                    f"pixels where both are valid (row {row}, column {col} of the grid: "
+                    f"{_values(before)} against {_values(here)}). Tiles of one image agree where "
+                    "they overlap, so these files are not tiles of one image. Keep the files you "
+                    "want for this date (move the others out of the folder), or join them "
+                    "yourself with a rule you choose and convert the joined files"
+                )
+        where = f"{_name(tiles[0][0])} and the other tiles of {show_time(self.times[t])}"
+        _settle_nan(data, valid if info.mask else None, info.nodata, f"{where} (timestep {t})")
+        return Step(data, valid.astype(np.uint8) if info.mask else None)
 
     def _declared_valid(
         self,
