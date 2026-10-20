@@ -19,6 +19,7 @@ This file holds measurements, tested versions, dates and caveats. User docs link
 - [Hosting observations](#hosting-observations)
 - [Newcomer trial (2026-10-12)](#newcomer-trial-2026-10-12)
 - [Newcomer baseline (2026-10-19)](#newcomer-baseline-2026-10-19)
+- [Newcomer measures after the fixes (2026-10-20)](#newcomer-measures-after-the-fixes-2026-10-20)
 - [Readers that decode (2026-10-19)](#readers-that-decode-2026-10-19)
 - [Stores written by other tools (2026-10-19)](#stores-written-by-other-tools-2026-10-19)
 - [Every chunk written (2026-10-20)](#every-chunk-written-2026-10-20)
@@ -797,6 +798,63 @@ Ranked by datasets and sessions affected, a wrong store first. Each is a candida
 ### Adoption
 
 GitHub on 2026-10-18: 0 stars, 0 forks, 0 watchers; every issue and pull request is the maintainer's; 35 unique visitors in 14 days, referred only by chronozarr.org. PyPI 2026-10-01 to 2026-10-15: 657 downloads without mirrors, 562 of them with no Python version and the rest peaking on release days. npm 2026-09-01 to 2026-10-16: 955 downloads, peaking on publish days. A GitHub code search finds no repository outside chronozarr that opens a store. Cloudflare analytics were not read.
+
+## Newcomer measures after the fixes (2026-10-20)
+
+The [newcomer baseline](#newcomer-baseline-2026-10-19) repeated after the changes it prompted (pull requests #110 to #130, merged 2026-10-19 and 2026-10-20), with the same data, briefs and checks. No person took part, so the [colleague trial](colleague-trial.md#analysis)'s primary endpoint still has no value.
+
+### Real data
+
+The 20 datasets of the baseline, run on main at `83e5235` with the `geo` extra only, as the quickstart installs it (`scripts/corpus/run_corpus.py --results`; results in `data/corpus/results-2026-10-20-main-83e5235.json`). A route counts when following only what the messages say gives a store whose dates, CRS and values at 3 pixels on 3 dates equal the source.
+
+| | Baseline (0.4.1) | Main `5673cee` | Main `83e5235` |
+|---|---:|---:|---:|
+| First run converts | 0 | 2 | 2 |
+| First run refused with a fix that works | 7 | 15 | 17 |
+| First run refused with no fix that works | 13 | 3 | 1 |
+| Messages alone lead to a correct store | 4 | 10 | 12 |
+| The same, with longitudes beyond 180 accepted | 4 | 14 | 17 |
+
+No first run gave a wrong store or a traceback in any of the three. The 18 hand-made routes of the baseline still give correct stores, except the two NSIDC routes, which the fill check now stops until `--nodata` is given.
+
+Still without a route from the messages alone: Earth Engine tiles split per date (the message suggests narrowing the glob, which converts a quarter of the mosaic), SMAP (the CRS and extents of its EASE-Grid must come from elsewhere), HRRR (a `gdal_translate` loop and a date from the folder name) and MODIS HDF4 (a GDAL with the HDF4 driver; not run). Only one of the two NSIDC flag values can be marked as nodata.
+
+### Simulated newcomers
+
+The ten sessions of the baseline (sessions 1, 22, 3, 4, 5, 26, 7, 8, 9, 10), repeated as sessions 201 to 210 with the same briefs, datasets, images and Codex configuration, against a local copy of main at `83e5235` given version 0.5.0 and documentation pinned to 0.5.0. That copy's wheel and site were built and served as chronozarr.org inside the containers, over HTTPS with a local certificate authority (`scripts/trial/newcomer/site_server.mjs`). It was not released or deployed. Stores were opened from each session's saved home folder and compared with the source at every pixel and date.
+
+| Data | Minutes to link, baseline / after | Own conversion code, baseline / after | Store after |
+|---|---:|---|---|
+| WorldClim monthly GeoTIFF | 1.3 / 1.0 | 5-line manifest / none | correct |
+| NSIDC monthly GeoTIFF, polar | 1.0 / 1.0 | none / none | correct; flag values kept as data with `--nodata none` |
+| PRISM daily BIL in zips | 1.8 / 1.2 | 19 lines / none | correct |
+| MODIS 16-day COG, day-of-year names | 2.0 / 1.4 | 22 lines / none | correct, with `--scale 0.0001` |
+| Landsat NDVI with NaN | 1.6 / 1.2 | none / none | correct |
+| Earth Engine 23-band export | 1.5 / 1.3 | 25 lines / none | correct, `--bands-are-dates` and `--nodata -3000` |
+| OISST daily NetCDF | 1.5 / 1.9 | none / none | correct; longitudes 280 to 360 kept |
+| CMIP6 360-day NetCDF | 1.9 / 1.4 | 10 lines / none | correct; the calendar rule is in the store's provenance |
+| ERA5 6-hourly NetCDF over 180° | 1.5 / 1.6 | none / none | correct; longitudes 165 to 195 kept |
+| Daymet NetCDF, Lambert conformal | 1.7 / 1.5 | 19 lines / none | correct, in its own CRS |
+
+All 30 tasks were done in both runs, and the recipient saw the chosen date every time. Sessions that wrote their own conversion code went from 5 (and one hand-written manifest) to 0. The minutes changed little: the agent writes code at machine speed, so the code it no longer writes is the measure that matters. The containers' packages are the baseline's versions, and the site was served from this machine, so the recipient's first-frame times are not comparable.
+
+Seen in the sessions and not yet changed: a local `preview` logs 404 console errors for chunks a store does not have (78 in one session), `chronozarr link` run at once after `share` failed once until the tunnel's address resolved, and a lookup in xarray by a longitude from -180 to 180 on a store kept at 0 to 360 still returns an edge column.
+
+### Viewer
+
+Measured locally, as the sections above give in full: [Cold open with the viewer bundled](#cold-open-with-the-viewer-bundled-2026-10-19) and [Speculative bandwidth and playback on a slow link](#speculative-bandwidth-and-playback-on-a-slow-link-2026-10-19).
+
+| | Before | After |
+|---|---:|---:|
+| Requests one after another before the first frame | 11 | 5 |
+| First frame with 200 ms added to every request | 2,404 ms | 1,128 ms |
+| Wire bytes in the 1.5 s after the first frame | 270 MB | 113 MB |
+| Playback at 0.7 MB/s: first step after pressing play | 23.5 s | 5.0 s |
+| Playback at 0.7 MB/s: pauses in 60 s | 3 | 0 |
+
+The byte and playback figures were measured with the first version of the bandwidth change. Its final version caps the speculative requests of all jobs together and sets the playback speed per missing frame; it had no pause in 6 runs of the slow-link test on the sources and 6 on the bundled viewer.
+
+Speed gates, last measured on a lightly loaded machine: with the bundled viewer (load 9 to 10), cold open 121 to 133 ms from the store load call, warm switch 3.6 to 4.1 ms, decode 4.3 to 4.6 ms per chunk and 0 wire bytes on a warm switch; with the first version of the bandwidth change (load 5 to 7), warm switch 4.7 to 5.1 ms and decode 4.2 to 4.5 ms. During the final change the machine was at load 190 to 315 from other work: before and after, alternated under that load, gave the same figures, so the change did not move them, but the gates were not measured again. The deployed site was not measured, because nothing has been deployed since 0.4.1.
 
 ## Temporary sharing
 

@@ -1,0 +1,17 @@
+# What the newcomer-rc images offer from /opt/wheelhouse: the Phase 2 closing re-measurement, against a simulated release of
+# main (the chronozarr 0.5.0 wheel built from a clean `git archive` of origin/main with the version and the docs' install pins
+# moved from 0.4.1 to 0.5.0; never published). Resolved on the host under the 7-day quarantine (uv.toml exclude-newer), with
+# the Phase 0 wheelhouse's versions held as constraints so that nothing but chronozarr changes between the two measurements.
+chronozarr[geo,netcdf,dask,notebook,s3,publish] @ file:///Users/jakegearon/projects/chronozarr/data/trial/wheelhouse-rc-0.5.0/chronozarr-0.5.0-py3-none-any.whl
+
+# What a scientist might add to read one pixel over time.
+xarray
+rioxarray
+rasterio
+netCDF4
+h5netcdf
+zarr
+dask
+pandas
+matplotlib
+ipython

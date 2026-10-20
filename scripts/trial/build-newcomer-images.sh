@@ -5,6 +5,9 @@
 #
 # Two named build contexts come from the main checkout's data/trial/: wheelhouse (newcomer/build_wheelhouse.py fills it)
 # and assets (the Miniforge installer, fetched here once; the Dockerfile checks its sha256).
+#
+# Env WHEELHOUSE (default wheelhouse: a folder name under data/trial or a path) and TAG_SUFFIX (default empty) build a
+# second pair of images beside the first: WHEELHOUSE=wheelhouse-rc-0.5.0 TAG_SUFFIX=-rc gives ubuntu-rc and conda-rc.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -12,7 +15,12 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$here/lib.sh"
 
 trial_dir=$(trial_data_dir)
-wheelhouse="$trial_dir/wheelhouse"
+wheelhouse=${WHEELHOUSE:-wheelhouse}
+case "$wheelhouse" in
+/*) ;;
+*) wheelhouse="$trial_dir/$wheelhouse" ;;
+esac
+tag_suffix=${TAG_SUFFIX:-}
 assets="$trial_dir/assets"
 [ -f "$wheelhouse/SHA256SUMS" ] || die "no wheelhouse at $wheelhouse; run scripts/trial/newcomer/build_wheelhouse.py"
 
@@ -27,6 +35,6 @@ fi
 
 for target in ubuntu conda; do
   docker build --build-context "wheelhouse=$wheelhouse" --build-context "assets=$assets" \
-    --target "$target" -t "chronozarr-newcomer:$target" "$here/newcomer"
+    --target "$target" -t "chronozarr-newcomer:$target$tag_suffix" "$here/newcomer"
 done
 docker images chronozarr-newcomer

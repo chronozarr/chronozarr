@@ -1,7 +1,7 @@
 """Fetch the wheelhouse of the newcomer images from a pylock.toml, with every hash verified.
 
     uv run --no-project --with packaging python build_wheelhouse.py \
-        --lock pylock.wheelhouse.toml --out DIR --chronozarr-wheel PATH
+        --lock pylock.wheelhouse.toml --out DIR --chronozarr-wheel PATH [--chronozarr-sha256 HEX]
 
 pylock.wheelhouse.toml comes from `uv pip compile wheelhouse-requirements.in --universal
 --python-version 3.12 --format pylock.toml`, run under the host's 7-day quarantine
@@ -10,8 +10,9 @@ uploaded in the last 7 days.
 
 What lands in DIR: the wheels that a Linux aarch64 glibc machine running CPython 3.12, 3.13 or
 3.14 can install (pure-Python wheels and those three interpreters' binary wheels), plus the
-chronozarr 0.4.1 wheel built from the v0.4.1 tag, copied from --chronozarr-wheel. No sdists:
-the images have no compiler.
+chronozarr wheel given by --chronozarr-wheel (built from a tag, or a simulated release), copied in
+after its sha256 matches --chronozarr-sha256 (default: the v0.4.1 tag wheel). No sdists: the images
+have no compiler.
 """
 
 import argparse
@@ -31,7 +32,7 @@ QUARANTINE = dt.timedelta(days=7)
 TARGET_PYTHONS = [(3, 12), (3, 13), (3, 14)]
 # Ubuntu 24.04 ships glibc 2.39.
 GLIBC_MINOR_MAX = 39
-CHRONOZARR_WHEEL_SHA256 = "e5ec2167370126decf78bd24419b736d0cee5240acd651a758f9fe2198f8dd00"
+V041_WHEEL_SHA256 = "e5ec2167370126decf78bd24419b736d0cee5240acd651a758f9fe2198f8dd00"
 
 
 def platforms() -> list[str]:
@@ -125,6 +126,11 @@ def main() -> int:
     parser.add_argument("--lock", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--chronozarr-wheel", type=Path, required=True)
+    parser.add_argument(
+        "--chronozarr-sha256",
+        default=V041_WHEEL_SHA256,
+        help="sha256 of the chronozarr wheel (default: the v0.4.1 tag wheel)",
+    )
     args = parser.parse_args()
 
     lock = tomllib.loads(args.lock.read_text())
@@ -136,8 +142,10 @@ def main() -> int:
 
     args.out.mkdir(parents=True, exist_ok=True)
     local = args.chronozarr_wheel
-    if sha256_of(local) != CHRONOZARR_WHEEL_SHA256:
-        raise SystemExit(f"{local} is not the v0.4.1 tag wheel (sha256 {sha256_of(local)})")
+    if sha256_of(local) != args.chronozarr_sha256:
+        raise SystemExit(
+            f"{local} has sha256 {sha256_of(local)}, not the expected {args.chronozarr_sha256}"
+        )
     if not (args.out / local.name).exists():
         shutil.copyfile(local, args.out / local.name)
 

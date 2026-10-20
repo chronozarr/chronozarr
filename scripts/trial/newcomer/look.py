@@ -40,6 +40,13 @@ CHROMIUM_ARGS = [
     "--enable-webgl",
 ]
 
+# A machine can hold public key hashes (base64 SHA-256 of the SPKI, one per line) of CAs whose
+# certificates the browser accepts. Chromium on Linux reads its own NSS database rather than
+# /etc/ssl/certs, and takes these as --ignore-certificate-errors-spki-list: errors are ignored only
+# for a certificate chain that holds one of the keys. The simulated-release harness
+# (scripts/trial/lib.sh, site_trust) writes the file; a machine without it trusts the public roots.
+TRUSTED_SPKI_FILE = Path("/etc/look/trusted-spki")
+
 # Runs before any page script. Polls the main canvas every 50 ms and records, in milliseconds
 # since the navigation began, when it first shows more than its background colour. A canvas is
 # read by scaling it down to 48 x 48 pixels: it counts as painted when at least 1% of those
@@ -309,12 +316,22 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+def chromium_args() -> list[str]:
+    args = list(CHROMIUM_ARGS)
+    if TRUSTED_SPKI_FILE.is_file():
+        lines = TRUSTED_SPKI_FILE.read_text().splitlines()
+        hashes = [line.strip() for line in lines if line.strip()]
+        if hashes:
+            args.append(f"--ignore-certificate-errors-spki-list={','.join(hashes)}")
+    return args
+
+
 def main() -> int:
     args = parse_args()
     shot_dir = Path.home() / "shots"
     shot_dir.mkdir(exist_ok=True)
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(args=CHROMIUM_ARGS)
+        browser = playwright.chromium.launch(args=chromium_args())
         context = browser.new_context(viewport=WINDOW, locale="en-US", timezone_id="UTC")
         # Chrome asks before a page on the internet reads 127.0.0.1; nobody is here to click Allow.
         context.grant_permissions(["local-network-access"])

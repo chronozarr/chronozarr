@@ -7,7 +7,8 @@
 # newcomer/brief.md. WORK_ROOT holds the agent's working directory and its private CODEX_HOME. Codex gets a fresh
 # CODEX_HOME holding only a link to the owner's auth.json and a config with memories off: no AGENTS.md, memories,
 # hooks, skills or MCP servers. Env: CODEX_BIN (default codex), CODEX_MODEL (default gpt-6.1-sol),
-# SESSION_TIMEOUT_S (default 3600).
+# SESSION_TIMEOUT_S (default 3600). The environment also reaches start-newcomer.sh and recipient.sh: SITE_IP and
+# SITE_CA (a local copy of chronozarr.org, see lib.sh) and RECIPIENT_IMAGE (default chronozarr-newcomer:ubuntu).
 #
 # Afterwards: the share link from the agent's answer goes to recipient.sh, the container's history, screenshots and
 # background logs are saved, and the container is removed. Records: <main checkout>/data/trial/newcomer-N/.
