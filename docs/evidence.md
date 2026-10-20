@@ -838,7 +838,7 @@ The ten sessions of the baseline (sessions 1, 22, 3, 4, 5, 26, 7, 8, 9, 10), rep
 
 All 30 tasks were done in both runs, and the recipient saw the chosen date every time. Sessions that wrote their own conversion code went from 5 (and one hand-written manifest) to 0. The minutes changed little: the agent writes code at machine speed, so the code it no longer writes is the measure that matters. The containers' packages are the baseline's versions, and the site was served from this machine, so the recipient's first-frame times are not comparable.
 
-Seen in the sessions and not yet changed: a local `preview` logs 404 console errors for chunks a store does not have (78 in one session), `chronozarr link` run at once after `share` failed once until the tunnel's address resolved, and a lookup in xarray by a longitude from -180 to 180 on a store kept at 0 to 360 still returns an edge column.
+Seen in the sessions and not yet changed: a local `preview` logs 404 console errors for chunks a store does not have (78 in one session), `chronozarr link` run at once after `share` failed once until the tunnel's address resolved, and a lookup in xarray by a longitude from -180 to 180 on a store kept at 0 to 360 still returns an edge column. The first two were changed afterwards: see [Every chunk written](#every-chunk-written-2026-10-20) and [`link` before the address works](#link-before-the-address-works-2026-10-20).
 
 ### Viewer
 
