@@ -177,7 +177,7 @@ def test_sharded_append_writes_the_trailing_shard_and_metadata_only(tmp_path, tr
     assert all("/data/c/2/0/" in key for key in data_objects), sorted(data_objects)[:5]
     fresh = tmp_path / "fresh"
     encode_head(truth, fresh, 9, shard=True, shard_time=4)
-    expected = {k for k in digests(fresh) if "/data/c/2/0/" in k}  # all-fill cells have no shard
+    expected = {k for k in digests(fresh) if "/data/c/2/0/" in k}
     assert data_objects == expected
     assert all(after[k] == before[k] for k in before if "/data/c/0/" in k or "/data/c/1/" in k)
     # nothing else is touched except the metadata that describes the longer axis
