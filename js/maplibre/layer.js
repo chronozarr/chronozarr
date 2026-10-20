@@ -975,7 +975,7 @@ export class ChronozarrLayer {
     const store = this.#store;
     const { lod, cells } = this.#lastView;
     if (!store || this.#disposed || cells.length === 0) return;
-    this.#prefetchController?.abort();
+    const previous = this.#prefetchController;
     const controller = new AbortController();
     this.#prefetchController = controller;
     const seek = Math.abs(this.#t - this.#prefetchedAt) > SEEK_DISTANCE;
@@ -997,5 +997,7 @@ export class ChronozarrLayer {
       .then((result) => {
         if (result.errors.length > 0) this.#emit('error', { error: result.errors[0].error, prefetch: true, errors: result.errors });
       }, report);
+    // The new job has taken over the requests it shares with the old one (the reader plans synchronously): now the old one can stop.
+    previous?.abort();
   }
 }

@@ -91,7 +91,8 @@ store.close(); // aborts in-flight requests and releases the decode workers
 | `workers` | cores minus 1, at most 8 | The number of decode workers. With 0 the calling thread decodes. |
 | `totalBytes` | 1.5 GiB on machines that report 8 GB or more, else 768 MiB | The joint cap for the decoded and compressed tiers. |
 | `horizonSteps` | 12 | The timesteps on either side of `t` that idle prefetch covers. |
-| `idleBytes` | 64 MiB | The bytes that idle prefetch may start per idle episode. |
+| `idleBytes` | 32 MiB | The most bytes that idle prefetch may start per idle episode. |
+| `idleSeconds` | 1 | The seconds of the measured bandwidth that idle prefetch may spend per idle episode, when that is less than `idleBytes`. A slow link speculates less. |
 | `idleMs` | 3000 | The quiet time after the last scrub or playback before the viewer counts as idle. |
 | `maxRequests` | 12 | The cap on concurrent requests to the store. |
 | `retryDelaysMs` | `[200, 600, 1500]` | The delay before each retry of a failed request. |
