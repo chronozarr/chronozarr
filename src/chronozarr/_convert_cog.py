@@ -418,6 +418,8 @@ class CogManifestSource(Source):
         variable: str | None = None,
         undated: Sequence[str] = (),
         prior_problems: Sequence[Problem] = (),
+        scale_given: bool = False,
+        offset_given: bool = False,
         band_series: BandSeries | None = None,
         band_date_pattern: str | None = None,
     ) -> None:
@@ -472,7 +474,11 @@ class CogManifestSource(Source):
             problems += self._size_problems(good)
         self.grid = self._target_grid(first, target_crs, target_transform, target_shape)
         problems += self._consistency_problems(
-            good, compare_labels=band_names is None, compare_descriptions=labels is None
+            good,
+            compare_labels=band_names is None,
+            compare_descriptions=labels is None,
+            compare_scales=not scale_given,
+            compare_offsets=not offset_given,
         )
         if resampling is None:
             problems += self._grid_problems(good, first_uri)
@@ -614,11 +620,16 @@ class CogManifestSource(Source):
 
     @staticmethod
     def _consistency_problems(
-        good: list[tuple[str, _CogHeader]], *, compare_labels: bool, compare_descriptions: bool
+        good: list[tuple[str, _CogHeader]],
+        *,
+        compare_labels: bool,
+        compare_descriptions: bool,
+        compare_scales: bool,
+        compare_offsets: bool,
     ) -> list[Problem]:
         """What differs from the first source: band count, dtype, scale, offset, units and
         (unless the manifest names the bands) band colours and descriptions, the latter unless
-        they are labels of their files."""
+        they are labels of their files. Scales and offsets are left out when the user gave them."""
         first_uri, first = good[0]
         problems = []
         for uri, header in good:
@@ -643,11 +654,11 @@ class CogManifestSource(Source):
                         "chronozarr does not change a dtype for you",
                     )
                 )
-            fields = [
-                ("scales", header.scales, first.scales),
-                ("offsets", header.offsets, first.offsets),
-                ("units", header.units, first.units),
-            ]
+            fields = [("units", header.units, first.units)]
+            if compare_offsets:
+                fields.insert(0, ("offsets", header.offsets, first.offsets))
+            if compare_scales:
+                fields.insert(0, ("scales", header.scales, first.scales))
             if compare_labels:
                 if compare_descriptions:
                     fields.append(("band descriptions", header.descriptions, first.descriptions))

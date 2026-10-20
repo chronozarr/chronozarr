@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
@@ -328,3 +328,37 @@ def _scaling(scale: float, offset: float, where: str) -> tuple[float, float]:
             "non-zero and the offset finite"
         )
     return scale, offset
+
+
+def override_scaling(
+    bands: Sequence[Band], scale: float | None, offset: float | None
+) -> tuple[tuple[Band, ...], str]:
+    """`bands` with the scale and offset the user gave in place of the sources' own, and the plan
+    line that says so. A value left as None keeps what the sources declare; ValueError when a given
+    scale is zero or not finite, or a given offset is not finite."""
+    if scale is not None and not (math.isfinite(scale) and scale != 0):
+        raise ValueError(f"--scale must be finite and non-zero, got {scale}")
+    if offset is not None and not math.isfinite(offset):
+        raise ValueError(f"--offset must be finite, got {offset}")
+
+    def declared(values: Sequence[float | None], none: float) -> str:
+        return ", ".join(dict.fromkeys(f"{none if v is None else v:.10g}" for v in values))
+
+    parts = []
+    if scale is not None:
+        parts.append(
+            f"--scale {scale:.10g}; the files declare {declared([b.scale for b in bands], 1.0)}"
+        )
+    if offset is not None:
+        parts.append(
+            f"--offset {offset:.10g}; the files declare {declared([b.offset for b in bands], 0.0)}"
+        )
+    changed = tuple(
+        replace(
+            band,
+            scale=band.scale if scale is None else scale,
+            offset=band.offset if offset is None else offset,
+        )
+        for band in bands
+    )
+    return changed, ". ".join(parts)

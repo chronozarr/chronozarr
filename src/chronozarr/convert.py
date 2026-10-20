@@ -70,6 +70,12 @@ Scale, offset and units:
 2. Zarr and NetCDF: the variable's CF `scale_factor`, `add_offset` and `units` apply to every
    band (1 and 0 when absent); a scale that is zero or not finite fails.
 
+`--scale` and `--offset` replace the scale and offset of every band, and the sources then need not
+agree on them. A scale of 100, 1000, 10000 ... with no offset that carries a value past 1e6 is
+refused until `--scale` is given: HDF-EOS products such as MODIS MOD13 write the divisor (NDVI,
+scale 10000, meaning stored / 10000) and GDAL multiplies. `--scale 0.0001` reads it as a divisor,
+`--scale 10000` keeps the file's value.
+
 Validity. A store marks invalid pixels either with one `nodata` sentinel, judged per band with no
 mask, or with a `mask` variable shared by all bands (spec 2.3, 2.4).
 
@@ -108,7 +114,10 @@ mask, or with a `mask` variable shared by all bands (spec 2.3, 2.4).
 Plan lines from the pixels. The plan reads three timesteps, and from those pixels it adds a `fill:`
 line when a value that no declared nodata or mask covers looks like a fill (`_convert_pixels`
 says how it is judged), and a `range:` line, each band's values after scale and offset, when a band
-declares a scale or offset. Neither changes what is written or refuses a conversion.
+declares a scale or offset. The `range:` line changes nothing. A `fill:` line only names the value
+and the option that marks it, unless the value holds 5 % of the valid pixels (1 % for -9999, -999,
+-3000 and -32768): then the conversion is refused, a dry run too, until `--nodata VALUE` marks it
+or `--nodata none` keeps every value as data. Any explicit `--nodata` ends the refusal.
 
 Calendars. A Zarr or NetCDF time axis on a 360_day, noleap (365_day), all_leap (366_day) or
 julian calendar is decoded by cftime (`chronozarr[cftime]`) and refused unless
@@ -151,7 +160,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -206,7 +215,13 @@ from chronozarr._convert_manifest import (
 from chronozarr._convert_manifest import (
     read_manifest as read_manifest,
 )
-from chronozarr._convert_pixels import fill_line, range_line
+from chronozarr._convert_pixels import (
+    fill_line,
+    fill_refusal,
+    likely_fills,
+    range_line,
+    scale_refusal,
+)
 from chronozarr._convert_preflight import (
     PreflightError as PreflightError,
 )
@@ -233,6 +248,7 @@ from chronozarr._convert_source import (
 )
 from chronozarr._convert_source import (
     _check_north_up,
+    override_scaling,
 )
 from chronozarr._convert_source import (
     check_bounds as check_bounds,
@@ -263,6 +279,10 @@ Scale, offset, units and validity are carried over from the source, or the conve
 Scale and offset: COG per-band scales, offsets, units and descriptions become the band objects
 and must be identical in every source; an alpha band is not data, it becomes the mask.
 Zarr/NetCDF: the CF scale_factor, add_offset and units of the variable apply to every band.
+--scale and --offset replace them for every band (the sources then need not agree). A scale of
+100, 1000, 10000 ... with no offset that gives values past 1e6 is refused, as MODIS NDVI is:
+HDF-EOS products write the divisor, GDAL multiplies. --scale 0.0001 reads it as a divisor;
+--scale 10000 keeps it.
 
 \b
 Validity is either one nodata sentinel (judged per band, no mask) or one mask shared by all bands:
@@ -274,6 +294,9 @@ Validity is either one nodata sentinel (judged per band, no mask) or one mask sh
             --nodata gives one. A pixel invalid in any band is invalid for all.
   NaN is never stored: under a mask it becomes 0. A float source with undeclared NaN fails;
   --nodata nan treats NaN as invalid. --nodata N replaces the declared nodata; none ignores it.
+  A value that looks like a fill and that the files do not declare fails too, a dry run included,
+  when it holds 5 % of the pixels (1 % for -9999, -999, -3000 and -32768): --nodata N marks it
+  invalid, --nodata none keeps it as data. Smaller findings are named in the plan only.
 
 \b
 Time: a Zarr or NetCDF time axis on a 360_day, noleap, all_leap or julian calendar needs the
@@ -402,6 +425,8 @@ def plan_conversion(
     shape: tuple[int, int] | None = None,
     resampling: str | None = None,
     nodata: float | int | str | None = "auto",
+    scale: float | None = None,
+    offset: float | None = None,
     mask_var: str | None = None,
     bounds: Sequence[float] | None = None,
     chunk_size: int = 512,
@@ -415,7 +440,8 @@ def plan_conversion(
 
     Reads `SAMPLE_TIMESTEPS` timesteps (when `sample`) to measure read time and compression.
     Raises `PreflightError` with every problem found in the files (and, for a discovered series,
-    in their dated names) when the sources cannot be one series.
+    in their dated names) when the sources cannot be one series, and `ValueError` when the sampled
+    pixels hold an undeclared fill or a divisor scale that `nodata` or `scale` has not answered.
     """
     check_rule(calendar_to_gregorian)
     text = str(source_path)
@@ -486,6 +512,8 @@ def plan_conversion(
             chunk_size=chunk_size,
             bounds=frame_bounds,
             variable=variable,
+            scale_given=scale is not None,
+            offset_given=offset is not None,
             band_series=band_series,
             band_date_pattern=date_pattern,
         )
@@ -515,6 +543,8 @@ def plan_conversion(
                         mask_var,
                         bounds,
                         calendar_to_gregorian,
+                        scale,
+                        offset,
                     )
                 )
                 or nodata != "auto"
@@ -533,6 +563,10 @@ def plan_conversion(
                 text, variable, _parse_dims(dims), crs, nodata, mask_var, calendar_to_gregorian
             )
 
+    if scale is not None or offset is not None:
+        bands, said = override_scaling(source.info.bands, scale, offset)
+        source.info = replace(source.info, bands=bands)
+        source.notes = (*source.notes, f"override:   {said}")
     info = source.info
     n_time = len(source.times)
     timestep_bytes = info.n_band * info.grid.height * info.grid.width * info.dtype.itemsize
@@ -568,8 +602,15 @@ def plan_conversion(
         plan.est_output_bytes = int(plan.raw_bytes * plan.sample_ratio * pyramid)
         if not isinstance(source, LegacySource):  # a migration copies what the store holds
             steps = list(plan.samples.values())
+            fills = likely_fills(steps, info)
+            refusals = [
+                *([fill_refusal(fills, len(steps), info)] if nodata == "auto" else []),
+                *([scale_refusal(steps, info)] if scale is None else []),
+            ]
+            if any(refusals):
+                raise ValueError("\n".join(r for r in refusals if r))
             plan.value_range = range_line(steps, info)
-            plan.fill = fill_line(steps, info)
+            plan.fill = fill_line(fills, len(steps), info, nodata)
     return plan
 
 
@@ -748,6 +789,8 @@ def convert(
     shape: tuple[int, int] | None = None,
     resampling: str | None = None,
     nodata: float | int | str | None = "auto",
+    scale: float | None = None,
+    offset: float | None = None,
     mask_var: str | None = None,
     bounds: Sequence[float] | None = None,
     band_roles: Mapping[str, str | None] | None = None,
@@ -795,10 +838,14 @@ def convert(
     Scale, offset, units and validity follow the fidelity rules of the module docstring.
     `nodata` is "auto" (what the sources declare; none declared means no nodata, not 0), a
     number that replaces the declared nodata, None (no nodata) or NaN (float data: NaN pixels are
-    invalid, through a mask). `mask_var` names a boolean or integer (time, y, x) variable of a
-    Zarr or NetCDF source whose nonzero values are valid; the store then gets a mask. `variable`
-    names the Zarr or NetCDF variable, or for rasters the subdataset to read from files that hold
-    several (HDF5, HDF-EOS5).
+    invalid, through a mask). An undeclared value that looks like a fill and holds a large share of
+    the sampled pixels is refused unless `nodata` is given (a number, None or NaN). `scale` and
+    `offset` replace the scale and offset of every band that the sources declare; a scale that
+    reads like a divisor (10000 on MODIS NDVI, which gives values near 1e8) is refused unless
+    `scale` is given, and `scale=0.0001` fixes it. `mask_var` names a boolean or integer (time, y,
+    x) variable of a Zarr or NetCDF source whose nonzero values are valid; the store then gets a
+    mask. `variable` names the Zarr or NetCDF variable, or for rasters the subdataset to read from
+    files that hold several (HDF5, HDF-EOS5).
 
     `calendar_to_gregorian` ("date" or "date-or-month-end") says how to store a Zarr or NetCDF
     time axis on a calendar that is not Gregorian (360_day, noleap, all_leap, julian; needs
@@ -848,6 +895,8 @@ def convert(
             shape=shape,
             resampling=resampling,
             nodata=nodata,
+            scale=scale,
+            offset=offset,
             mask_var=mask_var,
             bounds=bounds,
             chunk_size=encode_options.get("chunk_size", 512),
