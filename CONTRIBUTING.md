@@ -29,10 +29,13 @@ Native Node coverage measures only modules loaded by the Node tests under `chron
 
 CI retains both coverage reports for 14 days.
 
-For a before and after speed check on the same local fixture:
+The Speed gates workflow measures the viewer of a pull request that changes `js/` against the viewer of its base, on the same runner, and fails when the head is slower than the tolerances in `js/support/gate-bench/compare.js` allow or when a warm switch uses the network. Its step summary gives both builds' figures. The same before and after check, locally (`/path/to/base` is a checkout of the base commit with `npm ci` run in its `js/`):
 
 ```bash
-node scripts/audit_browser.mjs js data/spike/stress6x6 data/reports/browser-bench.json
+node /path/to/base/js/support/build-viewer.mjs /tmp/gates/viewers/base
+node js/support/build-viewer.mjs /tmp/gates/viewers/head
+node js/support/gate-bench/store.mjs /tmp/gates/store
+node js/support/gate-bench/run.mjs --base /tmp/gates/viewers/base --head /tmp/gates/viewers/head --store /tmp/gates/store
 ```
 
-The script uses headless Chromium with software WebGL, three cold runs and 20 switches. Its additional `warmFullyLoaded` measurement primes all timesteps with a 2 GiB cache, because the ordinary idle prefetch intentionally stops at 64 MiB. Inspect complete frames and bytes alongside timings. Local and loopback results do not measure CDN performance.
+The runner alternates the two builds in pairs of runs, each a new headless Chromium with software WebGL, and compares each pair on its own. The store is 36 cells at level 0. `--gpu metal` draws on the GPU of a Mac instead. Timings on a machine that other work loads are noise: check `uptime` first. Local and loopback results do not measure CDN performance.
