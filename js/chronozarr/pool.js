@@ -97,10 +97,15 @@ export class DecodePool {
     return this.#failure !== null;
   }
 
-  /** Have every worker instantiate the codecs for `spec` as soon as it can, so its first real chunk is not slowed. */
+  /**
+   * Have every worker, and the fallback decoder, instantiate the codecs for `spec` as soon as they can, so the first real
+   * chunk is not slowed. The fallback decodes whatever arrives before a worker is ready: its codecs load while the chunk
+   * downloads instead of after it.
+   */
   warm(spec) {
     if (this.#warm.has(spec.key)) return;
     this.#warm.set(spec.key, spec);
+    this.#fallback?.warm?.(spec);
     for (const worker of this.#workers) if (worker.ready) worker.handle.postMessage({ type: 'warm', spec });
   }
 

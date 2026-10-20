@@ -174,6 +174,30 @@ test('with a fallback, workers that cannot start are replaced by it, with one wa
   assert.match(warn.mock.calls[0].arguments[0], /decode worker failed to start: no such codec.*decoding on the main thread/);
 });
 
+test('warm() has the fallback decoder load its codecs too, once per spec, while the first chunk is still downloading', async () => {
+  const spawn = () => ({ onmessage: null, postMessage() {}, terminate() {} });
+  const warmed = [];
+  const fallback = { decode: async () => new Uint16Array(1), warm: (spec) => warmed.push(spec.key) };
+  const pool = new DecodePool({ size: 2, spawn, init: { type: 'init' }, fallback });
+  const spec = { key: 'u16-zstd', dtype: 'uint16', shape: [1, 1, 8, 8], codecs: [] };
+  pool.warm(spec);
+  pool.warm(spec);
+  pool.warm({ ...spec, key: 'u8-mask' });
+  assert.deepEqual(warmed, ['u16-zstd', 'u8-mask'], 'at once, not when the first job arrives');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  pool.close();
+});
+
+test('warm() with no fallback, or a fallback that cannot warm, only warms the workers', () => {
+  const { spawn } = fakeWorkerFactory();
+  const spec = { key: 'k', dtype: 'uint16', shape: [1, 1, 8, 8], codecs: [] };
+  for (const fallback of [null, { decode: async () => new Uint16Array(1) }]) {
+    const pool = new DecodePool({ size: 1, spawn, init: { type: 'init' }, fallback });
+    pool.warm(spec);
+    pool.close();
+  }
+});
+
 test('cancelling a queued decode releases its job before a worker becomes ready', async (t) => {
   const { spawn, log } = fakeWorkerFactory({ readyDelayMs: 500 });
   const pool = new DecodePool({ size: 1, spawn, init: { type: 'init' } });
