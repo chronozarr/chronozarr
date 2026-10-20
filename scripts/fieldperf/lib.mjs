@@ -17,6 +17,15 @@ export { scriptLevels } from '../../js/support/script-levels.js';
 export const SITE = process.env.FIELDPERF_SITE ?? 'https://chronozarr.org/demo/';
 export const STORE = process.env.FIELDPERF_STORE ?? 'https://data.chronozarr.org/ucayali_santa_maria_v03';
 export const STORE_HOST = new URL(STORE).host;
+
+/** The address of a visit. The catalog's default store is the public one, so a local site (FIELDPERF_SITE) always names its store. */
+export function viewerUrl({ t = null, store = null } = {}) {
+  const query = [];
+  if (store !== null || process.env.FIELDPERF_SITE) query.push(`store=${encodeURIComponent(store ?? STORE)}`);
+  if (t !== null) query.push(`t=${t}`);
+  return query.length ? `${SITE}?${query.join('&')}` : SITE;
+}
+
 // Raw data and summaries go to one directory per measurement date. FIELDPERF_OUT overrides the default (the 2026-10-18 resume),
 // so an analysis script can be pointed at the 2026-10-16 directory, whose data stays as it was written.
 export const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -182,6 +191,42 @@ export function describeRequest(r, t0Ts) {
 
 function round1(x) {
   return Math.round(x * 10) / 10;
+}
+
+/** A request for something inside the store (metadata, coordinates, chunks, masks), not the page or its modules. */
+export function isStoreRequest(r) {
+  return r.url.startsWith(STORE);
+}
+
+/** What a store request is, from its path: a data, mask or coverage chunk of a level, or metadata. */
+export function classifyStorePath(urlPath) {
+  const match = /\/(\d+)\/(data|mask|coverage)\/c\/[\d/]+$/.exec(urlPath.split('?')[0]);
+  return match ? { kind: match[2], level: Number(match[1]) } : { kind: 'meta', level: null };
+}
+
+/**
+ * Wire bytes of the store requests (as describeRequest returns them) that started between `fromS` and `toS`, epoch seconds,
+ * by kind and, for data chunks, by level. A request the page aborted reports no bytes over CDP: `aborted` counts them.
+ */
+export function wireSummary(described, fromS, toS) {
+  const out = { requests: 0, bytes: 0, aborted: 0, failed: 0, data: { n: 0, bytes: 0, byLevel: {} }, mask: { n: 0, bytes: 0 }, coverage: { n: 0, bytes: 0 }, meta: { n: 0, bytes: 0 } };
+  for (const r of described) {
+    if (!r.url.startsWith(STORE) || r.method === 'OPTIONS' || r.wallTime < fromS || r.wallTime > toS) continue;
+    const { kind, level } = classifyStorePath(r.path);
+    const bytes = r.encodedDataLength ?? 0;
+    out.requests++;
+    out.bytes += bytes;
+    out[kind].n++;
+    out[kind].bytes += bytes;
+    if (kind === 'data') {
+      const entry = (out.data.byLevel[level] ??= { n: 0, bytes: 0 });
+      entry.n++;
+      entry.bytes += bytes;
+    }
+    if (r.canceled) out.aborted++;
+    else if (r.failed || (r.status && r.status >= 400)) out.failed++;
+  }
+  return out;
 }
 
 export function systemState() {

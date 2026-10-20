@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_STEPS_PER_SECOND, DEFAULT_WIRE_RATIO, LINK_HEADROOM, Playback, SPEEDS, chooseMovieLevel, describeReason, linkAllows, snapSpeed, wireRatio } from '../demo/playback.js';
+import { DEFAULT_STEPS_PER_SECOND, DEFAULT_WIRE_RATIO, BUFFER_BATCH, LINK_HEADROOM, MIN_LINK_STEPS_PER_SECOND, Playback, SPEEDS, bufferBatch, chooseMovieLevel, describeReason, linkAllows, linkSteps, roundSteps, snapSpeed, wireRatio } from '../demo/playback.js';
 
 const FRAME_60 = 1000 / 60;
 
@@ -457,4 +457,183 @@ test('hint text names the rule: fits memory, link, or both', () => {
   assert.equal(describeReason('link'), 'link');
   assert.equal(describeReason('memory+link'), 'fits memory + link');
   assert.equal(describeReason(null), '');
+});
+
+// ---- the link sets the speed ----
+
+test('link steps: the speed at which every frame ahead that is not in memory is in before the playhead gets there', () => {
+  const base = { bytesPerStep: 700_000, bandwidth: 660_000 };
+  const feeds = (LINK_HEADROOM * 660_000) / 700_000; // frames per second that 70 % of the link brings
+  const cold = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+  assert.ok(Math.abs(linkSteps({ ...base, coldAhead: cold(1, 32) }) - feeds) < 1e-9, 'cold from the next frame on: what the link feeds, the boundary of linkAllows');
+  assert.equal(linkAllows({ ...base, stepsPerSecond: feeds * 0.99, coldFraction: 1 }), true);
+  assert.equal(linkAllows({ ...base, stepsPerSecond: feeds * 1.01, coldFraction: 1 }), false);
+  assert.ok(Math.abs(linkSteps({ ...base, coldAhead: cold(3, 32) }) - (feeds * 32) / 30) < 1e-9, 'two frames in hand, the rest cold: the 30th missing frame is 32 steps ahead');
+  assert.equal(linkSteps({ ...base, coldAhead: [] }), Infinity, 'nothing missing: the link does not limit');
+  assert.equal(linkSteps({ ...base, coldAhead: cold(1, 32), bandwidth: null }), Infinity, 'no bandwidth measured: nothing to go on');
+  assert.equal(linkSteps({ ...base, coldAhead: cold(1, 32), bandwidth: 0 }), Infinity);
+  assert.ok(Math.abs(linkSteps({ ...base, coldAhead: [40] }) - 40 * feeds) < 1e-9, 'one frame missing far ahead has time to come: it does not slow the movie');
+  assert.ok(Math.abs(linkSteps({ ...base, coldAhead: [1, 2] }) - feeds) < 1e-9, 'the last frames missing right ahead of the playhead keep it at the speed of the link, not at the speed it had over the frames that were loaded');
+  assert.ok(linkSteps({ ...base, coldAhead: [1, 2, 9, 10] }) <= linkSteps({ ...base, coldAhead: [1, 2] }), 'more missing frames never raise the speed');
+});
+
+test('the playback buffer loads as many timesteps at once as the measured link carries in a second, from one to three', () => {
+  assert.equal(BUFFER_BATCH, 3);
+  assert.equal(bufferBatch({ bytesPerStep: 524_000, bandwidth: 920_000 }), 1, 'a link that carries 1.8 steps a second loads them in order');
+  assert.equal(bufferBatch({ bytesPerStep: 690_000, bandwidth: 660_000 }), 1, 'and one that carries less than a step still loads one');
+  assert.equal(bufferBatch({ bytesPerStep: 524_000, bandwidth: 1_100_000 }), 2);
+  assert.equal(bufferBatch({ bytesPerStep: 690_000, bandwidth: 12_000_000 }), 3, 'a fast link: three');
+  assert.equal(bufferBatch({ bytesPerStep: 690_000, bandwidth: 12_000_000, max: 5 }), 5, 'a bigger maximum is an option');
+  assert.equal(bufferBatch({ bytesPerStep: 690_000, bandwidth: null }), 3, 'nothing measured: three');
+  assert.equal(bufferBatch({ bytesPerStep: 0, bandwidth: 660_000 }), 3);
+});
+
+test('the effective speed is the lowest of the requested speed, the display rate and what the link feeds, never below the floor', () => {
+  let feeds = Infinity;
+  const { playback, display } = setup({ count: 100, stepsPerSecond: 4, linkSteps: () => feeds });
+  assert.equal(playback.effectiveStepsPerSecond, 4, 'not playing: nothing is limited');
+  assert.equal(playback.linkLimited, false);
+  playback.play();
+  display.runUntil(500);
+  assert.equal(playback.linkLimited, false, 'a link that feeds more than asked changes nothing');
+  assert.equal(playback.effectiveStepsPerSecond, 4);
+  feeds = 0.7;
+  assert.equal(playback.effectiveStepsPerSecond, 0.7);
+  assert.equal(playback.displayStepsPerSecond, 4, 'what the display would deliver on a link that feeds it');
+  assert.equal(playback.linkStepsPerSecond, 0.7);
+  assert.equal(playback.linkLimited, true);
+  feeds = 0.01;
+  assert.equal(playback.effectiveStepsPerSecond, MIN_LINK_STEPS_PER_SECOND, 'a link slower than the floor is not followed further down');
+  feeds = 9;
+  assert.equal(playback.effectiveStepsPerSecond, 4, 'a faster link does not raise it above the request');
+  assert.equal(playback.linkLimited, false);
+  playback.pause();
+  feeds = 0.7;
+  assert.equal(playback.effectiveStepsPerSecond, 4, 'paused: the link rule is off');
+});
+
+test('rounded for the interface: whole steps per second from 2, tenths below', () => {
+  assert.equal(roundSteps(0.74), 0.7);
+  assert.equal(roundSteps(1.96), 2);
+  assert.equal(roundSteps(2.4), 2);
+  assert.equal(roundSteps(59.94), 60);
+});
+
+test('a link-limited movie steps at the speed the link feeds and starts on two frames, not eight', () => {
+  // Frames 1 and 2 are there, nothing after: two seconds at 1 step/s is all it waits for.
+  const { playback, state, display } = setup({ count: 100, stepsPerSecond: 4, linkSteps: () => 1, ready: (index) => index <= 2 });
+  playback.play();
+  assert.equal(playback.buffered.needed, 2, 'two seconds at the speed that is delivered');
+  assert.equal(playback.buffering, false, 'it starts on those two');
+  assert.equal(state.steps.length, 1, 'the first step is at once');
+  display.runUntil(1500);
+  assert.deepEqual(state.steps.map((s) => s.index), [1, 2], 'then a step a second');
+  assert.ok(Math.abs(state.steps[1].at - state.steps[0].at - 1000) < FRAME_60);
+
+  const full = setup({ count: 100, stepsPerSecond: 4, ready: (index) => index <= 2 });
+  full.playback.play();
+  assert.equal(full.playback.buffering, true, 'at the speed asked for it would wait for eight');
+  assert.equal(full.playback.buffered.needed, 8);
+});
+
+/**
+ * A link that delivers one frame every `periodMs`, in the order the player asked for them, once it has something to deliver
+ * (an idle link does not bank time). Frames 0 and 1 are loaded already.
+ */
+function slowLink(periodMs) {
+  const link = { delivered: new Set([0, 1]), queue: [], nextAt: 0 };
+  const pump = (now) => {
+    while (link.queue.length > 0 && link.nextAt <= now) {
+      link.delivered.add(link.queue.shift());
+      link.nextAt += periodMs;
+    }
+    if (link.queue.length === 0) link.nextAt = Math.max(link.nextAt, now);
+  };
+  return {
+    prepare: (indices) => {
+      link.queue = indices.filter((index) => !link.delivered.has(index));
+    },
+    isReady: (index, now) => {
+      pump(now);
+      return link.delivered.has(index);
+    },
+  };
+}
+
+/**
+ * 30 s of a 12-step loop at 4 steps/s over a link that delivers a frame every 0.75 s (1 MB/s, 750 KB steps, frames 0 and 1 in memory),
+ * with the speed the link allows worked out by `rule` from the frames ahead that are not in memory, as the viewer does.
+ */
+function playShortLoopOverSlowLink(rule) {
+  const COUNT = 12;
+  const net = slowLink(750);
+  const state = { index: 0 };
+  const display = fakeDisplay();
+  const playback = new Playback({
+    count: COUNT,
+    stepsPerSecond: 4,
+    getIndex: () => state.index,
+    goTo: (index) => {
+      state.index = index;
+    },
+    isReady: (index) => net.isReady(index, display.now()),
+    prepare: net.prepare,
+    linkSteps: () => {
+      const coldAhead = [];
+      for (let k = 1; k < COUNT; k++) if (!net.isReady((state.index + k) % COUNT, display.now())) coldAhead.push(k);
+      return rule(coldAhead);
+    },
+    now: display.now,
+    requestFrame: display.requestFrame,
+    cancelFrame: display.cancelFrame,
+  });
+  playback.play();
+  display.runUntil(30_000);
+  return playback.stats;
+}
+
+test('speeding up over frames that are loaded does not run the movie into the few that are not: the end of the first lap of a short loop', () => {
+  const base = { bytesPerStep: 750_000, bandwidth: 1_000_000 };
+  const justInTime = playShortLoopOverSlowLink((coldAhead) => linkSteps({ ...base, coldAhead }));
+  // The share of the 11 frames ahead that is missing, taken as an average: with three left it says 3.4 steps/s, and the movie runs into them.
+  const average = playShortLoopOverSlowLink((coldAhead) => (coldAhead.length === 0 ? Infinity : (LINK_HEADROOM * base.bandwidth * 11) / (base.bytesPerStep * coldAhead.length)));
+  assert.ok(average.bufferingPauses >= 1, `by the share alone it runs dry at the end of the lap (${average.bufferingPauses} pauses)`);
+  assert.equal(justInTime.bufferingPauses, 0, 'frame by frame it never does');
+  assert.ok(justInTime.steps >= 40, `and it still plays through the loaded frames at full speed after the first lap (${justInTime.steps} steps in 30 s)`);
+});
+
+/** 60 s of playback of 117 timesteps at 4 steps/s over a link that delivers a frame every 1.25 s (0.8 steps/s), with the link rule saying `linkStepsPerSecond`. */
+function playOverSlowLink(linkStepsPerSecond) {
+  const net = slowLink(1250);
+  const state = { index: 0, steps: 0 };
+  const display = fakeDisplay();
+  const playback = new Playback({
+    count: 117,
+    stepsPerSecond: 4,
+    getIndex: () => state.index,
+    goTo: (index) => {
+      state.index = index;
+      state.steps++;
+    },
+    isReady: (index) => net.isReady(index, display.now()),
+    prepare: net.prepare,
+    linkSteps: () => linkStepsPerSecond,
+    now: display.now,
+    requestFrame: display.requestFrame,
+    cancelFrame: display.cancelFrame,
+  });
+  playback.play();
+  display.runUntil(60_000);
+  return { stats: playback.stats, steps: state.steps };
+}
+
+test('on a link that cannot keep up with the speed asked for, lowering the speed replaces repeated pauses with a steady slower pace', () => {
+  // The link rule keeps 30 % in hand: 0.7 steps per second for a link that delivers 0.8.
+  const uncapped = playOverSlowLink(Infinity);
+  const capped = playOverSlowLink(0.7);
+  assert.ok(uncapped.stats.bufferingPauses >= 4, `at the speed asked for it pauses again and again (${uncapped.stats.bufferingPauses} pauses, ${Math.round(uncapped.stats.bufferingMs)} ms)`);
+  assert.equal(capped.stats.bufferingPauses, 0, 'at the speed the link feeds it never runs dry');
+  assert.ok(capped.steps >= 38, `and it keeps a steady 0.7 steps per second: ${capped.steps} steps in 60 s`);
+  assert.ok(capped.stats.initialBufferMs < 4000, `it starts after two frames, not eight (${Math.round(capped.stats.initialBufferMs)} ms)`);
+  assert.ok(uncapped.stats.initialBufferMs > 7000, `eight frames take over seven seconds on that link (${Math.round(uncapped.stats.initialBufferMs)} ms)`);
 });

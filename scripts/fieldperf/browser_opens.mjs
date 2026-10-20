@@ -11,7 +11,7 @@
 // (from the start of navigation). Appends one JSON line per run to OUT_DIR/browser_opens.jsonl; resumes where it stopped.
 
 import path from 'node:path';
-import { DATA_ROOT, OUT_DIR, SITE, STORE, appendJsonl, describeRequest, launch, rafMedian, readJsonl, rng, sleep, systemState } from './lib.mjs';
+import { DATA_ROOT, OUT_DIR, STORE, appendJsonl, describeRequest, launch, rafMedian, readJsonl, rng, sleep, systemState, viewerUrl, wireSummary } from './lib.mjs';
 
 const args = process.argv.slice(2);
 const opt = (name, fallback) => {
@@ -30,6 +30,7 @@ const retryWarm = args.includes('--retry-warm');
 const pauseMs = Number(opt('pause', 4000));
 const FILE = path.join(OUT_DIR, `${opt('file', 'browser_opens')}.jsonl`);
 const N_TIME = 117;
+const AFTER_FRAME_MS = 1500;
 
 function drawTimes(n, rand) {
   // Timesteps already opened on an earlier date are probably still in the edge cache there: leave them out of the draw.
@@ -49,7 +50,7 @@ async function openOnce(t, intent, index) {
     const rafBefore = await rafMedian(page, 600);
     const state = systemState();
     const cb = forcedCold ? `?cb=fp${Date.now().toString(36)}${Math.floor(Math.random() * 1e9).toString(36)}` : '';
-    const url = forcedCold ? `${SITE}?store=${encodeURIComponent(STORE + cb)}&t=${t}` : `${SITE}?t=${t}`;
+    const url = forcedCold ? viewerUrl({ t, store: STORE + cb }) : viewerUrl({ t });
     await page.goto(url, { waitUntil: 'commit' });
     await page.waitForFunction(() => window.chronozarr?.ready, null, { timeout: 120000, polling: 25 });
     const done = await page.evaluate(async () => {
@@ -62,12 +63,14 @@ async function openOnce(t, intent, index) {
       const v = window.chronozarr.viewer;
       return { shownT: v.t, paintedT: v.paintedT, net: { ...v.store.stats.network }, viewTiming: v.viewTiming };
     });
+    // What the viewer fetches by itself after the first frame: the wire bytes of the store requests that start in the next AFTER_FRAME_MS.
+    await sleep(Math.max(0, done.epochMs + AFTER_FRAME_MS + 200 - Date.now()));
     await sleep(500);
     const rafAfter = await rafMedian(page, 500);
     const t0Ts = requests[0].requestTs;
     const firstFrameEpochS = done.epochMs / 1000;
     const described = requests.map((r) => ({ ...describeRequest(r, t0Ts), beforeFirstFrame: r.wallTime <= firstFrameEpochS }));
-    const data = described.filter((r) => r.host === 'data.chronozarr.org' && r.beforeFirstFrame);
+    const data = described.filter((r) => r.url.startsWith(STORE) && r.beforeFirstFrame);
     const chunks = data.filter((r) => r.path.includes('/data/c/'));
     const level1 = chunks.filter((r) => r.path.includes('/1/data/c/'));
     const record = {
@@ -86,6 +89,7 @@ async function openOnce(t, intent, index) {
       rafBeforeMs: rafBefore,
       rafAfterMs: rafAfter,
       state,
+      afterFirstFrame: { ms: AFTER_FRAME_MS, ...wireSummary(described, firstFrameEpochS, firstFrameEpochS + AFTER_FRAME_MS / 1000) },
       beforeFirstFrame: {
         requests: described.filter((r) => r.beforeFirstFrame).length,
         bytes: described.filter((r) => r.beforeFirstFrame).reduce((n, r) => n + (r.encodedDataLength ?? 0), 0),

@@ -11,6 +11,10 @@
 // LOW_BUFFER_SECONDS are ready ahead; and if the next frame is not ready when it is due it pauses, asking for
 // the next START_BUFFER_SECONDS, and starts again by itself once they are in. It never holds on a single frame
 // and never skips one. After a pause the schedule restarts from that moment, so it does not burst to catch up.
+//
+// On a link that cannot feed the speed it lowers the speed instead of pausing again and again: the caller says how many
+// steps per second the link can feed (`linkSteps`), and the effective speed is the lowest of that, the requested speed and the
+// display rate. Frames that are in memory already need no link, so the speed comes back up as they are.
 
 /** Selectable speeds, steps per second: every integer up to 15, then coarser up to 60. */
 export const SPEEDS = [...Array.from({ length: 15 }, (_, i) => i + 1), 20, 24, 30, 40, 48, 60];
@@ -26,16 +30,25 @@ export function snapSpeed(value) {
   return SPEEDS.reduce((best, speed) => (Math.abs(speed - value) < Math.abs(best - value) ? speed : best), SPEEDS[0]);
 }
 
+/** The link rule never lowers playback below this many steps per second: slower than a frame every 4 s is a slide show the viewer pauses for anyway. */
+export const MIN_LINK_STEPS_PER_SECOND = 0.25;
+
 const DEFAULT_FRAME_MS = 1000 / 60;
 const MIN_REFRESH_SAMPLES = 8;
 const MAX_REFRESH_SAMPLES = 30;
 const FILL_REQUEST_MS = 250;
+
+/** A speed as the interface shows it: whole steps per second, and tenths below 2 (a link-limited movie plays at 0.7). */
+export function roundSteps(stepsPerSecond) {
+  return stepsPerSecond < 2 ? Math.round(stepsPerSecond * 10) / 10 : Math.round(stepsPerSecond);
+}
 
 export class Playback {
   #count;
   #getIndex;
   #goTo;
   #isReady;
+  #linkSteps;
   #prepare;
   #now;
   #requestFrame;
@@ -75,6 +88,7 @@ export class Playback {
    * @param {() => number} options.getIndex     the timestep currently shown
    * @param {(index: number, direction: 1) => void} options.goTo  show a timestep; playback always moves forward
    * @param {(index: number) => boolean} options.isReady  whether showing this timestep would be instant
+   * @param {() => number} [options.linkSteps]  steps per second the link can feed for the frames that are not in memory yet (Infinity: no limit); asked on every frame, so keep it cheap
    * @param {(indices: number[]) => void} [options.prepare]  asks for these timesteps (the next ones, nearest first) to be loaded; called on entering
    *   a buffering pause, while one lasts about every 250 ms, and when fewer than a second of frames are ready ahead
    * @param {() => void} [options.onChange]     called when playing, buffering, the buffered count, the speed or the effective speed changes
@@ -91,6 +105,7 @@ export class Playback {
     getIndex,
     goTo,
     isReady,
+    linkSteps,
     prepare,
     onChange,
     wrap = true,
@@ -105,6 +120,7 @@ export class Playback {
     this.#getIndex = getIndex;
     this.#goTo = goTo;
     this.#isReady = isReady;
+    this.#linkSteps = linkSteps;
     this.#prepare = prepare;
     this.#onChange = onChange;
     this.#wrap = wrap;
@@ -156,10 +172,27 @@ export class Playback {
     return this.#measuredFrameMs() ?? DEFAULT_FRAME_MS;
   }
 
-  /** The speed playback can actually deliver: the requested speed, capped at the display refresh rate. */
-  get effectiveStepsPerSecond() {
+  /** The requested speed, capped at the display refresh rate: what playback would deliver on a link that feeds it. */
+  get displayStepsPerSecond() {
     const refreshHz = this.refreshHz;
     return refreshHz === null ? this.#stepsPerSecond : Math.min(this.#stepsPerSecond, refreshHz);
+  }
+
+  /** The steps per second the link can feed right now, never below MIN_LINK_STEPS_PER_SECOND; Infinity while nothing limits it or it is not playing. */
+  get linkStepsPerSecond() {
+    if (!this.#playing || !this.#linkSteps) return Infinity;
+    const steps = this.#linkSteps();
+    return Number.isFinite(steps) ? Math.max(MIN_LINK_STEPS_PER_SECOND, steps) : Infinity;
+  }
+
+  /** The speed playback can actually deliver: the requested speed, capped at the display refresh rate and at what the link feeds. */
+  get effectiveStepsPerSecond() {
+    return Math.min(this.displayStepsPerSecond, this.linkStepsPerSecond);
+  }
+
+  /** Whether the link, not the display or the request, sets the speed. */
+  get linkLimited() {
+    return this.linkStepsPerSecond < this.displayStepsPerSecond;
   }
 
   get #interval() {
@@ -280,7 +313,7 @@ export class Playback {
     }
     if (this.#playing) {
       this.#queueFrame();
-      const effective = Math.round(this.effectiveStepsPerSecond);
+      const effective = roundSteps(this.effectiveStepsPerSecond);
       if (effective !== this.#reportedEffective) {
         this.#reportedEffective = effective;
         this.#onChange?.();
@@ -367,6 +400,43 @@ const MIN_RATIO_SAMPLE_BYTES = 8 * 1024 * 1024;
 export function wireRatio({ compressedBytes, decodedBytes }) {
   if (compressedBytes === null || decodedBytes === null || decodedBytes < MIN_RATIO_SAMPLE_BYTES) return DEFAULT_WIRE_RATIO;
   return Math.min(1.2, Math.max(0.2, compressedBytes / decodedBytes));
+}
+
+/** Timesteps the playback buffer loads at once, at most; fewer when the link carries less than one step a second (bufferBatch). */
+export const BUFFER_BATCH = 3;
+
+/** The timesteps in flight at once carry about this many seconds of the measured link. */
+export const BUFFER_FLIGHT_SECONDS = 1;
+
+/**
+ * How many timesteps the playback buffer loads at once: as many as the measured link carries in BUFFER_FLIGHT_SECONDS, from 1
+ * to `max`. Loaded side by side they all arrive late together (n steps share the link, so each takes n times as long) and
+ * the one the playhead reaches first is one of them; on a link that carries a step a second the buffer loads them in order.
+ * `max` while no bandwidth has been measured.
+ */
+export function bufferBatch({ bytesPerStep, bandwidth, max = BUFFER_BATCH }) {
+  if (bandwidth === null || bandwidth === undefined || !(bandwidth > 0) || !(bytesPerStep > 0)) return max;
+  return Math.max(1, Math.min(max, Math.floor((bandwidth * BUFFER_FLIGHT_SECONDS) / bytesPerStep)));
+}
+
+/**
+ * The steps per second at which the link brings every frame ahead that is not in memory before the playhead gets there.
+ * `coldAhead` lists how many steps ahead each of those frames is, nearest first; a step is `bytesPerStep` on the wire and the
+ * link carries LINK_HEADROOM of the measured `bandwidth` (bytes per second). The j-th missing frame is in no sooner than
+ * j x bytesPerStep / (LINK_HEADROOM x bandwidth) seconds from now, and the playhead reaches it after distance / speed seconds, so
+ * the speed is the lowest of distance x LINK_HEADROOM x bandwidth / (j x bytesPerStep) over the missing frames. A loop that is cold
+ * from the next frame on gives LINK_HEADROOM x bandwidth / bytesPerStep (what linkAllows lets through); frames that are missing only
+ * far ahead do not slow the movie yet, and the last few missing frames right ahead of the playhead keep it slow until they are in,
+ * instead of letting it run into them at the speed it had over the frames that were. Infinity when none is missing or no
+ * bandwidth has been measured.
+ */
+export function linkSteps({ bytesPerStep, coldAhead, bandwidth, headroom = LINK_HEADROOM }) {
+  if (bandwidth === null || bandwidth === undefined || !(bandwidth > 0) || !(bytesPerStep > 0)) return Infinity;
+  let steps = Infinity;
+  coldAhead.forEach((distance, index) => {
+    steps = Math.min(steps, (distance * headroom * bandwidth) / ((index + 1) * bytesPerStep));
+  });
+  return steps;
 }
 
 /**

@@ -42,6 +42,37 @@ export function stageLeadMs(roundTripMs) {
   return Math.min(STAGE_LEAD_MAX_MS, Math.max(STAGE_LEAD_MIN_MS, STAGE_LEAD_ROUND_TRIPS * roundTripMs));
 }
 
+/**
+ * The coarse loop (every timestep at the coarsest level, so that some whole frame is in memory wherever the user goes) plans as many
+ * timesteps as the measured link carries in this many seconds: all of a short loop on any link a few MB/s or faster, a window around
+ * the timestep on a slow one (about 20 steps of the 0.7 MB steps of the Ucayali store at 0.7 MB/s). It is planned again as the
+ * playhead moves away from it (coarseLoopDrifted), so the loaded stretch follows the user.
+ */
+export const COARSE_LOOP_SECONDS = 20;
+
+/** The coarse loop never plans fewer timesteps than this: two seconds of a movie at the default 4 steps/s, what playback buffers before it starts. */
+export const COARSE_LOOP_MIN_STEPS = 8;
+
+/**
+ * How many timesteps of the coarse loop to plan, nearest first: what `bandwidth` (bytes per second) carries in `seconds` at
+ * `bytesPerStep` on the wire, from COARSE_LOOP_MIN_STEPS to the whole loop of `count` timesteps. The whole loop while nothing has
+ * been measured.
+ */
+export function coarseLoopSteps({ bytesPerStep, bandwidth, count, seconds = COARSE_LOOP_SECONDS }) {
+  if (!(bandwidth > 0) || !(bytesPerStep > 0)) return count;
+  return Math.min(count, Math.max(COARSE_LOOP_MIN_STEPS, Math.floor((seconds * bandwidth) / bytesPerStep)));
+}
+
+/**
+ * Whether a coarse loop planned around timestep `planned` for `steps` timesteps should be planned again because the playhead (`t`)
+ * is more than a quarter of that window away, either way around the loop. Never when it covers every timestep.
+ */
+export function coarseLoopDrifted({ t, planned, steps, count }) {
+  if (steps >= count) return false;
+  const gap = Math.abs(t - planned);
+  return Math.min(gap, count - gap) > Math.floor(steps / 4);
+}
+
 /** The unique [row, col] cells of level `toLod` that cover the given cells of level `fromLod` (`toLod` >= `fromLod`). */
 export function ancestorCells(cells, fromLod, toLod) {
   const shift = toLod - fromLod;

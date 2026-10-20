@@ -11,7 +11,7 @@
 // and the reader's network counters. Raw arrays go to OUT_DIR/<file>.jsonl; summarising is in analyze_playback.mjs.
 
 import path from 'node:path';
-import { OUT_DIR, SITE, appendJsonl, describeRequest, launch, rafMedian, sleep, systemState } from './lib.mjs';
+import { OUT_DIR, STORE, appendJsonl, describeRequest, isStoreRequest, launch, rafMedian, sleep, systemState, viewerUrl, wireSummary } from './lib.mjs';
 
 const args = process.argv.slice(2);
 const mode = args[0];
@@ -36,7 +36,7 @@ async function runOnce(index) {
     const rafBefore = await rafMedian(page, 600);
     const state = systemState();
     const openStarted = Date.now();
-    await page.goto(SITE, { waitUntil: 'commit' });
+    await page.goto(viewerUrl(), { waitUntil: 'commit' });
     await page.waitForFunction(() => window.chronozarr?.ready, null, { timeout: 180000, polling: 50 });
     const open = await page.evaluate(async () => {
       const result = await window.chronozarr.ready;
@@ -108,6 +108,7 @@ async function runOnce(index) {
           buffering,
           network: { requests: net1.requests - net0.requests, bytes: net1.bytes - net0.bytes },
           cache: v.store.cacheInfo(),
+          bandwidth: v.store.bandwidthEstimate(),
           last,
         };
       },
@@ -115,7 +116,7 @@ async function runOnce(index) {
     );
     await sleep(300);
     const t0Ts = requests[0].requestTs;
-    const dataRequests = requests.slice(netAtPlay).filter((r) => r.host !== 'chronozarr.org').map((r) => describeRequest(r, t0Ts));
+    const dataRequests = requests.slice(netAtPlay).filter(isStoreRequest).map((r) => describeRequest(r, t0Ts));
     const cf = {};
     for (const r of requests) if (r.url.startsWith('https://data.chronozarr.org/')) cf[r.cfCacheStatus ?? 'none'] = (cf[r.cfCacheStatus ?? 'none'] ?? 0) + 1;
     const record = {
@@ -129,7 +130,14 @@ async function runOnce(index) {
       rafBeforeMs: rafBefore,
       state,
       play,
-      playRequests: { n: dataRequests.length, failed: dataRequests.filter((r) => r.failed).length, canceled: dataRequests.filter((r) => r.canceled).length },
+      playRequests: {
+        n: dataRequests.length,
+        failed: dataRequests.filter((r) => r.failed).length,
+        canceled: dataRequests.filter((r) => r.canceled).length,
+        // [path after the store URL, start ms, finish ms, wire bytes, canceled]: what was fetched while playing, and when.
+        list: dataRequests.map((r) => [r.path.slice(new URL(STORE).pathname.length), r.startMs, r.finishMs, r.encodedDataLength, r.canceled ? 1 : 0]),
+        wire: wireSummary(requests.slice(netAtPlay).filter(isStoreRequest).map((r) => describeRequest(r, t0Ts)), 0, Infinity),
+      },
       cfCacheStatus: cf,
       errors,
       consoleErrors,

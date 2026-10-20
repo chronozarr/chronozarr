@@ -3,10 +3,10 @@
 
 import { chunkKey, openStore, samplePixelFrom, scrubCost, windowOrder } from '../chronozarr/decoder.js';
 import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, validAt, windowPixels, xFromTime } from './chart.js';
-import { ASSUMED_BANDWIDTH, ancestorCells, planCoarseStages, stageLeadMs } from './coarse.js';
+import { ASSUMED_BANDWIDTH, ancestorCells, coarseLoopDrifted, coarseLoopSteps, planCoarseStages, stageLeadMs } from './coarse.js';
 import { fetchWithEarlyReads, takeEarlyRootMs } from './early.js';
 import { chooseFrame } from './frames.js';
-import { DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, chooseMovieLevel, describeReason, linkAllows, snapSpeed, wireRatio } from './playback.js';
+import { BUFFER_BATCH, DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, START_BUFFER_SECONDS, bufferBatch, chooseMovieLevel, describeReason, linkAllows, linkSteps, roundSteps, snapSpeed, wireRatio } from './playback.js';
 import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js';
 import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrubLevel, planScrubLoads, readyRun, savesData, scrubLevels, scrubNeed, stepsAhead } from './scrub.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
@@ -62,8 +62,12 @@ const SEEK_DISTANCE = 4;
 const PERF_UPDATE_MS = 250;
 const GAP_HATCH_PX = 8;
 const GAP_MASK_CACHE = 48;
-// Timesteps the playback buffer loads at once, at demand priority.
-const BUFFER_BATCH = 3;
+// The stretch of the loop ahead whose frames not in memory the link has to carry, in seconds of playback at the requested speed.
+const LINK_WINDOW_SECONDS = 8;
+// How long the link's verdict on the speed is kept (it is asked for on every frame).
+const LINK_STEPS_REFRESH_MS = 500;
+// A movie that the link limits prefetches no further ahead than this many seconds of playback at the speed it delivers.
+const LINK_PREFETCH_SECONDS = 2 * START_BUFFER_SECONDS;
 // Eviction rank of the chunks of the coarse loop: after what the view shows, before everything else.
 const COARSE_LOOP_RANK = 5e5;
 // Chart geometry in SVG units (the svg scales to the sidebar width).
@@ -195,6 +199,8 @@ class Viewer {
   #urlTimer = 0;
   #viewTiming = null;
   #movieMemo = null;
+  /** The link's verdict on the playback speed, {at, steps}, and when it was reached. */
+  #linkVerdict = null;
   #playEpoch = 0;
   /** How fast the user is scrubbing, the level chosen for the latest step ({key, lod, baseLod, levels, need}), and the timer that ends the scrub. */
   #scrub = new ScrubSpeed();
@@ -928,14 +934,16 @@ class Viewer {
     clearTimeout(this.#prefetchTimer);
     this.#prefetchTimer = 0;
     this.#prefetchStartedAt = performance.now();
-    this.#prefetchAbort?.abort();
+    const previous = this.#prefetchAbort;
     const abort = new AbortController();
     this.#prefetchAbort = abort;
     const lod = movie ? this.#targetLod({ asPlaying: true }) : this.#view.lod;
     const cells = movie ? this.#visibleCells(lod) : [...this.#view.cells].map((k) => k.split('/').map(Number));
     const seek = !movie && this.#seekPending;
     if (!movie) this.#seekPending = false;
-    return this.store
+    // Only as far ahead as the link lets the movie play in the next few seconds: the rest would be fetched for nothing if it stops.
+    const maxSteps = movie && this.#playback?.linkLimited ? Math.ceil(LINK_PREFETCH_SECONDS * this.#playback.effectiveStepsPerSecond) + 1 : undefined;
+    const job = this.store
       .prefetch({
         lod,
         cells,
@@ -944,6 +952,7 @@ class Viewer {
         behindFactor: movie ? BEHIND_FACTOR_PLAYING : BEHIND_FACTOR,
         loop: movie,
         playing: movie,
+        maxSteps,
         masks: this.store.hasMask,
         seek,
         signal: abort.signal,
@@ -957,14 +966,19 @@ class Viewer {
         for (const { key, error } of result.errors) console.error(`prefetch failed for chunk ${key}:`, error);
         return result;
       });
+    // The new job has claimed the requests it shares with the old one (the store plans synchronously): now the old one can stop.
+    previous?.abort();
+    return job;
   }
 
   /**
-   * Prefetch the whole loop at the coarsest useful level (the level of a view four times further out than the more
+   * Prefetch the loop at the coarsest useful level (the level of a view four times further out than the more
    * zoomed-out of the camera and the fitted view; for a store a few cells wide that is its last level, one cell), so
    * that some complete frame is in memory for every timestep and a frame never has to be a partial one. It uses the
-   * playing prefetch, which the store's idle limit does not apply to; the horizon prefetch of the current level goes
-   * on as before. It runs once per view: again only when the level or its cells change, or after a jump in time.
+   * playing prefetch, which the store's idle limit does not apply to, but as an ambient job, which does not count as the
+   * user playing; the horizon prefetch of the current level goes on as before. It plans as many timesteps as the measured
+   * link carries in COARSE_LOOP_SECONDS (the whole loop on all but a slow link), nearest first. It runs once per view: again
+   * only when the level or its cells change, after a jump in time, or when the playhead has moved a quarter of the window away.
    */
   #prefetchCoarseLoop() {
     const { store } = this;
@@ -973,10 +987,13 @@ class Viewer {
     this.#coarseLoopLod = lod;
     const cells = this.#visibleCells(lod);
     const key = `${lod}:${cells.map(([row, col]) => `${row}/${col}`).join(',')}`;
-    if (this.#coarseLoop?.key === key || cells.length === 0) return;
-    this.#coarseLoop?.controller.abort();
+    if (cells.length === 0) return;
+    const count = store.times.length;
+    const steps = coarseLoopSteps({ bytesPerStep: this.#wireBytesPerStep(lod, cells), bandwidth: store.bandwidthEstimate(), count });
+    const current = this.#coarseLoop;
+    if (current?.key === key && !coarseLoopDrifted({ t: this.t, planned: current.t, steps: current.steps, count })) return;
     const controller = new AbortController();
-    const loop = { key, controller };
+    const loop = { key, controller, t: this.t, steps };
     this.#coarseLoop = loop;
     store
       .prefetch({
@@ -987,6 +1004,8 @@ class Viewer {
         behindFactor: BEHIND_FACTOR_PLAYING,
         loop: true,
         playing: true,
+        ambient: true,
+        maxSteps: steps < count ? steps : undefined,
         masks: store.hasMask,
         signal: controller.signal,
         onChunk: (chunkLod, row, col, t) => {
@@ -999,6 +1018,8 @@ class Viewer {
         // Chunks that failed are planned again the next time the view settles; the store leaves a failed cell alone for a while.
         if (result.errors.length > 0 && this.#coarseLoop === loop) this.#coarseLoop = null;
       });
+    // The new plan has taken over the requests it shares with the old one: now the old one can stop.
+    current?.controller.abort();
   }
 
   /** A chunk landed in memory while the frame that was asked for is not on screen: it may have made a whole frame possible. */
@@ -1024,6 +1045,7 @@ class Viewer {
       getIndex: () => this.t,
       goTo: (index, direction) => this.goToTime(index, { playing: true, direction }),
       isReady: (index) => this.isTimestepReady(index),
+      linkSteps: () => this.#linkStepsAhead(),
       prepare: (indices) => this.#fillBuffer(indices),
       onChange: () => this.#updatePlayUi(),
     });
@@ -1052,7 +1074,7 @@ class Viewer {
       let previous = '';
       while (!signal.aborted) {
         const lod = pump.lod ?? this.#targetLod();
-        const batch = pump.wanted.filter((t) => !this.#frameReady(lod, t)).slice(0, BUFFER_BATCH);
+        const batch = pump.wanted.filter((t) => !this.#frameReady(lod, t)).slice(0, this.#bufferBatch(lod));
         const key = batch.join(',');
         // The same batch again means the cache cannot keep what was loaded: stop rather than load it forever.
         if (batch.length === 0 || key === previous) break;
@@ -1071,6 +1093,12 @@ class Viewer {
     } else if (failed) {
       console.error('scrub: could not load the timesteps ahead:', failed);
     }
+  }
+
+  /** Timesteps the buffer loads at once, at demand priority: BUFFER_BATCH, or fewer while a movie plays on a link that carries less (see bufferBatch). */
+  #bufferBatch(lod) {
+    if (!this.#playing) return BUFFER_BATCH;
+    return bufferBatch({ bytesPerStep: this.#wireBytesPerStep(lod, this.#visibleCells(lod)), bandwidth: this.store.bandwidthEstimate(), max: BUFFER_BATCH });
   }
 
   /** Stop filling the buffer of playback or of a scrub, and the probe: what is in flight and wanted by no one else is cancelled. */
@@ -1237,20 +1265,43 @@ class Viewer {
     const { store } = this;
     const bandwidth = store.bandwidthEstimate();
     const cells = this.#visibleCells(lod);
-    const level = store.levels[lod];
-    const bytesPerPixel = level.chunkBytes / (level.chunkWidth * level.chunkHeight);
     const count = store.times.length;
-    let pixels = 0;
     let cold = 0;
-    for (const [row, col] of cells) {
-      const { width, height } = store.cellExtent(lod, row, col);
-      pixels += width * height;
-      for (let t = 0; t < count; t++) if (!store.peekRaw(lod, row, col, t)) cold++;
-    }
-    const bytesPerStep = pixels * bytesPerPixel * wireRatio(readStats(store));
-    const stepsPerSecond = this.#playback?.effectiveStepsPerSecond ?? this.#speed;
+    for (const [row, col] of cells) for (let t = 0; t < count; t++) if (!store.peekRaw(lod, row, col, t)) cold++;
+    const bytesPerStep = this.#wireBytesPerStep(lod, cells);
+    // The speed asked for, not the one the link leaves (#linkStepsAhead): the level is the one that can feed what was asked for.
+    const stepsPerSecond = this.#playback?.displayStepsPerSecond ?? this.#speed;
     const coldFraction = cells.length === 0 ? 0 : cold / (cells.length * count);
     return { ok: linkAllows({ bytesPerStep, stepsPerSecond, coldFraction, bandwidth }), cells: cells.length, bytesPerStep, stepsPerSecond, coldFraction, bandwidth };
+  }
+
+  /** Bytes on the wire for one timestep of `cells` at `lod`: what the chunks of that level took so far (chunks are stored padded to the chunk size). */
+  #wireBytesPerStep(lod, cells) {
+    return cells.length * this.store.chunkWireBytes(lod);
+  }
+
+  /**
+   * How many steps per second the link can feed at the level the movie plays at: the frames of the next LINK_WINDOW_SECONDS
+   * of playback at the requested speed that are not in memory have to come over the link before the playhead reaches them
+   * (see linkSteps). A movie running into frames it has not loaded slows down to what the link feeds, and speeds up again
+   * over frames it has.
+   * Infinity when nothing is playing, nothing is measured or nothing is missing. The playback object asks on every frame, so the
+   * verdict is kept for LINK_STEPS_REFRESH_MS.
+   */
+  #linkStepsAhead() {
+    if (!this.store || !this.#playing) return Infinity;
+    const now = performance.now();
+    if (this.#linkVerdict !== null && now - this.#linkVerdict.at < LINK_STEPS_REFRESH_MS) return this.#linkVerdict.steps;
+    const count = this.store.times.length;
+    const lod = this.#targetLod({ asPlaying: true });
+    const cells = this.#visibleCells(lod);
+    const requested = this.#playback?.displayStepsPerSecond ?? this.#speed;
+    const window = Math.min(count - 1, Math.max(1, Math.ceil(LINK_WINDOW_SECONDS * requested)));
+    const coldAhead = [];
+    for (let k = 1; k <= window; k++) if (!this.#frameReady(lod, (this.t + k) % count)) coldAhead.push(k);
+    const steps = cells.length === 0 ? Infinity : linkSteps({ bytesPerStep: this.#wireBytesPerStep(lod, cells), coldAhead, bandwidth: this.store.bandwidthEstimate() });
+    this.#linkVerdict = { at: now, steps };
+    return steps;
   }
 
   /** The tooltip of the resolution hint: what ruled out the normal level. */
@@ -2249,22 +2300,32 @@ class Viewer {
     this.#updateSpeedUi();
   }
 
-  /** The slider shows the requested speed; when the display cannot keep up the label adds what is delivered. */
+  /** The slider shows the requested speed; when the display or the link cannot keep up the label adds what is delivered. */
   #updateSpeedUi() {
     $('speed').value = String(SPEEDS.indexOf(this.#speed));
-    const effective = this.#playback?.playing ? Math.round(this.#playback.effectiveStepsPerSecond) : this.#speed;
+    const effective = this.#playback?.playing ? roundSteps(this.#playback.effectiveStepsPerSecond) : this.#speed;
     $('speed-label').textContent = effective < this.#speed ? `${this.#speed} /s → ${effective}` : `${this.#speed} /s`;
+    this.#updateResHint();
   }
 
-  /** "playing at 1/2 res · fits memory" (or "· link") while the movie level is coarser than the normal one; the tooltip has the numbers. */
+  /**
+   * What the link does to the movie, in the hint next to the speed: "playing at 1/2 res · fits memory" (or "· link") while the
+   * movie level is coarser than the normal one, and "0.7 step/s: link too slow for 4" while the link, not the display, sets the
+   * speed. The tooltip has the numbers.
+   */
   #updateResHint() {
     const { baseLod, lod, reason, detail } = this.#movie;
     const coarser = this.#playing && lod > baseLod;
-    const text = coarser ? `playing at 1/${2 ** (lod - baseLod)} res · ${describeReason(reason)}` : '';
+    const slowed = this.#playing && this.#playback.linkLimited;
+    const parts = [];
+    if (coarser) parts.push(`playing at 1/${2 ** (lod - baseLod)} res · ${describeReason(reason)}`);
+    if (slowed) parts.push(`${roundSteps(this.#playback.effectiveStepsPerSecond)} step/s: link too slow for ${this.#speed}`);
+    const text = parts.join(' · ');
+    const title = [coarser ? detail : null, slowed ? `The measured link feeds about ${roundSteps(this.#playback.linkStepsPerSecond)} frames per second of the ones not loaded yet; playback speeds up over frames that are.` : null].filter(Boolean).join(' ');
     const hint = $('res-hint');
     if (hint.textContent !== text) {
       hint.textContent = text;
-      hint.title = coarser ? (detail ?? '') : '';
+      hint.title = title;
     }
   }
 
