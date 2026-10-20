@@ -8,7 +8,7 @@
 // different latencies are interleaved. Output: OUT_DIR/latency_sweep.jsonl and a printed least-squares fit.
 
 import path from 'node:path';
-import { OUT_DIR, SITE, appendJsonl, describeRequest, launch, rafMedian, readJsonl, sleep, systemState } from './lib.mjs';
+import { OUT_DIR, SITE, STORE_HOST, appendJsonl, describeRequest, launch, rafMedian, readJsonl, scriptLevels, sleep, systemState } from './lib.mjs';
 
 const args = process.argv.slice(2);
 const opt = (name, fallback) => (args.includes(`--${name}`) ? args[args.indexOf(`--${name}`) + 1] : fallback);
@@ -27,12 +27,15 @@ async function once(latencyMs, index) {
     await page.waitForFunction(() => window.chronozarr?.ready, null, { timeout: 120000, polling: 25 });
     const done = await page.evaluate(async () => {
       const result = await window.chronozarr.ready;
-      return { result, nowMs: performance.now() };
+      const now = performance.now();
+      return { result, nowMs: now, epochMs: performance.timeOrigin + now };
     });
     const t0 = requests[0].requestTs;
     const cat = requests.find((q) => q.url.endsWith('catalog.json'));
-    const zj = requests.find((q) => q.url.split('?')[0].endsWith('/zarr.json') && q.url.includes('data.chronozarr.org'));
+    const zj = requests.find((q) => q.url.split('?')[0].endsWith('/zarr.json') && q.url.includes(STORE_HOST));
     const d = (q) => (q ? describeRequest(q, t0) : null);
+    // Requests the page had started when the first target-level frame was complete, by the wall clock of their start.
+    const before = requests.filter((q) => q.wallTime <= done.epochMs / 1000).map((q) => describeRequest(q, t0));
     const record = {
       index,
       latencyMs,
@@ -43,7 +46,11 @@ async function once(latencyMs, index) {
       coarsePageMs: done.nowMs - done.result.firstPaintMs + done.result.coarseMs,
       bootMs: cat ? (cat.requestTs - t0) * 1000 : null,
       metaFinishMs: d(zj)?.finishMs ?? null,
-      cf: requests.filter((q) => q.url.startsWith('https://data.chronozarr.org/') && q.status).reduce((m, q) => ((m[q.cfCacheStatus ?? 'none'] = (m[q.cfCacheStatus ?? 'none'] ?? 0) + 1), m), {}),
+      requestsBeforeFirstFrame: before.length,
+      scriptsBeforeFirstFrame: before.filter((q) => q.type === 'Script').length,
+      scriptLevels: scriptLevels(before),
+      bytesBeforeFirstFrame: before.reduce((n, q) => n + (q.encodedDataLength ?? 0), 0),
+      cf: requests.filter((q) => q.url.includes(STORE_HOST) && q.status).reduce((m, q) => ((m[q.cfCacheStatus ?? 'none'] = (m[q.cfCacheStatus ?? 'none'] ?? 0) + 1), m), {}),
       rafMs: raf,
       load1: state.load1,
     };

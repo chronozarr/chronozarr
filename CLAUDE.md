@@ -27,9 +27,11 @@ src/chronozarr/           Python package; CLI `chronozarr` (commands: append | e
 js/chronozarr/            DOM-free reader on zarrita (spec 0.3): decoder.js (openStore, getCell, prefetch), metadata.js,
                           http.js, cache.js, bandwidth.js, limiter.js, pool.js + decode-worker.js, codec.js, shard.js, redact.js (URLs without login or signed query, for messages)
 js/maplibre/              MapLibre custom layer on the reader: layer.js, mesh.js, projection.js, shader.js, slots.js, view.js; demo.js + index.html
-js/demo/                 viewer: index.html?store=<url>, viewer.js, renderer.js (WebGL2), products.js, playback.js, chart.js, export.js, permalink.js, open-store.js (the "Open store URL" field), bench.js
+js/demo/                 viewer: index.html?store=<url>, viewer.js, renderer.js (WebGL2), products.js, playback.js, chart.js, export.js, permalink.js, open-store.js (the "Open store URL" field), bench.js,
+                          early.js (the inline script of index.html starts catalog.json and the root zarr.json before viewer.js loads; early.js hands those responses to the viewer)
 js/test/                  node --test suites (fixtures skip if data/spike is absent)
-js/support/               static-server.js (byte ranges), synthetic-store.js, test fixtures
+js/support/               static-server.js (byte ranges, optional HTTP/2), synthetic-store.js, test fixtures;
+                          build-viewer.mjs (esbuild: js/demo and the reader into demo/viewer.js, demo/decode-worker.js and lazy codec files; the site and the npm package publish this build, the sources stay for development and the tests), viewer-bundle.mjs (chronozarr-viewer CLI)
 tests/                    pytest, marker `unit`
 docs/                     user guides: hosting.md (overview), publish.md, hosting-providers.md (S3 + CloudFront, R2, GCS, Source Cooperative), hosting-requirements.md (doctor checklist), append.md,
                           embedding.md, private.md, viewer-distribution.md, png-frames.md, format-comparison.md, python.md (API reference);
@@ -46,6 +48,8 @@ data/                     gitignored: mosaics/, stores/, spike/ (P0 fixtures)
 uv sync --locked                   # includes the dev group; add --extra ingest for the Sentinel-2 example
 uv run pytest -q -m unit
 cd js && node --test
+cd js && npx playwright test                                  # browser specs on the sources
+cd js && CHRONOZARR_E2E_BUILT_VIEWER=1 npx playwright test e2e/viewer-   # the viewer specs on the built viewer (what the site publishes)
 # dev server with byte ranges (needed for sharded stores), from .claude/launch.json "spike":
 uv run --with rangehttpserver python -m RangeHTTPServer 8000
 # then: http://localhost:8000/js/demo/index.html?store=http://localhost:8000/data/spike/synthetic_sharded

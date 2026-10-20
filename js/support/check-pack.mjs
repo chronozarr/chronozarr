@@ -1,12 +1,13 @@
 // prepack guard: the tarball must hold exactly what the package's entry points load, plus the files npm
 // requires and the vendored licenses. Runs on `npm pack` and `npm publish` from js/ (package.json "prepack").
 //
-// The package ships source files unchanged and has no build step, so a file missing from "files" is a
+// The reader, the layer and their modules ship as sources, unchanged, so a file missing from "files" is a
 // runtime 404 for a consumer, and unrelated tests or fixtures are noise in every install.
-// The complete viewer is an intentional package asset. This script follows HTML script/image/link assets,
+// The complete viewer is an intentional package asset, in the form that build-viewer.mjs gives it (dist/viewer,
+// written by the prepack script just before this one). This script follows HTML script/image/link assets,
 // relative imports, dynamic imports and
 // `new URL('./x.js', import.meta.url)` references from every `exports` target (the decode worker is one of
-// them) and compares that set with the file list of `npm pack --dry-run`.
+// them) and from the built viewer page, and compares that set with the file list of `npm pack --dry-run`.
 //
 //   node support/check-pack.mjs        exit 1 with the list of problems, or print a one-line summary
 
@@ -74,17 +75,18 @@ function packedFiles() {
 if (pkg.private === true) problems.push('package.json has "private": true, so npm will refuse to publish it');
 if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(pkg.version ?? '')) problems.push(`package.json version "${pkg.version}" is not a semver version`);
 
-const needed = reachable([...leaves(pkg.exports), ...leaves(pkg.bin), 'demo/index.html']);
+const VIEWER = 'dist/viewer/demo/';
+const needed = reachable([...leaves(pkg.exports), ...leaves(pkg.bin), `${VIEWER}index.html`]);
 const packed = packedFiles();
 
 for (const file of [...needed].sort()) {
   if (!packed.has(file)) problems.push(`${file} is loaded by the entry points but is not in the tarball; add it to "files" in package.json`);
 }
-const allowed = (file) => needed.has(file) || ['package.json', 'README.md', 'LICENSE', 'favicon.svg', 'demo/index.html', 'demo/catalog.json'].includes(file) || VENDORED.some((prefix) => file.startsWith(prefix));
+const allowed = (file) => needed.has(file) || ['package.json', 'README.md', 'LICENSE', 'favicon.svg', `${VIEWER}catalog.json`, `${VIEWER}LICENSES.txt`].includes(file) || VENDORED.some((prefix) => file.startsWith(prefix));
 for (const file of [...packed].sort()) {
   if (!allowed(file)) problems.push(`${file} is in the tarball but nothing the entry points load reaches it; remove it from "files" or add an export that needs it`);
 }
-for (const file of ['README.md', 'LICENSE', 'demo/index.html', 'demo/catalog.json', 'favicon.svg', ...VENDORED.map((prefix) => `${prefix}LICENSE`)]) {
+for (const file of ['README.md', 'LICENSE', `${VIEWER}index.html`, `${VIEWER}catalog.json`, `${VIEWER}LICENSES.txt`, 'favicon.svg', ...VENDORED.map((prefix) => `${prefix}LICENSE`)]) {
   if (!packed.has(file)) problems.push(`${file} is missing from the tarball`);
 }
 try {

@@ -274,7 +274,7 @@ export async function openStore(baseUrl, options = {}) {
   let decoder;
   if (workers > 0) {
     const fallback = new MainThreadDecoder(ZARRITA_CODECS);
-    const init = { type: 'init', zarritaUrl: ZARRITA_CODECS_URL };
+    const init = { type: 'init', zarritaUrl: ZARRITA_CODECS_URL, warm: Object.values(specs) };
     try {
       decoder = options.spawnWorker
         ? new DecodePool({ size: workers, spawn: options.spawnWorker, init, fallback })

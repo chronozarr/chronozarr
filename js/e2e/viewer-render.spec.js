@@ -69,7 +69,8 @@ for (const storeName of ['u16_lcc', 'u16_sinusoidal']) {
   test(`${storeName}: a store with no EPSG code opens, draws its native grid equal to the CPU render, and loads no proj4`, async ({ page, servers, storeUrl }) => {
     const proj4Requests = [];
     page.on('request', (request) => {
-      if (request.url().includes('/vendor/proj4/')) proj4Requests.push(request.url());
+      // js/vendor/proj4 in the sources, demo/chunks/proj4-<hash>.js in the built viewer.
+      if (/\/vendor\/proj4\/|\/chunks\/proj4-/.test(request.url())) proj4Requests.push(request.url());
     });
     await openViewer(page, servers, await storeUrl(storeName));
     expect(await page.evaluate(() => ({ crs: window.chronozarr.viewer.store.crs, wkt2: typeof window.chronozarr.viewer.store.wkt2 }))).toEqual({ crs: null, wkt2: 'string' });

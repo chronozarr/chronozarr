@@ -39,6 +39,21 @@ export const SAMPLE_PIXELS = [
  * centre of each requested level-0 pixel.
  */
 export async function captureFrame(page, pixels = SAMPLE_PIXELS) {
+  // Manual steps less than 300 ms apart are a scrub, and a scrub draws a coarser level until it ends, 300 ms after its last step.
+  // Three key presses of a test are one on a page that answers quickly (the built viewer, a fast runner), so the frame to compare
+  // with the CPU render is the one the viewer settles on once the scrub is over: wait until the level it draws stops changing.
+  await page.evaluate(async () => {
+    const { viewer } = window.chronozarr;
+    viewer.endScrub();
+    let previous = null;
+    let steady = 0;
+    for (const started = performance.now(); steady < 3 && performance.now() - started < 5000; ) {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      const { lod } = viewer.renderNow();
+      steady = lod === previous ? steady + 1 : 0;
+      previous = lod;
+    }
+  });
   return page.evaluate(
     ({ pixels, background }) => {
       const { viewer } = window.chronozarr;
