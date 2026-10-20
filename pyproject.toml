@@ -1,6 +1,6 @@
 [project]
 name = "chronozarr"
-version = "0.4.1"
+version = "0.5.0.dev0"
 description = "Turn a raster time series into static files that a browser plays and Python reads with the stored values"
 readme = "README.md"
 license = "Apache-2.0"

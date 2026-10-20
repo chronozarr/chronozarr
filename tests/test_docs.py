@@ -14,6 +14,7 @@ import click
 import numpy as np
 import pytest
 import xarray as xr
+from packaging.version import Version
 
 import chronozarr
 from chronozarr.cli import main
@@ -98,20 +99,34 @@ def test_the_docs_show_the_commands_people_need() -> None:
 
 
 def test_install_pins_match_the_release() -> None:
+    """The docs pin the release that PyPI has. A development version on main is the next one."""
     version = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))["project"][
         "version"
     ]
     npm = json.loads((REPO / "js/package.json").read_text(encoding="utf-8"))["version"]
-    assert npm == version, "pyproject.toml and js/package.json must release the same version"
+    # PEP 440 writes a development release 0.5.0.dev0; npm's semver writes it 0.5.0-dev.0.
+    assert npm == re.sub(r"\.dev(\d+)$", r"-dev.\1", version), (
+        f"pyproject.toml ({version}) and js/package.json ({npm}) must be the same version"
+    )
     # Install pins, and the `chronozarr --version` output that the quickstart shows.
     pin = re.compile(r"chronozarr(?:\[[^\]]*\])?(?:==|@|, version )(\d+\.\d+\.\d+)")
     # The evidence log and release notes record the versions that were measured or released.
     records = {"evidence.md", *(p.name for p in USER_DOCS if p.name.startswith("release-"))}
+    pinned: dict[str, list[str]] = {}
     for path in (p for p in USER_DOCS if p.name not in records):
         for found in pin.findall(path.read_text(encoding="utf-8")):
-            assert found == version, (
-                f"{path.name} pins chronozarr {found}; the release is {version}"
-            )
+            pinned.setdefault(found, []).append(path.name)
+    assert pinned, "no user doc pins a chronozarr version"
+    assert len(pinned) == 1, f"the docs pin more than one release: {pinned}"
+    release = Version(next(iter(pinned)))
+    if Version(version).is_devrelease:
+        assert Version(version) > release, (
+            f"pyproject.toml is {version}, not after the release {release} that the docs pin"
+        )
+    else:
+        assert Version(version) == release, (
+            f"the docs pin chronozarr {release}; the release is {version}: {pinned}"
+        )
 
 
 def test_the_readme_quickstart_is_part_of_the_full_quickstart() -> None:

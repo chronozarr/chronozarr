@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import sys
-from importlib.metadata import version
 
 import numpy as np
 import pytest
 from click.testing import CliRunner
 
 import chronozarr
-from chronozarr import schema
+from chronozarr import _install, schema
 from chronozarr.cli import main
 from tests.synthetic import CRS, TRANSFORM, make_da, make_truth
 
@@ -162,12 +161,12 @@ def test_geotiff_without_date_in_name_fails(tmp_path):
 def test_geotiff_input_without_rasterio_names_the_geo_extra(tmp_path, monkeypatch):
     (tmp_path / "scene_2024-01-15.tif").write_bytes(b"")
     monkeypatch.setitem(sys.modules, "rasterio", None)  # makes `import rasterio` raise ImportError
+    monkeypatch.setattr(_install, "version", lambda name: "0.4.1")  # a release, whatever runs here
     result = CliRunner().invoke(main, ["encode", str(tmp_path / "*.tif"), str(tmp_path / "o")])
     assert result.exit_code == 1
     # An installed package has no project to sync: the hint names the installed routes too.
-    pin = version("chronozarr")
-    assert f"uv tool install --python 3.13 'chronozarr[geo]=={pin}'" in result.output
-    assert f"uv add 'chronozarr[geo]=={pin}'" in result.output
+    assert "uv tool install --python 3.13 'chronozarr[geo]==0.4.1'" in result.output
+    assert "uv add 'chronozarr[geo]==0.4.1'" in result.output
     assert "uv sync --extra geo" in result.output
 
 
