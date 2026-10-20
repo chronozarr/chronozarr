@@ -15,8 +15,8 @@ Run `chronozarr <command> --help` for every option. In a uv project, run `uv run
 
 | Command | What it does |
 |---------|--------------|
-| `validate STORE` | Checks a store against the spec. Exits with status 1 on failure |
-| `info STORE` | Prints the times, bands and levels of a store |
+| `validate STORE` | Checks a store against the spec. Exits with status 1 on failure. It prints a `note:` for each SHOULD the store leaves out, which does not fail it |
+| `info STORE` | Prints the times, bands and levels of a store, and a `note:` for each deviation the reader read through |
 | `doctor TARGET` | Checks a hosted URL or a local store. See [hosting-requirements.md](hosting-requirements.md#checklist) |
 
 ## Explore and share

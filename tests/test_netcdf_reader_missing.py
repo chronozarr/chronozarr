@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from importlib.metadata import version
 from pathlib import Path
 
 import pytest
 import xarray as xr
 from click.testing import CliRunner
 
+from chronozarr._install import extra_hint
 from chronozarr.cli import main
 
 pytestmark = pytest.mark.unit
@@ -54,15 +54,21 @@ def _nc_file(tmp_path: Path, signature: bytes = HDF5_SIGNATURE) -> Path:
     return path
 
 
+def _assert_install_routes(stderr: str, extra: str, command_line_extras: str) -> None:
+    """The routes that add `extra` to this installation, as `extra_hint` writes them for the
+    installed version: pinned for a release, from the repository for a development version. The
+    subprocess reads the same installed metadata, so the full hint is what it prints."""
+    assert extra_hint(extra) in stderr
+    assert f"uv tool install --python 3.13 'chronozarr[{command_line_extras}]" in stderr
+    assert f"uv add 'chronozarr[{extra}]" in stderr
+
+
 def _assert_names_the_extra(result: subprocess.CompletedProcess[str], path: Path) -> None:
-    pin = version("chronozarr")
     assert result.returncode == 1, result.stderr
     assert "Traceback" not in result.stderr
     assert str(path) in result.stderr
     assert "install the netcdf extra" in result.stderr
-    assert f"uv tool install --python 3.13 'chronozarr[geo,netcdf]=={pin}'" in result.stderr
-    assert f"uv add 'chronozarr[netcdf]=={pin}'" in result.stderr
-    assert f"'chronozarr[netcdf]=={pin}'` with pip" in result.stderr
+    _assert_install_routes(result.stderr, "netcdf", "geo,netcdf")
     assert "dependencies may not be installed" not in result.stderr
 
 
@@ -145,14 +151,12 @@ def test_a_non_gregorian_calendar_without_cftime_names_the_cftime_extra(tmp_path
     pytest.importorskip("h5netcdf")
     source = _model_file(tmp_path, "360_day", suffix)
     result = _run("cftime", "convert", str(source), str(tmp_path / "out"), "--variable", "tas")
-    pin = version("chronozarr")
     assert result.returncode == 1, result.stderr
     assert "Traceback" not in result.stderr
     assert (
         "the time coordinate 'time' uses the 360_day calendar, which needs cftime" in result.stderr
     )
-    assert f"`uv tool install --python 3.13 'chronozarr[geo,cftime]=={pin}'`" in result.stderr
-    assert f"`uv add 'chronozarr[cftime]=={pin}'`" in result.stderr
+    _assert_install_routes(result.stderr, "cftime", "geo,cftime")
     assert "unable to decode time units" not in result.stderr
 
 

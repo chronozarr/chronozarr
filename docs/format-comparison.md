@@ -111,7 +111,7 @@ The viewer downloads more than zarr-layer does. In the review, on a local store,
 
 Scrubbing uses client memory. It depends on worker decoding, cached chunks and time-window prefetch.
 
-chronozarr's readers open only chronozarr stores. On 2026-10-19 each of them refused an ndpyramid store, an ESA EOPF Sentinel-2 product and a plain GeoZarr store at the first check, with the message "missing chronozarr" ([review](../spec/review-2026-10-geozarr.md)). zarr-layer and GDAL open a chronozarr store, but zarr-layer ignores its scale and mask, as described above.
+On 2026-10-19 every chronozarr reader refused an ndpyramid store, an ESA EOPF Sentinel-2 product and a plain GeoZarr store at the first check, with the message "missing chronozarr" ([review](../spec/review-2026-10-geozarr.md)). The Python reader now opens them from the multiscales layout and reports what it assumed ([evidence.md](evidence.md#stores-written-by-other-tools-2026-10-19)). The JavaScript reader and the viewer still open only chronozarr stores. zarr-layer and GDAL open a chronozarr store, but zarr-layer ignores its scale and mask, as described above.
 
 Two readers have been checked against the v0.3 fixture: GDAL and zarr-layer. The versions, and what the checks did not establish, are in [evidence.md](evidence.md#reader-checks).
 

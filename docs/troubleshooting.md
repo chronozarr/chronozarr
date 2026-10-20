@@ -20,16 +20,19 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 | Message | Cause and fix |
 |---|---|
 | `no date in the file name` | Put one date in each name, as `20240131`, `2024-01-31` or `2024-01`. Or pass `--date-pattern`, such as `--date-pattern "ndvi_%Y%m%d"` (`%Y%j` reads a year and day of year, as in MODIS and HLS names: `--date-pattern "MOD13A1.A%Y%j"`), or list the files in a [manifest](convert.md#from-a-manifest-of-urls) |
+| `no date in the file name` for one multi-band file, and the `fix:` names `--bands-are-dates` | The bands of the file are dates, as in an Earth Engine `toBands()` export. Pass `--bands-are-dates`. See [From Earth Engine exports](convert.md#from-earth-engine-exports) |
 | `several dates` in one name | Pass `--date-pattern` to say which part is the date |
 | A month name, such as `scene_Jan2024.tif` | `--date-pattern` reads numbers only. Write a CSV manifest with the columns `uri,datetime`, one row per file, and convert the manifest |
 | `Got unexpected extra arguments` | The shell expanded an unquoted glob into many files. Quote it: `"scenes/*.tif"` |
 | The bands are named `1`, `2` | The GeoTIFFs have no band descriptions. Add a `bands` column to a manifest, as in [Convert your data](convert.md#from-dated-geotiffs) |
 | Two files `share the datetime` | Each timestep needs one file. Remove or rename the duplicate |
 | A file on another grid or CRS | All timesteps of a store share one grid. Fix the files, or pass `--resampling` to warp every file to the grid of the first |
-| Different scale, offset, units or band names | A store holds one value of each per band. Correct the metadata, for example with `gdal_edit.py -scale -offset -units` |
+| Different scale, offset, units or band names | A store holds one value of each per band. Correct the metadata, for example with `gdal_edit.py -scale -offset -units`. For a scale or offset, `--scale` and `--offset` give one value for every band instead |
 | A float file with undeclared NaN | Pass `--nodata nan` to treat NaN as invalid |
-| A `fill:` line names a value such as `-9999` | The files declare no nodata, and the value looks like a fill. Pass `--nodata -9999` to mark it invalid. Leave it out if the value is data |
-| A `range:` line shows values far outside the physical range | The scale is applied as stored * scale + offset. Correct the scale in the files, for example with `gdal_edit.py -scale -offset` |
+| `-9999 (48 % of the valid pixels in the 3 sampled timesteps) lies far outside the other values`, and the command stops | The files declare no nodata, and a value that looks like a fill holds a large share of the pixels. If it marks missing pixels, pass `--nodata -9999`. If it is data, pass `--nodata none`. `--nodata` takes one value: with two flag values the message says which stays data and how to mark both |
+| A `fill:` line names a value such as `-9999` | The files declare no nodata, and the value looks like a fill but holds a small share of the pixels. Pass `--nodata -9999` to mark it invalid. Leave it out if the value is data |
+| `500m 16 days NDVI declares scale 10000 and would run -2e+07 to 1e+08`, and the command stops | The file's scale is a divisor, as in MODIS and other HDF-EOS products, and the store multiplies. Pass `--scale 0.0001`. If 10000 is right, pass `--scale 10000` |
+| A `range:` line shows values far outside the physical range, and the command did not stop | The scale is applied as stored * scale + offset. Pass `--scale` and `--offset` with the right values, or correct the files, for example with `gdal_edit.py -scale -offset` |
 | A palette PNG is refused | Expand it to RGB first: `gdal_translate -expand rgba` |
 | The output folder exists | A store is never overwritten. Choose a new folder |
 | `reading a NetCDF4 file needs h5netcdf and h5py`. Older releases print xarray's `found the following matches with the input file in xarray's IO backends`, or `No module named 'h5py'` | The `netcdf` extra is missing. Install it the way you installed chronozarr: `uv tool install --python 3.13 'chronozarr[geo,netcdf]==0.4.1'`, listing every extra you use at once; `uv add 'chronozarr[netcdf]==0.4.1'` in a uv project; or pip with `'chronozarr[netcdf]==0.4.1'`. A classic NetCDF3 file (it starts with `CDF`) needs `scipy` instead: add `--with scipy` to `uv tool install`. See [From NetCDF or Zarr](convert.md#from-netcdf-or-zarr) |

@@ -19,6 +19,8 @@ This file holds measurements, tested versions, dates and caveats. User docs link
 - [Hosting observations](#hosting-observations)
 - [Newcomer trial (2026-10-12)](#newcomer-trial-2026-10-12)
 - [Newcomer baseline (2026-10-19)](#newcomer-baseline-2026-10-19)
+- [Readers that decode (2026-10-19)](#readers-that-decode-2026-10-19)
+- [Stores written by other tools (2026-10-19)](#stores-written-by-other-tools-2026-10-19)
 - [Sentinel-2 ingest performance](#sentinel-2-ingest-performance)
 
 ## Reader checks
@@ -725,6 +727,53 @@ With `--port` set, `chronozarr preview` fails when anything listens on the port.
 ### Interrupt
 
 A SIGINT stopped the command with exit status 0 after it printed "stopped". The same port was free for a new bind afterwards.
+
+## Readers that decode (2026-10-19)
+
+The strip tests of the [GeoZarr review](../spec/review-2026-10-geozarr.md) copy a synthetic store (3 bands, 6 dates, 3 levels, a mask, a coverage plane) and remove or change one piece of chronozarr metadata at a time. The Python probe opened each of 43 copies with `validate`, `open_store` and `xr.open_dataset(engine="chronozarr")`, and compared the stored values at levels 0 and 1 and the physical values at one pixel with the values the copy was made from. It ran on main at 5673cee and on the branch that makes the readers decode what they can read as declared.
+
+Main already opened the copies with the CRS as `proj:wkt2` or `proj:projjson` only and with no `crs` mirror, so those rows did not change. 12 of 43 copies changed result, and every opened copy returned the stored values exactly.
+
+| Copy | `validate` on main | `open_store` on main | `validate` now | `open_store` now |
+|---|---|---|---|---|
+| `_ARRAY_DIMENSIONS` removed from every array | 22 problems | refused | conforms, 1 note | opens, 1 note |
+| `levels` mirror removed | 1 problem | opens | conforms, 1 note | opens, 1 note |
+| `band_names` removed | 1 problem | opens | conforms, 1 note | opens, 1 note |
+| level-group `crs`, `transform` and `resolution` removed | 3 problems | opens | conforms, 2 notes | opens, 2 notes |
+| `time`, `band`, `x` and `y` arrays removed | 12 problems | opens | conforms, 1 note | opens |
+| CF `units` and `calendar` removed from `time` | 3 problems | opens | conforms, 1 note | opens |
+| `proj` and `spatial` registrations removed from the arrays | 9 problems | refused | 2 problems | opens, 2 notes |
+| `multiscales` registration removed from the root | 1 problem | refused | 1 problem | opens, 1 note |
+| `resampling_method` set to `nearest` | 1 problem | refused | 1 problem | opens, 1 note |
+| `spec_version` set to `0.3.1` | 1 problem | refused | 1 problem | opens, 1 note |
+| `variable` removed from the block | 1 problem | refused | 1 problem | opens, 1 note |
+| the smallest metadata the knock-out tests accepted (`z_minimal`) | 5 problems | opens | conforms, 5 notes | opens, 4 notes |
+
+A copy that still fails `validate` fails on a MUST for writers: a registration, `resampling_method`, `spec_version` or `variable`. The reader reads through each of them and reports it, and a `resampling_method` note says that the overview levels are not block means. The reader does not read the coordinate arrays or the CF attributes of `time`, so only `validate` reports their absence. The `open_store` column of the bands as plain strings, `times`, `nodata` and the rotated and south-up grids is unchanged: they still refuse. Problems are counted once per distinct finding, so a registration that is missing from nine arrays counts once.
+
+## Stores written by other tools (2026-10-19)
+
+The Python reader opens a store with no `chronozarr` block from its multiscales layout and arrays (spec 9.4). The values it reads were compared with what zarr-python reads from the same arrays.
+
+| Store | Levels | What it opened as | Values |
+|---|---|---|---|
+| ndpyramid 0.4.0 `pyramid_coarsen`, WorldClim tmax 2020 | 3 (1, 2, 4 x), 1080 x 2160 at level 0 | 12 monthly timesteps from `days since 2020-01-01`, one band `tmax`, EPSG:4326 from the CF `spatial_ref`, geometry from the x and y arrays, scale 1 and offset 0 as declared, NaN fill | all 3 levels at all 12 times equal zarr-python |
+| ndpyramid 0.4.0 `pyramid_reproject`, same data | 3 (512, 256, 128 px), listed coarse to fine | read finest first, EPSG:3857 from the layout, chunks that span all 12 times, `_FillValue` 9.97e36 | all 3 levels at all 12 times equal zarr-python |
+| ESA EOPF Sentinel-2 L2A staging product, `measurements/reflectance` over HTTPS | 6 (r10m to r720m), 10980 x 10980 at level 0 | EPSG:32633 from `proj:code`, geometry from `spatial:transform`, 3 bands (b02, b03, b04) of the 4 to 11 that the levels have, one timestep dated 1970-01-01 as a placeholder, no scale | a cell of r10m (3 x 244 x 244) and of r20m (3 x 183 x 183) and the whole of r720m (3 x 152 x 152) equal zarr-python; the same r720m through `xr.open_dataset(engine="chronozarr")` |
+
+The EOPF store showed three things that the strip tests did not. The levels have different bands: r10m has b02, b03, b04 and b08, r20m has ten, and r60m and the coarser levels have eleven, so the reader keeps the three that every level has and names the rest in a note. The overview levels (r120m and coarser) mark missing pixels with NaN and the finer ones with 0, so each level keeps its own marker. And `_eopf_attrs` holds a scale of 0.0001 and an offset of -0.1 for the `<u2` counts, while the arrays hold float32 values that are already decoded: r720m runs from -0.09 to 1.00, and r60m from -0.09 to 0.28 in the window read. The reader applies `_eopf_attrs` only when the array still has the dtype it names, so these values are not scaled twice.
+
+Opening the EOPF group took 0.87 s: its metadata is consolidated, and the three band arrays of a level are read one after the other. A cell read took 1.5 s at r720m and 3.5 to 7.1 s at r10m and r20m on this link, because a sharded array costs an index request and a chunk request per band.
+
+The same probe as in [Readers that decode](#readers-that-decode-2026-10-19) ran on the 43 copies of the strip tests. 9 changed result:
+
+| Copy | `open_store` before | `open_store` now |
+|---|---|---|
+| `a_no_block`, `b_no_block_no_planes`, `d3_wkt2_only_no_block`, `s_a_no_block` (the `chronozarr` block removed) | refused | opens; stored values equal the source; scale and offset not declared |
+| `f1_generic_bands_as_variables` (one array per band) | refused | opens; every level, band and time equals zarr-python by name |
+| `f2_chunks_time_multi`, `f3_chunks_band_split`, `f4_chunks_nonsquare`, `f5_chunks_odd_size` | refused | opens; values equal; `validate` still fails on the chunk layout |
+
+37 of 43 copies open now, against 22 on main. The 6 that still refuse have a `chronozarr` block that is incomplete or not north-up: bands as plain strings, no `bands`, no `times`, no `nodata`, and the rotated and south-up grids. The reader does not fall back to the layout for them, because that would drop the scale and the mask the block declares.
 
 ## Sentinel-2 ingest performance
 

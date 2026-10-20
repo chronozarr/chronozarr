@@ -317,6 +317,38 @@ def _compile_pattern(date_pattern: str) -> re.Pattern[str]:
     return re.compile(head + "".join(parts) + tail)
 
 
+def _date_spans(
+    text: str, pattern: re.Pattern[str] | None
+) -> tuple[list[tuple[int, int, np.datetime64]], list[str]]:
+    """Where `text` holds a date, as (start, end, moment), and the texts that matched `pattern` but
+    are not real dates (a month 13, a day 366 in a common year). Without `pattern`, the default
+    rules: YYYYMMDD, YYYY-MM-DD, YYYY_MM_DD (day) and YYYY-MM, YYYY_MM (first of the month)."""
+    if pattern is None:
+        return _default_date_spans(text), []
+    spans: list[tuple[int, int, np.datetime64]] = []
+    invalid: list[str] = []
+    for match in pattern.finditer(text):
+        fields = {k: int(v) for k, v in match.groupdict().items()}
+        try:
+            if "j" in fields:
+                month, day_of_month = _month_and_day(fields["Y"], fields["j"])
+            else:
+                month, day_of_month = fields["m"], fields.get("d", 1)
+            moment = _moment(
+                fields["Y"],
+                month,
+                day_of_month,
+                fields.get("H", 0),
+                fields.get("M", 0),
+                fields.get("S", 0),
+            )
+        except ValueError:
+            invalid.append(match.group(0))
+            continue
+        spans.append((*match.span(), moment))
+    return spans, invalid
+
+
 def find_dates(
     stem: str, pattern: re.Pattern[str] | None
 ) -> tuple[dict[np.datetime64, str], list[str]]:
@@ -327,30 +359,9 @@ def find_dates(
     month); numbers that are no calendar date are not dates. With `pattern`: what it matches, and a
     match that is no calendar date (or no such day of year) is reported as invalid.
     """
+    spans, invalid = _date_spans(stem, pattern)
     found: dict[np.datetime64, str] = {}
-    invalid: list[str] = []
-    if pattern is not None:
-        for match in pattern.finditer(stem):
-            fields = {k: int(v) for k, v in match.groupdict().items()}
-            try:
-                if "j" in fields:
-                    month, day_of_month = _month_and_day(fields["Y"], fields["j"])
-                else:
-                    month, day_of_month = fields["m"], fields.get("d", 1)
-                moment = _moment(
-                    fields["Y"],
-                    month,
-                    day_of_month,
-                    fields.get("H", 0),
-                    fields.get("M", 0),
-                    fields.get("S", 0),
-                )
-            except ValueError:
-                invalid.append(match.group(0))
-                continue
-            found.setdefault(moment, match.group(0))
-        return found, invalid
-    for start, end, moment in _default_date_spans(stem):
+    for start, end, moment in spans:
         found.setdefault(moment, stem[start:end])
     return found, invalid
 
@@ -381,10 +392,12 @@ def _default_date_spans(text: str) -> list[tuple[int, int, np.datetime64]]:
 DATE_MARK = "\x00"
 
 
-def mask_dates(text: str) -> str:
-    """`text` with every date the default rules read replaced by `DATE_MARK`: the part of a
-    band description or file name that is the same from file to file once the date is taken out."""
-    for start, end, _ in sorted(_default_date_spans(text), key=lambda span: span[0], reverse=True):
+def mask_dates(text: str, pattern: re.Pattern[str] | None = None) -> str:
+    """`text` with every date read from it (by `pattern`, else the default rules) replaced by
+    `DATE_MARK`: the part of a band description or file name that is the same from file to file
+    once the date is taken out."""
+    spans, _ = _date_spans(text, pattern)
+    for start, end, _ in sorted(spans, key=lambda span: span[0], reverse=True):
         text = text[:start] + DATE_MARK + text[end:]
     return text
 
