@@ -871,6 +871,32 @@ trycloudflare.com has a negative TTL of 60 s (SOA minimum). A lookup made before
 
 In every run the recipient read `zarr.json` through the address (200, `Access-Control-Allow-Origin: *`), Ctrl-C printed `stopped` with exit status 0, no cloudflared process remained, and the address then answered HTTP 530.
 
+### Browser check through the tunnel (2026-10-20)
+
+`chronozarr share` on the WorldClim tmax store (`chronozarr convert` of `data/corpus/worldclim-tmax-monthly/raw`: 24 months, 1 band, 1080 x 2160 px, 4 levels, a mask plane, 813 objects, 27.4 MB), with cloudflared on a laptop and a home connection, load 4 to 12. "Doctor" is the time from `checking browser access...` to `measuring first transfer...`, the doctor run through the new address.
+
+Before, each request of that doctor run timed through a live tunnel:
+
+| Phase | Requests | Round trips one after another (at least) | Seconds |
+|---|---:|---:|---:|
+| HTTP checks: root, array metadata, range, suffix range, preflight, HEAD, cache repeat | 7 | 7 | 1.2 |
+| validate | 688 | 232 | 53.5 |
+| open the store | 1 | 1 | 0.1 |
+| decode 4 levels: two cells and a plain-Zarr pixel each | 16 | 16 | 3.0 |
+
+A request through the tunnel took 240 ms on average. Of the 688 validate requests, 576 read the mask: the check that a mask holds only 0 and 1 reads every timestep at every level, one timestep after another. The other 112 read metadata objects and coordinate arrays: validation opens the store without its consolidated metadata, so it reads every `zarr.json`, several of them more than once.
+
+Now `share` validates the folder it serves from disk: 0.3 s for this store, and the tunnel has just returned the root `zarr.json` of that folder byte for byte. CORS, byte ranges, the suffix range, the preflight, HEAD and a decoded cell per level still go through the tunnel. doctor also sends the probes that do not depend on each other at the same time (3 round trips, was 7) and decodes the levels at the same time (4 round trips, was 16). Through the tunnel the doctor run made 24 requests in 2.3 s.
+
+| Code | Address works | Doctor | Link printed |
+|---|---:|---:|---:|
+| main b058d7d, run 1 | 44.3 s | 62.9 s | 107.8 s |
+| main b058d7d, run 2 | 22.2 s | 71.2 s | 93.8 s |
+| validate from disk, run 1 | 18.9 s | 2.1 s | 21.4 s |
+| validate from disk, run 2 | 24.3 s | 2.2 s | 26.9 s |
+
+The runs alternated between the two versions. Each one stopped its tunnel; no cloudflared process remained. `chronozarr doctor <url>` still validates over HTTP, so on a store with a mask behind a slow link it remains slow; only its probe and decode round trips are fewer.
+
 ## Local preview and remote notebooks
 
 Checked on 2026-10-09 on macOS with Python 3.11 and a synthetic store of 6 timesteps, 2 bands and 200 by 220 pixels.
