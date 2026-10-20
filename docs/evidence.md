@@ -897,6 +897,19 @@ Now `share` validates the folder it serves from disk: 0.3 s for this store, and 
 
 The runs alternated between the two versions. Each one stopped its tunnel; no cloudflared process remained. `chronozarr doctor <url>` still validates over HTTP, so on a store with a mask behind a slow link it remains slow; only its probe and decode round trips are fewer.
 
+### Validation over HTTP (2026-10-20)
+
+`chronozarr doctor <url>` with no local copy, on the same WorldClim tmax store, before and after validation sends its reads together. Validation now reads every node's `zarr.json` once: the root, then every node the root names at the same time. It reads the mask in batches, several timesteps at once, holding at most 64 MiB of mask values. A batch spans a whole time shard when one fits, so each shard object is read once. Each level's coordinate arrays are read together, and the `shard_bytes` sizes come from HEAD requests sent together. Before, zarr's `WrapperStore` did not pass `getsize` on, so each listed shard was downloaded in full. HTTP requests now run on 32 threads of their own. They used to share asyncio's default pool, which holds a 4-core machine to 8 requests at once. Every mask chunk is still read and checked.
+
+| Code | Link | Doctor | Requests | Round trips one after another |
+|---|---|---:|---:|---:|
+| PR #136 (64caa84) | 240 ms added to each request, local server | 61.2 s | 759 | 244 |
+| this change | 240 ms added to each request, local server | 10.1 s | 697 | 39 |
+| PR #136, run 1 / run 2 | quick tunnel | 55.3 s / 56.8 s | 760 | 246 |
+| this change, run 1 / run 2 | quick tunnel | 7.9 s / 8.7 s | 698 | 40 |
+
+The tunnel runs alternated between the two versions on a laptop at load 9 to 31. Requests and round trips come from a third run of each version, which made every request through the same tunnel; it took 54.0 s before and 6.9 s after. The tunnel was stopped afterwards; no cloudflared process remained. Most of the remaining requests are the 576 mask chunks, now in waves of up to 32. In tests/test_doctor.py, validation of a 3-level masked test store takes 10 round trips, where it took 103 before. doctor takes 18, where it took 111.
+
 ## Local preview and remote notebooks
 
 Checked on 2026-10-09 on macOS with Python 3.11 and a synthetic store of 6 timesteps, 2 bands and 200 by 220 pixels.
