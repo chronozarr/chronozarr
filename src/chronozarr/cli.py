@@ -895,7 +895,8 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
 @click.option(
     "--variable",
     default=None,
-    help="Variable to convert from a Zarr or NetCDF source; for rasters, the subdataset to read "
+    help="Variable to convert from a Zarr or NetCDF source (also from every file of a NetCDF "
+    "series); for rasters, the subdataset to read "
     "from files that hold several, such as HDF5 (Group/name, or the name alone when unique).",
 )
 @click.option(
@@ -969,11 +970,11 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
 @click.option(
     "--date-pattern",
     default=None,
-    help="Directory, glob or S3 prefix only: where the date is in each file name, with %Y %m "
-    "%d %H %M %S (for example 'ndvi_%Y%m%d'), or %Y %j for a year and day of year (for example "
-    "'MOD13A1.A%Y%j' or 'HLS.S30.T17SQV.%Y%jT%H%M%S'). Default: YYYYMMDD, YYYY-MM-DD or "
-    "YYYY-MM, read only when a name holds exactly one date. With --bands-are-dates it reads "
-    "the band descriptions instead of the file name.",
+    help="Directory, glob or S3 prefix of rasters only: where the date is in each file name, "
+    "with %Y %m %d %H %M %S (for example 'ndvi_%Y%m%d'), or %Y %j for a year and day of year "
+    "(for example 'MOD13A1.A%Y%j' or 'HLS.S30.T17SQV.%Y%jT%H%M%S'). Default: YYYYMMDD, "
+    "YYYY-MM-DD or YYYY-MM, read only when a name holds exactly one date. With "
+    "--bands-are-dates it reads the band descriptions instead of the file name.",
 )
 @click.option(
     "--bands-are-dates",
@@ -1043,9 +1044,11 @@ def convert_command(
       one raster whose bands are dates (Earth Engine toBands()), with --bands-are-dates
       a manifest (.csv with columns uri,datetime[,bands] or .json) of raster or PNG frame URIs
       a Zarr store (path or URL) or a NetCDF file, the last two with --variable
+      a directory or quoted glob of NetCDF files, one file per day or month, which together
+        form one time series dated by the time coordinate in each file (with --variable)
 
     A directory or S3 prefix is not searched recursively; use a glob such as 'dir/**/*.tif'
-    for subdirectories. S3 prefixes are listed with your AWS credentials and need
+    or 'dir/**/*.nc' for subdirectories. S3 prefixes are listed with your AWS credentials and need
     `pip install 'chronozarr[s3]'`. A file that holds subdatasets and no band (HDF5, HDF-EOS5)
     needs --variable to pick one; one without georeferencing needs --crs and --bounds. A date is
     read from a name only when it holds exactly one (YYYYMMDD, YYYY-MM-DD or YYYY-MM); otherwise

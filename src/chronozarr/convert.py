@@ -14,7 +14,8 @@ Five input kinds are recognised from SOURCE:
   manifest, written for you);
 * one raster whose bands are dates, with `bands_are_dates` (`--bands-are-dates`);
 * a Zarr store (local path or http(s) URL) with a chosen variable;
-* a NetCDF file (`.nc`, `.nc4`, `.cdf`) with a chosen variable (needs an xarray NetCDF engine).
+* a NetCDF file (`.nc`, `.nc4`, `.cdf`) with a chosen variable (needs an xarray NetCDF engine),
+  or a directory or glob of NetCDF files that together form one time series.
 
 Needs rasterio (`chronozarr[geo]`) for COG manifests and for the CRS handling of all kinds.
 
@@ -40,6 +41,17 @@ wrong, in the names and in the files, is reported together, per file, in one `Pr
 (`--dry-run` writes nothing and reports the same). `write_manifest_to` exports the files, their
 dates and the band names the files agree on, also when the checks report problems: a file
 with no date gets a row with an empty datetime for the user to fill in.
+
+NetCDF series. A directory or glob (`dir/**/*.nc` recurses) that holds NetCDF files and no
+rasters is one source, as NOAA, NASA and ESGF deliver a series: one file per day, month or decade.
+Each file is dated by the time coordinate inside it, never by its name. The steps of all files are
+sorted by time and each is read from the file that holds it, one file open at a time per reader, so
+memory does not grow with the number of files. Every file is checked against the first: variable,
+dimensions, x/y coordinates, dtype, scale, offset, units, declared nodata, calendar and CRS. All
+that differs is reported per file in one `PreflightError`, as for rasters; so are files whose
+times overlap or repeat. A dimension of length 1 besides time, y and x (OISST's `zlev`, a `height`)
+is squeezed, with a `squeezed:` plan line naming it and its value, for a single file as well; a
+longer one needs `--dims band=NAME` or a selection first.
 
 Bands as dates. One raster whose bands are dates, as Earth Engine's `ee.ImageCollection.toBands()`
 exports a series (`2020_01_01_NDVI`, `2020_01_17_NDVI`, ...), is a series only when the caller
@@ -68,7 +80,9 @@ Scale, offset and units:
    `1`, and the plan says so. An alpha band (colour interpretation alpha) is not a data
    band: it is not stored as data and becomes the mask (rule 4).
 2. Zarr and NetCDF: the variable's CF `scale_factor`, `add_offset` and `units` apply to every
-   band (1 and 0 when absent); a scale that is zero or not finite fails.
+   band (1 and 0 when absent); a scale that is zero or not finite fails. Packed integers stay
+   integers: the store holds the stored values and the band carries the scale and offset. The
+   files of a NetCDF series must agree on all three.
 
 `--scale` and `--offset` replace the scale and offset of every band, and the sources then need not
 agree on them. A scale of 100, 1000, 10000 ... with no offset that carries a value past 1e6 is
@@ -215,6 +229,7 @@ from chronozarr._convert_manifest import (
 from chronozarr._convert_manifest import (
     read_manifest as read_manifest,
 )
+from chronozarr._convert_netcdf_files import find_netcdf_files
 from chronozarr._convert_pixels import (
     fill_line,
     fill_refusal,
@@ -278,7 +293,8 @@ Scale, offset, units and validity are carried over from the source, or the conve
 \b
 Scale and offset: COG per-band scales, offsets, units and descriptions become the band objects
 and must be identical in every source; an alpha band is not data, it becomes the mask.
-Zarr/NetCDF: the CF scale_factor, add_offset and units of the variable apply to every band.
+Zarr/NetCDF: the CF scale_factor, add_offset and units of the variable apply to every band;
+packed integers stay integers.
 --scale and --offset replace them for every band (the sources then need not agree). A scale of
 100, 1000, 10000 ... with no offset that gives values past 1e6 is refused, as MODIS NDVI is:
 HDF-EOS products write the divisor, GDAL multiplies. --scale 0.0001 reads it as a divisor;
@@ -304,6 +320,13 @@ cftime extra and --calendar-to-gregorian. `date` keeps each step's date and time
 Gregorian timestamp (30-day months become 28 to 31 days apart) and stops at a date Gregorian
 lacks, such as 360_day Feb 30; `date-or-month-end` moves it to the last day of its month. The
 store's provenance records the calendar, the rule and the dates moved.
+
+\b
+NetCDF series: a directory or glob of NetCDF files is one time series, dated by the time coordinate
+in each file and sorted by time. Every file must match the first (variable, dimensions, x/y,
+dtype, scale, offset, units, nodata, calendar, CRS) and no two may share a time; all that differs
+is reported per file. A dimension of length 1 besides time, y and x (OISST's zlev) is squeezed
+and the plan says so; a longer one needs --dims band=NAME or a selection first.
 
 \b
 Image frames (PNG): GDAL reads them like COGs and the rules above apply; the values are stored
@@ -356,6 +379,13 @@ class Plan:
         ]
         if list_files and self.discovered and isinstance(self.source, CogManifestSource):
             out.extend(self.source.listing())
+        if isinstance(self.source, XarraySource) and len(self.source.files) > 1:
+            out.append(
+                f"files:      {len(self.source.files)} NetCDF files, dated by their time "
+                "coordinate and joined in time order"
+            )
+            if list_files:
+                out.extend(self.source.file_lines())
         longitude = info.grid.longitude_note()
         out += [
             f"grid:       {info.grid.describe()}",
@@ -447,7 +477,13 @@ def plan_conversion(
     text = str(source_path)
     suffix = Path(text).suffix.lower()
     is_manifest = suffix in (".csv", ".json")
-    discovered = not is_manifest and is_discovery_source(text)
+    netcdf_files = None if is_manifest else find_netcdf_files(text)
+    discovered = not is_manifest and netcdf_files is None and is_discovery_source(text)
+    if date_pattern is not None and netcdf_files is not None:
+        raise ValueError(
+            f"--date-pattern applies to rasters; NetCDF files are dated by their time coordinate "
+            f"({text})"
+        )
     if bands_are_dates and not discovered:
         raise ValueError(
             f"--bands-are-dates applies to one raster file whose bands are dates, not to {text}"
@@ -527,7 +563,7 @@ def plan_conversion(
     else:
         from chronozarr._convert_legacy import LegacySource, legacy_metadata
 
-        metadata = legacy_metadata(source_path)
+        metadata = None if netcdf_files is not None else legacy_metadata(source_path)
         if metadata is not None:
             source = LegacySource(source_path)
             if (
@@ -560,7 +596,14 @@ def plan_conversion(
             )
         if metadata is None:
             source = XarraySource(
-                text, variable, _parse_dims(dims), crs, nodata, mask_var, calendar_to_gregorian
+                text,
+                variable,
+                _parse_dims(dims),
+                crs,
+                nodata,
+                mask_var,
+                calendar_to_gregorian,
+                files=netcdf_files,
             )
 
     if scale is not None or offset is not None:
@@ -809,7 +852,8 @@ def convert(
     """Convert `source` into a chronozarr store at `out` without holding the whole stack.
 
     `source` is a manifest (`.csv`/`.json`), a directory, glob or S3 prefix of rasters, a Zarr
-    store (path or URL) or a NetCDF file; see the module docstring. The grid comes from the first
+    store (path or URL), a NetCDF file, or a directory or glob of NetCDF files that form one
+    time series; see the module docstring. The grid comes from the first
     source (manifests, GeoTIFFs) or the x/y coordinates (Zarr, NetCDF) unless `crs`, `transform`
     and `shape` override it for a manifest, in which case sources off the grid are warped with the
     explicit `resampling`.
