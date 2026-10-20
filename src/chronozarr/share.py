@@ -310,9 +310,10 @@ def share(
             first_lookup=_FIRST_LOOKUP_SECONDS,
         )
         echo("checking browser access...")
-        # The store is the local one, already checked when it was written: through the tunnel,
-        # check what a browser needs and decode one cell per level, without whole timesteps.
-        checks = diagnose(access.store_url, full_read_limit_mb=0)
+        # Through the tunnel, check what a browser needs and decode one cell per level, without
+        # whole timesteps. The tunnel serves this directory, whose root it has just returned
+        # byte for byte: validate the layout from disk, not one round trip per object.
+        checks = diagnose(access.store_url, full_read_limit_mb=0, local_copy=server.store)
         if not _doctor_passes(checks):
             failed = "; ".join(f"{c.name}: {c.detail}" for c in checks if c.status == "fail")
             raise OSError(f"the tunnel did not pass chronozarr doctor: {failed}")

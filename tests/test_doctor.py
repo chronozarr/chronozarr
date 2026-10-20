@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import re
 import shutil
 import threading
 import urllib.error
@@ -22,10 +23,12 @@ from zarr.abc.store import OffsetByteRequest, RangeByteRequest, SuffixByteReques
 from zarr.core.buffer import default_buffer_prototype
 
 import chronozarr
+import chronozarr.doctor as doctor_module
 import chronozarr.store as store_module
 from chronozarr.decode import HttpStore
-from chronozarr.doctor import Check, diagnose
+from chronozarr.doctor import DEFAULT_ORIGIN, Check, diagnose
 from chronozarr.view import StoreRequestHandler, serve_store, view
+from tests.round_trips import RoundTrips
 from tests.synthetic import build_store, make_truth
 
 pytestmark = pytest.mark.unit
@@ -311,6 +314,58 @@ def test_layout_problems_fail_validate(tmp_path):
     (path / "0" / "time" / "c" / "0").write_bytes(b"")
     checks = diagnose(str(path))
     assert any(c.name == "validate" and c.status == "fail" for c in checks)
+
+
+# --- round trips over a slow link -------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def masked_store(tmp_path_factory) -> Path:
+    path = tmp_path_factory.mktemp("doctor") / "masked"
+    mask = np.ones((4, 40, 50), dtype=np.uint8)
+    mask[:, :5, :5] = 0
+    build_store(path, make_truth(4, 1, 40, 50), shard=False, chunk_size=16, mask=mask)
+    return path
+
+
+def test_http_checks_take_three_round_trips(unsharded_store, monkeypatch):
+    with serving(StoreRequestHandler, unsharded_store) as url:
+        trips = RoundTrips(monkeypatch)
+        checks, document = doctor_module._http_checks(url, DEFAULT_ORIGIN)
+    assert document is not None
+    assert not failures(checks), failures(checks)
+    # The root names the data array; then the array metadata and the ranged read; then the
+    # suffix range, the preflight and HEAD on the object the ranged read found.
+    assert len(trips.requests) == 6
+    assert trips.rounds() == 3, trips.paths()
+
+
+def test_a_local_copy_is_validated_from_disk_and_the_levels_decode_together(
+    masked_store, monkeypatch
+):
+    with serving(StoreRequestHandler, masked_store) as url:
+        trips = RoundTrips(monkeypatch)
+        checks = by_name(diagnose(url, full_read_limit_mb=0, local_copy=masked_store))
+    assert not failures(list(checks.values())), failures(list(checks.values()))
+    assert checks["validate"].status == "ok"
+    assert str(masked_store) in checks["validate"].detail
+    assert len([name for name in checks if name.startswith("decode level")]) == 3
+    # Validation read every mask chunk and every coordinate array; none of them crossed HTTP.
+    layout = [p for p in trips.paths() if re.search(r"/(mask|time|band|x|y)/", p)]
+    assert not layout, layout
+    # Three for the HTTP checks, one to open the store, then one level's four reads (two cells,
+    # then the plain-Zarr array metadata and pixel) with every level read at the same time.
+    assert trips.rounds() <= 8, trips.paths()
+
+
+def test_layout_problems_in_the_local_copy_fail_validate(unsharded_store, tmp_path):
+    copy = tmp_path / "copy"
+    shutil.copytree(unsharded_store, copy)
+    (copy / "0" / "time" / "c" / "0").write_bytes(b"")
+    with serving(StoreRequestHandler, unsharded_store) as url:
+        checks = by_name(diagnose(url, local_copy=copy))
+    assert checks["validate"].status == "fail"
+    assert not any(name.startswith("decode level") for name in checks)
 
 
 # --- chronozarr.decode.HttpStore against the local range server -----------------------------

@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -191,25 +192,46 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
             )
         )
 
-    array_meta = _probe(
-        object_url(base, f"{first_level}/{variable}/zarr.json"), read_limit=1_000_000
-    )
-    sharded = b"sharding_indexed" in array_meta.body
     has_shard_bytes = "shard_bytes" in meta
-
+    array_meta_key = f"{first_level}/{variable}/zarr.json"
     key = f"{first_level}/{variable}/c/0/0/0/0"
-    target = object_url(base, key)
-    ranged = _probe(target, headers={**browser, "Range": "bytes=0-99"}, read_limit=100)
-    used = key
-    if ranged.status == 404:  # an unsharded store may omit an all-fill chunk
-        used = f"{first_level}/{variable}/zarr.json"
-        target = object_url(base, used)
-        ranged = _probe(target, headers={**browser, "Range": "bytes=0-9"}, read_limit=10)
+    # Each probe is a round trip, and over a slow link (a quick tunnel) round trips are what this
+    # takes: the probes that do not depend on each other's answers go out together.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        array_meta = pool.submit(_probe, object_url(base, array_meta_key), read_limit=1_000_000)
+        used, target = key, object_url(base, key)
+        ranged = _probe(target, headers={**browser, "Range": "bytes=0-99"}, read_limit=100)
+        if ranged.status == 404:  # an unsharded store may omit an all-fill chunk
+            used, target = array_meta_key, object_url(base, array_meta_key)
+            ranged = _probe(target, headers={**browser, "Range": "bytes=0-9"}, read_limit=10)
+        ranged_label = f"byte range on {used}"
+        if ranged.status == 0:
+            checks.append(_request_failed(ranged_label, target, ranged))
+            return checks, document
+        suffix_sent = pool.submit(
+            _probe, target, headers={**browser, "Range": "bytes=-16"}, read_limit=16
+        )
+        preflight_sent = pool.submit(
+            _probe,
+            target,
+            method="OPTIONS",
+            headers={
+                **browser,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "range",
+            },
+        )
+        head_sent = pool.submit(_probe, target, method="HEAD", headers=browser)
+        repeat_sent = (
+            pool.submit(_probe, target, headers={**browser, "Range": "bytes=0-99"}, read_limit=100)
+            if "cf-cache-status" in ranged.headers
+            else None
+        )
+    sharded = b"sharding_indexed" in array_meta.result().body
+    suffix, preflight, head = suffix_sent.result(), preflight_sent.result(), head_sent.result()
+    repeat = repeat_sent.result() if repeat_sent is not None else None
+
     layout = "sharded" if sharded else "unsharded"
-    ranged_label = f"byte range on {used}"
-    if ranged.status == 0:
-        checks.append(_request_failed(ranged_label, target, ranged))
-        return checks, document
     content_range = ranged.headers.get("content-range", "")
     if ranged.status == 206 and content_range:
         checks.append(
@@ -272,7 +294,6 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
             )
         )
 
-    suffix = _probe(target, headers={**browser, "Range": "bytes=-16"}, read_limit=16)
     suffix_range = suffix.headers.get("content-range", "")
     suffix_works = suffix.status == 206 and suffix_range.startswith("bytes ")
     if not sharded:
@@ -304,15 +325,6 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
             )
         )
 
-    preflight = _probe(
-        target,
-        method="OPTIONS",
-        headers={
-            **browser,
-            "Access-Control-Request-Method": "GET",
-            "Access-Control-Request-Headers": "range",
-        },
-    )
     allowed = _header_tokens(preflight, "access-control-allow-headers")
     if (
         preflight.status in (200, 204)
@@ -336,7 +348,6 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
             )
         )
 
-    head = _probe(target, method="HEAD", headers=browser)
     length = head.headers.get("content-length", "")
     if head.status == 200 and length.isdigit() and _allows_origin(head, origin):
         checks.append(Check("HEAD", "ok", f"200, Content-Length {int(length):,}"))
@@ -353,9 +364,6 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
             )
         )
 
-    repeat = None
-    if "cf-cache-status" in ranged.headers:
-        repeat = _probe(target, headers={**browser, "Range": "bytes=0-99"}, read_limit=100)
     host = urllib.parse.urlsplit(base).hostname or "<host>"
     checks.extend(_cache_checks(ranged, _looks_versioned(base), repeat=repeat, host=host))
     return checks, document
@@ -487,10 +495,12 @@ def _decode_level(source: Any, store: ChronoStore, lod: int, full_read_limit: in
     return Check(name, "ok", "; ".join(notes))
 
 
-def _decode_checks(source: Any, full_read_limit: int) -> list[Check]:
+def _decode_checks(
+    source: Any, full_read_limit: int, local_copy: Path | None = None
+) -> list[Check]:
     checks: list[Check] = []
     try:
-        problems = validate(source)
+        problems = validate(source if local_copy is None else local_copy)
     except Exception as exc:  # unreadable metadata or chunks is itself the diagnosis
         return [
             Check(
@@ -515,7 +525,8 @@ def _decode_checks(source: Any, full_read_limit: int) -> list[Check]:
             )
         )
         return checks
-    checks.append(Check("validate", "ok", "layout conforms to the chronozarr spec"))
+    checked_in = "" if local_copy is None else f" (read from {local_copy})"
+    checks.append(Check("validate", "ok", f"layout conforms to the chronozarr spec{checked_in}"))
 
     try:
         store = open_store(source)
@@ -526,32 +537,46 @@ def _decode_checks(source: Any, full_read_limit: int) -> list[Check]:
             )
         )
         return checks
-    for lod in range(len(store.levels)):
+
+    def decode(lod: int) -> Check:
         try:
-            checks.append(_decode_level(source, store, lod, full_read_limit))
+            return _decode_level(source, store, lod, full_read_limit)
         except Exception as exc:  # a failed read is the finding; keep checking other levels
-            checks.append(
-                Check(
-                    f"decode level {lod}",
-                    "fail",
-                    f"{type(exc).__name__}: {exc}",
-                    "A chunk could not be read or decoded. For a remote store check the shard "
-                    "object exists and Range requests work (see the HTTP checks above).",
-                )
+            return Check(
+                f"decode level {lod}",
+                "fail",
+                f"{type(exc).__name__}: {exc}",
+                "A chunk could not be read or decoded. For a remote store check the shard "
+                "object exists and Range requests work (see the HTTP checks above).",
             )
+
+    # The levels are read at the same time: over a slow link one level's round trips, not all.
+    with ThreadPoolExecutor(max_workers=len(store.levels)) as pool:
+        checks.extend(pool.map(decode, range(len(store.levels))))
     return checks
 
 
 def diagnose(
-    target: str, *, origin: str = DEFAULT_ORIGIN, full_read_limit_mb: float = 16.0
+    target: str,
+    *,
+    origin: str = DEFAULT_ORIGIN,
+    full_read_limit_mb: float = 16.0,
+    local_copy: str | Path | None = None,
 ) -> list[Check]:
-    """Run every applicable check against `target` (https URL or local path)."""
+    """Run every applicable check against `target` (https URL or local path).
+
+    `local_copy` is the directory a URL `target` serves, for a store served from this computer:
+    its layout is validated from disk there. Over HTTP validation reads every metadata object
+    and every mask chunk, one round trip after another (a minute through a quick tunnel). The
+    HTTP and decode checks still read `target`.
+    """
     limit = int(full_read_limit_mb * 1e6)
     if is_url(target):
         checks, document = _http_checks(target, origin)
         if document is None:
             return checks
-        checks.extend(_decode_checks(as_store(target), limit))
+        copy = None if local_copy is None else Path(local_copy)
+        checks.extend(_decode_checks(as_store(target), limit, copy))
         return checks
     path = Path(target)
     if not path.is_dir():

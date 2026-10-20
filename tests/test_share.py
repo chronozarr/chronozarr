@@ -10,12 +10,14 @@ import subprocess
 from pathlib import Path
 from typing import cast
 
+import numpy as np
 import pytest
 from click.testing import CliRunner
 
 from chronozarr.cli import main
 from chronozarr.doctor import Check
 from chronozarr.view import serve_store
+from tests.round_trips import RoundTrips
 from tests.synthetic import build_store, make_truth
 
 pytestmark = pytest.mark.unit
@@ -169,6 +171,46 @@ def test_share_reports_stages_before_their_corresponding_work(store, monkeypatch
     share_module.share(store, open_browser=False, echo=lines.append)
 
     assert [line for line in lines if line in stages] == stages
+
+
+def test_share_checks_browser_access_in_a_few_round_trips_through_the_tunnel(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "masked"
+    build_store(
+        path,
+        make_truth(4, 1, 40, 50),
+        shard=False,
+        chunk_size=16,
+        mask=np.ones((4, 40, 50), dtype=np.uint8),
+    )
+    process = FakeProcess()
+    ports: list[int] = []
+
+    def start_tunnel(executable: str, port: int):
+        ports.append(port)
+        return share_module._Tunnel(
+            cast("subprocess.Popen[str]", process), share_module._TunnelLogs()
+        )
+
+    monkeypatch.setattr(share_module.shutil, "which", lambda _: "/mock/cloudflared")
+    monkeypatch.setattr(share_module, "_start_tunnel", start_tunnel)
+    # The fake tunnel's public address is the local server, so the real doctor and transfer
+    # measurement go over HTTP, each request held as long as a slow link holds it.
+    monkeypatch.setattr(share_module, "_tunnel_url", lambda _: f"http://127.0.0.1:{ports[0]}")
+    monkeypatch.setattr(share_module, "_wait_for_public_store", lambda *args, **kwargs: None)
+    monkeypatch.setattr(share_module, "_wait_for_tunnel", _interrupt)
+    trips = RoundTrips(monkeypatch)
+    lines: list[str] = []
+
+    share_module.share(path, open_browser=False, echo=lines.append)
+
+    assert any(line.startswith("open: ") for line in lines)
+    # The layout is checked in the directory being served; the mask is never read remotely.
+    assert not [p for p in trips.paths() if "/mask/" in p], trips.paths()
+    # doctor: three for the HTTP checks, one to open the store, one level's four reads with
+    # every level read at the same time; then the measurement opens the store and reads a chunk.
+    assert trips.rounds() <= 10, trips.paths()
 
 
 def test_share_missing_cloudflared_never_starts_a_server(store, monkeypatch):
