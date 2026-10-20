@@ -22,7 +22,7 @@ const EMPTY_ENTRY = 0xffffffffffffffffn;
 const text = new TextEncoder();
 const json = (value) => text.encode(JSON.stringify(value, null, 1));
 
-const COMPRESSORS = {
+export const COMPRESSORS = {
   zstd: {
     codec: { name: 'zstd', configuration: { level: 5, checksum: false } },
     compress: (bytes) => zstdCompressSync(bytes, { params: { [constants.ZSTD_c_compressionLevel]: 5 } }),
@@ -67,7 +67,7 @@ function repackShard(shard, nTime, compress) {
 }
 
 /** A synthetic store as { path: bytes } with the data chunks compressed and the codec chain of the data arrays extended. */
-function compressedStore(spec, compressor) {
+export function compressedStore(spec, compressor) {
   const files = buildSyntheticStore(spec).files;
   const arrays = {};
   for (const [key, bytes] of files) {
@@ -168,7 +168,7 @@ async function codecBenchFiles() {
   return files;
 }
 
-async function writeTree(dir, files) {
+export async function writeTree(dir, files) {
   const staging = `${dir}.tmp-${process.pid}`;
   for (const [key, bytes] of files) {
     const file = path.join(staging, key);
