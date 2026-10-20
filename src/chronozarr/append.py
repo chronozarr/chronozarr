@@ -92,7 +92,7 @@ class _Target:
 
     @property
     def transform(self) -> Transform:
-        return schema.parse_level_attrs(self.groups[0].attrs.asdict(), "level 0").transform
+        return schema.canonical_level(self.arrays[0].data, "level 0/data").transform
 
     @property
     def chunk_size(self) -> int:
