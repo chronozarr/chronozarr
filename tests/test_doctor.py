@@ -372,6 +372,25 @@ def test_layout_problems_in_the_local_copy_fail_validate(unsharded_store, tmp_pa
     assert not any(name.startswith("decode level") for name in checks)
 
 
+def test_a_local_copy_does_not_excuse_a_failing_http_check(unsharded_store):
+    with serving(NoCorsHandler, unsharded_store) as url:
+        checks = by_name(diagnose(url, full_read_limit_mb=0, local_copy=unsharded_store))
+    assert checks["validate"].status == "ok"
+    assert checks["CORS on zarr.json"].status == "fail"
+
+
+def test_a_local_copy_does_not_excuse_a_chunk_the_url_serves_corrupt(unsharded_store, tmp_path):
+    served = tmp_path / "served"
+    shutil.copytree(unsharded_store, served)
+    for chunk in (served / "0" / "data" / "c").rglob("*"):
+        if chunk.is_file():
+            chunk.write_bytes(bytes(chunk.stat().st_size))
+    with serving(StoreRequestHandler, served) as url:
+        checks = by_name(diagnose(url, full_read_limit_mb=0, local_copy=unsharded_store))
+    assert checks["validate"].status == "ok"  # the copy on disk is sound
+    assert checks["decode level 0"].status == "fail"
+
+
 # A doctor run whose server holds every request for `pattern` for a minute.
 _HANGING_DOCTOR = """
 import re, signal, sys, threading, time
