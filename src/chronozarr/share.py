@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -303,8 +304,19 @@ def _first_chunk_measurement(store_url: str) -> _CellMeasurement:
     )
 
 
-def _doctor_passes(checks: list[Check]) -> bool:
-    return not any(check.status == "fail" for check in checks)
+def _doctor_failure(checks: list[Check], store: Path) -> str | None:
+    """Why no link is printed, or None. `validate` read the folder on disk, not the tunnel."""
+    failed = [check for check in checks if check.status == "fail"]
+    reasons = [
+        f"{store} does not pass chronozarr validate: {check.detail}. {check.hint} "
+        f"`chronozarr validate {shlex.quote(str(store))}` lists every problem."
+        for check in failed
+        if check.name == "validate"
+    ]
+    through_tunnel = [f"{c.name}: {c.detail}" for c in failed if c.name != "validate"]
+    if through_tunnel:
+        reasons.append(f"the tunnel did not pass chronozarr doctor: {'; '.join(through_tunnel)}")
+    return " ".join(reasons) or None
 
 
 def _wait_for_tunnel(tunnel: _Tunnel) -> int:
@@ -326,7 +338,10 @@ def share(
     """Serve ``store`` through one disposable Cloudflare quick tunnel until interrupted.
 
     The public viewer link is deliberately withheld until the tunnel returns the local store's
-    root metadata and ``chronozarr doctor`` reports no reader-breaking failures.
+    root metadata and ``chronozarr doctor`` reports no reader-breaking failures. doctor validates
+    the layout from the folder on disk; through the tunnel it checks CORS, byte ranges, HEAD and
+    one decoded cell per level. The mask, coverage and coordinate arrays and the level groups'
+    zarr.json are not read through the tunnel: the same server serves them from that folder.
     """
     if viewer is not None and viewer_dir is not None:
         raise ValueError("pass either viewer (a URL) or viewer_dir (a folder), not both")
@@ -358,12 +373,12 @@ def share(
             first_lookup=_FIRST_LOOKUP_SECONDS,
         )
         echo("checking browser access...")
-        # The store is the local one, already checked when it was written: through the tunnel,
-        # check what a browser needs and decode one cell per level, without whole timesteps.
-        checks = diagnose(access.store_url, full_read_limit_mb=0)
-        if not _doctor_passes(checks):
-            failed = "; ".join(f"{c.name}: {c.detail}" for c in checks if c.status == "fail")
-            raise OSError(f"the tunnel did not pass chronozarr doctor: {failed}")
+        # Through the tunnel, check what a browser needs and decode one cell per level, without
+        # whole timesteps. The tunnel serves this directory, whose root it has just returned
+        # byte for byte: validate the layout from disk, not one round trip per object.
+        checks = diagnose(access.store_url, full_read_limit_mb=0, local_copy=server.store)
+        if (failure := _doctor_failure(checks, server.store)) is not None:
+            raise OSError(failure)
         echo("measuring first transfer...")
         measurement = _first_chunk_measurement(access.store_url)
         rate = (

@@ -5,7 +5,12 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import queue
+import re
 import shutil
+import signal
+import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -22,10 +27,12 @@ from zarr.abc.store import OffsetByteRequest, RangeByteRequest, SuffixByteReques
 from zarr.core.buffer import default_buffer_prototype
 
 import chronozarr
+import chronozarr.doctor as doctor_module
 import chronozarr.store as store_module
 from chronozarr.decode import HttpStore
-from chronozarr.doctor import Check, diagnose
+from chronozarr.doctor import DEFAULT_ORIGIN, Check, diagnose
 from chronozarr.view import StoreRequestHandler, serve_store, view
+from tests.round_trips import RoundTrips
 from tests.synthetic import build_store, make_truth
 
 pytestmark = pytest.mark.unit
@@ -311,6 +318,153 @@ def test_layout_problems_fail_validate(tmp_path):
     (path / "0" / "time" / "c" / "0").write_bytes(b"")
     checks = diagnose(str(path))
     assert any(c.name == "validate" and c.status == "fail" for c in checks)
+
+
+# --- round trips over a slow link -------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def masked_store(tmp_path_factory) -> Path:
+    path = tmp_path_factory.mktemp("doctor") / "masked"
+    mask = np.ones((4, 40, 50), dtype=np.uint8)
+    mask[:, :5, :5] = 0
+    build_store(path, make_truth(4, 1, 40, 50), shard=False, chunk_size=16, mask=mask)
+    return path
+
+
+def test_http_checks_take_three_round_trips(unsharded_store, monkeypatch):
+    with serving(StoreRequestHandler, unsharded_store) as url:
+        trips = RoundTrips(monkeypatch)
+        checks, document = doctor_module._http_checks(url, DEFAULT_ORIGIN)
+    assert document is not None
+    assert not failures(checks), failures(checks)
+    # The root names the data array; then the array metadata and the ranged read; then the
+    # suffix range, the preflight and HEAD on the object the ranged read found.
+    assert len(trips.requests) == 6
+    assert trips.rounds() == 3, trips.paths()
+
+
+def test_a_local_copy_is_validated_from_disk_and_the_levels_decode_together(
+    masked_store, monkeypatch
+):
+    with serving(StoreRequestHandler, masked_store) as url:
+        trips = RoundTrips(monkeypatch)
+        checks = by_name(diagnose(url, full_read_limit_mb=0, local_copy=masked_store))
+    assert not failures(list(checks.values())), failures(list(checks.values()))
+    assert checks["validate"].status == "ok"
+    assert str(masked_store) in checks["validate"].detail
+    assert len([name for name in checks if name.startswith("decode level")]) == 3
+    # Validation read every mask chunk and every coordinate array; none of them crossed HTTP.
+    layout = [p for p in trips.paths() if re.search(r"/(mask|time|band|x|y)/", p)]
+    assert not layout, layout
+    # Three for the HTTP checks, one to open the store, then one level's four reads (two cells,
+    # then the plain-Zarr array metadata and pixel) with every level read at the same time.
+    assert trips.rounds() <= 8, trips.paths()
+
+
+def test_layout_problems_in_the_local_copy_fail_validate(unsharded_store, tmp_path):
+    copy = tmp_path / "copy"
+    shutil.copytree(unsharded_store, copy)
+    (copy / "0" / "time" / "c" / "0").write_bytes(b"")
+    with serving(StoreRequestHandler, unsharded_store) as url:
+        checks = by_name(diagnose(url, local_copy=copy))
+    assert checks["validate"].status == "fail"
+    assert not any(name.startswith("decode level") for name in checks)
+
+
+def test_a_local_copy_does_not_excuse_a_failing_http_check(unsharded_store):
+    with serving(NoCorsHandler, unsharded_store) as url:
+        checks = by_name(diagnose(url, full_read_limit_mb=0, local_copy=unsharded_store))
+    assert checks["validate"].status == "ok"
+    assert checks["CORS on zarr.json"].status == "fail"
+
+
+def test_a_local_copy_does_not_excuse_a_chunk_the_url_serves_corrupt(unsharded_store, tmp_path):
+    served = tmp_path / "served"
+    shutil.copytree(unsharded_store, served)
+    for chunk in (served / "0" / "data" / "c").rglob("*"):
+        if chunk.is_file():
+            chunk.write_bytes(bytes(chunk.stat().st_size))
+    with serving(StoreRequestHandler, served) as url:
+        checks = by_name(diagnose(url, full_read_limit_mb=0, local_copy=unsharded_store))
+    assert checks["validate"].status == "ok"  # the copy on disk is sound
+    assert checks["decode level 0"].status == "fail"
+
+
+# A doctor run whose server holds every request for `pattern` for a minute.
+_HANGING_DOCTOR = """
+import re, signal, sys, threading, time
+from functools import partial
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+
+from chronozarr.doctor import diagnose
+from chronozarr.view import StoreRequestHandler
+
+signal.signal(signal.SIGINT, signal.default_int_handler)
+store, pattern = Path(sys.argv[1]), re.compile(sys.argv[2])
+
+
+class Hang(StoreRequestHandler):
+    def send_head(self):
+        if pattern.search(self.path):
+            print("hung", flush=True)
+            time.sleep(60)
+        return super().send_head()
+
+
+class Quiet(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        pass  # a client that went away mid-request is the point of this server
+
+
+server = Quiet(("127.0.0.1", 0), partial(Hang, root=store, prefix=store.name))
+server.daemon_threads = True
+threading.Thread(target=server.serve_forever, daemon=True).start()
+try:
+    diagnose(f"http://127.0.0.1:{server.server_address[1]}/{store.name}", local_copy=store)
+except KeyboardInterrupt:
+    print("interrupted", flush=True)
+    raise
+print("finished", flush=True)
+"""
+
+
+@pytest.mark.parametrize(
+    ("hang", "exits"),
+    [("/0/data/zarr.json$", True), ("/1/data/c/", False)],
+    ids=["HTTP checks", "level decode"],
+)
+def test_ctrl_c_during_a_hung_check_stops_doctor_at_once(masked_store, hang, exits):
+    # share stops the tunnel and the server when doctor raises, so a check must not hold
+    # Ctrl-C until its request ends. After an HTTP check the process also exits at once; a
+    # level read leaves zarr's own reader thread, which the process waits for, as before.
+    child = subprocess.Popen(
+        [sys.executable, "-c", _HANGING_DOCTOR, str(masked_store), hang],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    stdout = child.stdout
+    assert stdout is not None
+    lines: queue.Queue[str] = queue.Queue()
+
+    def read() -> None:
+        for line in stdout:
+            lines.put(line)
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    try:
+        assert lines.get(timeout=60) == "hung\n"
+        child.send_signal(signal.SIGINT)
+        assert lines.get(timeout=5) == "interrupted\n"
+        if exits:
+            assert child.wait(timeout=5) == -signal.SIGINT  # not held by a thread, not a crash
+    finally:
+        child.kill()
+        child.wait()
+        reader.join(timeout=5)
+        stdout.close()
 
 
 # --- chronozarr.decode.HttpStore against the local range server -----------------------------
