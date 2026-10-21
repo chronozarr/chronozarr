@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import re
+import shlex
 import shutil
 import subprocess
 import threading
@@ -256,8 +257,19 @@ def _first_chunk_measurement(store_url: str) -> _CellMeasurement:
     )
 
 
-def _doctor_passes(checks: list[Check]) -> bool:
-    return not any(check.status == "fail" for check in checks)
+def _doctor_failure(checks: list[Check], store: Path) -> str | None:
+    """Why no link is printed, or None. `validate` read the folder on disk, not the tunnel."""
+    failed = [check for check in checks if check.status == "fail"]
+    reasons = [
+        f"{store} does not pass chronozarr validate: {check.detail}. {check.hint} "
+        f"`chronozarr validate {shlex.quote(str(store))}` lists every problem."
+        for check in failed
+        if check.name == "validate"
+    ]
+    through_tunnel = [f"{c.name}: {c.detail}" for c in failed if c.name != "validate"]
+    if through_tunnel:
+        reasons.append(f"the tunnel did not pass chronozarr doctor: {'; '.join(through_tunnel)}")
+    return " ".join(reasons) or None
 
 
 def _wait_for_tunnel(tunnel: _Tunnel) -> int:
@@ -314,9 +326,8 @@ def share(
         # whole timesteps. The tunnel serves this directory, whose root it has just returned
         # byte for byte: validate the layout from disk, not one round trip per object.
         checks = diagnose(access.store_url, full_read_limit_mb=0, local_copy=server.store)
-        if not _doctor_passes(checks):
-            failed = "; ".join(f"{c.name}: {c.detail}" for c in checks if c.status == "fail")
-            raise OSError(f"the tunnel did not pass chronozarr doctor: {failed}")
+        if (failure := _doctor_failure(checks, server.store)) is not None:
+            raise OSError(failure)
         echo("measuring first transfer...")
         measurement = _first_chunk_measurement(access.store_url)
         rate = (

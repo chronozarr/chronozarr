@@ -254,6 +254,30 @@ def test_share_does_not_print_a_link_when_doctor_fails(store, monkeypatch):
     assert not view_module._servers
 
 
+def test_a_store_that_fails_validate_is_named_and_the_tunnel_is_not_blamed(store, monkeypatch):
+    process = FakeProcess()
+    _ready_share(monkeypatch, process)
+    hint = "Fix the listed layout problems or re-encode."
+    monkeypatch.setattr(
+        share_module,
+        "diagnose",
+        lambda _, **kwargs: [
+            Check("CORS on zarr.json", "ok", "allowed"),
+            Check("validate", "fail", "1 problem(s): level 0/time: values differ", hint),
+        ],
+    )
+
+    with pytest.raises(OSError) as raised:
+        share_module.share(store, open_browser=False, echo=lambda _: None)
+
+    message = str(raised.value)
+    assert "tunnel" not in message
+    assert "level 0/time: values differ" in message and hint in message
+    assert f"chronozarr validate '{store}'" in message  # quoted: the path has a space
+    assert process.terminated
+    assert not view_module._servers
+
+
 def test_share_labels_a_sharded_measurement_as_a_cell_read(store, monkeypatch):
     process = FakeProcess()
     _ready_share(monkeypatch, process)
