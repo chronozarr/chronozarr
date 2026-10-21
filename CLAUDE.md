@@ -68,4 +68,4 @@ Always `uv run python`, never bare `python`. Never override uv's 7-day release-a
 
 ## Speed gates (measure before and after any change to the read path)
 
-Cold open ≤ 500 ms at LOD 0 for 36 cells; warm timestep switch ≤ 16 ms; decode ≤ 5 ms per chunk; 0 wire bytes on a warm switch. `await chronozarr.bench()` in the viewer console. Numbers live in the README and `.napkin.md`.
+Cold open ≤ 500 ms at LOD 0 for 36 cells; warm timestep switch ≤ 16 ms; decode ≤ 5 ms per chunk; 0 wire bytes on a warm switch. The verdicts come from `node js/support/gate-bench/run.mjs` (CONTRIBUTING.md; the Speed gates workflow runs it), which loads every chunk before its warm switches. `await chronozarr.bench()` in the viewer console gives the cold open and the decode of the open store; its warm loops report all their traffic, which is 0 only on a store that the idle prefetch holds. Numbers live in the README and `.napkin.md`.

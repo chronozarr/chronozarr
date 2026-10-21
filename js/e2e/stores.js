@@ -57,6 +57,13 @@ export const STORES = {
     spec: { ...BASE, height: 512, width: 512, chunk: 256, nTime: 12, sharded: false, nBand: 4, bands: S2_BANDS, nodata: 0, transform: GEOREFERENCE, values: wobbled(0) },
     enabledProducts: ALL_PRODUCTS,
   },
+  // A step is 2 x 2 chunks of 2 MiB at level 0 and one at level 1: the 10 steps of level 0 are 80 MiB, more than idle
+  // prefetch may start (32 MiB), so stepping through time goes past what was prefetched and fetches.
+  beyond_idle: {
+    dtype: 'uint16',
+    spec: { ...BASE, height: 1024, width: 1024, chunk: 512, nTime: 10, sharded: false, nBand: 4, bands: S2_BANDS, nodata: 0, transform: GEOREFERENCE, values: wobbled(0) },
+    enabledProducts: ALL_PRODUCTS,
+  },
   // Display-ready 8-bit true-value RGB.
   u8_rgb: {
     dtype: 'uint8',

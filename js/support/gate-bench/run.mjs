@@ -16,9 +16,8 @@
 //      the first switch until 1 s after the last, and the reader counts its own requests and bytes: all must be 0.
 //
 // bench() has warm loops too, but they do not establish a warm switch on 36 cells: its prefetch stops at the idle allowance
-// (32 MiB, about 23 of the 36 chunks of one timestep), so its first steps draw incomplete frames and fetch what they miss
-// (7 of 20 frames and 60 to 74 requests per run on this store), and it counts wire bytes inside each switch, which is
-// synchronous, so no response can arrive in it: it reported 0 bytes for those requests. Its figures stay in the JSON.
+// (32 MiB, about 23 of the 36 chunks of one timestep), so its first steps draw incomplete frames and fetch what they miss:
+// 7 of 20 frames per run on this store, and its stepping loop reports 228 requests (321 MB). Its figures stay in the JSON.
 //
 // The builds alternate (base then head, then head then base, ...) after one warm-up pair that is not counted, so that the
 // load of a shared runner falls on both, and each pair is compared on its own.
