@@ -11,14 +11,15 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar, cast
 
 import numpy as np
 import zarr
@@ -30,6 +31,7 @@ from chronozarr.store import object_url, redact_url
 DEFAULT_ORIGIN = "https://chronozarr.org"
 USER_AGENT = "chronozarr-doctor"
 Status = Literal["ok", "info", "warn", "fail"]
+T = TypeVar("T")
 
 
 def is_url(target: str) -> bool:
@@ -98,6 +100,33 @@ def _probe(
         )
     except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
         return Probe(0, {}, b"", time.perf_counter() - started, error=str(exc))
+
+
+class _Background(Generic[T]):
+    """`fn(*args, **kwargs)` on a daemon thread; `result()` waits for it and re-raises its error.
+
+    Not a ThreadPoolExecutor: leaving its `with` block and exiting the interpreter both wait for
+    every request in flight, so Ctrl-C during a hung request kept doctor running, and `share`'s
+    tunnel and server up, until the request timed out. Nothing waits for a daemon thread.
+    """
+
+    def __init__(self, fn: Callable[..., T], *args: Any, **kwargs: Any) -> None:
+        self._value: T | None = None
+        self._error: BaseException | None = None
+        self._thread = threading.Thread(target=self._run, args=(fn, args, kwargs), daemon=True)
+        self._thread.start()
+
+    def _run(self, fn: Callable[..., T], args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+        try:
+            self._value = fn(*args, **kwargs)
+        except BaseException as exc:  # raised again by result(), in the thread that asks
+            self._error = exc
+
+    def result(self) -> T:
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+        return cast("T", self._value)
 
 
 def _allows_origin(probe: Probe, origin: str) -> bool:
@@ -197,36 +226,35 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
     key = f"{first_level}/{variable}/c/0/0/0/0"
     # Each probe is a round trip, and over a slow link (a quick tunnel) round trips are what this
     # takes: the probes that do not depend on each other's answers go out together.
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        array_meta = pool.submit(_probe, object_url(base, array_meta_key), read_limit=1_000_000)
-        used, target = key, object_url(base, key)
-        ranged = _probe(target, headers={**browser, "Range": "bytes=0-99"}, read_limit=100)
-        if ranged.status == 404:  # an unsharded store may omit an all-fill chunk
-            used, target = array_meta_key, object_url(base, array_meta_key)
-            ranged = _probe(target, headers={**browser, "Range": "bytes=0-9"}, read_limit=10)
-        ranged_label = f"byte range on {used}"
-        if ranged.status == 0:
-            checks.append(_request_failed(ranged_label, target, ranged))
-            return checks, document
-        suffix_sent = pool.submit(
-            _probe, target, headers={**browser, "Range": "bytes=-16"}, read_limit=16
-        )
-        preflight_sent = pool.submit(
-            _probe,
-            target,
-            method="OPTIONS",
-            headers={
-                **browser,
-                "Access-Control-Request-Method": "GET",
-                "Access-Control-Request-Headers": "range",
-            },
-        )
-        head_sent = pool.submit(_probe, target, method="HEAD", headers=browser)
-        repeat_sent = (
-            pool.submit(_probe, target, headers={**browser, "Range": "bytes=0-99"}, read_limit=100)
-            if "cf-cache-status" in ranged.headers
-            else None
-        )
+    array_meta = _Background(_probe, object_url(base, array_meta_key), read_limit=1_000_000)
+    used, target = key, object_url(base, key)
+    ranged = _probe(target, headers={**browser, "Range": "bytes=0-99"}, read_limit=100)
+    if ranged.status == 404:  # an unsharded store may omit an all-fill chunk
+        used, target = array_meta_key, object_url(base, array_meta_key)
+        ranged = _probe(target, headers={**browser, "Range": "bytes=0-9"}, read_limit=10)
+    ranged_label = f"byte range on {used}"
+    if ranged.status == 0:
+        checks.append(_request_failed(ranged_label, target, ranged))
+        return checks, document
+    suffix_sent = _Background(
+        _probe, target, headers={**browser, "Range": "bytes=-16"}, read_limit=16
+    )
+    preflight_sent = _Background(
+        _probe,
+        target,
+        method="OPTIONS",
+        headers={
+            **browser,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "range",
+        },
+    )
+    head_sent = _Background(_probe, target, method="HEAD", headers=browser)
+    repeat_sent = (
+        _Background(_probe, target, headers={**browser, "Range": "bytes=0-99"}, read_limit=100)
+        if "cf-cache-status" in ranged.headers
+        else None
+    )
     sharded = b"sharding_indexed" in array_meta.result().body
     suffix, preflight, head = suffix_sent.result(), preflight_sent.result(), head_sent.result()
     repeat = repeat_sent.result() if repeat_sent is not None else None
@@ -551,8 +579,8 @@ def _decode_checks(
             )
 
     # The levels are read at the same time: over a slow link one level's round trips, not all.
-    with ThreadPoolExecutor(max_workers=len(store.levels)) as pool:
-        checks.extend(pool.map(decode, range(len(store.levels))))
+    reads = [_Background(decode, lod) for lod in range(len(store.levels))]
+    checks.extend(read.result() for read in reads)
     return checks
 
 

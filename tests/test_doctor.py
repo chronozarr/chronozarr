@@ -5,8 +5,12 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+import queue
 import re
 import shutil
+import signal
+import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -366,6 +370,82 @@ def test_layout_problems_in_the_local_copy_fail_validate(unsharded_store, tmp_pa
         checks = by_name(diagnose(url, local_copy=copy))
     assert checks["validate"].status == "fail"
     assert not any(name.startswith("decode level") for name in checks)
+
+
+# A doctor run whose server holds every request for `pattern` for a minute.
+_HANGING_DOCTOR = """
+import re, signal, sys, threading, time
+from functools import partial
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+
+from chronozarr.doctor import diagnose
+from chronozarr.view import StoreRequestHandler
+
+signal.signal(signal.SIGINT, signal.default_int_handler)
+store, pattern = Path(sys.argv[1]), re.compile(sys.argv[2])
+
+
+class Hang(StoreRequestHandler):
+    def send_head(self):
+        if pattern.search(self.path):
+            print("hung", flush=True)
+            time.sleep(60)
+        return super().send_head()
+
+
+class Quiet(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        pass  # a client that went away mid-request is the point of this server
+
+
+server = Quiet(("127.0.0.1", 0), partial(Hang, root=store, prefix=store.name))
+server.daemon_threads = True
+threading.Thread(target=server.serve_forever, daemon=True).start()
+try:
+    diagnose(f"http://127.0.0.1:{server.server_address[1]}/{store.name}", local_copy=store)
+except KeyboardInterrupt:
+    print("interrupted", flush=True)
+    raise
+print("finished", flush=True)
+"""
+
+
+@pytest.mark.parametrize(
+    ("hang", "exits"),
+    [("/0/data/zarr.json$", True), ("/1/data/c/", False)],
+    ids=["HTTP checks", "level decode"],
+)
+def test_ctrl_c_during_a_hung_check_stops_doctor_at_once(masked_store, hang, exits):
+    # share stops the tunnel and the server when doctor raises, so a check must not hold
+    # Ctrl-C until its request ends. After an HTTP check the process also exits at once; a
+    # level read leaves zarr's own reader thread, which the process waits for, as before.
+    child = subprocess.Popen(
+        [sys.executable, "-c", _HANGING_DOCTOR, str(masked_store), hang],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    stdout = child.stdout
+    assert stdout is not None
+    lines: queue.Queue[str] = queue.Queue()
+
+    def read() -> None:
+        for line in stdout:
+            lines.put(line)
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    try:
+        assert lines.get(timeout=60) == "hung\n"
+        child.send_signal(signal.SIGINT)
+        assert lines.get(timeout=5) == "interrupted\n"
+        if exits:
+            assert child.wait(timeout=5) == -signal.SIGINT  # not held by a thread, not a crash
+    finally:
+        child.kill()
+        child.wait()
+        reader.join(timeout=5)
+        stdout.close()
 
 
 # --- chronozarr.decode.HttpStore against the local range server -----------------------------
