@@ -113,7 +113,7 @@ Viewer on the v0.1 Sahara store (128 months, 4 bands, 6 x 6 cells at LOD 0, 3.9 
 | Cold open to first complete frame | 257 ms, 109 requests, 43.8 MB | 475 ms median, 109 requests, 35.2 MB |
 | Cold open without consolidated metadata | 256 ms | 556 to 1478 ms |
 | Warm timestep switch, stepping (median / p95) | 3.5 / 15 ms | 6.3 / 19 ms |
-| Warm switch wire bytes and requests | 0 / 0 | 0 / 0 |
+| Warm switch wire bytes and requests, counted inside each switch, where no response can arrive ([Speed gates in CI](#speed-gates-in-ci-2026-10-20)) | 0 / 0 | 0 / 0 |
 | Product switch | about 1 ms | under 1 ms |
 | Decode per 2 MB chunk | 4.6 ms | 10 ms under load (4.5 ms idle) |
 
@@ -134,7 +134,7 @@ The workflow `.github/workflows/speed-gates.yml` runs on every pull request that
 
 The job measures warm switches itself because `bench()` does not establish them on 36 cells. It prefetches no more than the idle allowance (32 MiB) before its warm loops, so its first steps draw incomplete frames and fetch what they miss: 7 of 20 frames per run on this store. `bench()` used to count the requests and bytes of a warm loop inside each switch. A switch is synchronous, so no response could arrive in that window, and it reported 0 bytes; its request count, taken when a request starts, caught what a switch started at once (60 to 74 requests per run) but not what it scheduled. The figures below that give only `bench()`'s wire bytes on a warm switch (2026-10-18 and 2026-10-19) do not establish that gate.
 
-`bench()` now counts each warm loop from before its first switch to 1 s after its last, as the runner does; `js/e2e/viewer-bench.spec.js` checks this on a store larger than the idle allowance. On this store its stepping loop (10 steps) then reports 228 requests and 320.7 MB, every level-0 chunk the prefetch had not loaded, where the old count gave 63 to 66 requests and 0 bytes. Its jumps and its switches from the decoded cache fetch nothing in either. Both built viewers alternated, 3 runs each, SwiftShader, load 5 to 8.
+`bench()` now counts each warm loop from before its first switch until 1 s after its last, as the runner counts its own, and then until no request is in flight (10 s at most; `inflightAtEnd` gives what was still on the way). `js/e2e/viewer-bench.spec.js` checks this on a store larger than the idle allowance, also with every chunk response 400 ms late, and checks that the loops count nothing on a store the prefetch holds. On this store the stepping loop (10 steps) then reports 228 to 255 requests and 320.7 to 329.1 MB, where the old count gave 55 to 68 requests and 0 bytes; the level-0 chunks the prefetch had not loaded are 228 and 320.7 MB. Its jumps and its switches from the decoded cache fetch nothing (one run of the old count gave 6 requests in its jumps). Both built viewers alternated, 3 runs each, SwiftShader, 2026-10-21, load 16 to 18. Each loop now ends with that wait, so the jumping loop and the loop from the decoded cache start at least 1 s later than before, with more of the earlier loop's chunks in memory: their medians and incomplete frames are not comparable with figures recorded before this change.
 
 Noise of the comparison on GitHub's runners, with the same build as base and head: 6 jobs of 6 pairs, then 6 jobs of 5 pairs with 5 cold opens per run (the job as it is). With 3 cold opens per run, one pair's cold-open ratio ranged from 0.70 to 1.59, hence 5.
 
@@ -739,7 +739,7 @@ What the 5 sequential requests are now: the page, `catalog.json`, the root `zarr
 
 Two more changes follow from making the script and the workers load in one round trip. A decode worker used to take about seven round trips to start, so the main thread decoded every chunk of the first frame; now a worker starts in one, and a worker that said `ready` before its codec had loaded held the first chunk (one run at 200 ms: 2.5 s to the first frame, against 1.1 s with the change below). A worker now says `ready` after the codecs of the store's arrays have loaded, and the main-thread decoder that serves jobs until then loads them while the first chunk downloads. And the root metadata read, made before the viewer script ran, no longer shows the viewer a round trip: the viewer paces its coarse stages by the time that read took, which the page now reports (`e2e/viewer-coarse.spec.js` failed until it did).
 
-The speed gates above, run on both builds with the viewer's `bench()` against the same local store (3 runs per build, alternating; 1-minute load average 9 to 10 at the start): cold open at level 0, 36 cells, from the `loadStore` call, median of 5 per run, 120 to 123 ms before and 121 to 133 ms after (gate 500 ms); warm switch 4.3 to 5.2 ms before and 3.6 to 4.1 ms after (gate 16 ms), 0 wire bytes in all six runs; decode 4.4 to 4.6 ms before and 4.3 to 4.6 ms after per 2 MB chunk (gate 5 ms). Movie playback, 30 s at 4 steps per second, unthrottled, 3 runs per build: 120 of 120 steps shown on time and no buffering pause in all six.
+The speed gates above, run on both builds with the viewer's `bench()` against the same local store (3 runs per build, alternating; 1-minute load average 9 to 10 at the start): cold open at level 0, 36 cells, from the `loadStore` call, median of 5 per run, 120 to 123 ms before and 121 to 133 ms after (gate 500 ms); warm switch 4.3 to 5.2 ms before and 3.6 to 4.1 ms after (gate 16 ms), 0 wire bytes in all six runs as counted inside each switch, where no response can arrive ([Speed gates in CI](#speed-gates-in-ci-2026-10-20)); decode 4.4 to 4.6 ms before and 4.3 to 4.6 ms after per 2 MB chunk (gate 5 ms). Movie playback, 30 s at 4 steps per second, unthrottled, 3 runs per build: 120 of 120 steps shown on time and no buffering pause in all six.
 
 Not measured: the deployed site (the sweep is local, so the connection set-up of the data host, which the page now starts at once, is not in it), a repeat visit with the cache on, and Safari and Firefox. The gate "cold open ≤ 500 ms" is read from a call to `loadStore`, as `bench()` does, not from navigation.
 
@@ -800,7 +800,7 @@ Speed gates, `chronozarr.bench()` 3 runs each (load 5 to 7):
 | Warm switch, stepping, p50 (≤ 16 ms) | 4.4 to 4.8 ms (3, 25 and 12 of 30 frames incomplete) | 4.7 to 5.1 ms (3, 3 and 6 incomplete) |
 | Warm switch, jumping, p50 | 1.3 to 1.6 ms | 1.4 to 1.6 ms |
 | Upload from the decoded cache, p50 | 11.4 to 11.8 ms | 11.0 to 12.2 ms |
-| Wire bytes on a warm switch (0) | 0 | 0 |
+| Wire bytes on a warm switch (0), counted inside each switch, where no response can arrive ([Speed gates in CI](#speed-gates-in-ci-2026-10-20)) | 0 | 0 |
 | Decode per 2 MiB chunk, p50 (≤ 5 ms) | 4.2 to 4.3 ms | 4.2 to 4.5 ms |
 
 After the fix above the gates were run again on the built viewers, before and after alternated, but another job had loaded the machine (load average 265 to 314 on 16 cores): the warm step took 2.0 to 2.3 ms and the decode 5.5 to 5.7 ms in both, the upload from the cache 15.6 to 16.6 ms in both, and no warm switch used the network. At that load the 16 ms and 5 ms gates cannot be established, and the two builds do not differ.
@@ -817,13 +817,15 @@ The gates of `main` after that change (b058d7d), 2026-10-20. The machine was nev
 
 `bench()`'s jumps are fast because most of its frames are incomplete, which skips the cells it lacks; with every chunk in memory a jump uploads the cells of a timestep outside the GPU window and takes 8.5 ms. No percentile is written into the 16 ms gate: the medians hold it and the 95th percentiles (17.7 and 22.7 ms) do not. A quiet machine may give lower figures; this load is that of the earlier figures (5 to 10).
 
-`bench_gates.mjs` again on the same store, with `bench()` counting each warm loop from before its first switch to 1 s after its last ([Speed gates in CI](#speed-gates-in-ci-2026-10-20)): the built viewer with and without that change alternated, 3 runs each, load 9.7 to 14.6. Before the loops the idle prefetch had loaded 31 chunks in both. The store's level 0 is 36 chunks per step over 117 steps, so these loops switch while chunks are still arriving:
+`bench_gates.mjs` again on the same store, with `bench()` counting each warm loop over the whole loop and until no request is in flight after it ([Speed gates in CI](#speed-gates-in-ci-2026-10-20)): the built viewer with and without that change alternated, 3 runs each, 2026-10-21, load 11.9 to 14.9. Before the loops the idle prefetch had loaded 31 chunks in both. The store's level 0 is 36 chunks per step over 117 steps, so these loops switch while chunks are still arriving:
 
 | Warm loop of `bench()` | Counted inside each switch | Counted over the loop |
 |---|---|---|
-| Stepping, 30 steps | 22 to 26 requests, 0 bytes; 4 or 5 frames incomplete | 1,486 or 1,487 requests, 1.72 GB; 4 frames incomplete |
-| Jumping, 30 jumps | 6 or 7 requests, 0 bytes; 28 or 29 incomplete | 361 to 377 requests, 0.40 to 0.41 GB; 24 incomplete |
-| From the decoded cache, 30 jumps | 0 requests, 0 bytes; 20 or 21 incomplete | 338 to 344 requests, 0.38 to 0.39 GB; 27 incomplete |
+| Stepping, 30 steps | 17 to 46 requests, 0 bytes; 4 to 11 frames incomplete | 1,487 requests, 1.72 GB; 4 frames incomplete |
+| Jumping, 30 jumps | 7 to 9 requests, 0 bytes; 28 to 30 incomplete | 522 or 785 requests, 0.58 to 0.88 GB; 24 incomplete |
+| From the decoded cache, 30 jumps | 0 requests, 0 bytes; 19 to 21 incomplete | 522 or 785 requests, 0.61 to 0.91 GB; 24 or 25 incomplete |
+
+Every loop ended with no request in flight. A `bench()` run took 15 to 17 s, against 10 s with the old count.
 
 On the built viewer (the page bundled, `CHRONOZARR_E2E_BUILT_VIEWER=1`), the slow-link browser test (a store of 12 steps of 524 KB at 1 MB/s and 50 ms) paused twice where it allows one, and passed on the sources. Both open with the same five store requests (2,100,777 bytes), so the early reads of the page are not what differed. The build's first bandwidth estimate was 876 KB/s where the sources read 686 KB/s, because its page no longer shares the throttled link with about 60 modules. The speculative jobs (the coarse loop and the movie's prefetch) had each sized their workers once, at their start, as the estimate over the chunk size (421 KB then, the real chunk is 524 KB): 2 each on the build, 1 each on the sources. With the playback buffer's batch of three that was 5 to 7 requests in flight on the build and 3 or 4 on the sources, and the frame the playhead reached first was one of the requests that shared the link five ways (the four frames after the first three arrived together 4.7 s after play, where on the sources they came in from 3.5 s). Six runs on each of the sources and the build, counting the pauses of the first 14 s after play:
 
