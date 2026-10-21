@@ -49,6 +49,14 @@ if hasattr(os, "register_at_fork"):  # POSIX
     os.register_at_fork(after_in_child=_start_request_threads)
 
 
+class HttpStatusError(OSError):
+    """An HTTP error answer that retries did not clear. `status` is its code."""
+
+    def __init__(self, message: str, status: int) -> None:
+        super().__init__(message)
+        self.status = status
+
+
 def _base_url(url: str) -> str:
     """`url` minus trailing slashes on the path and any fragment; the query stays."""
     parts = urlsplit(url)
@@ -152,7 +160,8 @@ class HttpStore(Store):
                     return None
                 transient = code == 429 or code >= 500
                 if not transient or attempt == len(_RETRY_DELAYS_S):
-                    raise OSError(f"{method} {shown}: HTTP {code} {reason}") from None
+                    message = f"{method} {shown}: HTTP {code} {reason}"
+                    raise HttpStatusError(message, code) from None
             except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
                 if attempt == len(_RETRY_DELAYS_S):
                     raise OSError(f"{method} {shown}: {error}") from error
@@ -183,7 +192,12 @@ class HttpStore(Store):
         return await self._request(key, "HEAD") is not None
 
     async def getsize(self, key: str) -> int:
-        fetched = await self._request(key, "HEAD")
+        try:
+            fetched = await self._request(key, "HEAD")
+        except HttpStatusError as error:
+            if error.status not in (403, 405):
+                raise
+            return await self._getsize_by_get(key)
         if fetched is None:
             raise FileNotFoundError(key)
         length = fetched[1].get("Content-Length")
@@ -192,6 +206,24 @@ class HttpStore(Store):
                 f"HEAD {redact_url(object_url(self.url, key))}: no Content-Length header"
             )
         return int(length)
+
+    async def _getsize_by_get(self, key: str) -> int:
+        """The size from a one-byte GET, for a host that refuses HEAD (URLs presigned for GET).
+
+        A 206 answer names the size in Content-Range (`bytes 0-0/12345`); a server that ignores
+        Range answers 200 with the whole object, and its Content-Length is the size.
+        """
+        fetched = await self._request(key, "GET", RangeByteRequest(0, 1))
+        if fetched is None:
+            raise FileNotFoundError(key)
+        headers = fetched[1]
+        size = headers.get("Content-Range", "").rpartition("/")[2] or headers.get("Content-Length")
+        if size is None or not size.isdigit():
+            raise OSError(
+                f"GET {redact_url(object_url(self.url, key))}: no size in Content-Range or "
+                "Content-Length"
+            )
+        return int(size)
 
     async def set(self, key: str, value: Buffer) -> None:
         raise PermissionError("HttpStore is read-only")

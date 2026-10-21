@@ -91,6 +91,19 @@ class FlakyHandler(StoreRequestHandler):
         return super().send_head()
 
 
+class NoHeadHandler(StoreRequestHandler):
+    """Refuses HEAD, as a host behind URLs presigned for GET does. Records each GET's Range."""
+
+    ranges: list[str | None]
+
+    def do_HEAD(self):
+        self.send_error(HTTPStatus.FORBIDDEN)
+
+    def do_GET(self):
+        self.ranges.append(self.headers.get("Range"))
+        super().do_GET()
+
+
 class LocalServer(ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 128  # the default 5 drops connections from 32 requests at once
@@ -500,6 +513,21 @@ def test_doctor_on_a_masked_store_over_http_takes_eighteen_round_trips(masked_st
     assert trips.rounds() <= 18, trips.paths()
 
 
+def test_remote_validate_sizes_shards_with_one_byte_reads_when_the_host_refuses_head(
+    sharded_store, monkeypatch
+):
+    handler = type("NoHead", (NoHeadHandler,), {"ranges": []})
+    with serving(handler, sharded_store) as url:
+        trips = RoundTrips(monkeypatch)
+        problems = validate(url)
+    assert problems == []
+    shards = [(method, path) for _, _, method, path in trips.requests if "/data/c/" in path]
+    assert sorted(path for method, path in shards if method == "GET") == sorted(
+        object_paths(sharded_store, "data")
+    )
+    assert handler.ranges.count("bytes=0-0") == len(object_paths(sharded_store, "data"))
+
+
 # --- chronozarr.decode.HttpStore against the local range server -----------------------------
 
 
@@ -522,6 +550,17 @@ def test_http_store_reads_ranges_and_reports_missing_keys(sharded_store):
         assert asyncio.run(read(store, "no/such/key")) is None
         assert asyncio.run(store.exists("zarr.json")) is True
         assert asyncio.run(store.exists("no/such/key")) is False
+
+
+def test_http_store_sizes_an_object_when_the_host_refuses_head(sharded_store):
+    key = "0/data/c/0/0/0/0"
+    handler = type("NoHead", (NoHeadHandler,), {"ranges": []})
+    with serving(handler, sharded_store) as url:
+        store = HttpStore(url)
+        assert asyncio.run(store.getsize(key)) == (sharded_store / key).stat().st_size
+        with pytest.raises(FileNotFoundError):
+            asyncio.run(store.getsize("no/such/key"))
+    assert handler.ranges == ["bytes=0-0", "bytes=0-0"]
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="os.fork is POSIX only")
