@@ -207,13 +207,13 @@ files:      32, dated from their names and placed by their grids
   ...
 grid:       WKT2 "unnamed", 1000 x 1000 px, 463.3127165 m pixels (transform origin -6301052.945, 5189102.425)
 validity:   nodata -3000 sentinel, no mask
-tiles:      32 files are tiles of one 1000 x 1000 px grid, 4 per date, and the tiles of each date are joined into one timestep; no two tiles overlap; every date covers the whole grid
+tiles:      32 files are tiles of one 1000 x 1000 px grid, 4 per date, and the tiles of each date are joined into one timestep; every date covers the whole grid
 ```
 
 The rules:
 
-- The files are tiles of one grid when they have one CRS and one pixel size, their origins are a whole number of pixels apart, and no two files of a date cover the same pixels. The grid of the store is the smallest that holds every file of every date. Nothing is resampled.
-- Earth Engine's tiles do not overlap. Where tiles from elsewhere do, their values must be equal wherever both are valid, or the conversion stops and names the date, the files and the number of pixels; nothing is written. Where only one of them is valid, its value is kept.
+- The files are tiles of one grid when they have one CRS and one pixel size, their origins are a whole number of pixels apart, and no two files of a date share a pixel. The grid of the store is the smallest that holds every file of every date. Nothing is resampled.
+- At least two files must share a date. When no two do, `--mosaic-tiles` is refused: there is nothing to join, and joining files of different dates and extents would only leave pixels empty.
 - Pixels that no tile of a date covers, as when one date is missing a tile, are invalid on that date. When the files declare no nodata and you give none, the store gets a mask for them. The `tiles:` line says on how many dates this happens.
 - Scale, offset, units and nodata come from the files, as for any GeoTIFFs. Earth Engine leaves MODIS NDVI's `-3000` fill undeclared; on this mosaic it holds 3.7 % of the pixels, so `convert` stops until `--nodata -3000` marks it invalid.
 - `--mosaic-tiles` applies to a folder, a glob or an `s3://` prefix. It is refused with `--resampling`, `--transform`, `--shape`, `--bounds`, `--bands-are-dates` and `--write-manifest`, and with a `--crs` other than the CRS of the tiles.
@@ -221,6 +221,7 @@ The rules:
 When the files of a date are not tiles of one grid, the report does not offer `--mosaic-tiles`:
 
 - Files of one date that cover the same pixels are copies, or two images of one area. Keep one of them, or, if their names carry a time of day, read it with `--date-pattern` and `%H%M%S`.
+- Files of one date that overlap in part, as Earth Engine's tiles never do, need a rule for the pixels they share, and that rule is your decision. Join them yourself, for example with `gdal_merge.py`, where the last file wins, and convert the joined files.
 - Files with different CRSs or pixel sizes, or whose pixels are not aligned, can be joined only by resampling, and the method is your decision. Join them onto one grid with `gdalwarp` (with `-tap -tr` for an aligned grid) and convert the joined files, or export them again with `crs` and `crsTransform` so that every tile sits on one grid.
 
 ## From a manifest of URLs
