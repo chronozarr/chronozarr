@@ -7,9 +7,13 @@
 //   warm switch     goToTime -> frame finished on the GPU, after the idle prefetch: stepping one timestep at a
 //                   time with pauses (the GPU window keeps neighbours resident, so a step is a uniform change),
 //                   jumping several timesteps at once, and with the texture pool emptied so every switch
-//                   uploads from the decoded cache. Each loop reports the requests and bytes from before its
-//                   first switch to 1 s after its last, and the frames drawn without every cell (`incomplete`):
-//                   a store larger than the idle prefetch allowance fetches during the loop.
+//                   uploads from the decoded cache. `networkRequests` and `wireBytes` are per loop: all the
+//                   traffic from before its first switch until 1 s after its last and no request in flight
+//                   (10 s at most; `inflightAtEnd` counts what was still on the way then), the viewer's
+//                   look-ahead included. `incomplete` (frames drawn without every cell), `uploadsPerSwitch`
+//                   and `cacheMisses` are counted per switch. A store larger than the idle prefetch allowance
+//                   fetches during the loops, so their traffic is 0 only on a store the prefetch holds; the
+//                   gate "0 wire bytes on a warm switch" is measured by support/gate-bench/run.mjs.
 //   product switch  setProduct -> frame finished.
 //   decode          per-chunk zarrita decode time, replayed from recorded bytes (no network).
 //
@@ -93,12 +97,23 @@ async function coldOpen(viewer, url, fetchImpl, runs) {
   return rows;
 }
 
-// How long a warm loop waits after its last switch for the responses to what its switches started or scheduled.
+// After its last switch a warm loop waits SETTLE_MS, then until no request is in flight (checked every SETTLE_POLL_MS),
+// for the responses to what its switches started or scheduled; SETTLE_CAP_MS in all at most.
 const SETTLE_MS = 1000;
+const SETTLE_POLL_MS = 50;
+const SETTLE_CAP_MS = 10000;
+
+/** Resolves with the number of requests still in flight when it gives up (0 unless it reached SETTLE_CAP_MS). */
+async function settle(network) {
+  const started = performance.now();
+  await sleep(SETTLE_MS);
+  while (network.inflight > 0 && performance.now() - started < SETTLE_CAP_MS) await sleep(SETTLE_POLL_MS);
+  return network.inflight;
+}
 
 /**
- * Times each switch of `sequence` and counts the requests and bytes of the whole loop, from before its first switch to
- * SETTLE_MS after its last. A switch is synchronous, so no response arrives inside it, and what the viewer schedules
+ * Times each switch of `sequence` and counts the requests and bytes of the whole loop, from before its first switch until
+ * it has settled after its last. A switch is synchronous, so no response arrives inside it, and what the viewer schedules
  * after a switch starts after it.
  */
 async function switchTimings(viewer, sequence, { emptyPool = false, pauseMs = 0 } = {}) {
@@ -118,16 +133,17 @@ async function switchTimings(viewer, sequence, { emptyPool = false, pauseMs = 0 
     const ms = performance.now() - started;
     rows.push({ t, ms, complete: frame.complete, uploads: renderer.stats.uploads - uploads, misses: store.stats.cache.misses - misses });
   }
-  await sleep(SETTLE_MS);
-  return { rows, requests: network.requests - before.requests, bytes: network.bytes - before.bytes };
+  const inflightAtEnd = await settle(network);
+  return { rows, requests: network.requests - before.requests, bytes: network.bytes - before.bytes, inflightAtEnd };
 }
 
-function describeSwitches({ rows, requests, bytes }) {
+function describeSwitches({ rows, requests, bytes, inflightAtEnd }) {
   return {
     ...Object.fromEntries(Object.entries(summarize(rows.map((r) => r.ms))).map(([k, v]) => [k, round(v)])),
     incomplete: rows.filter((r) => !r.complete).length,
     networkRequests: requests,
     wireBytes: bytes,
+    inflightAtEnd,
     uploadsPerSwitch: rows.reduce((n, r) => n + r.uploads, 0) / rows.length,
     cacheMisses: rows.reduce((n, r) => n + r.misses, 0),
   };
