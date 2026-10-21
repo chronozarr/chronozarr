@@ -5,6 +5,7 @@ from __future__ import annotations
 import glob
 import inspect
 import re
+import shlex
 import sys
 import time
 from collections.abc import Iterator, Sequence
@@ -28,6 +29,8 @@ from chronozarr._calendar import (
 )
 from chronozarr._convert_discover import TIFF_SUFFIXES, is_discovery_source
 from chronozarr._convert_source import UndeclaredNaNError
+from chronozarr._convert_tiles import OPTION as MOSAIC_TILES
+from chronozarr._convert_tiles import SameDateFixes
 from chronozarr._convert_xarray import open_netcdf, open_zarr
 from chronozarr._install import extra_hint
 from chronozarr.append import append, is_store
@@ -95,12 +98,14 @@ class _GeotiffStack:
     bands: tuple[Band, ...]
 
 
-def _read_geotiffs(pattern: str, crs: str | None) -> _GeotiffStack:
+def _read_geotiffs(pattern: str, crs: str | None, join_tiles: str) -> _GeotiffStack:
     """One GeoTIFF per timestep (date parsed from the file name), bands stacked.
 
     The files are read as `chronozarr convert` reads a manifest of COGs, so dtype, band names,
     scale, offset, units, nodata and masks follow its fidelity rules (`convert --help`). Every
     file must be on one grid; nothing is resampled. `crs` stands in for a file that has none.
+    Files that share a date are refused; when they are tiles of one grid, the fix is
+    `join_tiles`, the command that joins them (this one cannot).
     """
     paths = [pattern] if Path(pattern).is_file() else glob.glob(pattern)
     if not paths:
@@ -115,6 +120,7 @@ def _read_geotiffs(pattern: str, crs: str | None) -> _GeotiffStack:
         resampling="nearest",  # only so that an off-grid file is reported below, not warped
         nodata="auto",
         chunk_size=_READ_ROWS,
+        same_date_fixes=SameDateFixes(join=join_tiles, distinct=None),
     )
     if 0 in source.warped:
         raise click.ClickException(
@@ -468,8 +474,13 @@ def encode_command(
     if any(ch in input for ch in _GLOB_CHARS):
         if calendar_to_gregorian is not None:
             raise click.UsageError("--calendar-to-gregorian applies to Zarr and NetCDF input")
+        join = (
+            f"use `chronozarr convert {shlex.quote(input)} {shlex.quote(str(out))} "
+            f"{MOSAIC_TILES}`, which joins the tiles of each date into one timestep (encode does "
+            "not)"
+        )
         with _command_errors():
-            stack = _read_geotiffs(input, crs)
+            stack = _read_geotiffs(input, crs, join)
         da = stack.data
         crs = None  # da.attrs holds the files' CRS, which --crs had to match
         file_options = {"bands": stack.bands, "nodata": stack.nodata, "mask": stack.mask}
@@ -518,7 +529,12 @@ def append_command(
         elif any(ch in input for ch in _GLOB_CHARS) or (
             Path(input).is_file() and input.lower().endswith(TIFF_SUFFIXES)
         ):
-            stack = _read_geotiffs(input, crs)
+            join = (
+                f"join them into a new store with `chronozarr convert {shlex.quote(input)} "
+                f"NEW_STORE {MOSAIC_TILES}`, then append that store with `chronozarr append "
+                f"{shlex.quote(str(store))} NEW_STORE`"
+            )
+            stack = _read_geotiffs(input, crs, join)
             _check_validity_matches_store(store, stack)
             report = append(store, stack.data, workers=workers, bands=stack.bands, mask=stack.mask)
         else:
@@ -986,6 +1002,15 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     "timestep. Never assumed: a multi-band file is normally bands.",
 )
 @click.option(
+    "--mosaic-tiles",
+    is_flag=True,
+    help="Directory, glob or S3 prefix only: files that share a date are tiles of one image, as "
+    "Earth Engine splits a large export into name-0000000000-0000000000.tif files; join the "
+    "tiles of each date into one timestep. They must share one CRS, pixel size and pixel grid, "
+    "and no two tiles of a date may share a pixel. Pixels no tile of a date covers are invalid. "
+    "Never assumed: files that share a date can also be copies.",
+)
+@click.option(
     "--write-manifest",
     type=click.Path(path_type=Path),
     default=None,
@@ -1031,6 +1056,7 @@ def convert_command(
     band_roles: tuple[str, ...],
     date_pattern: str | None,
     bands_are_dates: bool,
+    mosaic_tiles: bool,
     write_manifest: Path | None,
     **options: Any,
 ) -> None:
@@ -1057,7 +1083,9 @@ def convert_command(
     'MOD13A1.A%Y%j'). --write-manifest saves what was found, also when the checks report
     problems, so you can edit it and run convert on it. One multi-band file whose band
     descriptions each hold a date (2020_01_01_NDVI, as toBands() names them) is refused with
-    the option that reads it, --bands-are-dates; it is never assumed.
+    the option that reads it, --bands-are-dates; it is never assumed. Files that share a date and
+    tile one grid (Earth Engine splits a large export into name-0000000000-0000000000.tif files)
+    are refused with the option that joins them, --mosaic-tiles; that is never assumed either.
 
     Every file is checked before anything is read in bulk: dates, grid and CRS, bands, dtype,
     scale, offset, units and nodata. All problems are reported together, per file, with a
@@ -1108,6 +1136,7 @@ def convert_command(
             read_ahead=read_ahead,
             date_pattern=date_pattern,
             bands_are_dates=bands_are_dates,
+            mosaic_tiles=mosaic_tiles,
             calendar_to_gregorian=calendar_to_gregorian,
             write_manifest_to=write_manifest,
             on_plan=show_plan,

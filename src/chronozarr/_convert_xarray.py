@@ -617,7 +617,7 @@ class XarraySource(Source):
             facts.declared,
             override=nodata,
             explicit=[] if mask_var is None else [f"mask variable {mask_var}"],
-            footprint=False,
+            footprint=None,
         )
         self._sentinels: tuple[float | int, ...]
         if nodata == "auto":

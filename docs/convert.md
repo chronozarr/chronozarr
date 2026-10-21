@@ -7,6 +7,7 @@
 | A folder, a glob or an `s3://` prefix of GeoTIFFs with a date in each name | [From dated GeoTIFFs](#from-dated-geotiffs) |
 | BIL, GRIB2, HDF5 or any other raster that GDAL reads, or zips that hold one | [From other raster formats](#from-other-raster-formats) |
 | One GeoTIFF whose bands are dates, such as an Earth Engine `toBands()` export | [From Earth Engine exports](#from-earth-engine-exports) |
+| Several files per date that tile one image, as Earth Engine splits a large export (`name-0000000000-0000000000.tif`) | [Exports split into tiles](#exports-split-into-tiles) |
 | COGs at URLs, with dates in a table | [From a manifest of URLs](#from-a-manifest-of-urls) |
 | A NetCDF file or a Zarr store with a time axis | [From NetCDF or Zarr](#from-netcdf-or-zarr) |
 | A folder or glob of NetCDF files, one per day or month | [A series of NetCDF files](#a-series-of-netcdf-files) |
@@ -26,7 +27,7 @@ chronozarr convert "scenes/*.tif" my_store
 
 The dry run runs the same discovery and checks as conversion. It prints each file with its date, the grid, the bands, the scaling, the validity rule and the expected size. The pixel size is in the unit of the CRS: `m`, `degree` or `US survey foot`. A geographic grid whose longitudes run outside -180 to 180, such as 0 to 360, gets a `longitude:` line. The store keeps those values, so a lookup in xarray must use the same convention. A directory or `s3://` prefix is not searched recursively; use a glob such as `"scenes/**/*.tif"` for subdirectories. Listing an S3 prefix needs the `s3` extra (`uv tool install --python 3.13 'chronozarr[geo,s3]==0.4.1'`) and uses your AWS credentials.
 
-A date is read from a name only when the name holds exactly one. A name with no date, with several (`20240215_2024-03`), or two files with the same date are reported, never guessed. `--date-pattern` says where the date is, for example `--date-pattern "ndvi_%Y%m%d"`. `--write-manifest found.csv` saves discovered files and dates as a manifest that `convert` reads back; it is the one output allowed with `--dry-run`. The manifest is written even when the checks find problems, and the problems are reported after it. A file whose date was not found gets a row with an empty `datetime`, and the report says which rows; fill them in or delete them, then convert the manifest. When the files name their bands, the manifest has a `bands` column with those names to edit.
+A date is read from a name only when the name holds exactly one. A name with no date, with several (`20240215_2024-03`), or two files with the same date are reported, never guessed. When the files that share a date are tiles of one image, the report says so and names `--mosaic-tiles` ([exports split into tiles](#exports-split-into-tiles)). `--date-pattern` says where the date is, for example `--date-pattern "ndvi_%Y%m%d"`. `--write-manifest found.csv` saves discovered files and dates as a manifest that `convert` reads back; it is the one output allowed with `--dry-run`. The manifest is written even when the checks find problems, and the problems are reported after it. A file whose date was not found gets a row with an empty `datetime`, and the report says which rows; fill them in or delete them, then convert the manifest. When the files name their bands, the manifest has a `bands` column with those names to edit.
 
 MODIS and HLS name a file by year and day of year. `MOD13A1.A2020001.h12v04.061.2020326023424_500m_16_days_NDVI.tif` is 1 January 2020, and `HLS.S30.T17SQV.2020061T155151.v2.0.B04.tif` is 1 March 2020 at 15:51:51. `%j` reads the three-digit day of year, 001 to 366, and goes with `%Y`, alone or with `%H%M%S`:
 
@@ -167,6 +168,61 @@ When the descriptions cannot be read as dates, `convert` lists every reason at o
 ```bash
 gdal_translate -co INTERLEAVE=BAND -co TILED=YES -co COMPRESS=DEFLATE in.tif band_interleaved.tif
 ```
+
+### Exports split into tiles
+
+`Export.image` writes an image that is larger than its file limit as several files, each a part of one grid, named by the row and column offset of the part: `<fileNamePrefix>-<row>-<column>.tif`. A series of such exports has several files per date:
+
+```text
+NDVI_2020_01_01-0000000000-0000000000.tif
+NDVI_2020_01_01-0000000000-0000000500.tif
+NDVI_2020_01_01-0000000500-0000000000.tif
+NDVI_2020_01_01-0000000500-0000000500.tif
+NDVI_2020_01_17-0000000000-0000000000.tif
+...
+```
+
+Files that share a date can also be copies, so `convert` does not join them by itself. It reads their grids and says which case it found. For tiles, the fix names the option that joins them:
+
+```text
+/data/raw/NDVI_2020_01_01-0000000000-0000000000.tif
+  - has the same date 2020-01-01 as NDVI_2020_01_01-0000000000-0000000500.tif, NDVI_2020_01_01-0000000500-0000000000.tif and NDVI_2020_01_01-0000000500-0000000500.tif, and together they are tiles of one 1000 x 1000 px grid, each a different part of it, as Earth Engine splits a large export into files
+    fix: pass --mosaic-tiles to join the tiles of each date into one timestep; keeping one file per date would store only part of the area
+```
+
+Do not leave files out to get one per date: the store would hold a quarter of the area. `--mosaic-tiles` joins the tiles of each date into one timestep:
+
+```bash
+chronozarr convert raw ndvi_store --mosaic-tiles --nodata -3000 --dry-run
+chronozarr convert raw ndvi_store --mosaic-tiles --nodata -3000
+```
+
+The dry run prints every tile with its date and its place in the grid, and a `tiles:` line:
+
+```text
+source:     dated GeoTIFF tiles, 8 timesteps (2020-01-01 .. 2020-04-22)
+files:      32, dated from their names and placed by their grids
+  2020-01-01  rows 0..499, columns 0..499      /data/raw/NDVI_2020_01_01-0000000000-0000000000.tif
+  2020-01-01  rows 0..499, columns 500..999    /data/raw/NDVI_2020_01_01-0000000000-0000000500.tif
+  ...
+grid:       WKT2 "unnamed", 1000 x 1000 px, 463.3127165 m pixels (transform origin -6301052.945, 5189102.425)
+validity:   nodata -3000 sentinel, no mask
+tiles:      32 files are tiles of one 1000 x 1000 px grid, 4 per date, and the tiles of each date are joined into one timestep; every date covers the whole grid
+```
+
+The rules:
+
+- The files are tiles of one grid when they have one CRS and one pixel size, their origins are a whole number of pixels apart, and no two files of a date share a pixel. The grid of the store is the smallest that holds every file of every date. Nothing is resampled.
+- At least two files must share a date. When no two do, `--mosaic-tiles` is refused: there is nothing to join, and joining files of different dates and extents would only leave pixels empty.
+- Pixels that no tile of a date covers, as when one date is missing a tile, are invalid on that date. When the files declare no nodata and you give none, the store gets a mask for them. The `tiles:` line says on how many dates this happens.
+- Scale, offset, units and nodata come from the files, as for any GeoTIFFs. Earth Engine leaves MODIS NDVI's `-3000` fill undeclared; on this mosaic it holds 3.7 % of the pixels, so `convert` stops until `--nodata -3000` marks it invalid.
+- `--mosaic-tiles` applies to a folder, a glob or an `s3://` prefix. It is refused with `--resampling`, `--transform`, `--shape`, `--bounds`, `--bands-are-dates` and `--write-manifest`, and with a `--crs` other than the CRS of the tiles.
+
+When the files of a date are not tiles of one grid, the report does not offer `--mosaic-tiles`:
+
+- Files of one date that cover the same pixels are copies, or two images of one area. Keep one of them, or, if their names carry a time of day, read it with `--date-pattern` and `%H%M%S`.
+- Files of one date that overlap in part, as Earth Engine's tiles never do, need a rule for the pixels they share, and that rule is your decision. Join them yourself, for example with `gdal_merge.py`, where the last file wins, and convert the joined files.
+- Files with different CRSs or pixel sizes, or whose pixels are not aligned, can be joined only by resampling, and the method is your decision. Join them onto one grid with `gdalwarp` (with `-tap -tr` for an aligned grid) and convert the joined files, or export them again with `crs` and `crsTransform` so that every tile sits on one grid.
 
 ## From a manifest of URLs
 

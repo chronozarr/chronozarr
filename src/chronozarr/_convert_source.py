@@ -235,14 +235,14 @@ def _decide_validity(
     *,
     override: float | int | None | str,
     explicit: Sequence[str],
-    footprint: bool,
+    footprint: str | None,
 ) -> Validity:
     """Choose between a nodata sentinel and a mask.
 
     `declared` are the nodata tokens of every source and band (None where a band declares
     none); `override` is "auto", None or the explicit nodata; `explicit` names the sources'
-    own masks (alpha band, internal mask, `--mask-var`); `footprint` says warped timesteps
-    leave pixels with no source behind them.
+    own masks (alpha band, internal mask, `--mask-var`); `footprint` says why some pixels have
+    no source behind them (warped timesteps, tiles that leave a gap), or is None.
     """
     reasons = list(explicit)
     candidate: float | int | None = None
@@ -267,8 +267,8 @@ def _decide_validity(
             reasons.append("nodata nan was requested")
         else:
             candidate = _checked_nodata(override, dtype)
-    if footprint and candidate is None:
-        reasons.append("warped timesteps leave pixels outside the source footprint")
+    if footprint is not None and candidate is None:
+        reasons.append(footprint)
     if not reasons:
         if candidate is None:
             what = "no nodata declared" if override == "auto" else "no nodata (--nodata none)"

@@ -36,7 +36,8 @@ it cannot be told from YYMMDD. `date_pattern` (`--date-pattern`, strptime-like w
 %M %S`, or `%Y` and `%j` for a year and day of year) replaces these rules and finds the date where
 the pattern says. A name with no date, with
 several different dates or with an impossible one, and two files with the same date, are reported;
-none is guessed or dropped. What the files hold is checked as for a manifest, and everything found
+none is guessed or dropped (files that share a date: see "Tiles"). What the files hold is checked
+as for a manifest, and everything found
 wrong, in the names and in the files, is reported together, per file, in one `PreflightError`
 (`--dry-run` writes nothing and reports the same). `write_manifest_to` exports the files, their
 dates and the band names the files agree on, also when the checks report problems: a file
@@ -52,6 +53,21 @@ that differs is reported per file in one `PreflightError`, as for rasters; so ar
 times overlap or repeat. A dimension of length 1 besides time, y and x (OISST's `zlev`, a `height`)
 is squeezed, with a `squeezed:` plan line naming it and its value, for a single file as well; a
 longer one needs `--dims band=NAME` or a selection first.
+
+Tiles. Earth Engine writes an image larger than its file limit as several files, named `<name>-<row
+offset>-<column offset>.tif`, each a part of one grid, so a series of such exports has several
+files per date. Files that share a date may also be copies, so they are joined only when the caller
+says so with `mosaic_tiles` (`--mosaic-tiles`). Without it each such file is refused, and the fix
+says which case the grids show: tiles of one grid (one CRS and pixel size, origins whole pixels
+apart, no two files of a date sharing a pixel), which the option joins; copies on the same pixels,
+of which to keep one; files that overlap in part, which only a rule the user chooses for the shared
+pixels can join; or files on different grids, which only a resampling the user chooses can join.
+With it at least two files must share a date, and every dated file must be a tile of one grid
+(`_convert_tiles`), which becomes the store's grid: the smallest that holds every file of every
+date. Each timestep places the tiles of its date in that grid. Pixels that no tile of a date covers
+are invalid, which can give the store a mask (rule 4). The plan says so (`tiles:`). Tiles are never
+warped: `--transform`, `--shape`, `--resampling` and `--bounds` are refused with it, and so is
+`write_manifest_to`.
 
 Bands as dates. One raster whose bands are dates, as Earth Engine's `ee.ImageCollection.toBands()`
 exports a series (`2020_01_01_NDVI`, `2020_01_17_NDVI`, ...), is a series only when the caller
@@ -101,7 +117,8 @@ mask, or with a `mask` variable shared by all bands (spec 2.3, 2.4).
 4. Mask otherwise: the store gets a `mask` variable when any source has an alpha band, an
    internal or per-dataset mask, or a nodata value that cannot be the store's (NaN, infinite,
    differing between sources or bands, or declared on only some of them); when a timestep is
-   warped and the store has no nodata sentinel (pixels outside the source footprint are invalid);
+   warped, or tiles leave pixels of a date uncovered, and the store has no nodata sentinel (pixels
+   outside the source footprint are invalid);
    or when a Zarr/NetCDF variable names its mask with `--mask-var`. A store with a mask has no
    nodata (so a valid value equal to the old sentinel stays valid), unless `--nodata` gives one.
 5. Mask content, 1 = valid. COG: the alpha band is nonzero (alpha wins over everything else, as
@@ -465,6 +482,7 @@ def plan_conversion(
     date_pattern: str | None = None,
     calendar_to_gregorian: str | None = None,
     bands_are_dates: bool = False,
+    mosaic_tiles: bool = False,
 ) -> Plan:
     """Open the source, check it is consistent and estimate the conversion.
 
@@ -491,6 +509,10 @@ def plan_conversion(
     if date_pattern is not None and not discovered:
         raise ValueError(
             f"--date-pattern applies to a directory, glob or S3 prefix of rasters, not to {text}"
+        )
+    if mosaic_tiles:
+        _check_mosaic_options(
+            text, discovered, bands_are_dates, transform, shape, resampling, bounds
         )
     source: Source
     if is_manifest or discovered:
@@ -552,6 +574,7 @@ def plan_conversion(
             offset_given=offset is not None,
             band_series=band_series,
             band_date_pattern=date_pattern,
+            mosaic_tiles=mosaic_tiles,
         )
         if band_series is not None:
             kind = "GeoTIFF" if band_series.uri.lower().endswith(TIFF_SUFFIXES) else "raster"
@@ -559,7 +582,8 @@ def plan_conversion(
         elif discovered and source.kind == CogManifestSource.kind:
             # The plan's first line names what the user gave: files found by name, not a manifest.
             tiffs_only = all(e.uri.lower().endswith(TIFF_SUFFIXES) for e in entries)
-            source.kind = "dated GeoTIFFs" if tiffs_only else "dated rasters"
+            source.kind = "dated GeoTIFF" if tiffs_only else "dated raster"
+            source.kind += " tiles" if mosaic_tiles else "s"
     else:
         from chronozarr._convert_legacy import LegacySource, legacy_metadata
 
@@ -655,6 +679,44 @@ def plan_conversion(
             plan.value_range = range_line(steps, info)
             plan.fill = fill_line(fills, len(steps), info, nodata)
     return plan
+
+
+def _check_mosaic_options(
+    text: str,
+    discovered: bool,
+    bands_are_dates: bool,
+    transform: Sequence[float] | None,
+    shape: tuple[int, int] | None,
+    resampling: str | None,
+    bounds: Sequence[float] | None,
+) -> None:
+    """Refuse what `mosaic_tiles` cannot honour: a source that is not files to list, a file whose
+    bands are dates, or options that would warp the tiles."""
+    if not discovered:
+        raise ValueError(
+            f"--mosaic-tiles joins the files of a directory, glob or S3 prefix that share a date; "
+            f"{text} is not one"
+        )
+    if bands_are_dates:
+        raise ValueError(
+            "--mosaic-tiles joins files that share a date, and --bands-are-dates reads one file; "
+            "give one of them"
+        )
+    given = [
+        name
+        for name, value in (
+            ("--transform", transform),
+            ("--shape", shape),
+            ("--resampling", resampling),
+            ("--bounds", bounds),
+        )
+        if value is not None
+    ]
+    if given:
+        raise ValueError(
+            f"--mosaic-tiles joins the tiles on their own grid, so {', '.join(given)} does not "
+            "apply. Leave it out, or join and warp the tiles yourself first (gdalwarp)"
+        )
 
 
 def _read_checked(source: Source, t: int) -> Step:
@@ -843,6 +905,7 @@ def convert(
     read_ahead: int = 2,
     date_pattern: str | None = None,
     bands_are_dates: bool = False,
+    mosaic_tiles: bool = False,
     calendar_to_gregorian: str | None = None,
     write_manifest_to: str | Path | None = None,
     on_plan: Callable[[Plan], None] | None = None,
@@ -872,6 +935,10 @@ def convert(
     (`2020_01_01_NDVI`; `date_pattern` then reads the descriptions), and the part besides the date
     names the band. Several bands per date become the bands of one timestep. The file is refused
     without this argument, since a multi-band file is normally bands; the refusal names it.
+
+    `mosaic_tiles` joins the discovered files that share a date into one timestep, as Earth Engine
+    splits a large export into files (module docstring, "Tiles"). Without it such files are
+    refused, and the refusal names it when they tile one grid.
 
     Image frames (PNG) are manifest sources. `crs` names the CRS of frames that carry none (a
     world file has none). `bounds` is `(west, south, east, north)` in the units of `crs`, the
@@ -918,6 +985,11 @@ def convert(
                 "--write-manifest lists files with their dates, and a file whose bands are dates "
                 "is one file: leave --write-manifest out"
             )
+        if mosaic_tiles:
+            raise ValueError(
+                "--write-manifest writes one file per datetime, and with --mosaic-tiles several "
+                "files share one: leave --write-manifest out"
+            )
         if not is_discovery_source(str(source)):
             raise ValueError(
                 "--write-manifest exports the files found in a directory, glob or S3 prefix; "
@@ -948,6 +1020,7 @@ def convert(
             date_pattern=date_pattern,
             calendar_to_gregorian=calendar_to_gregorian,
             bands_are_dates=bands_are_dates,
+            mosaic_tiles=mosaic_tiles,
         )
     except PreflightError as exc:
         if write_manifest_to is not None and exc.draft is not None:
