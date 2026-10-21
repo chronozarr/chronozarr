@@ -20,6 +20,7 @@ from typing import Generic, Protocol, TypeVar, cast
 import numpy as np
 import xarray as xr
 import zarr
+from zarr.core.array_spec import ArrayConfigParams
 
 from chronozarr import schema
 from chronozarr._calendar import is_cftime
@@ -27,6 +28,10 @@ from chronozarr.schema import Band, Transform
 
 VOLATILITY_SCALE = 10000  # fixed normalisation for every dtype (Sentinel-2 reflectance scale)
 DEFAULT_CELLS_IN_FLIGHT = 4
+# Every array is written with its all-fill chunks too (zarr omits them by default). A reader asks
+# for every chunk of what it shows, and a browser logs each 404 as a console error on any host,
+# so a correct store with omitted chunks looked broken. An all-fill chunk is tens of bytes.
+WRITE_EVERY_CHUNK: ArrayConfigParams = {"write_empty_chunks": True}
 _R = TypeVar("_R")
 
 
@@ -582,6 +587,7 @@ def _put_coord(
         dtype=dtype,
         dimension_names=(name,),
         overwrite=overwrite,
+        config=WRITE_EVERY_CHUNK,
     )
     array[:] = values
     array.attrs.update({"_ARRAY_DIMENSIONS": [name], **(attrs or {})})

@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import re
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -43,6 +44,9 @@ _READY_TIMEOUT_SECONDS = 90.0
 # cloudflared printed the address, but a lookup at once made the address work here only after 75 s.
 _FIRST_LOOKUP_SECONDS = 15.0
 _POLL_SECONDS = 0.2
+# How often `wait_for_address` asks this computer's resolver again. Until the negative answer
+# expires the resolver replies from its cache, so asking often brings the answer no sooner.
+_LOOKUP_POLL_SECONDS = 1.0
 _TUNNEL_LOG_LINES = 32
 
 
@@ -197,6 +201,49 @@ def _wait_for_public_store(
     )
 
 
+def wait_for_address(url: str, echo: Callable[[str], None]) -> None:
+    """Return once the host of a quick-tunnel `url` resolves on this computer, waiting as long as
+    `share` waits for a new address. Any other URL, and one that a proxy reaches, returns at once.
+    This waits for the name only: once it resolves, the tunnel can still answer an HTTP error for
+    a few seconds, which the reader retries for about 2 s.
+
+    An address that `share` has just printed may not be published yet, and a lookup that finds
+    nothing is cached for the 60 s negative TTL of trycloudflare.com: the name then fails here
+    for up to a minute after Cloudflare has published it.
+    """
+    parts = urllib.parse.urlsplit(url)
+    host = parts.hostname or ""
+    if not host.endswith(".trycloudflare.com") or host == "api.trycloudflare.com":
+        return
+    # Through a proxy the reader never looks the name up here (urllib asks the proxy), and this
+    # computer may not resolve names at all: the reader's own errors say what is wrong.
+    if parts.scheme in urllib.request.getproxies() and not urllib.request.proxy_bypass(host):
+        return
+    deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
+    told = False
+    while True:
+        try:
+            socket.getaddrinfo(host, None)
+            return
+        except socket.gaierror as exc:
+            reason = exc.strerror or str(exc)
+        if time.monotonic() >= deadline:
+            raise OSError(
+                f"{host} did not resolve within {_READY_TIMEOUT_SECONDS:.0f} seconds ({reason}). "
+                "A quick-tunnel address works only while the `chronozarr share` that printed it "
+                "runs: check that it still runs, and use the address of its open: line."
+            )
+        if not told:
+            echo(
+                f"{host} does not resolve yet ({reason}). A new quick-tunnel address works 15 to "
+                "30 seconds after `chronozarr share` prints it, and a lookup before then can keep "
+                f"it failing here for a minute: waiting up to {_READY_TIMEOUT_SECONDS:.0f} "
+                "seconds..."
+            )
+            told = True
+        time.sleep(_LOOKUP_POLL_SECONDS)
+
+
 @dataclass(frozen=True)
 class _CellMeasurement:
     """One real level-0 cell read through the tunnel, after reader metadata is open."""
@@ -301,7 +348,8 @@ def share(
         )
         echo(
             f"waiting for {public_root} to work; a new address usually takes 15 to 30 seconds "
-            "(at most 90)..."
+            "(at most 90). Use it after the open: line below: a lookup before then can keep it "
+            "failing for a minute..."
         )
         _wait_for_public_store(
             access.store_url,

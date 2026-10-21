@@ -144,6 +144,8 @@ The objects stay in the bucket, no link is printed, and the exit status is 1. Fi
 5. Runs the doctor checks against the public URL, with `Origin: https://chronozarr.org`.
 6. Prints `https://chronozarr.org/demo/?store=<URL-encoded public URL>` only when no check failed. Warnings are printed and do not block the link.
 
+The upload count is the store's file count. A store writes every chunk, including chunks that hold only the fill value, so a store that is mostly empty has many small objects: 4,155 files for an 8192 by 4096 store of 24 timesteps whose cells are 69 % empty. Encoded with `--shard`, the same store has 564 files, and a viewer then makes one small range read for each empty chunk it shows ([measurements](evidence.md#every-chunk-written-2026-10-20)).
+
 Cache headers follow the [cache classes](append.md#cache-classes). Every `zarr.json`, each level's `time/c/0` and the `volatility` chunks get `public, max-age=300`. Every other object gets `public, max-age=31536000, immutable`. The command does not mark the last shard of a sharded store as short-lived, so `--update` refuses a sharded append that rewrites a trailing shard.
 
 ## CORS and public access

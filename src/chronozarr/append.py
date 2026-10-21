@@ -23,6 +23,7 @@ from chronozarr import schema
 from chronozarr._writer import (
     DEFAULT_CELLS_IN_FLIGHT,
     VOLATILITY_SCALE,
+    WRITE_EVERY_CHUNK,
     Block,
     _ArraySource,
     _CellWriter,
@@ -121,19 +122,18 @@ def _open_target(store: str | Path) -> _Target:
     groups = [schema.get_group(root, d.path, "store") for d in parsed.datasets]
     arrays = []
     for group in groups:
-        data = schema.get_array(group, meta.variable, "store")
-        mask = (
-            None
-            if meta.mask_variable is None
-            else schema.get_array(group, meta.mask_variable, "store")
-        )
+        data = _writable(group, meta.variable)
+        mask = None if meta.mask_variable is None else _writable(group, meta.mask_variable)
         coverage = (
-            None
-            if meta.coverage_variable is None
-            else schema.get_array(group, meta.coverage_variable, "store")
+            None if meta.coverage_variable is None else _writable(group, meta.coverage_variable)
         )
         arrays.append(_LevelArrays(data, mask, coverage))
     return _Target(path, root, meta, parsed.datasets, groups, arrays)
+
+
+def _writable(group: zarr.Group, name: str) -> zarr.Array:
+    """Array `name` of `group`, opened to write its all-fill chunks too, as encode does."""
+    return schema.get_array(group, name, "store").with_config(WRITE_EVERY_CHUNK)
 
 
 # --- The new timesteps --------------------------------------------------------------------------
@@ -314,7 +314,7 @@ def _append_cell(block: Block, arrays: _LevelArrays, ys: slice, xs: slice, plan:
 def _update_volatility(target: _Target, plan: _Plan) -> None:
     if target.meta.volatility_path is None:
         return
-    array = schema.get_array(target.root, target.meta.volatility_path, "store")
+    array = _writable(target.root, target.meta.volatility_path)
     cs = target.chunk_size
     updated = np.zeros(array.shape, dtype=np.float32)
     reference = schema.comparison_schedule(plan.new_n, COMPARISON_INTERVAL)

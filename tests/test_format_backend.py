@@ -304,8 +304,10 @@ def test_reads_survive_a_server_that_ignores_range(tmp_path, serve):
 
 def test_missing_objects_are_missing_keys_and_not_errors(tmp_path, serve):
     truth = make_truth(3, 1, 40, 50)
-    truth[:, :, :16, :16] = 0  # the first cell is all fill: zarr skips empty chunks
+    truth[:, :, :16, :16] = 0  # the first cell is all fill
     chronozarr.encode(make_da(truth, ["b"]), tmp_path / "s", chunk_size=CS, shard=False)
+    # chronozarr writes every chunk; other writers, and chronozarr before 0.5, omit all-fill ones.
+    (tmp_path / "s/0/data/c/1/0/0/0").unlink()
     url, handler = serve(tmp_path / "s")
     store = chronozarr.open_store(url)
     assert not store.read_cell(1, 0, 0).any()

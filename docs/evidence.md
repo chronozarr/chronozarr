@@ -22,6 +22,7 @@ This file holds measurements, tested versions, dates and caveats. User docs link
 - [Newcomer measures after the fixes (2026-10-20)](#newcomer-measures-after-the-fixes-2026-10-20)
 - [Readers that decode (2026-10-19)](#readers-that-decode-2026-10-19)
 - [Stores written by other tools (2026-10-19)](#stores-written-by-other-tools-2026-10-19)
+- [Every chunk written (2026-10-20)](#every-chunk-written-2026-10-20)
 - [Sentinel-2 ingest performance](#sentinel-2-ingest-performance)
 
 ## Reader checks
@@ -899,7 +900,7 @@ The ten sessions of the baseline (sessions 1, 22, 3, 4, 5, 26, 7, 8, 9, 10), rep
 
 All 30 tasks were done in both runs, and the recipient saw the chosen date every time. Sessions that wrote their own conversion code went from 5 (and one hand-written manifest) to 0. The minutes changed little: the agent writes code at machine speed, so the code it no longer writes is the measure that matters. The containers' packages are the baseline's versions, and the site was served from this machine, so the recipient's first-frame times are not comparable.
 
-Seen in the sessions and not yet changed: a local `preview` logs 404 console errors for chunks a store does not have (78 in one session), `chronozarr link` run at once after `share` failed once until the tunnel's address resolved, and a lookup in xarray by a longitude from -180 to 180 on a store kept at 0 to 360 still returns an edge column.
+Seen in the sessions and not yet changed: a local `preview` logs 404 console errors for chunks a store does not have (78 in one session), `chronozarr link` run at once after `share` failed once until the tunnel's address resolved, and a lookup in xarray by a longitude from -180 to 180 on a store kept at 0 to 360 still returns an edge column. The first two were changed afterwards: see [Every chunk written](#every-chunk-written-2026-10-20) and [`link` before the address works](#link-before-the-address-works-2026-10-20).
 
 ### Viewer
 
@@ -932,6 +933,12 @@ Speed gates, last measured on a lightly loaded machine: with the bundled viewer 
 trycloudflare.com has a negative TTL of 60 s (SOA minimum). A lookup made before the record exists is cached as "no such host" for that time by the resolver of the computer that shares, so the address works there only after the cache entry expires. Waiting 15 s before the first lookup avoids it. If the first lookup still finds nothing, the wait is as before. A recipient on another network has not looked the address up, so their resolver has no such entry.
 
 In every run the recipient read `zarr.json` through the address (200, `Access-Control-Allow-Origin: *`), Ctrl-C printed `stopped` with exit status 0, no cloudflared process remained, and the address then answered HTTP 530.
+
+### `link` before the address works (2026-10-20)
+
+In newcomer session 207, `chronozarr link` on the address ran about 10 s after `share` printed it, before `share`'s own first lookup, and failed with `Name or service not known`. The cached answer then held `share`'s wait for about a minute: its next stage came 70 to 90 s after the address, against 21 s in the measurements above. `link` now waits up to 90 s for a quick-tunnel address that does not resolve yet, and `share`'s waiting line says to use the address after its `open:` line.
+
+On this laptop on 2026-10-20 (cloudflared 2026.10.0), `link` run 2 s after the address appeared resolved it at once, so the failure did not recur here. The address worked 20 s after `share` started, and `open:` came at 80 s: the doctor check through the tunnel took 60 s, against 4 s for the same check on the local server.
 
 ## Local preview and remote notebooks
 
@@ -999,6 +1006,49 @@ The same probe as in [Readers that decode](#readers-that-decode-2026-10-19) ran 
 | `f2_chunks_time_multi`, `f3_chunks_band_split`, `f4_chunks_nonsquare`, `f5_chunks_odd_size` | refused | opens; values equal; `validate` still fails on the chunk layout |
 
 37 of 43 copies open now, against 22 on main. The 6 that still refuse have a `chronozarr` block that is incomplete or not north-up: bands as plain strings, no `bands`, no `times`, no `nodata`, and the rotated and south-up grids. The reader does not fall back to the layout for them, because that would drop the scale and the mask the block declares.
+
+## Every chunk written (2026-10-20)
+
+In newcomer sessions 201 and 204, a local `preview` logged 78 and 13 console errors, `Failed to load resource: the server responded with a status of 404`. The local server answered each absent chunk with `404` and the CORS headers, and the reader read it as fill, as it should. Chromium logs every response with a 4xx status as a console error, and a page cannot stop it. The deployed host does the same: an absent key on data.chronozarr.org logged the same error in Chromium. Session 201's recipient saw no error because its view, zoom 4 over Phoenix through the tunnel to the same local server, needed no absent chunk.
+
+The chunks were absent because the writer left out every chunk that holds only fill, as zarr-python does by default. In the WorldClim store of session 201 (2160 x 1080, 24 months) that is the bottom row of cells at levels 0 and 1, south of 80.7° S, where WorldClim has no data: 384 of 1,152 data and mask chunks. The writer now stores every chunk (spec §2.1, a SHOULD). Readers still read an absent chunk as fill, because stores written before and by other tools have them.
+
+Cost, from `chronozarr convert` on main at `b9b7df6` and on the branch, alternated, two runs each, on this laptop at load 7 to 12. `publish` uploads every file, so the file count is also the upload object count.
+
+| Corpus dataset | Files, main / branch | Bytes added | Write time, main / branch |
+|---|---:|---:|---:|
+| WorldClim tmax 10', 24 months | 813 / 1,197 | 14,592 (0.05 %) | 3.7 to 3.9 s / 3.1 to 3.2 s |
+| CHIRPS Africa monthly, 24 months, `--nodata=-9999` | 391 / 439 | 5,184 | 2.8 s / 2.6 to 2.7 s |
+| MODIS 13A1 NDVI, 23 dates (session 204's data) | 869 / 938 | 4,002 | 4.0 s / 3.9 to 4.0 s |
+| NSIDC sea ice south monthly, `--nodata 2540` | 16 / 16 | 0 | 2.1 s / 2.1 s |
+| NSIDC sea ice north daily, `--nodata 2540` | 331 / 331 | 0 | 3.0 to 3.1 s / 2.9 to 3.0 s |
+| OISST daily 2020, NaN over land | 744 / 744 | 0 | 4.5 to 4.6 s / 3.9 to 4.1 s |
+
+An all-fill chunk is 50 bytes for a 512 px float32 band and 26 bytes for a mask. A store changes only where a whole 512 px cell holds no valid pixel: the NSIDC and OISST grids have none, although land or ocean covers much of them. The object count grows by the share of such cells, here up to 47 %. Writing was no slower: zarr-python no longer compares each chunk with the fill value before it writes it.
+
+The worst case is a store that is mostly empty. A synthetic store of 8192 by 4096 pixels, 24 timesteps and one uint16 band, whose 11 western cell columns hold only nodata (88 of 128 level-0 cells, 69 %), written once by main and once by the branch on 2026-10-21 at load 13 to 14:
+
+| Layout | Files, main / branch | Payload added | Disk added |
+|---|---:|---:|---:|
+| Unsharded | 1,443 / 4,155 | 92,208 B | 11.1 MB |
+| Sharded, `shard_time` 8 | 225 / 564 | 145,116 B | 1.4 MB |
+
+The disk grows more than the payload because each file takes at least one 4 KB block. In the sharded store the branch also writes the all-fill inner chunks into each shard, and the JavaScript reader, which the viewer uses, makes one range read for each. With the shard indexes cached by the first timestep, a switch to the next timestep over 64 level-0 cells, 56 of them empty, took 8 requests on main's store, whose empty cells have no shard, and 64 on the branch's. The Python reader made 64 on both, because it asks for an absent shard again each time.
+
+The speed gates were not measured again for this change: the machine was at load 13 to 14 from other work. Run them on a quiet machine before the next release.
+
+The CDN answer, two requests each on 2026-10-20: an absent key of `ucayali_santa_maria_v03` answered `404` with `cf-cache-status: BYPASS` both times, and a chunk that exists answered `MISS`, then `HIT` (`max-age=31536000, immutable`). The zone's Cache Rule keeps `404` answers out of the cache, as the R2 recipe says ([Cache Rule](hosting-providers.md#cache-rule)), so every read of an absent chunk goes to the bucket, while a stored all-fill chunk is served from the edge after its first read.
+
+The viewer at the fit view of the WorldClim store, with main's bundled viewer under `chronozarr preview --viewer-dir`, three runs alternated per store:
+
+| Store written by | Console errors, first frame + 1.5 s | Console errors, after 5 s of playback |
+|---|---:|---:|
+| main | 6, 12, 12 | 102, 108, 108 |
+| the branch | 0, 0, 0 | 0, 0, 0 |
+
+Through `chronozarr share`, the branch's store at the fit view gave no console error and no response of 400 or more, at first frame and after 5 s of playback.
+
+Appending to a store written by main: `convert` on main wrote 2020 (429 files), the branch appended 2021. The append wrote 593 objects: all 576 chunk objects of the 12 new months and the metadata. The 384 chunk objects of 2020 kept their bytes, and the 192 chunk keys main had left out stayed absent. The store conforms to `chronozarr validate`, and its values and masks at every level and timestep equal a 24-month store written by the branch in one run.
 
 ## Sentinel-2 ingest performance
 

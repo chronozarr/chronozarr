@@ -31,7 +31,7 @@ classifiers = [
 ]
 dependencies = [
     "numpy>=1.26",
-    "zarr>=3.1",
+    "zarr>=3.1.6",
     "numcodecs>=0.14",
     "xarray>=2024.1",
     "click>=8.1",
