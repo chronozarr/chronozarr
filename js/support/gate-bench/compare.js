@@ -10,13 +10,15 @@
 /**
  * The timed gates (repo CLAUDE.md, "Speed gates"). `gateMs` is the gate on a real GPU, shown next to the runner's figures.
  * The tolerances are the noise of the comparison on GitHub's runners, measured with the same build on both sides
- * (docs/evidence.md, "Speed gates in CI"), with room to spare.
+ * (docs/evidence.md, "Speed gates in CI"), with room to spare. Decode is held tighter than its noise requires because its
+ * gate has little headroom: 4.3 to 4.8 ms measured against 5 ms, so a 10 % slower decode would break the gate. Its floor is
+ * below 5 % of the fastest runner's decode (5.5 ms), so that the floor does not loosen the tolerance there.
  */
 export const METRICS = [
   { key: 'coldOpenMs', label: 'Cold open, level 0, 36 cells', gateMs: 500, tolerance: 0.15, floorMs: 20 },
   { key: 'warmStepMs', label: 'Warm switch, stepping', gateMs: 16, tolerance: 0.1, floorMs: 2 },
   { key: 'warmJumpMs', label: 'Warm switch, jumping', gateMs: 16, tolerance: 0.1, floorMs: 2 },
-  { key: 'decodeMs', label: 'Decode per 2 MiB chunk', gateMs: 5, tolerance: 0.1, floorMs: 0.5 },
+  { key: 'decodeMs', label: 'Decode per 2 MiB chunk', gateMs: 5, tolerance: 0.05, floorMs: 0.2 },
 ];
 
 /** The counters of the warm loops that must all be 0 for the head. */
