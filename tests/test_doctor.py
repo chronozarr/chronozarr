@@ -87,10 +87,14 @@ class FlakyHandler(StoreRequestHandler):
         return super().send_head()
 
 
+class LocalServer(ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = 128  # the default 5 drops connections from 32 requests at once
+
+
 @contextmanager
 def serving(handler: type[StoreRequestHandler], root: Path) -> Iterator[str]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(handler, root=root, prefix=root.name))
-    server.daemon_threads = True
+    server = LocalServer(("127.0.0.1", 0), partial(handler, root=root, prefix=root.name))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

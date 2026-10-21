@@ -255,6 +255,8 @@ def _is_listening(port: int) -> bool:
 
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
+    # The default listen backlog of 5 drops connections when a reader sends 32 requests at once.
+    request_queue_size = 128
     # On Windows SO_REUSEADDR lets a second process bind a port that is in use, which would hide
     # a port conflict instead of reporting it.
     allow_reuse_address = os.name != "nt"
