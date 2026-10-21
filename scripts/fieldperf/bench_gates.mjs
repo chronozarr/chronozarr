@@ -1,5 +1,5 @@
 // The speed gates of CLAUDE.md, measured in the deployed viewer from this machine with the viewer's own benchmark:
-// `await chronozarr.bench()` (js/demo/bench.js; the page's wrapper passes no options, so it runs the defaults: 5 cold runs per variant, 30 switches), against the public default store.
+// `await chronozarr.bench()` (js/demo/bench.js) with its defaults (5 cold runs per variant, 30 switches), against the public default store.
 //
 //   node scripts/fieldperf/bench_gates.mjs [tag]
 //

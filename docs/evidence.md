@@ -128,6 +128,44 @@ The deployed viewer at chronozarr.org/demo/ opened the public store `ucayali_san
 
 Medians, with the range in brackets. Each open read 11 requests and 11.0 MB: the metadata and nine level-1 chunks. The laptop ran on battery, which capped animation frames at 30 Hz, so each paint can be up to 33 ms late. The load average was 8 to 10 on 16 cores. Page, script and codec-module load are not included.
 
+### Speed gates in CI (2026-10-20)
+
+The workflow `.github/workflows/speed-gates.yml` runs on every pull request that changes `js/`. It builds the viewer of the pull request and of its base (`js/support/build-viewer.mjs`), writes a store of 36 cells (`js/support/gate-bench/store.mjs`: 6 x 6 chunks of 512 x 512 at level 0, 4 bands, 8 timesteps, zstd level 5, 1.39 to 1.41 MB per chunk, as the Ucayali chunks), and measures both builds with `js/support/gate-bench/run.mjs`: headless Chromium with SwiftShader at 1280 x 720, a new browser per run, one warm-up pair, then 5 pairs whose order alternates. Each run takes 5 cold opens at level 0 and the decode per chunk from `chronozarr.bench()`. That decode runs on the main thread (`workers: 0`), so a regression in the decode workers or their pool reaches the job only through the cold open: in the review of pull request #134, a decode twice as slow in the workers alone passed with 8 workers and failed with 4 (cold open +29 %). Then every chunk of level 0 is loaded, and the runner times 20 steps (120 ms apart) and 20 jumps from `goToTime` to the frame finished on the GPU, while the data server and the reader count requests and bytes. The job fails when the median over the pairs of head / base exceeds a metric's tolerance and the medians differ by more than its floor (20 ms for the cold open, 2 ms for a switch, 0.2 ms for a decode), or when a warm switch of the head makes any request. The step summary gives both builds' figures. A job takes 7 to 10 minutes.
+
+The job measures warm switches itself because `bench()` does not establish them on 36 cells. It prefetches no more than the idle allowance (32 MiB) before its warm loops, so its first steps drew incomplete frames and fetched what they missed: 7 of 20 frames and 60 to 74 requests per run on this store. And it counts wire bytes inside each switch, which is synchronous, so no response can arrive in that window: it reported 0 bytes for those requests. Its request count, taken when a request starts, catches what a switch starts at once but not what it schedules. The figures above that give only `bench()`'s wire bytes on a warm switch (2026-10-18 and 2026-10-19) do not establish that gate.
+
+Noise of the comparison on GitHub's runners, with the same build as base and head: on a temporary branch, 6 jobs of 6 pairs, then 6 jobs of 5 pairs with 5 cold opens per run (the job as it is); then the job's 3 runs on pull requests #134 and #138, whose changes do not reach the code it times (15 pairs). The cold-open column counts only runs with 5 cold opens: with 3, one pair's cold-open ratio ranged from 0.70 to 1.59, hence 5.
+
+| Head / base, same build | Cold open | Warm step | Warm jump | Decode |
+|---|---|---|---|---|
+| Median of a job's pairs, range over the jobs | 0.974 to 1.060 (9 jobs) | 0.996 to 1.008 (15) | 0.961 to 1.017 (15) | 0.995 to 1.013 (15) |
+| One pair, range | 0.84 to 1.19 (45 pairs) | 0.96 to 1.04 (81) | 0.89 to 1.09 (81) | 0.91 to 1.06 (81) |
+| Tolerance | +15 % | +10 % | +10 % | +5 % |
+
+The verdict is the median of 5 pair ratios, so a metric fails only when at least 3 of the 5 pairs are above its tolerance. One slow pair does not fail it: the first run on #134 had a cold-open pair at 1.19, with the other four at 0.93 to 1.03. The cold open varies most from job to job: in one job the head's cold open was 4 to 6 % slower than the base's in all 5 pairs, with identical builds. The worst job medians are +6.0 % for the cold open, +1.7 % for a switch and +1.3 % for the decode, against tolerances of 15, 10 and 5 %. The decode is held tighter than its noise requires because its gate has little headroom (4.3 to 4.8 ms measured against 5 ms).
+
+Regressions injected into the head, one job each:
+
+| Injected | Flagged |
+|---|---|
+| 100 ms added to `loadStore` after the metadata, and a 1.5 ms busy wait after each chunk decode | cold open +16 %, decode +16 % |
+| A 10 ms busy wait in `renderNow`, and a request for the root `zarr.json` in every `goToTime` | warm step +30 %, warm jump +34 %; 205 requests reached the data server in the head's warm loops |
+
+A regression exactly at the tolerance has a median ratio at the tolerance, so it fails about half the jobs; the cold open, with pairs spread 0.84 to 1.19, is seen reliably from about 20 %. The injected 100 ms is +14 % on the slowest runner type (cold open 700 ms) and +21 % on the fastest, so it would pass on the first.
+
+The runner's own figures, base medians per job, depend on the CPU it gets (4 vCPUs, 16 GB):
+
+| CPU | Jobs | Cold open | Warm step | Warm jump | Decode per chunk |
+|---|---:|---|---|---|---|
+| AMD EPYC 9V45 | 4 | 451 to 504 ms | 30 to 33 ms | 29 to 32 ms | 5.5 to 5.9 ms |
+| AMD EPYC 9V74 | 4 | 513 to 639 ms | 48 to 60 ms | 47 to 59 ms | 7.4 to 9.5 ms |
+| AMD EPYC 7763 | 5 | 658 to 707 ms | 64 ms | 63 to 64 ms | 9.5 to 9.9 ms |
+| Intel Xeon Platinum 8573C | 2 | 619 to 673 ms | 48 to 49 ms | 54 to 55 ms | 9.3 to 9.5 ms |
+
+SwiftShader draws on the CPU, so a warm switch costs 30 to 64 ms there against 3 to 5 ms on a GPU. These are not the gates' figures; the job compares them with the base in the same job.
+
+On a laptop that other work loads, the same comparison is noisier: on the M3 Max at load 6 to 15, SwiftShader steps took 3 ms or 13 ms in stretches, so one run's step median moved between 3 and 14 ms with the same build. Local before-and-after checks need a quiet machine.
+
 ### Scrub latency
 
 Perceived scrub latency is the time from the input event to the frame that shows the new timestep. 20 steps, same 36-cell 48-month store and browser before and after the decoder rewrite. The rewrite added worker-pool decode, time-window prefetch, no debounce and per-cell paint. 2026-09-30:
@@ -764,6 +802,18 @@ Speed gates, `chronozarr.bench()` 3 runs each (load 5 to 7):
 
 After the fix above the gates were run again on the built viewers, before and after alternated, but another job had loaded the machine (load average 265 to 314 on 16 cores): the warm step took 2.0 to 2.3 ms and the decode 5.5 to 5.7 ms in both, the upload from the cache 15.6 to 16.6 ms in both, and no warm switch used the network. At that load the 16 ms and 5 ms gates cannot be established, and the two builds do not differ.
 
+The gates of `main` after that change (b058d7d), 2026-10-20. The machine was never quiet: from 14:57 to 17:58 the 1-minute load never fell below 4 (4.7 at the lowest, above 100 several times, from other sessions' builds), so the runs started once it fell below 8, at 17:59, and the load was 6.6 to 10.9 during them. Two methods: `scripts/fieldperf/bench_gates.mjs` as for the figures above (the built viewer, the local Ucayali store, Metal, 1440 x 900 at pixel ratio 2, 3 runs), and the gate runner of [Speed gates in CI](#speed-gates-in-ci-2026-10-20) on the GPU (`run.mjs --gpu metal`, `main` against itself, the 36-cell store with all 288 level-0 chunks in memory before the warm switches, 1280 x 720, 8 runs of which 6 count).
+
+| Gate | `bench()`, Ucayali, 3 runs | Gate runner, GPU, 6 runs | Holds |
+|---|---|---|---|
+| Cold open ≤ 500 ms, level 0, 36 cells (median of 5 per run) | 122, 126 and 134 ms | 138 to 143 ms | yes |
+| Warm switch ≤ 16 ms, stepping | 4.9 ms p50 in each run, 3 or 4 of 30 frames incomplete | 4.0 to 11.0 ms p50 per run; 120 steps: 4.5 ms p50, 17.7 ms p95, 10 over 16 ms; every frame complete | yes at the median |
+| Warm switch, jumping | 1.1 to 1.2 ms p50, but 28 of 30 frames incomplete | 7.8 to 9.1 ms p50 per run; 120 jumps: 8.5 ms p50, 22.7 ms p95 | yes at the median |
+| Decode ≤ 5 ms per chunk (p50) | 4.3 ms in each run | 4.5 to 4.6 ms | yes |
+| 0 wire bytes on a warm switch | reported 0 bytes, but its stepping loops sent 18 to 24 requests and its jumps 6 to 9 | 0 requests at the data server, 0 requests and 0 bytes in the reader, over 240 switches | yes, by the gate runner |
+
+`bench()`'s jumps are fast because most of its frames are incomplete, which skips the cells it lacks; with every chunk in memory a jump uploads the cells of a timestep outside the GPU window and takes 8.5 ms. No percentile is written into the 16 ms gate: the medians hold it and the 95th percentiles (17.7 and 22.7 ms) do not. This load is that of the earlier figures (5 to 10), not a quiet machine: the run should be repeated on one, which may give lower figures.
+
 On the built viewer (the page bundled, `CHRONOZARR_E2E_BUILT_VIEWER=1`), the slow-link browser test (a store of 12 steps of 524 KB at 1 MB/s and 50 ms) paused twice where it allows one, and passed on the sources. Both open with the same five store requests (2,100,777 bytes), so the early reads of the page are not what differed. The build's first bandwidth estimate was 876 KB/s where the sources read 686 KB/s, because its page no longer shares the throttled link with about 60 modules. The speculative jobs (the coarse loop and the movie's prefetch) had each sized their workers once, at their start, as the estimate over the chunk size (421 KB then, the real chunk is 524 KB): 2 each on the build, 1 each on the sources. With the playback buffer's batch of three that was 5 to 7 requests in flight on the build and 3 or 4 on the sources, and the frame the playhead reached first was one of the requests that shared the link five ways (the four frames after the first three arrived together 4.7 s after play, where on the sources they came in from 3.5 s). Six runs on each of the sources and the build, counting the pauses of the first 14 s after play:
 
 | Reader and viewer | Sources | Build |
@@ -853,7 +903,7 @@ Measured locally, as the sections above give in full: [Cold open with the viewer
 
 The byte and playback figures were measured with the first version of the bandwidth change. Its final version caps the speculative requests of all jobs together and sets the playback speed per missing frame; it had no pause in 6 runs of the slow-link test on the sources and 6 on the bundled viewer.
 
-Speed gates, last measured on a lightly loaded machine: with the bundled viewer (load 9 to 10), cold open 121 to 133 ms from the store load call, warm switch 3.6 to 4.1 ms, decode 4.3 to 4.6 ms per chunk and 0 wire bytes on a warm switch; with the first version of the bandwidth change (load 5 to 7), warm switch 4.7 to 5.1 ms and decode 4.2 to 4.5 ms. During the final change the machine was at load 190 to 315 from other work: before and after, alternated under that load, gave the same figures, so the change did not move them, but the gates were not measured again. The deployed site was not measured, because nothing has been deployed since 0.4.1.
+Speed gates, last measured on a lightly loaded machine: with the bundled viewer (load 9 to 10), cold open 121 to 133 ms from the store load call, warm switch 3.6 to 4.1 ms, decode 4.3 to 4.6 ms per chunk and 0 wire bytes on a warm switch; with the first version of the bandwidth change (load 5 to 7), warm switch 4.7 to 5.1 ms and decode 4.2 to 4.5 ms. During the final change the machine was at load 190 to 315 from other work: before and after, alternated under that load, gave the same figures, so the change did not move them. Measured again on `main` afterwards at load 6.6 to 10.9 (the machine did not fall below load 4 in three hours): cold open 122 to 143 ms, warm step 4.5 ms p50 with every chunk in memory, decode 4.3 to 4.6 ms, and no request from a warm switch over 240 switches ([the gates of `main`](#speculative-bandwidth-and-playback-on-a-slow-link-2026-10-19), last table). The deployed site was not measured, because nothing has been deployed since 0.4.1.
 
 ## Temporary sharing
 
