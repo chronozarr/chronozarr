@@ -291,7 +291,10 @@ def share(
     """Serve ``store`` through one disposable Cloudflare quick tunnel until interrupted.
 
     The public viewer link is deliberately withheld until the tunnel returns the local store's
-    root metadata and ``chronozarr doctor`` reports no reader-breaking failures.
+    root metadata and ``chronozarr doctor`` reports no reader-breaking failures. doctor validates
+    the layout from the folder on disk; through the tunnel it checks CORS, byte ranges, HEAD and
+    one decoded cell per level. The mask, coverage and coordinate arrays and the level groups'
+    zarr.json are not read through the tunnel: the same server serves them from that folder.
     """
     if viewer is not None and viewer_dir is not None:
         raise ValueError("pass either viewer (a URL) or viewer_dir (a folder), not both")

@@ -886,7 +886,7 @@ Before, each request of that doctor run timed through a live tunnel:
 
 A request through the tunnel took 240 ms on average. Of the 688 validate requests, 576 read the mask: the check that a mask holds only 0 and 1 reads every timestep at every level, one timestep after another. The other 112 read metadata objects and coordinate arrays: validation opens the store without its consolidated metadata, so it reads every `zarr.json`, several of them more than once.
 
-Now `share` validates the folder it serves from disk: 0.3 s for this store, and the tunnel has just returned the root `zarr.json` of that folder byte for byte. CORS, byte ranges, the suffix range, the preflight, HEAD and a decoded cell per level still go through the tunnel. doctor also sends the probes that do not depend on each other at the same time (3 round trips, was 7) and decodes the levels at the same time (4 round trips, was 16). Through the tunnel the doctor run made 24 requests in 2.3 s.
+Now `share` validates the folder it serves from disk: 0.3 s for this store, and the tunnel has just returned the root `zarr.json` of that folder byte for byte. CORS, byte ranges, the suffix range, the preflight, HEAD and a decoded cell per level still go through the tunnel. These are no longer read through the tunnel: the mask, coverage and coordinate arrays (metadata and chunks) and the `zarr.json` of the level groups. The same server serves them from the folder that was validated. doctor also sends the probes that do not depend on each other at the same time (3 round trips, was 7) and decodes the levels at the same time (4 round trips, was 16). Through the tunnel the doctor run made 24 requests in 2.3 s.
 
 | Code | Address works | Doctor | Link printed |
 |---|---:|---:|---:|
