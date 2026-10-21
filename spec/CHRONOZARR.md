@@ -307,6 +307,8 @@ Timestep `t` belongs to time shard `ts=floor(t/shard_time)` at inner timestep `t
 
 A writer SHOULD choose `shard_time` so no object exceeds the intended host or CDN cache or range-serving limit, and a whole-object miss is tolerable. A CDN may retrieve a whole large shard for a small index range. [evidence.md](../docs/evidence.md#layout-choice) has the measurements. For appendable stores, unsharded storage SHOULD be used. If object count justifies sharding, writers SHOULD choose a finite interval, e.g. 12 for monthly data, instead of automatically using an entire long archive. Whole-axis sharding is appropriate for archives that will not be appended. An append rewrites the shard receiving new timesteps (§8.3).
 
+This paragraph is informative. Writing every chunk (§2.1) stores all-fill inner chunks in a shard, where I lets a writer mark them empty in the index. A reader then makes one small range read for each all-fill inner chunk it shows, where an empty index entry costs none. On a sharded store whose cells were 69 % empty, a timestep switch over 64 cells took 64 requests in the JavaScript reader, against 8 when the empty cells had no shard ([evidence.md](../docs/evidence.md#every-chunk-written-2026-10-20)).
+
 ### 7.2 Index access, cache and byte-length hints
 
 The index representation, checksum, placement semantics and missing or empty chunk rules are those of I, Index / Index location / Empty chunks (§0.2). Writers SHOULD use `index_location: "end"` for tested browser interoperability. Readers MUST support both upstream index locations. They MUST cache indices per shard. They MUST reuse one array handle per level, so an implementation's per-array index cache stays effective.

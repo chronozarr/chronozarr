@@ -25,6 +25,8 @@ The append writes the objects that gain a timestep, plus the metadata. Every oth
 - An unsharded store writes new chunk objects. This is the encoder default.
 - A sharded store rewrites the shard that receives each new timestep, whole.
 
+The new timesteps get every chunk, including chunks that hold only the fill value. A store written by chronozarr before 0.5.0 has no object for such a chunk. An append leaves those absent, and readers read them as fill.
+
 For a sharded store that will grow, choose a finite `--shard-time` only when the object count justifies the rewrite cost. Measured costs are in [evidence.md](evidence.md#appending).
 
 ## Publishing

@@ -964,6 +964,17 @@ Cost, from `chronozarr convert` on main at `b9b7df6` and on the branch, alternat
 
 An all-fill chunk is 50 bytes for a 512 px float32 band and 26 bytes for a mask. A store changes only where a whole 512 px cell holds no valid pixel: the NSIDC and OISST grids have none, although land or ocean covers much of them. The object count grows by the share of such cells, here up to 47 %. Writing was no slower: zarr-python no longer compares each chunk with the fill value before it writes it.
 
+The worst case is a store that is mostly empty. A synthetic store of 8192 by 4096 pixels, 24 timesteps and one uint16 band, whose 11 western cell columns hold only nodata (88 of 128 level-0 cells, 69 %), written once by main and once by the branch on 2026-10-21 at load 13 to 14:
+
+| Layout | Files, main / branch | Payload added | Disk added |
+|---|---:|---:|---:|
+| Unsharded | 1,443 / 4,155 | 92,208 B | 11.1 MB |
+| Sharded, `shard_time` 8 | 225 / 564 | 145,116 B | 1.4 MB |
+
+The disk grows more than the payload because each file takes at least one 4 KB block. In the sharded store the branch also writes the all-fill inner chunks into each shard, and the JavaScript reader, which the viewer uses, makes one range read for each. With the shard indexes cached by the first timestep, a switch to the next timestep over 64 level-0 cells, 56 of them empty, took 8 requests on main's store, whose empty cells have no shard, and 64 on the branch's. The Python reader made 64 on both, because it asks for an absent shard again each time.
+
+The speed gates were not measured again for this change: the machine was at load 13 to 14 from other work. Run them on a quiet machine before the next release.
+
 The CDN answer, two requests each on 2026-10-20: an absent key of `ucayali_santa_maria_v03` answered `404` with `cf-cache-status: BYPASS` both times, and a chunk that exists answered `MISS`, then `HIT` (`max-age=31536000, immutable`). The zone's Cache Rule keeps `404` answers out of the cache, as the R2 recipe says ([Cache Rule](hosting-providers.md#cache-rule)), so every read of an absent chunk goes to the bucket, while a stored all-fill chunk is served from the edge after its first read.
 
 The viewer at the fit view of the WorldClim store, with main's bundled viewer under `chronozarr preview --viewer-dir`, three runs alternated per store:
