@@ -7,11 +7,15 @@ import importlib
 import itertools
 import json
 import math
+import os
 import re
 import shutil
+import signal
 import threading
+import time
 import urllib.error
 import urllib.request
+import warnings
 from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -518,6 +522,33 @@ def test_http_store_reads_ranges_and_reports_missing_keys(sharded_store):
         assert asyncio.run(read(store, "no/such/key")) is None
         assert asyncio.run(store.exists("zarr.json")) is True
         assert asyncio.run(store.exists("no/such/key")) is False
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="os.fork is POSIX only")
+def test_http_store_reads_in_a_process_forked_after_a_read(sharded_store):
+    async def read(store: HttpStore):
+        return await store.get("zarr.json", default_buffer_prototype())
+
+    with serving(StoreRequestHandler, sharded_store) as url:
+        store = HttpStore(url)
+        assert asyncio.run(read(store)) is not None  # the request threads exist now
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)  # fork with threads running
+            pid = os.fork()
+        if pid == 0:  # the child exits 0 only if its read returns
+            code = 1
+            try:
+                code = 0 if asyncio.run(read(store)) is not None else 1
+            finally:
+                os._exit(code)
+        deadline = time.monotonic() + 10
+        while (waited := os.waitpid(pid, os.WNOHANG))[0] == 0 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if waited[0] == 0:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            pytest.fail("the forked process's read hung")
+    assert os.waitstatus_to_exitcode(waited[1]) == 0
 
 
 def test_http_store_slices_locally_when_the_server_ignores_range(sharded_store):

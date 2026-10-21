@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -31,7 +32,21 @@ _USER_AGENT = "chronozarr (+https://github.com/chronozarr/chronozarr)"
 # Requests wait on the network, not the CPU, so they get threads of their own: asyncio's default
 # pool has cores + 4 threads, which holds a 4-core machine to 8 requests at once.
 REQUESTS_AT_ONCE = 32
-_REQUESTS = ThreadPoolExecutor(max_workers=REQUESTS_AT_ONCE, thread_name_prefix="chronozarr-http")
+_REQUESTS: ThreadPoolExecutor  # replaced in a forked child
+
+
+def _start_request_threads() -> None:
+    global _REQUESTS
+    _REQUESTS = ThreadPoolExecutor(
+        max_workers=REQUESTS_AT_ONCE, thread_name_prefix="chronozarr-http"
+    )
+
+
+_start_request_threads()
+if hasattr(os, "register_at_fork"):  # POSIX
+    # A forked child has none of the parent's threads, and a pool that counts them as idle never
+    # starts new ones: the child's first request would wait forever.
+    os.register_at_fork(after_in_child=_start_request_threads)
 
 
 def _base_url(url: str) -> str:
