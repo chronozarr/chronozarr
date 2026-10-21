@@ -140,7 +140,7 @@ def test_the_audit_finds_what_an_older_writer_left_out(monkeypatch, tmp_path):
 
     # The bottom cell row of level 0 and the one of level 1 that is its block mean.
     level0 = [f"0/data/c/0/0/2/{c}" for c in range(4)]
-    assert _unwritten(out) == level0 + ["1/data/c/0/0/1/0", "1/data/c/0/0/1/1"]
+    assert _unwritten(out) == [*level0, "1/data/c/0/0/1/0", "1/data/c/0/0/1/1"]
 
 
 def test_arrays_that_hold_only_their_fill_value_are_written(tmp_path):
@@ -216,11 +216,11 @@ def test_append_updates_a_volatility_that_falls_to_zero(tmp_path):
     frames = np.stack([a, a, a, a] + [b] * 8)
     out = tmp_path / "falls"
     chronozarr.encode(make_da(frames[:6], BANDS), out, chunk_size=CHUNK, nodata=0, volatility=True)
-    assert zarr.open_array(out / "volatility")[:].any()
+    assert np.asarray(zarr.open_array(out / "volatility")[:]).any()
 
     append(out, make_da(frames, BANDS).isel(time=slice(6, 12)))
 
-    assert not zarr.open_array(out / "volatility")[:].any()
+    assert not np.asarray(zarr.open_array(out / "volatility")[:]).any()
     assert _unwritten(out) == []
 
 
