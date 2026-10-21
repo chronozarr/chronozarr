@@ -45,7 +45,16 @@ const percent = (ratio) => `${ratio >= 1 ? '+' : '−'}${Math.round(Math.abs(rat
  */
 export function compareBuilds(records) {
   const byPair = new Map();
-  for (const record of records) byPair.set(record.pair, { ...byPair.get(record.pair), [record.variant]: record });
+  for (const record of records) {
+    // A field that bench() no longer reports arrives as undefined, and NaN passes every comparison: stop instead.
+    for (const { key } of METRICS) {
+      const value = record.figures[key];
+      if (!(Number.isFinite(value) && value > 0)) {
+        throw new Error(`${key} of the ${record.variant} run of pair ${record.pair + 1} is ${value}, not a time: did a field of bench() or of the warm loop change name?`);
+      }
+    }
+    byPair.set(record.pair, { ...byPair.get(record.pair), [record.variant]: record });
+  }
   const pairs = [...byPair.values()].filter((pair) => pair.base && pair.head);
   if (pairs.length < MIN_PAIRS) throw new Error(`${pairs.length} complete pairs of runs: comparing the builds needs at least ${MIN_PAIRS} pairs`);
 

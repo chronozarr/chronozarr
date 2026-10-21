@@ -84,6 +84,17 @@ test('an incomplete frame in a warm loop of the head fails: that switch was not 
   assert.match(result.failures[0], /incomplete/);
 });
 
+test('a figure that is missing, not a number or not positive stops the comparison, naming the metric, the build and the pair', () => {
+  // A renamed field of bench() reaches compare.js as undefined; NaN compares false with any tolerance and would pass.
+  for (const bad of [undefined, Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
+    for (const variant of ['base', 'head']) {
+      const records = runs(3).map((r) => (r.variant === variant && r.pair === 1 ? { ...r, figures: { ...r.figures, decodeMs: bad } } : r));
+      // The runner's log counts pairs from 1.
+      assert.throws(() => compareBuilds(records), new RegExp(`decodeMs of the ${variant} run of pair 2`), `${variant} ${bad}`);
+    }
+  }
+});
+
 test('fewer than three pairs cannot decide', () => {
   assert.throws(() => compareBuilds(runs(2)), /3 pairs/);
 });
