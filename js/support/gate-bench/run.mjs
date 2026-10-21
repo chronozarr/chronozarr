@@ -8,7 +8,8 @@
 // headless Chromium that opens the store in the viewer and then measures:
 //
 //   1. `chronozarr.bench({ coldRuns, switches })` of that build: the cold open at level 0 from the loadStore call to the
-//      first complete frame (36 cells, HTTP cache bypassed) and the decode per chunk, replayed from recorded bytes.
+//      first complete frame (36 cells, HTTP cache bypassed) and the decode per chunk, replayed from recorded bytes on the
+//      main thread (`workers: 0`). A regression in the decode workers or their pool reaches the job only through the cold open.
 //   2. Warm switches, by this script: every chunk of level 0 at every timestep is loaded into a 2 GiB cache first, then the
 //      viewer steps through time one timestep at a time with pauses (the sequence of bench()) and jumps (the same), each
 //      switch timed from goToTime to the frame finished on the GPU. The data server counts the requests that reach it from
