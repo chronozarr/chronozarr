@@ -459,23 +459,34 @@ def test_remote_validate_reads_each_mask_shard_once(sharded_masked_store, monkey
 
 
 def test_remote_validate_holds_no_more_mask_than_the_budget(masked_store, monkeypatch):
-    monkeypatch.setattr(schema_module, "_MASK_BYTES", 40 * 50)  # one level-0 mask timestep
+    monkeypatch.setattr(schema_module, "_MASK_BYTES", 16 * 16)  # one mask chunk
     with serving(StoreRequestHandler, masked_store) as url:
         trips = RoundTrips(monkeypatch)
         problems = validate(url)
     assert problems == []
-    level_0 = [
-        (started, ended, path.split("/mask/c/")[1].split("/")[0])
-        for started, ended, _, path in trips.requests
-        if f"/{masked_store.name}/0/mask/c/" in path
-    ]
-    assert len(level_0) == 48
+    mask = [(started, ended) for started, ended, _, path in trips.requests if "/mask/c/" in path]
+    assert len(mask) == 68
     overlapping = [
-        (a[2], b[2])
-        for a, b in itertools.combinations(level_0, 2)
-        if a[2] != b[2] and a[0] < b[1] and b[0] < a[1]
+        (a, b) for a, b in itertools.combinations(mask, 2) if a[0] < b[1] and b[0] < a[1]
     ]
-    assert not overlapping  # two timesteps of level 0 were never read at the same time
+    assert not overlapping  # two mask chunks were never read at the same time
+
+
+def test_remote_validate_stops_reading_a_mask_at_the_first_bad_chunk(
+    masked_store, tmp_path, monkeypatch
+):
+    copy = tmp_path / masked_store.name
+    shutil.copytree(masked_store, copy)
+    plane = zarr.open_array(copy / "0" / "mask", mode="r+")
+    plane[0, 0, 0] = 2  # in the first chunk read
+    monkeypatch.setattr(schema_module, "_MASK_BYTES", 16 * 16)  # one chunk at a time
+    with serving(StoreRequestHandler, copy) as url:
+        trips = RoundTrips(monkeypatch)
+        problems = validate(url)
+    assert problems == ["level 0/mask: mask must contain only 0 and 1"]
+    level_0 = [path for path in trips.paths() if f"/{copy.name}/0/mask/c/" in path]
+    # The bad chunk, and at most the next one, already under way when the bad one was found.
+    assert len(level_0) <= 2, level_0
 
 
 @pytest.mark.parametrize("remote", [False, True], ids=["local", "http"])

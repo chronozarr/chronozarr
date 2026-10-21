@@ -19,10 +19,10 @@ import asyncio
 import math
 import re
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import suppress
 from dataclasses import dataclass, field
-from itertools import pairwise
+from itertools import pairwise, product
 from typing import Any, cast
 
 import numpy as np
@@ -1261,31 +1261,38 @@ def _check_time_coordinate(
         )
 
 
-# Decoded mask values validation holds at once; as many timesteps as fit are read together.
+# Decoded mask values validation holds at once; as many stored objects as fit are read together.
 _MASK_BYTES = 64 * 2**20
 
 
 def _mask_is_binary(plane: zarr.Array) -> bool:
     """Whether every value of the mask `plane` is 0 or 1.
 
-    The timesteps are read in batches, several at once, holding at most `_MASK_BYTES` of values:
-    a remote store waits a round trip per wave of reads, not per timestep. A batch spans a whole
-    time shard when one fits, so each shard object is read once.
+    Each stored object (a shard, or a chunk when unsharded) is read and checked on its own, up to
+    `REQUESTS_AT_ONCE` at a time and at most `_MASK_BYTES` of values: a remote store waits a
+    round trip per wave of reads, not per timestep. Reading stops at the first object holding
+    another value; after an interrupt or a failed read only the reads under way finish.
     """
-    n_time = plane.shape[0]
-    step_bytes = max(1, math.prod(plane.shape[1:]) * plane.dtype.itemsize)
-    fit = max(1, _MASK_BYTES // step_bytes)  # timesteps held at once
-    span = min(plane.shards[0] if plane.shards is not None else 1, fit)
-    batches = [slice(t, min(t + span, n_time)) for t in range(0, n_time, span)]
+    extent = plane.shards or plane.chunks
+    grid = product(*(range(math.ceil(n / e)) for n, e in zip(plane.shape, extent, strict=True)))
+    regions = [
+        tuple(slice(i * e, (i + 1) * e) for i, e in zip(at, extent, strict=True)) for at in grid
+    ]
+    object_bytes = math.prod(extent) * plane.dtype.itemsize
+    at_once = max(1, min(REQUESTS_AT_ONCE, _MASK_BYTES // object_bytes))
 
-    def binary(batch: slice) -> bool:
-        return bool(np.isin(np.asarray(plane[batch]), (0, 1)).all())
+    def binary(region: tuple[slice, ...]) -> bool:
+        values = np.asarray(plane[region])
+        if values.dtype == np.uint8:  # max() allocates nothing; isin needs several copies
+            return int(values.max(initial=0)) <= 1
+        return bool(np.isin(values, (0, 1)).all())  # a wrong dtype, which _check_plane reports
 
-    pool = ThreadPoolExecutor(max_workers=max(1, min(len(batches), fit // span, REQUESTS_AT_ONCE)))
+    pool = ThreadPoolExecutor(max_workers=at_once)
     try:
-        return all(pool.map(binary, batches))
+        futures = [pool.submit(binary, region) for region in regions]
+        return all(future.result() for future in as_completed(futures))
     finally:
-        pool.shutdown(cancel_futures=True)  # after a bad batch the rest need not be read
+        pool.shutdown(cancel_futures=True)
 
 
 def _read_together(arrays: Mapping[str, zarr.Array]) -> dict[str, np.ndarray]:
