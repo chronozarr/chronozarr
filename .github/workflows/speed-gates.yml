@@ -1,0 +1,64 @@
+name: Speed gates
+
+# The speed gates of the viewer (CLAUDE.md), the viewer of the pull request against the viewer of its base, built and
+# measured in the same job (js/support/gate-bench/run.mjs). A workflow of its own, not a job of ci.yml: it needs a base to
+# compare with, which a pull request has and a push does not; only a change under js/ can move the viewer, and ci.yml has
+# no path filter; and its 15 minutes run beside CI rather than in it, and can be re-run alone.
+
+on:
+  pull_request:
+    paths:
+      - "js/**"
+      - ".github/workflows/speed-gates.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: speed-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: Head against base
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      # The checkout is the merge of the pull request into its base, so its first parent is the base, and the two builds
+      # differ by exactly the change of the pull request.
+      - name: Check out the base
+        run: git worktree add --detach "$RUNNER_TEMP/base" HEAD^1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: js/package-lock.json
+      - name: Install locked dependencies
+        run: |
+          npm ci --prefix js
+          npm ci --prefix "$RUNNER_TEMP/base/js"
+      - name: Install Chromium
+        working-directory: js
+        run: npx playwright install --with-deps chromium
+      - name: Build both viewers
+        run: |
+          node "$RUNNER_TEMP/base/js/support/build-viewer.mjs" "$RUNNER_TEMP/viewers/base"
+          node js/support/build-viewer.mjs "$RUNNER_TEMP/viewers/head"
+      - name: Generate the store
+        run: node js/support/gate-bench/store.mjs "$RUNNER_TEMP/gate-store"
+      - name: Measure base and head
+        run: >-
+          node js/support/gate-bench/run.mjs
+          --base "$RUNNER_TEMP/viewers/base" --head "$RUNNER_TEMP/viewers/head" --store "$RUNNER_TEMP/gate-store"
+          --pairs 5 --out "$RUNNER_TEMP/gates/results.json" --summary "$GITHUB_STEP_SUMMARY"
+      - name: Upload measurements
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: speed-gates
+          path: ${{ runner.temp }}/gates
+          retention-days: 14

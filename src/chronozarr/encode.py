@@ -23,6 +23,7 @@ from chronozarr import schema
 from chronozarr._writer import (
     DEFAULT_CELLS_IN_FLIGHT,
     VOLATILITY_SCALE,
+    WRITE_EVERY_CHUNK,
     Block,
     _ArraySource,
     _CellWriter,
@@ -202,6 +203,7 @@ def _create_level(root: zarr.Group, k: int, layout: _Layout) -> _LevelArrays:
             shards=(layout.shard_time, *lead, cs, cs) if layout.shard else None,
             compressors=compressor,
             filters=None,
+            config=WRITE_EVERY_CHUNK,
         )
         attrs = schema.data_array_attrs(
             layout.crs, transform, height, width, layout.nodata, dimensions=dims
@@ -326,6 +328,7 @@ def _write_store(
             dtype="float32",
             fill_value=0.0,
             dimension_names=("row", "col"),
+            config=WRITE_EVERY_CHUNK,
         )
         vol[:] = volatility
         vol.attrs["_ARRAY_DIMENSIONS"] = ["row", "col"]
