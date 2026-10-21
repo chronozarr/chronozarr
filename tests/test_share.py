@@ -7,6 +7,7 @@ import io
 import json
 import socket
 import subprocess
+import urllib.request
 from pathlib import Path
 from typing import cast
 
@@ -425,6 +426,10 @@ def _name_resolves_after(monkeypatch, host: str, seconds: float) -> list[float]:
     monkeypatch.setattr(
         share_module.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
     )
+    # Proxies come from the environment only, never from this computer's system settings.
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(urllib.request, "getproxies", urllib.request.getproxies_environment)
     return now
 
 
@@ -462,3 +467,29 @@ def test_link_does_not_wait_for_a_name_that_is_not_a_quick_tunnel(monkeypatch):
     assert "Name or service not known" in result.output
     assert "does not resolve yet" not in result.output
     assert now[0] < 5.0  # only the reader's own retries
+
+
+def test_link_does_not_wait_for_a_name_that_a_proxy_looks_up(monkeypatch):
+    # Behind a proxy this computer may never resolve the name; the reader asks the proxy.
+    now = _name_resolves_after(monkeypatch, QUICK_HOST, float("inf"))
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+
+    result = CliRunner().invoke(main, ["link", f"https://{QUICK_HOST}/s"])
+
+    assert result.exit_code == 1
+    assert "does not resolve yet" not in result.output
+    assert now[0] < 5.0  # only the reader's own retries
+
+
+def test_link_waits_when_the_proxy_is_bypassed_for_the_name(served, monkeypatch):
+    now = _name_resolves_after(monkeypatch, QUICK_HOST, 40.0)
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("NO_PROXY", ".trycloudflare.com")
+    url = served.url.replace("127.0.0.1", QUICK_HOST)
+
+    result = CliRunner().invoke(main, ["link", url], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert f"{QUICK_HOST} does not resolve yet" in result.stderr
+    assert 40.0 <= now[0] < 45.0

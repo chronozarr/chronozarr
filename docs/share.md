@@ -93,6 +93,7 @@ A tunnel targets a port, not a program. `share` starts its own server and checks
 | `cloudflared is required ... but was not found` | Install it (see above) and run the command again |
 | `cloudflared exited ...` | cloudflared could not reach Cloudflare. Check your network connection, or a firewall that blocks outgoing connections, and run the command again |
 | `the tunnel did not serve this store within 90 seconds` | The new address did not start working in time. Run the command again |
-| `chronozarr link` on the new address prints `does not resolve yet` | It ran before the address worked. It waits up to 90 seconds, as `share` does, then prints the link. Run `link` after `share` prints `open:` |
+| `chronozarr link` on the new address prints `does not resolve yet` | It ran before the address worked. It waits up to 90 seconds, as `share` does, then prints the link. Run `link` after `share` prints `open:`. Behind a proxy, `link` does not wait, because the proxy looks the name up |
+| `chronozarr link` on the new address fails with `HTTP 530` | The name resolves, but the tunnel does not answer yet. `link` waits for the name only, and retries an HTTP error for about 2 seconds. Run it again, or after `share` prints `open:` |
 | The recipient sees `Shared link not available` | Sharing stopped, or the computer slept or went offline. Start `share` again and send the new link |
 | Scrubbing is slow for the recipient | Every read passes through your upload connection. [Publish](publish.md) the store for more than a few viewers |

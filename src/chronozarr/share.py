@@ -203,14 +203,21 @@ def _wait_for_public_store(
 
 def wait_for_address(url: str, echo: Callable[[str], None]) -> None:
     """Return once the host of a quick-tunnel `url` resolves on this computer, waiting as long as
-    `share` waits for a new address. Any other URL returns at once.
+    `share` waits for a new address. Any other URL, and one that a proxy reaches, returns at once.
+    This waits for the name only: once it resolves, the tunnel can still answer an HTTP error for
+    a few seconds, which the reader retries for about 2 s.
 
     An address that `share` has just printed may not be published yet, and a lookup that finds
     nothing is cached for the 60 s negative TTL of trycloudflare.com: the name then fails here
     for up to a minute after Cloudflare has published it.
     """
-    host = urllib.parse.urlsplit(url).hostname or ""
+    parts = urllib.parse.urlsplit(url)
+    host = parts.hostname or ""
     if not host.endswith(".trycloudflare.com") or host == "api.trycloudflare.com":
+        return
+    # Through a proxy the reader never looks the name up here (urllib asks the proxy), and this
+    # computer may not resolve names at all: the reader's own errors say what is wrong.
+    if parts.scheme in urllib.request.getproxies() and not urllib.request.proxy_bypass(host):
         return
     deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
     told = False
