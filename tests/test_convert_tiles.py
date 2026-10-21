@@ -53,7 +53,7 @@ def write_tif(
         nodata=nodata,
     ) as dst:
         dst.write(array)
-        dst.descriptions = ["NDVI"] * array.shape[0]
+        dst.descriptions = ["NDVI", "EVI"][: array.shape[0]]
     return path
 
 
@@ -212,63 +212,34 @@ def test_mosaic_dry_run_lists_every_tile_and_its_place(tmp_path, truth):
     out = result.output
     assert "source:     dated GeoTIFF tiles, 3 timesteps (2024-01-01 .. 2024-02-02)" in out
     assert "12 files are tiles of one 40 x 60 px grid, 4 per date" in out
-    assert "no two tiles overlap" in out
     assert "every date covers the whole grid" in out
     assert "40 x 60 px" in out.split("grid:")[1].splitlines()[0]
     assert f"2024-01-17  rows 20..39, columns 30..59  {folder / tile_name(1, 20, 30)}" in out
     assert "dry run: nothing was written" in out
 
 
-def test_overlapping_tiles_that_agree_are_joined(tmp_path, truth):
-    folder = tmp_path / "raw"
-    for t in range(N_TIME):
-        for row in (0, 20):
-            rows = slice(row, row + 20)
-            write_tif(folder / tile_name(t, row, 0), truth[t, :, rows, :35], row=row)
-            write_tif(folder / tile_name(t, row, 25), truth[t, :, rows, 25:], row=row, col=25)
-    out = tmp_path / "store"
-
-    report = convert(folder, out, mosaic_tiles=True, **OPTIONS)
-
-    assert "tiles overlap on 3 dates" in " ".join(report.plan.source.notes)
-    np.testing.assert_array_equal(chronozarr.open_store(out).to_xarray().values, truth)
-
-
-def test_overlapping_tiles_that_disagree_stop_the_conversion(tmp_path, truth):
+def test_files_of_a_date_that_overlap_are_refused_from_their_grids(tmp_path, truth):
     folder = tmp_path / "raw"
     for t in range(N_TIME):
         write_tif(folder / tile_name(t, 0, 0), truth[t, :, :, :35])
-        right = truth[t, :, :, 25:].copy()
-        if t == 1:
-            right[:, :4, :10] += 1  # 40 pixels of the 10-column overlap differ on one date
-        write_tif(folder / tile_name(t, 0, 25), right, col=25)
-    out = tmp_path / "store"
+        write_tif(folder / tile_name(t, 0, 25), truth[t, :, :, 25:], col=25)  # 10 columns shared
 
-    with pytest.raises(ValueError) as error:
-        convert(folder, out, mosaic_tiles=True, **OPTIONS)
+    with pytest.raises(PreflightError) as plain:
+        convert(folder, tmp_path / "store", **OPTIONS)
+    same_date = [p for p in plain.value.problems if "same date" in p.detail]
+    assert len(same_date) == 2 * N_TIME
+    for problem in same_date:
+        assert problem.fix is not None and "--mosaic-tiles" not in problem.fix
+        assert "rule you choose" in problem.fix
 
-    message = text_of(error.value)
-    assert "2024-01-17" in message
-    assert tile_name(1, 0, 0) in message and tile_name(1, 0, 25) in message
-    assert "40 pixels" in message
-    assert not out.exists()
-
-
-def test_where_tiles_overlap_a_valid_value_wins_over_an_invalid_one(tmp_path, truth):
-    folder = tmp_path / "raw"
+    with pytest.raises(PreflightError) as mosaic:
+        convert(folder, tmp_path / "store", mosaic_tiles=True, **OPTIONS)
+    by_name = {Path(p.uri).name: p for p in mosaic.value.problems}
+    assert set(by_name) == {tile_name(t, 0, 25) for t in range(N_TIME)}
     for t in range(N_TIME):
-        left, right = truth[t, :, :, :35].copy(), truth[t, :, :, 25:].copy()
-        left[:, :20, 25:] = 0  # the left tile has no data in the top of the overlap
-        right[:, 20:, :10] = 0  # the right tile none in the bottom
-        write_tif(folder / tile_name(t, 0, 0), left, nodata=0)
-        write_tif(folder / tile_name(t, 0, 25), right, col=25, nodata=0)
-    out = tmp_path / "store"
-
-    convert(folder, out, mosaic_tiles=True, **OPTIONS)
-
-    store = chronozarr.open_store(out)
-    assert store.read_mask(0) is None  # every tile declares nodata 0: a sentinel store
-    np.testing.assert_array_equal(store.to_xarray().values, truth)
+        problem = by_name[tile_name(t, 0, 25)]
+        assert f"overlaps {tile_name(t, 0, 0)} by 400 px" in problem.detail  # 40 rows x 10 cols
+        assert problem.fix is not None and "rule you choose" in problem.fix
 
 
 def test_a_date_missing_a_tile_is_invalid_where_no_tile_covers_it(tmp_path, truth):
@@ -294,6 +265,9 @@ def test_a_date_missing_a_tile_is_invalid_where_no_tile_covers_it(tmp_path, trut
     "options",
     [
         {"resampling": "nearest"},
+        {"bounds": (746090.0, 2540040.0, 746690.0, 2540440.0), "crs": CRS},
+        {"transform": TRANSFORM, "shape": (HEIGHT, WIDTH), "crs": CRS},
+        {"shape": (HEIGHT, WIDTH)},
         {"crs": "EPSG:4326"},  # the tiles are in EPSG:32631, and tiles are not warped
         {"bands_are_dates": True},
         {"write_manifest_to": "found.csv"},
@@ -315,3 +289,153 @@ def test_mosaic_tiles_refuses_a_manifest(tmp_path, truth):
 
     with pytest.raises(ValueError, match="--mosaic-tiles"):
         convert(manifest, tmp_path / "store", mosaic_tiles=True, **OPTIONS)
+
+
+# --- review of PR #133 ------------------------------------------------------------------------
+
+
+def test_a_missing_tile_holds_the_nodata_of_a_sentinel_store(tmp_path, truth):
+    folder = write_tiles(tmp_path / "raw", truth, skip=((1, 20, 30),))
+    out = tmp_path / "store"
+
+    report = convert(folder, out, mosaic_tiles=True, nodata=-3000, **OPTIONS)
+
+    assert report.plan.source.info.validity == "nodata -3000 sentinel, no mask"
+    store = chronozarr.open_store(out)
+    assert store.read_mask(1) is None
+    gap = store.read(1)[:, 20:, 30:]
+    assert (gap == -3000).all()
+    assert np.isnan(store.physical(1)[:, 20:, 30:]).all()
+    np.testing.assert_array_equal(store.read(1)[:, :20, :], truth[1][:, :20, :])
+
+
+def test_tiles_with_several_bands_keep_every_band(tmp_path):
+    truth = make_truth(N_TIME, 2, HEIGHT, WIDTH).clip(1, None).astype(np.int16)
+    folder = write_tiles(tmp_path / "raw", truth)
+    out = tmp_path / "store"
+
+    convert(folder, out, mosaic_tiles=True, **OPTIONS)
+
+    np.testing.assert_array_equal(chronozarr.open_store(out).to_xarray().values, truth)
+
+
+def test_a_glob_of_tiles_converts_like_the_folder(tmp_path, truth):
+    folder = write_tiles(tmp_path / "raw", truth)
+    (folder / "notes.txt").write_text("not a raster")
+    out = tmp_path / "store"
+
+    convert(str(folder / "NDVI_*.tif"), out, mosaic_tiles=True, **OPTIONS)
+
+    np.testing.assert_array_equal(chronozarr.open_store(out).to_xarray().values, truth)
+
+
+def test_resume_refuses_tiles_staged_in_other_places(tmp_path, truth):
+    folder = write_tiles(tmp_path / "raw", truth)
+    out, work = tmp_path / "store", tmp_path / "work"
+
+    class Interrupted(Exception):
+        pass
+
+    def stop_after_one(done: int, total: int) -> None:
+        if done >= 1:
+            raise Interrupted
+
+    with pytest.raises(Interrupted):
+        convert(folder, out, mosaic_tiles=True, work_dir=work, progress=stop_after_one, **OPTIONS)
+    assert (work / "plan.json").is_file()
+    # the same files, dates and grid, with two tiles of every date in each other's place
+    for t in range(N_TIME):
+        top_left = truth[t, :, :20, :30]
+        bottom_right = truth[t, :, 20:, 30:]
+        write_tif(folder / tile_name(t, 0, 0), bottom_right, row=20, col=30)
+        write_tif(folder / tile_name(t, 20, 30), top_left)
+
+    with pytest.raises(ValueError, match="staged for a different input"):
+        convert(folder, out, mosaic_tiles=True, work_dir=work, resume=True, **OPTIONS)
+
+
+@pytest.mark.parametrize("series", ["tiles with a time of day", "one file per date"])
+def test_mosaic_tiles_refuses_files_that_share_no_date(tmp_path, truth, series):
+    folder = tmp_path / "raw"
+    options: dict[str, Any] = {}
+    if series == "tiles with a time of day":
+        for t in range(N_TIME):
+            for i, (row, col) in enumerate(QUARTERS):
+                part = truth[t, :, row : row + 20, col : col + 30]
+                name = f"S2_{ISO[t].replace('-', '')}T10{i:02d}00-{row:010d}-{col:010d}.tif"
+                write_tif(folder / name, part, row=row, col=col)
+        options["date_pattern"] = "S2_%Y%m%dT%H%M%S"
+    else:  # two series of one file per date, on different extents of one lattice
+        for t in range(N_TIME):
+            write_tif(folder / f"west_{ISO[t]}.tif", truth[t, :, :, :30])
+        later = ["2024-03-01", "2024-03-17", "2024-04-02"]
+        for t in range(N_TIME):
+            write_tif(folder / f"east_{later[t]}.tif", truth[t, :, :, 30:], col=30)
+
+    with pytest.raises(ValueError, match="no two of the") as error:
+        convert(folder, tmp_path / "store", mosaic_tiles=True, **options, **OPTIONS)
+    assert "nothing to join" in text_of(error.value)
+
+
+def test_a_series_of_tiled_and_whole_dates_converts(tmp_path, truth):
+    folder = write_tiles(tmp_path / "raw", truth[:2])
+    write_tif(folder / f"NDVI_{DAYS[2]}.tif", truth[2])  # the last date in one file
+    out = tmp_path / "store"
+
+    convert(folder, out, mosaic_tiles=True, **OPTIONS)
+
+    np.testing.assert_array_equal(chronozarr.open_store(out).to_xarray().values, truth)
+
+
+def iso_tile_name(t: int, row: int, col: int) -> str:
+    """A tile named with a date that `encode` and `append` read (YYYY-MM-DD)."""
+    return f"NDVI_{ISO[t]}-{row:010d}-{col:010d}.tif"
+
+
+def write_iso_tiles(folder: Path, truth: np.ndarray) -> Path:
+    for t in range(truth.shape[0]):
+        for row, col in QUARTERS:
+            part = truth[t, :, row : row + 20, col : col + 30]
+            write_tif(folder / iso_tile_name(t, row, col), part, row=row, col=col)
+    return folder
+
+
+def test_encode_names_the_convert_command_for_tiles(tmp_path, truth):
+    folder = write_iso_tiles(tmp_path / "raw", truth)
+    pattern = str(folder / "*.tif")
+
+    result = CliRunner().invoke(main, ["encode", pattern, str(tmp_path / "store")])
+
+    assert result.exit_code != 0
+    text = " ".join(result.output.split())
+    assert "tiles of one 40 x 60 px grid" in text
+    assert f"chronozarr convert '{pattern}'" in text and "--mosaic-tiles" in text
+    assert "pass --mosaic-tiles" not in text
+
+
+def test_encode_does_not_offer_convert_options_for_copies(tmp_path, truth):
+    folder = tmp_path / "raw"
+    write_tif(folder / "ndvi_2024-01-01.tif", truth[0])
+    write_tif(folder / "ndvi_copy_2024-01-01.tif", truth[0])
+
+    result = CliRunner().invoke(main, ["encode", str(folder / "*.tif"), str(tmp_path / "s")])
+
+    assert result.exit_code != 0
+    text = " ".join(result.output.split())
+    assert "covers the same pixels" in text
+    assert "--date-pattern" not in text and "manifest" not in text
+
+
+def test_append_names_the_convert_command_for_tiles(tmp_path, truth):
+    store = tmp_path / "store"
+    convert(write_tiles(tmp_path / "first", truth[:1]), store, mosaic_tiles=True, **OPTIONS)
+    folder = write_iso_tiles(tmp_path / "raw", truth)
+    pattern = str(folder / "*.tif")
+
+    result = CliRunner().invoke(main, ["append", str(store), pattern])
+
+    assert result.exit_code != 0
+    text = " ".join(result.output.split())
+    assert f"chronozarr convert '{pattern}' NEW_STORE --mosaic-tiles" in text
+    assert f"chronozarr append {store} NEW_STORE" in text
+    assert "pass --mosaic-tiles" not in text

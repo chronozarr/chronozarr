@@ -56,18 +56,18 @@ longer one needs `--dims band=NAME` or a selection first.
 
 Tiles. Earth Engine writes an image larger than its file limit as several files, named `<name>-<row
 offset>-<column offset>.tif`, each a part of one grid, so a series of such exports has several
-files per date. Files that share a date may also be copies, so they are joined only when the
-caller says so with `mosaic_tiles` (`--mosaic-tiles`). Without it each such file is refused, and
-the fix says which case the grids show: tiles of one grid (one CRS and pixel size, origins whole
-pixels apart, no two files of a date on the same pixels), which the option joins; copies on the
-same pixels, of which to keep one; or files on different grids, which only a resampling the user
-chooses can join. With it every dated file must be a tile of one grid (`_convert_tiles`), which
-becomes the store's grid: the smallest that holds every file of every date. Each timestep joins the
-tiles of its date in file order; a tile fills the pixels that the earlier ones leave uncovered or
-invalid, and where two tiles are valid their values must be equal, or the conversion stops and
-names them. Pixels that no tile of a date covers are invalid, which can give the store a mask (rule
-4). The plan says so (`tiles:`). Tiles are never warped: `--transform`, `--shape`, `--resampling`
-and `--bounds` are refused with it, and so is `write_manifest_to`.
+files per date. Files that share a date may also be copies, so they are joined only when the caller
+says so with `mosaic_tiles` (`--mosaic-tiles`). Without it each such file is refused, and the fix
+says which case the grids show: tiles of one grid (one CRS and pixel size, origins whole pixels
+apart, no two files of a date sharing a pixel), which the option joins; copies on the same pixels,
+of which to keep one; files that overlap in part, which only a rule the user chooses for the shared
+pixels can join; or files on different grids, which only a resampling the user chooses can join.
+With it at least two files must share a date, and every dated file must be a tile of one grid
+(`_convert_tiles`), which becomes the store's grid: the smallest that holds every file of every
+date. Each timestep places the tiles of its date in that grid. Pixels that no tile of a date covers
+are invalid, which can give the store a mask (rule 4). The plan says so (`tiles:`). Tiles are never
+warped: `--transform`, `--shape`, `--resampling` and `--bounds` are refused with it, and so is
+`write_manifest_to`.
 
 Bands as dates. One raster whose bands are dates, as Earth Engine's `ee.ImageCollection.toBands()`
 exports a series (`2020_01_01_NDVI`, `2020_01_17_NDVI`, ...), is a series only when the caller

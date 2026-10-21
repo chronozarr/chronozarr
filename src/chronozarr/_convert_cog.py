@@ -44,8 +44,14 @@ from chronozarr._convert_source import (
     _settle_nan,
     _value_valid,
 )
+from chronozarr._convert_tiles import (
+    CONVERT_FIXES,
+    SameDateFixes,
+    TileLayout,
+    lay_out,
+    same_date_problems,
+)
 from chronozarr._convert_tiles import OPTION as TILES_OPTION
-from chronozarr._convert_tiles import TileLayout, _name, _names, lay_out, same_date_problems
 from chronozarr.schema import Band, Transform
 
 GDAL_ENV = {
@@ -395,11 +401,6 @@ def _offer_band_dates(
     ]
 
 
-def _values(values: np.ndarray) -> str:
-    """One pixel's values, one per band."""
-    return ", ".join(str(v) for v in values.tolist())
-
-
 def _parse_resampling(name: str) -> Any:
     from rasterio.enums import Resampling
 
@@ -431,6 +432,7 @@ class CogManifestSource(Source):
         band_series: BandSeries | None = None,
         band_date_pattern: str | None = None,
         mosaic_tiles: bool = False,
+        same_date_fixes: SameDateFixes = CONVERT_FIXES,
     ) -> None:
         """Open every source's header and check the set is one series.
 
@@ -444,10 +446,12 @@ class CogManifestSource(Source):
         reads them (`band_date_pattern` is the `--date-pattern` that option would use).
 
         Files that share a date are refused, each with the fix that is true of it
-        (`same_date_problems`), unless `mosaic_tiles` says they are tiles: then they must tile one
-        grid (`lay_out`), which becomes the target grid, and each timestep joins the tiles of its
-        date. Tiles are never warped, so `target_transform`, `target_shape`, `resampling` and
-        `bounds` do not apply, and `target_crs` may only name the CRS the tiles have.
+        (`same_date_problems`, worded by `same_date_fixes` for the command), unless `mosaic_tiles`
+        says they are tiles: then they must tile one grid (`lay_out`), which becomes the target
+        grid, and each timestep joins the tiles of its date. With `mosaic_tiles`, at least two
+        files must share a date. Tiles are never warped, so `target_transform`, `target_shape`,
+        `resampling` and `bounds` do not apply, and `target_crs` may only name the CRS the tiles
+        have.
         """
         self.entries = entries
         self.times = [e.time for e in entries]
@@ -489,18 +493,20 @@ class CogManifestSource(Source):
         if bounds is not None:
             problems += self._size_problems(good)
         excused: frozenset[str] = frozenset()
+        nothing_to_join = False
         if band_series is None:
             dated = [(e.time, e.uri) for e in entries]
             grids = {uri: header.grid for uri, header in good}
             if mosaic_tiles:
+                nothing_to_join = len({time for time, _ in dated}) == len(dated)
                 files = [(time, uri, grids[uri]) for time, uri in dated if uri in grids]
-                layout = lay_out(files) if files else None
+                layout = None if nothing_to_join or not files else lay_out(files, same_date_fixes)
                 if isinstance(layout, TileLayout):
                     self._layout = layout
                 elif layout is not None:
                     problems += layout
             else:
-                shared, excused = same_date_problems(dated, grids)
+                shared, excused = same_date_problems(dated, grids, same_date_fixes)
                 problems += shared
         if self._layout is None:
             self.grid = self._target_grid(first, target_crs, target_transform, target_shape)
@@ -517,6 +523,13 @@ class CogManifestSource(Source):
             problems += [p for p in self._grid_problems(good, first_uri) if p.uri not in excused]
         if problems:
             self._raise(problems, uris)
+        if nothing_to_join:
+            raise ValueError(
+                f"{TILES_OPTION} joins files that share a date, and no two of the {len(entries)} "
+                f"dated files do, so there is nothing to join. Leave {TILES_OPTION} out; if some "
+                "files are tiles of one image, their names must give them one date (a "
+                "--date-pattern without a time of day)"
+            )
         headers = [h for _, h in good]
         self._headers = headers
         self._tile_headers = dict(good)
@@ -890,24 +903,18 @@ class CogManifestSource(Source):
         return Step(data, valid)
 
     def _read_tiles(self, t: int) -> Step:
-        """Timestep `t` joined from the tiles of its date, in file order.
-
-        A tile fills the pixels that no earlier tile covers, and those where it is valid and the
-        earlier tiles are not; where an earlier tile and this one are both valid, their values
-        must be equal, else ValueError. Pixels no tile covers hold the fill value and are invalid.
-        """
+        """Timestep `t` joined from the tiles of its date, which do not overlap. Pixels no tile
+        covers hold the fill value and are invalid."""
         import rasterio
 
         assert self._layout is not None
         grid, info = self.grid, self.info
         fill = 0 if info.nodata is None else info.nodata
         data = np.full((info.n_band, grid.height, grid.width), fill, dtype=info.dtype)
-        covered = np.zeros((grid.height, grid.width), dtype=bool)
-        valid = np.zeros((grid.height, grid.width), dtype=bool)
+        valid = np.zeros((grid.height, grid.width), dtype=np.uint8) if info.mask else None
         tiles = self._layout.tiles[t]
-        for i, (uri, window) in enumerate(tiles):
+        for uri, window in tiles:
             header = self._tile_headers[uri]
-            differ_count, example = 0, None
             try:
                 with (
                     rasterio.Env(**_gdal_env(header.dataset)),
@@ -917,44 +924,17 @@ class CogManifestSource(Source):
                         rows = min(self.chunk_size, window.height - top)
                         read_window = ((top, top + rows), (0, window.width))
                         block = src.read(list(header.data_indexes), window=read_window)
-                        block_valid = self._declared_valid(src, header, read_window)
-                        block_valid &= _value_valid(block, self._sentinels)
                         ys = slice(window.row + top, window.row + top + rows)
                         xs = slice(window.col, window.col + window.width)
-                        # views into the timestep: assignments below write through
-                        target, seen, good = data[:, ys, xs], covered[ys, xs], valid[ys, xs]
-                        differ = good & block_valid & (target != block).any(axis=0)
-                        if differ.any():
-                            differ_count += int(differ.sum())
-                            if example is None:
-                                y, x = (int(v) for v in np.argwhere(differ)[0])
-                                example = (
-                                    ys.start + y,
-                                    xs.start + x,
-                                    target[:, y, x].copy(),
-                                    block[:, y, x].copy(),
-                                )
-                        take = ~seen | (block_valid & ~good)
-                        target[:, take] = block[:, take]
-                        seen[:] = True
-                        good |= block_valid
+                        data[:, ys, xs] = block
+                        if valid is not None:
+                            valid[ys, xs] = self._declared_valid(src, header, read_window)
+                            valid[ys, xs] &= _value_valid(block, self._sentinels)
             except rasterio.errors.RasterioError as exc:
                 raise OSError(f"reading {uri} (timestep {t}): {exc}") from exc
-            if example is not None:
-                row, col, before, here = example
-                earlier = [u for u, w in tiles[:i] if w.overlaps(window)]
-                raise ValueError(
-                    f"{show_time(self.times[t])}: {_name(uri)} overlaps "
-                    f"{_names(earlier)}, and they hold different values at {differ_count} "
-                    f"pixels where both are valid (row {row}, column {col} of the grid: "
-                    f"{_values(before)} against {_values(here)}). Tiles of one image agree where "
-                    "they overlap, so these files are not tiles of one image. Keep the files you "
-                    "want for this date (move the others out of the folder), or join them "
-                    "yourself with a rule you choose and convert the joined files"
-                )
-        where = f"{_name(tiles[0][0])} and the other tiles of {show_time(self.times[t])}"
-        _settle_nan(data, valid if info.mask else None, info.nodata, f"{where} (timestep {t})")
-        return Step(data, valid.astype(np.uint8) if info.mask else None)
+        where = f"{tiles[0][0]} and the other tiles of {show_time(self.times[t])} (timestep {t})"
+        _settle_nan(data, valid, info.nodata, where)
+        return Step(data, valid)
 
     def _declared_valid(
         self,
