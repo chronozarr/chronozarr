@@ -189,7 +189,15 @@ def test_a_sharded_store_is_one_slab_and_unchanged(monkeypatch, tmp_path):
 def test_peak_python_memory_does_not_grow_with_the_series(monkeypatch, tmp_path):
     """With slabs, the arrays traced during encoding stay the same size from 12 to 96
     timesteps; in one slab they grow with the series. Cells of 256 x 256 make a whole-series
-    block 25 MB, well above tracing noise and per-timestep bookkeeping."""
+    block 25 MB, well above tracing noise and per-timestep bookkeeping.
+
+    One cell is in flight (`workers=1`). The traced peak is what the encoder's threads hold at
+    one instant, and with the default four cells in flight, how many of them reach their
+    largest buffers together changes from run to run: a spread of 1.2 to 1.5 MB (16 cores, 4
+    cores), as large as the 10 % bound (3.4 to 3.9 MB). The 16 slabs of 96 timesteps also draw
+    that maximum eight times as often as the 2 slabs of 12, so the long run's peak is biased up
+    and the test failed on about one run in ten, with or without other tests before it. With
+    one cell the growth is 0.2 MB."""
     cs = 256
     step = BANDS * cs * cs * 2
 
@@ -197,7 +205,9 @@ def test_peak_python_memory_does_not_grow_with_the_series(monkeypatch, tmp_path)
         da = make_da(make_truth(n_time, BANDS, 2 * cs, 2 * cs), ["b0", "b1"])
         monkeypatch.setattr(_writer, "SLAB_BYTES", steps * step)
         tracemalloc.start()
-        chronozarr.encode(da, tmp_path / f"t{n_time}-{steps}", chunk_size=cs, volatility=True)
+        chronozarr.encode(
+            da, tmp_path / f"t{n_time}-{steps}", chunk_size=cs, volatility=True, workers=1
+        )
         _, traced = tracemalloc.get_traced_memory()
         tracemalloc.stop()
         return traced
@@ -206,8 +216,8 @@ def test_peak_python_memory_does_not_grow_with_the_series(monkeypatch, tmp_path)
     short, long = peak(12, 6), peak(96, 6)
     one_slab = peak(96, 10**6)
     # In one slab the traced peak grows by many whole-series copies from 12 to 96 timesteps;
-    # with slabs it may grow by tracing noise from earlier tests, but by far less.
-    # Peaks include whatever earlier tests left traced, so compare growth, not levels: one slab
-    # holds at least the 84 extra timesteps of a cell, slabs a small fraction of that.
+    # with slabs it grows by per-timestep bookkeeping only, by far less.
+    # Every peak holds the encoder's fixed footprint (7 MB), so compare growth, not levels: one
+    # slab holds at least the 84 extra timesteps of a cell, slabs a small fraction of that.
     assert one_slab - short > 84 * step, (short, long, one_slab)
     assert long - short < 0.1 * (one_slab - short), (short, long, one_slab)
