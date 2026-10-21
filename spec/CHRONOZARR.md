@@ -37,7 +37,7 @@ The upstream sections in the table define these mechanisms. Later sections give 
 | Byte order for one-byte element types | B, Configuration / endian. |
 | Consolidated discovery and its recommendation | M, Consolidated Metadata. The reader fallback is in §9.2. |
 | Six affine coefficients, coefficient ordering and index-to-coordinate corner interpretation | S, spatial:transform / Coordinate convention / Coefficient ordering. North-up and factor-two restrictions are in §§2.3 and 3.3. |
-| Shard index representation, index checksums, index placement, empty entries, absent-shard fill and omission of all-fill shards | I, Index, Index location and Empty chunks. Profile interoperability choices are in §7.2. |
+| Shard index representation, index checksums, index placement, empty entries, absent-shard fill and omission of all-fill shards | I, Index, Index location and Empty chunks. Profile interoperability choices are in §7.2. §2.1 recommends that writers store all-fill shards. |
 | Node metadata representation and naming | Z, Stored representation; Array metadata; Group metadata. |
 | Standard shard decoding and array bounds | I, Decoding; Z, Array metadata / shape and Chunk grids. Profile access and missing-data interpretation are in §§4, 7 and 9. |
 
@@ -91,6 +91,8 @@ The root MUST contain consecutive level groups named `"0"`, `"1"` and so on, wit
 `cs` MUST be a positive even integer, identical at every level, with equal row and column chunk sizes. Writers SHOULD use 256 or 512, with 512 the default. Readers MUST accept other positive even sizes, including small test fixtures. Readers MUST derive `cs` from the data array's spatial inner chunk dimensions (indices 2 and 3), using I's inner `chunk_shape` when sharded. They MUST NOT derive `cs` from multiscales metadata or assume 256 or 512. Every data chunk MUST hold all bands of one timestep of one cell. The band chunk index is 0.
 
 At level `k`, cell `(r,c)` is the spatial slice `[r*cs:(r+1)*cs, c*cs:(c+1)*cs]` for any timestep and band. Row 0 is the north edge. The cell grid MUST equal `[ceil(H_k/cs), ceil(W_k/cs)]`. Elements that the upstream chunk representation uses as out-of-shape padding MUST equal the ordinary `fill_value`. §0.2 governs edge extent and bounds handling.
+
+Writers SHOULD store every chunk of the data, mask and coverage arrays, all-fill chunks included, and with sharding every shard, although Z and I let them omit one. A reader requests each chunk of the cells it shows. An absent key costs a request that ends in 404, which browsers log as an error, and a CDN that does not cache 404 answers passes every such request to the origin. Readers MUST still read an absent chunk or shard as `fill_value`, as Z and I define, because other writers and earlier stores omit them. An append does not write the chunks of existing timesteps (§8.3), so an absent one stays absent.
 
 ### 2.2 Coordinates and dimensions
 
@@ -305,6 +307,8 @@ Timestep `t` belongs to time shard `ts=floor(t/shard_time)` at inner timestep `t
 
 A writer SHOULD choose `shard_time` so no object exceeds the intended host or CDN cache or range-serving limit, and a whole-object miss is tolerable. A CDN may retrieve a whole large shard for a small index range. [evidence.md](../docs/evidence.md#layout-choice) has the measurements. For appendable stores, unsharded storage SHOULD be used. If object count justifies sharding, writers SHOULD choose a finite interval, e.g. 12 for monthly data, instead of automatically using an entire long archive. Whole-axis sharding is appropriate for archives that will not be appended. An append rewrites the shard receiving new timesteps (§8.3).
 
+This paragraph is informative. Writing every chunk (§2.1) stores all-fill inner chunks in a shard, where I lets a writer mark them empty in the index. A reader then makes one small range read for each all-fill inner chunk it shows, where an empty index entry costs none. On a sharded store whose cells were 69 % empty, a timestep switch over 64 cells took 64 requests in the JavaScript reader, against 8 when the empty cells had no shard ([evidence.md](../docs/evidence.md#every-chunk-written-2026-10-20)).
+
 ### 7.2 Index access, cache and byte-length hints
 
 The index representation, checksum, placement semantics and missing or empty chunk rules are those of I, Index / Index location / Empty chunks (§0.2). Writers SHOULD use `index_location: "end"` for tested browser interoperability. Readers MUST support both upstream index locations. They MUST cache indices per shard. They MUST reuse one array handle per level, so an implementation's per-array index cache stays effective.
@@ -507,6 +511,7 @@ Every 0.3.0 store remains valid. A reader of this document opens it unchanged.
 | `spec_version` is `"0.3.0"`, and a reader rejects anything else. | Readers also accept `0.3.x` and `0.4.x`, and report a version they do not know. | §§3.2, 9.1. |
 | Writers MUST write `band_names`, `levels` and the level-group `transform` and `resolution`. | SHOULD. Readers take them from `bands`, the layout and the arrays. A validator reports an absent one as a note. | §§3.2–3.4. |
 | Every array MUST declare `_ARRAY_DIMENSIONS`, and the coordinate arrays and the CF attributes of `time` MUST be present. | SHOULD. `dimension_names` stay required. A coordinate array or CF attribute that is present MUST still be correct. | §§2.1, 2.2. |
+| A writer may omit an all-fill chunk or shard, as Z and I allow. | Writers SHOULD store every chunk and shard, all-fill ones included. Readers MUST still read an absent one as fill. | §2.1. |
 
 ### Changes from 0.2
 

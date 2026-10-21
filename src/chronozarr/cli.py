@@ -54,7 +54,7 @@ from chronozarr.encode import EncodeReport, encode
 from chronozarr.export import export_cog, select_times
 from chronozarr.place import check_xy, lonlat_to_xy
 from chronozarr.schema import Band, SchemaError, validate_report
-from chronozarr.share import share
+from chronozarr.share import share, wait_for_address
 from chronozarr.stac import write_stac
 from chronozarr.store import redact_url
 from chronozarr.view import (
@@ -1500,6 +1500,7 @@ def link_command(
     if lon_lat is not None and store_xy is not None:
         raise click.UsageError("--lonlat and --xy both set the centre of the map: give one")
     with _command_errors():
+        wait_for_address(store_url, lambda line: click.echo(line, err=True))
         opened = open_store(store_url)
         bands = opened.attrs.bands
         statuses = {s.id: s for s in product_status(bands)}

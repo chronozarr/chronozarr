@@ -190,7 +190,7 @@ await chronozarr.scrubBench()
 await chronozarr.interactionBench()
 ```
 
-Headless, with software WebGL, against a local fixture: `node scripts/audit_browser.mjs js data/spike/stress6x6 data/reports/browser-bench.json` ([CONTRIBUTING.md](../CONTRIBUTING.md)). Codec sizes and decode: `js/support/codec-bench/` and `scripts/bench_codecs.py`. Delivery comparison with zarr-layer and COG: `node bench/v03/run.mjs` (several hours; needs Docker and a local copy of the store; see [bench/v03/README.md](../bench/v03/README.md)). Value check against independent readers: `node bench/v03/values.mjs`.
+Headless, with software WebGL, the viewer of two commits against each other on a generated 36-cell store: `node js/support/gate-bench/run.mjs` ([CONTRIBUTING.md](../CONTRIBUTING.md)); the Speed gates workflow runs it on every pull request that changes `js/`. Codec sizes and decode: `js/support/codec-bench/` and `scripts/bench_codecs.py`. Delivery comparison with zarr-layer and COG: `node bench/v03/run.mjs` (several hours; needs Docker and a local copy of the store; see [bench/v03/README.md](../bench/v03/README.md)). Value check against independent readers: `node bench/v03/values.mjs`.
 
 Ingestion, from the repository root:
 

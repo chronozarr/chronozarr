@@ -22,6 +22,7 @@ This file holds measurements, tested versions, dates and caveats. User docs link
 - [Newcomer measures after the fixes (2026-10-20)](#newcomer-measures-after-the-fixes-2026-10-20)
 - [Readers that decode (2026-10-19)](#readers-that-decode-2026-10-19)
 - [Stores written by other tools (2026-10-19)](#stores-written-by-other-tools-2026-10-19)
+- [Every chunk written (2026-10-20)](#every-chunk-written-2026-10-20)
 - [Sentinel-2 ingest performance](#sentinel-2-ingest-performance)
 
 ## Reader checks
@@ -113,7 +114,7 @@ Viewer on the v0.1 Sahara store (128 months, 4 bands, 6 x 6 cells at LOD 0, 3.9 
 | Cold open to first complete frame | 257 ms, 109 requests, 43.8 MB | 475 ms median, 109 requests, 35.2 MB |
 | Cold open without consolidated metadata | 256 ms | 556 to 1478 ms |
 | Warm timestep switch, stepping (median / p95) | 3.5 / 15 ms | 6.3 / 19 ms |
-| Warm switch wire bytes and requests | 0 / 0 | 0 / 0 |
+| Warm switch wire bytes and requests, counted inside each switch, where no response can arrive ([Speed gates in CI](#speed-gates-in-ci-2026-10-20)) | 0 / 0 | 0 / 0 |
 | Product switch | about 1 ms | under 1 ms |
 | Decode per 2 MB chunk | 4.6 ms | 10 ms under load (4.5 ms idle) |
 
@@ -127,6 +128,46 @@ The deployed viewer at chronozarr.org/demo/ opened the public store `ucayali_san
 | Cold (every object a MISS) | 223 ms | 404 ms (370 to 506) | 656 ms (548 to 758) | 981 ms (788 to 1109) |
 
 Medians, with the range in brackets. Each open read 11 requests and 11.0 MB: the metadata and nine level-1 chunks. The laptop ran on battery, which capped animation frames at 30 Hz, so each paint can be up to 33 ms late. The load average was 8 to 10 on 16 cores. Page, script and codec-module load are not included.
+
+### Speed gates in CI (2026-10-20)
+
+The workflow `.github/workflows/speed-gates.yml` runs on every pull request that changes `js/`. It builds the viewer of the pull request and of its base (`js/support/build-viewer.mjs`), writes a store of 36 cells (`js/support/gate-bench/store.mjs`: 6 x 6 chunks of 512 x 512 at level 0, 4 bands, 8 timesteps, zstd level 5, 1.39 to 1.41 MB per chunk, as the Ucayali chunks), and measures both builds with `js/support/gate-bench/run.mjs`: headless Chromium with SwiftShader at 1280 x 720, a new browser per run, one warm-up pair, then 5 pairs whose order alternates. Each run takes 5 cold opens at level 0 and the decode per chunk from `chronozarr.bench()`. That decode runs on the main thread (`workers: 0`), so a regression in the decode workers or their pool reaches the job only through the cold open: in the review of pull request #134, a decode twice as slow in the workers alone passed with 8 workers and failed with 4 (cold open +29 %). Then every chunk of level 0 is loaded, and the runner times 20 steps (120 ms apart) and 20 jumps from `goToTime` to the frame finished on the GPU, while the data server and the reader count requests and bytes. The job fails when the median over the pairs of head / base exceeds a metric's tolerance and the medians differ by more than its floor (20 ms for the cold open, 2 ms for a switch, 0.2 ms for a decode), or when a warm switch of the head makes any request. The step summary gives both builds' figures. A job takes 7 to 10 minutes.
+
+The job measures warm switches itself because `bench()` does not establish them on 36 cells. It prefetches no more than the idle allowance (32 MiB) before its warm loops, so its first steps draw incomplete frames and fetch what they miss: 7 of 20 frames per run on this store. `bench()` used to count the requests and bytes of a warm loop inside each switch. A switch is synchronous, so no response could arrive in that window, and it reported 0 bytes; its request count, taken when a request starts, caught what a switch started at once (60 to 74 requests per run) but not what it scheduled. The figures below that give only `bench()`'s wire bytes on a warm switch (2026-10-18 and 2026-10-19) do not establish that gate.
+
+`bench()` now counts each warm loop from before its first switch until 1 s after its last, as the runner counts its own, and then until no request is in flight (10 s at most; `inflightAtEnd` gives what was still on the way). `js/e2e/viewer-bench.spec.js` checks this on a store larger than the idle allowance, also with every chunk response 400 ms late, and checks that the loops count nothing on a store the prefetch holds. On this store the stepping loop (10 steps) then reports 228 to 255 requests and 320.7 to 329.1 MB, where the old count gave 55 to 68 requests and 0 bytes; the level-0 chunks the prefetch had not loaded are 228 and 320.7 MB. Its jumps and its switches from the decoded cache fetch nothing (one run of the old count gave 6 requests in its jumps). Both built viewers alternated, 3 runs each, SwiftShader, 2026-10-21, load 16 to 18. Each loop now ends with that wait, so the jumping loop and the loop from the decoded cache start at least 1 s later than before, with more of the earlier loop's chunks in memory: their medians and incomplete frames are not comparable with figures recorded before this change.
+
+Noise of the comparison on GitHub's runners, with the same build as base and head: on a temporary branch, 6 jobs of 6 pairs, then 6 jobs of 5 pairs with 5 cold opens per run (the job as it is); then the job's 3 runs on pull requests #134 and #138, whose changes do not reach the code it times (15 pairs). The cold-open column counts only runs with 5 cold opens: with 3, one pair's cold-open ratio ranged from 0.70 to 1.59, hence 5.
+
+| Head / base, same build | Cold open | Warm step | Warm jump | Decode |
+|---|---|---|---|---|
+| Median of a job's pairs, range over the jobs | 0.974 to 1.060 (9 jobs) | 0.996 to 1.008 (15) | 0.961 to 1.017 (15) | 0.995 to 1.013 (15) |
+| One pair, range | 0.84 to 1.19 (45 pairs) | 0.96 to 1.04 (81) | 0.89 to 1.09 (81) | 0.91 to 1.06 (81) |
+| Tolerance | +15 % | +10 % | +10 % | +5 % |
+
+The verdict is the median of 5 pair ratios, so a metric fails only when at least 3 of the 5 pairs are above its tolerance. One slow pair does not fail it: the first run on #134 had a cold-open pair at 1.19, with the other four at 0.93 to 1.03. The cold open varies most from job to job: in one job the head's cold open was 4 to 6 % slower than the base's in all 5 pairs, with identical builds. The worst job medians are +6.0 % for the cold open, +1.7 % for a switch and +1.3 % for the decode, against tolerances of 15, 10 and 5 %. The decode is held tighter than its noise requires because its gate has little headroom (4.3 to 4.8 ms measured against 5 ms).
+
+Regressions injected into the head, one job each:
+
+| Injected | Flagged |
+|---|---|
+| 100 ms added to `loadStore` after the metadata, and a 1.5 ms busy wait after each chunk decode | cold open +16 %, decode +16 % |
+| A 10 ms busy wait in `renderNow`, and a request for the root `zarr.json` in every `goToTime` | warm step +30 %, warm jump +34 %; 205 requests reached the data server in the head's warm loops |
+
+A regression exactly at the tolerance has a median ratio at the tolerance, so it fails about half the jobs; the cold open, with pairs spread 0.84 to 1.19, is seen reliably from about 20 %. The injected 100 ms is +14 % on the slowest runner type (cold open 700 ms) and +21 % on the fastest, so it would pass on the first.
+
+The runner's own figures, base medians per job, depend on the CPU it gets (4 vCPUs, 16 GB):
+
+| CPU | Jobs | Cold open | Warm step | Warm jump | Decode per chunk |
+|---|---:|---|---|---|---|
+| AMD EPYC 9V45 | 4 | 451 to 504 ms | 30 to 33 ms | 29 to 32 ms | 5.5 to 5.9 ms |
+| AMD EPYC 9V74 | 4 | 513 to 639 ms | 48 to 60 ms | 47 to 59 ms | 7.4 to 9.5 ms |
+| AMD EPYC 7763 | 5 | 658 to 707 ms | 64 ms | 63 to 64 ms | 9.5 to 9.9 ms |
+| Intel Xeon Platinum 8573C | 2 | 619 to 673 ms | 48 to 49 ms | 54 to 55 ms | 9.3 to 9.5 ms |
+
+SwiftShader draws on the CPU, so a warm switch costs 30 to 64 ms there against 3 to 5 ms on a GPU. These are not the gates' figures; the job compares them with the base in the same job.
+
+On a laptop that other work loads, the same comparison is noisier: on the M3 Max at load 6 to 15, SwiftShader steps took 3 ms or 13 ms in stretches, so one run's step median moved between 3 and 14 ms with the same build. Local before-and-after checks need a quiet machine.
 
 ### Scrub latency
 
@@ -668,7 +709,7 @@ Playback for 60 s at the default 4 steps per second, 2026-10-18, three runs each
 | Cold open ≤ 500 ms, level 0, 36 cells | about 1.4 s (5 runs) from Chapel Hill; first whole frame 549 ms cold, 456 ms warm | no |
 | Warm switch ≤ 16 ms | 2.2 to 2.5 ms p50, but 29 or 30 of 30 frames were incomplete: the 36-cell, 117-step working set does not fit | not established |
 | Decode ≤ 5 ms per chunk | 5.8 ms p50 at load 9, 8.0 ms at load 21 | not established under load |
-| 0 wire bytes on a warm switch | 0 bytes in all three warm loops | yes |
+| 0 wire bytes on a warm switch | 0 bytes in all three warm loops, counted inside each switch, where no response can arrive ([Speed gates in CI](#speed-gates-in-ci-2026-10-20)) | not established |
 
 ### Cold open with the viewer bundled (2026-10-19)
 
@@ -698,7 +739,7 @@ What the 5 sequential requests are now: the page, `catalog.json`, the root `zarr
 
 Two more changes follow from making the script and the workers load in one round trip. A decode worker used to take about seven round trips to start, so the main thread decoded every chunk of the first frame; now a worker starts in one, and a worker that said `ready` before its codec had loaded held the first chunk (one run at 200 ms: 2.5 s to the first frame, against 1.1 s with the change below). A worker now says `ready` after the codecs of the store's arrays have loaded, and the main-thread decoder that serves jobs until then loads them while the first chunk downloads. And the root metadata read, made before the viewer script ran, no longer shows the viewer a round trip: the viewer paces its coarse stages by the time that read took, which the page now reports (`e2e/viewer-coarse.spec.js` failed until it did).
 
-The speed gates above, run on both builds with the viewer's `bench()` against the same local store (3 runs per build, alternating; 1-minute load average 9 to 10 at the start): cold open at level 0, 36 cells, from the `loadStore` call, median of 5 per run, 120 to 123 ms before and 121 to 133 ms after (gate 500 ms); warm switch 4.3 to 5.2 ms before and 3.6 to 4.1 ms after (gate 16 ms), 0 wire bytes in all six runs; decode 4.4 to 4.6 ms before and 4.3 to 4.6 ms after per 2 MB chunk (gate 5 ms). Movie playback, 30 s at 4 steps per second, unthrottled, 3 runs per build: 120 of 120 steps shown on time and no buffering pause in all six.
+The speed gates above, run on both builds with the viewer's `bench()` against the same local store (3 runs per build, alternating; 1-minute load average 9 to 10 at the start): cold open at level 0, 36 cells, from the `loadStore` call, median of 5 per run, 120 to 123 ms before and 121 to 133 ms after (gate 500 ms); warm switch 4.3 to 5.2 ms before and 3.6 to 4.1 ms after (gate 16 ms), 0 wire bytes in all six runs as counted inside each switch, where no response can arrive ([Speed gates in CI](#speed-gates-in-ci-2026-10-20)); decode 4.4 to 4.6 ms before and 4.3 to 4.6 ms after per 2 MB chunk (gate 5 ms). Movie playback, 30 s at 4 steps per second, unthrottled, 3 runs per build: 120 of 120 steps shown on time and no buffering pause in all six.
 
 Not measured: the deployed site (the sweep is local, so the connection set-up of the data host, which the page now starts at once, is not in it), a repeat visit with the cache on, and Safari and Firefox. The gate "cold open ≤ 500 ms" is read from a call to `loadStore`, as `bench()` does, not from navigation.
 
@@ -759,10 +800,32 @@ Speed gates, `chronozarr.bench()` 3 runs each (load 5 to 7):
 | Warm switch, stepping, p50 (≤ 16 ms) | 4.4 to 4.8 ms (3, 25 and 12 of 30 frames incomplete) | 4.7 to 5.1 ms (3, 3 and 6 incomplete) |
 | Warm switch, jumping, p50 | 1.3 to 1.6 ms | 1.4 to 1.6 ms |
 | Upload from the decoded cache, p50 | 11.4 to 11.8 ms | 11.0 to 12.2 ms |
-| Wire bytes on a warm switch (0) | 0 | 0 |
+| Wire bytes on a warm switch (0), counted inside each switch, where no response can arrive ([Speed gates in CI](#speed-gates-in-ci-2026-10-20)) | 0 | 0 |
 | Decode per 2 MiB chunk, p50 (≤ 5 ms) | 4.2 to 4.3 ms | 4.2 to 4.5 ms |
 
 After the fix above the gates were run again on the built viewers, before and after alternated, but another job had loaded the machine (load average 265 to 314 on 16 cores): the warm step took 2.0 to 2.3 ms and the decode 5.5 to 5.7 ms in both, the upload from the cache 15.6 to 16.6 ms in both, and no warm switch used the network. At that load the 16 ms and 5 ms gates cannot be established, and the two builds do not differ.
+
+The gates of `main` after that change (b058d7d), 2026-10-20. The machine was never quiet: from 14:57 to 17:58 the 1-minute load never fell below 4 (4.7 at the lowest, above 100 several times, from other sessions' builds), so the runs started once it fell below 8, at 17:59, and the load was 6.6 to 10.9 during them. Two methods: `scripts/fieldperf/bench_gates.mjs` as for the figures above (the built viewer, the local Ucayali store, Metal, 1440 x 900 at pixel ratio 2, 3 runs), and the gate runner of [Speed gates in CI](#speed-gates-in-ci-2026-10-20) on the GPU (`run.mjs --gpu metal`, `main` against itself, the 36-cell store with all 288 level-0 chunks in memory before the warm switches, 1280 x 720, 8 runs of which 6 count).
+
+| Gate | `bench()`, Ucayali, 3 runs | Gate runner, GPU, 6 runs | Holds |
+|---|---|---|---|
+| Cold open ≤ 500 ms, level 0, 36 cells (median of 5 per run) | 122, 126 and 134 ms | 138 to 143 ms | yes |
+| Warm switch ≤ 16 ms, stepping | 4.9 ms p50 in each run, 3 or 4 of 30 frames incomplete | 4.0 to 11.0 ms p50 per run; 120 steps: 4.5 ms p50, 17.7 ms p95, 10 over 16 ms; every frame complete | yes at the median |
+| Warm switch, jumping | 1.1 to 1.2 ms p50, but 28 of 30 frames incomplete | 7.8 to 9.1 ms p50 per run; 120 jumps: 8.5 ms p50, 22.7 ms p95 | yes at the median |
+| Decode ≤ 5 ms per chunk (p50) | 4.3 ms in each run | 4.5 to 4.6 ms | yes |
+| 0 wire bytes on a warm switch | reported 0 bytes, counted inside each switch: 18 to 24 requests in its stepping loops and 6 to 9 in its jumps (counted over each loop, 1.72 GB: below) | 0 requests at the data server, 0 requests and 0 bytes in the reader, over 240 switches | yes, by the gate runner |
+
+`bench()`'s jumps are fast because most of its frames are incomplete, which skips the cells it lacks; with every chunk in memory a jump uploads the cells of a timestep outside the GPU window and takes 8.5 ms. No percentile is written into the 16 ms gate: the medians hold it and the 95th percentiles (17.7 and 22.7 ms) do not. This load is that of the earlier figures (5 to 10), not a quiet machine: the run should be repeated on one, which may give lower figures.
+
+`bench_gates.mjs` again on the same store, with `bench()` counting each warm loop over the whole loop and until no request is in flight after it ([Speed gates in CI](#speed-gates-in-ci-2026-10-20)): the built viewer with and without that change alternated, 3 runs each, 2026-10-21, load 11.9 to 14.9. Before the loops the idle prefetch had loaded 31 chunks in both. The store's level 0 is 36 chunks per step over 117 steps, so these loops switch while chunks are still arriving:
+
+| Warm loop of `bench()` | Counted inside each switch | Counted over the loop |
+|---|---|---|
+| Stepping, 30 steps | 17 to 46 requests, 0 bytes; 4 to 11 frames incomplete | 1,487 requests, 1.72 GB; 4 frames incomplete |
+| Jumping, 30 jumps | 7 to 9 requests, 0 bytes; 28 to 30 incomplete | 522 or 785 requests, 0.58 to 0.88 GB; 24 incomplete |
+| From the decoded cache, 30 jumps | 0 requests, 0 bytes; 19 to 21 incomplete | 522 or 785 requests, 0.61 to 0.91 GB; 24 or 25 incomplete |
+
+Every loop ended with no request in flight. A `bench()` run took 15 to 17 s, against 10 s with the old count.
 
 On the built viewer (the page bundled, `CHRONOZARR_E2E_BUILT_VIEWER=1`), the slow-link browser test (a store of 12 steps of 524 KB at 1 MB/s and 50 ms) paused twice where it allows one, and passed on the sources. Both open with the same five store requests (2,100,777 bytes), so the early reads of the page are not what differed. The build's first bandwidth estimate was 876 KB/s where the sources read 686 KB/s, because its page no longer shares the throttled link with about 60 modules. The speculative jobs (the coarse loop and the movie's prefetch) had each sized their workers once, at their start, as the estimate over the chunk size (421 KB then, the real chunk is 524 KB): 2 each on the build, 1 each on the sources. With the playback buffer's batch of three that was 5 to 7 requests in flight on the build and 3 or 4 on the sources, and the frame the playhead reached first was one of the requests that shared the link five ways (the four frames after the first three arrived together 4.7 s after play, where on the sources they came in from 3.5 s). Six runs on each of the sources and the build, counting the pauses of the first 14 s after play:
 
@@ -837,7 +900,7 @@ The ten sessions of the baseline (sessions 1, 22, 3, 4, 5, 26, 7, 8, 9, 10), rep
 
 All 30 tasks were done in both runs, and the recipient saw the chosen date every time. Sessions that wrote their own conversion code went from 5 (and one hand-written manifest) to 0. The minutes changed little: the agent writes code at machine speed, so the code it no longer writes is the measure that matters. The containers' packages are the baseline's versions, and the site was served from this machine, so the recipient's first-frame times are not comparable.
 
-Seen in the sessions and not yet changed: a local `preview` logs 404 console errors for chunks a store does not have (78 in one session), `chronozarr link` run at once after `share` failed once until the tunnel's address resolved, and a lookup in xarray by a longitude from -180 to 180 on a store kept at 0 to 360 still returns an edge column.
+Seen in the sessions and not yet changed: a local `preview` logs 404 console errors for chunks a store does not have (78 in one session), `chronozarr link` run at once after `share` failed once until the tunnel's address resolved, and a lookup in xarray by a longitude from -180 to 180 on a store kept at 0 to 360 still returns an edge column. The first two were changed afterwards: see [Every chunk written](#every-chunk-written-2026-10-20) and [`link` before the address works](#link-before-the-address-works-2026-10-20).
 
 ### Viewer
 
@@ -853,7 +916,7 @@ Measured locally, as the sections above give in full: [Cold open with the viewer
 
 The byte and playback figures were measured with the first version of the bandwidth change. Its final version caps the speculative requests of all jobs together and sets the playback speed per missing frame; it had no pause in 6 runs of the slow-link test on the sources and 6 on the bundled viewer.
 
-Speed gates, last measured on a lightly loaded machine: with the bundled viewer (load 9 to 10), cold open 121 to 133 ms from the store load call, warm switch 3.6 to 4.1 ms, decode 4.3 to 4.6 ms per chunk and 0 wire bytes on a warm switch; with the first version of the bandwidth change (load 5 to 7), warm switch 4.7 to 5.1 ms and decode 4.2 to 4.5 ms. During the final change the machine was at load 190 to 315 from other work: before and after, alternated under that load, gave the same figures, so the change did not move them, but the gates were not measured again. The deployed site was not measured, because nothing has been deployed since 0.4.1.
+Speed gates, last measured on a lightly loaded machine: with the bundled viewer (load 9 to 10), cold open 121 to 133 ms from the store load call, warm switch 3.6 to 4.1 ms and decode 4.3 to 4.6 ms per chunk (its 0 wire bytes on a warm switch were counted where no response can arrive); with the first version of the bandwidth change (load 5 to 7), warm switch 4.7 to 5.1 ms and decode 4.2 to 4.5 ms. During the final change the machine was at load 190 to 315 from other work: before and after, alternated under that load, gave the same figures, so the change did not move them. Measured again on `main` afterwards at load 6.6 to 10.9 (the machine did not fall below load 4 in three hours): cold open 122 to 143 ms, warm step 4.5 ms p50 with every chunk in memory, decode 4.3 to 4.6 ms, and no request from a warm switch over 240 switches ([the gates of `main`](#speculative-bandwidth-and-playback-on-a-slow-link-2026-10-19), last table). The deployed site was not measured, because nothing has been deployed since 0.4.1.
 
 ## Temporary sharing
 
@@ -871,6 +934,12 @@ trycloudflare.com has a negative TTL of 60 s (SOA minimum). A lookup made before
 
 In every run the recipient read `zarr.json` through the address (200, `Access-Control-Allow-Origin: *`), Ctrl-C printed `stopped` with exit status 0, no cloudflared process remained, and the address then answered HTTP 530.
 
+### `link` before the address works (2026-10-20)
+
+In newcomer session 207, `chronozarr link` on the address ran about 10 s after `share` printed it, before `share`'s own first lookup, and failed with `Name or service not known`. The cached answer then held `share`'s wait for about a minute: its next stage came 70 to 90 s after the address, against 21 s in the measurements above. `link` now waits up to 90 s for a quick-tunnel address that does not resolve yet, and `share`'s waiting line says to use the address after its `open:` line.
+
+On this laptop on 2026-10-20 (cloudflared 2026.10.0), `link` run 2 s after the address appeared resolved it at once, so the failure did not recur here. The address worked 20 s after `share` started, and `open:` came at 80 s: the doctor check through the tunnel took 60 s, against 4 s for the same check on the local server (about 2 s since [the browser check reads the served folder from disk](#browser-check-through-the-tunnel-2026-10-20)).
+
 ### Browser check through the tunnel (2026-10-20)
 
 `chronozarr share` on the WorldClim tmax store (`chronozarr convert` of `data/corpus/worldclim-tmax-monthly/raw`: 24 months, 1 band, 1080 x 2160 px, 4 levels, a mask plane, 813 objects, 27.4 MB), with cloudflared on a laptop and a home connection, load 4 to 12. "Doctor" is the time from `checking browser access...` to `measuring first transfer...`, the doctor run through the new address.
@@ -886,7 +955,7 @@ Before, each request of that doctor run timed through a live tunnel:
 
 A request through the tunnel took 240 ms on average. Of the 688 validate requests, 576 read the mask: the check that a mask holds only 0 and 1 reads every timestep at every level, one timestep after another. The other 112 read metadata objects and coordinate arrays: validation opens the store without its consolidated metadata, so it reads every `zarr.json`, several of them more than once.
 
-Now `share` validates the folder it serves from disk: 0.3 s for this store, and the tunnel has just returned the root `zarr.json` of that folder byte for byte. CORS, byte ranges, the suffix range, the preflight, HEAD and a decoded cell per level still go through the tunnel. doctor also sends the probes that do not depend on each other at the same time (3 round trips, was 7) and decodes the levels at the same time (4 round trips, was 16). Through the tunnel the doctor run made 24 requests in 2.3 s.
+Now `share` validates the folder it serves from disk: 0.3 s for this store, and the tunnel has just returned the root `zarr.json` of that folder byte for byte. CORS, byte ranges, the suffix range, the preflight, HEAD and a decoded cell per level still go through the tunnel. These are no longer read through the tunnel: the mask, coverage and coordinate arrays (metadata and chunks) and the `zarr.json` of the level groups. The same server serves them from the folder that was validated. doctor also sends the probes that do not depend on each other at the same time (3 round trips, was 7) and decodes the levels at the same time (4 round trips, was 16). Through the tunnel the doctor run made 24 requests in 2.3 s.
 
 | Code | Address works | Doctor | Link printed |
 |---|---:|---:|---:|
@@ -978,6 +1047,49 @@ The same probe as in [Readers that decode](#readers-that-decode-2026-10-19) ran 
 | `f2_chunks_time_multi`, `f3_chunks_band_split`, `f4_chunks_nonsquare`, `f5_chunks_odd_size` | refused | opens; values equal; `validate` still fails on the chunk layout |
 
 37 of 43 copies open now, against 22 on main. The 6 that still refuse have a `chronozarr` block that is incomplete or not north-up: bands as plain strings, no `bands`, no `times`, no `nodata`, and the rotated and south-up grids. The reader does not fall back to the layout for them, because that would drop the scale and the mask the block declares.
+
+## Every chunk written (2026-10-20)
+
+In newcomer sessions 201 and 204, a local `preview` logged 78 and 13 console errors, `Failed to load resource: the server responded with a status of 404`. The local server answered each absent chunk with `404` and the CORS headers, and the reader read it as fill, as it should. Chromium logs every response with a 4xx status as a console error, and a page cannot stop it. The deployed host does the same: an absent key on data.chronozarr.org logged the same error in Chromium. Session 201's recipient saw no error because its view, zoom 4 over Phoenix through the tunnel to the same local server, needed no absent chunk.
+
+The chunks were absent because the writer left out every chunk that holds only fill, as zarr-python does by default. In the WorldClim store of session 201 (2160 x 1080, 24 months) that is the bottom row of cells at levels 0 and 1, south of 80.7° S, where WorldClim has no data: 384 of 1,152 data and mask chunks. The writer now stores every chunk (spec §2.1, a SHOULD). Readers still read an absent chunk as fill, because stores written before and by other tools have them.
+
+Cost, from `chronozarr convert` on main at `b9b7df6` and on the branch, alternated, two runs each, on this laptop at load 7 to 12. `publish` uploads every file, so the file count is also the upload object count.
+
+| Corpus dataset | Files, main / branch | Bytes added | Write time, main / branch |
+|---|---:|---:|---:|
+| WorldClim tmax 10', 24 months | 813 / 1,197 | 14,592 (0.05 %) | 3.7 to 3.9 s / 3.1 to 3.2 s |
+| CHIRPS Africa monthly, 24 months, `--nodata=-9999` | 391 / 439 | 5,184 | 2.8 s / 2.6 to 2.7 s |
+| MODIS 13A1 NDVI, 23 dates (session 204's data) | 869 / 938 | 4,002 | 4.0 s / 3.9 to 4.0 s |
+| NSIDC sea ice south monthly, `--nodata 2540` | 16 / 16 | 0 | 2.1 s / 2.1 s |
+| NSIDC sea ice north daily, `--nodata 2540` | 331 / 331 | 0 | 3.0 to 3.1 s / 2.9 to 3.0 s |
+| OISST daily 2020, NaN over land | 744 / 744 | 0 | 4.5 to 4.6 s / 3.9 to 4.1 s |
+
+An all-fill chunk is 50 bytes for a 512 px float32 band and 26 bytes for a mask. A store changes only where a whole 512 px cell holds no valid pixel: the NSIDC and OISST grids have none, although land or ocean covers much of them. The object count grows by the share of such cells, here up to 47 %. Writing was no slower: zarr-python no longer compares each chunk with the fill value before it writes it.
+
+The worst case is a store that is mostly empty. A synthetic store of 8192 by 4096 pixels, 24 timesteps and one uint16 band, whose 11 western cell columns hold only nodata (88 of 128 level-0 cells, 69 %), written once by main and once by the branch on 2026-10-21 at load 13 to 14:
+
+| Layout | Files, main / branch | Payload added | Disk added |
+|---|---:|---:|---:|
+| Unsharded | 1,443 / 4,155 | 92,208 B | 11.1 MB |
+| Sharded, `shard_time` 8 | 225 / 564 | 145,116 B | 1.4 MB |
+
+The disk grows more than the payload because each file takes at least one 4 KB block. In the sharded store the branch also writes the all-fill inner chunks into each shard, and the JavaScript reader, which the viewer uses, makes one range read for each. With the shard indexes cached by the first timestep, a switch to the next timestep over 64 level-0 cells, 56 of them empty, took 8 requests on main's store, whose empty cells have no shard, and 64 on the branch's. The Python reader made 64 on both, because it asks for an absent shard again each time.
+
+The speed gates were not measured again for this change: the machine was at load 13 to 14 from other work. Run them on a quiet machine before the next release.
+
+The CDN answer, two requests each on 2026-10-20: an absent key of `ucayali_santa_maria_v03` answered `404` with `cf-cache-status: BYPASS` both times, and a chunk that exists answered `MISS`, then `HIT` (`max-age=31536000, immutable`). The zone's Cache Rule keeps `404` answers out of the cache, as the R2 recipe says ([Cache Rule](hosting-providers.md#cache-rule)), so every read of an absent chunk goes to the bucket, while a stored all-fill chunk is served from the edge after its first read.
+
+The viewer at the fit view of the WorldClim store, with main's bundled viewer under `chronozarr preview --viewer-dir`, three runs alternated per store:
+
+| Store written by | Console errors, first frame + 1.5 s | Console errors, after 5 s of playback |
+|---|---:|---:|
+| main | 6, 12, 12 | 102, 108, 108 |
+| the branch | 0, 0, 0 | 0, 0, 0 |
+
+Through `chronozarr share`, the branch's store at the fit view gave no console error and no response of 400 or more, at first frame and after 5 s of playback.
+
+Appending to a store written by main: `convert` on main wrote 2020 (429 files), the branch appended 2021. The append wrote 593 objects: all 576 chunk objects of the 12 new months and the metadata. The 384 chunk objects of 2020 kept their bytes, and the 192 chunk keys main had left out stayed absent. The store conforms to `chronozarr validate`, and its values and masks at every level and timestep equal a 24-month store written by the branch in one run.
 
 ## Sentinel-2 ingest performance
 

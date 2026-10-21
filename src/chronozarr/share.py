@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import contextlib
 import re
+import shlex
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -43,6 +45,9 @@ _READY_TIMEOUT_SECONDS = 90.0
 # cloudflared printed the address, but a lookup at once made the address work here only after 75 s.
 _FIRST_LOOKUP_SECONDS = 15.0
 _POLL_SECONDS = 0.2
+# How often `wait_for_address` asks this computer's resolver again. Until the negative answer
+# expires the resolver replies from its cache, so asking often brings the answer no sooner.
+_LOOKUP_POLL_SECONDS = 1.0
 _TUNNEL_LOG_LINES = 32
 
 
@@ -197,6 +202,49 @@ def _wait_for_public_store(
     )
 
 
+def wait_for_address(url: str, echo: Callable[[str], None]) -> None:
+    """Return once the host of a quick-tunnel `url` resolves on this computer, waiting as long as
+    `share` waits for a new address. Any other URL, and one that a proxy reaches, returns at once.
+    This waits for the name only: once it resolves, the tunnel can still answer an HTTP error for
+    a few seconds, which the reader retries for about 2 s.
+
+    An address that `share` has just printed may not be published yet, and a lookup that finds
+    nothing is cached for the 60 s negative TTL of trycloudflare.com: the name then fails here
+    for up to a minute after Cloudflare has published it.
+    """
+    parts = urllib.parse.urlsplit(url)
+    host = parts.hostname or ""
+    if not host.endswith(".trycloudflare.com") or host == "api.trycloudflare.com":
+        return
+    # Through a proxy the reader never looks the name up here (urllib asks the proxy), and this
+    # computer may not resolve names at all: the reader's own errors say what is wrong.
+    if parts.scheme in urllib.request.getproxies() and not urllib.request.proxy_bypass(host):
+        return
+    deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
+    told = False
+    while True:
+        try:
+            socket.getaddrinfo(host, None)
+            return
+        except socket.gaierror as exc:
+            reason = exc.strerror or str(exc)
+        if time.monotonic() >= deadline:
+            raise OSError(
+                f"{host} did not resolve within {_READY_TIMEOUT_SECONDS:.0f} seconds ({reason}). "
+                "A quick-tunnel address works only while the `chronozarr share` that printed it "
+                "runs: check that it still runs, and use the address of its open: line."
+            )
+        if not told:
+            echo(
+                f"{host} does not resolve yet ({reason}). A new quick-tunnel address works 15 to "
+                "30 seconds after `chronozarr share` prints it, and a lookup before then can keep "
+                f"it failing here for a minute: waiting up to {_READY_TIMEOUT_SECONDS:.0f} "
+                "seconds..."
+            )
+            told = True
+        time.sleep(_LOOKUP_POLL_SECONDS)
+
+
 @dataclass(frozen=True)
 class _CellMeasurement:
     """One real level-0 cell read through the tunnel, after reader metadata is open."""
@@ -256,8 +304,19 @@ def _first_chunk_measurement(store_url: str) -> _CellMeasurement:
     )
 
 
-def _doctor_passes(checks: list[Check]) -> bool:
-    return not any(check.status == "fail" for check in checks)
+def _doctor_failure(checks: list[Check], store: Path) -> str | None:
+    """Why no link is printed, or None. `validate` read the folder on disk, not the tunnel."""
+    failed = [check for check in checks if check.status == "fail"]
+    reasons = [
+        f"{store} does not pass chronozarr validate: {check.detail}. {check.hint} "
+        f"`chronozarr validate {shlex.quote(str(store))}` lists every problem."
+        for check in failed
+        if check.name == "validate"
+    ]
+    through_tunnel = [f"{c.name}: {c.detail}" for c in failed if c.name != "validate"]
+    if through_tunnel:
+        reasons.append(f"the tunnel did not pass chronozarr doctor: {'; '.join(through_tunnel)}")
+    return " ".join(reasons) or None
 
 
 def _wait_for_tunnel(tunnel: _Tunnel) -> int:
@@ -279,7 +338,10 @@ def share(
     """Serve ``store`` through one disposable Cloudflare quick tunnel until interrupted.
 
     The public viewer link is deliberately withheld until the tunnel returns the local store's
-    root metadata and ``chronozarr doctor`` reports no reader-breaking failures.
+    root metadata and ``chronozarr doctor`` reports no reader-breaking failures. doctor validates
+    the layout from the folder on disk; through the tunnel it checks CORS, byte ranges, HEAD and
+    one decoded cell per level. The mask, coverage and coordinate arrays and the level groups'
+    zarr.json are not read through the tunnel: the same server serves them from that folder.
     """
     if viewer is not None and viewer_dir is not None:
         raise ValueError("pass either viewer (a URL) or viewer_dir (a folder), not both")
@@ -301,7 +363,8 @@ def share(
         )
         echo(
             f"waiting for {public_root} to work; a new address usually takes 15 to 30 seconds "
-            "(at most 90)..."
+            "(at most 90). Use it after the open: line below: a lookup before then can keep it "
+            "failing for a minute..."
         )
         _wait_for_public_store(
             access.store_url,
@@ -314,9 +377,8 @@ def share(
         # whole timesteps. The tunnel serves this directory, whose root it has just returned
         # byte for byte: validate the layout from disk, not one round trip per object.
         checks = diagnose(access.store_url, full_read_limit_mb=0, local_copy=server.store)
-        if not _doctor_passes(checks):
-            failed = "; ".join(f"{c.name}: {c.detail}" for c in checks if c.status == "fail")
-            raise OSError(f"the tunnel did not pass chronozarr doctor: {failed}")
+        if (failure := _doctor_failure(checks, server.store)) is not None:
+            raise OSError(failure)
         echo("measuring first transfer...")
         measurement = _first_chunk_measurement(access.store_url)
         rate = (
