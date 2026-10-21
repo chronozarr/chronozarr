@@ -19,7 +19,7 @@ class RoundTrips:
     """
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch, delay: float = 0.2) -> None:
-        self.requests: list[tuple[float, float, str]] = []
+        self.requests: list[tuple[float, float, str, str]] = []  # start, end, method, path
         lock = threading.Lock()
         real = urllib.request.urlopen
 
@@ -31,16 +31,17 @@ class RoundTrips:
             finally:
                 with lock:
                     path = urlsplit(request.full_url).path
-                    self.requests.append((started, time.perf_counter(), path))
+                    ended = time.perf_counter()
+                    self.requests.append((started, ended, request.get_method(), path))
 
         monkeypatch.setattr(urllib.request, "urlopen", urlopen)
 
     def paths(self) -> list[str]:
-        return [path for _, _, path in self.requests]
+        return [path for *_, path in self.requests]
 
     def rounds(self) -> int:
         count, last_end = 0, float("-inf")
-        for started, ended, _ in sorted(self.requests, key=lambda request: request[1]):
+        for started, ended, *_ in sorted(self.requests, key=lambda request: request[1]):
             if started >= last_end:
                 count, last_end = count + 1, ended
         return count

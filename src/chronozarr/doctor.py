@@ -595,11 +595,12 @@ def diagnose(
 
     `local_copy` is the directory a URL `target` serves, for a store served from this computer:
     its layout is validated from disk there. Over HTTP validation reads every metadata object
-    and every mask chunk, one round trip after another (a minute through a quick tunnel). The
-    HTTP and decode checks still read `target`: the root zarr.json, the first level-0 data
-    object (range, suffix range, preflight, HEAD), and each level's data zarr.json and cells.
-    With a copy, these are read from disk only, never through `target`: the zarr.json of the
-    level groups and of the mask, coverage, coordinate and volatility arrays, and their chunks.
+    and every mask chunk, many at a time (8 s through a quick tunnel for a 24-month store with a
+    mask; 0.3 s from disk). The HTTP and decode checks still read `target`: the root zarr.json,
+    the first level-0 data object (range, suffix range, preflight, HEAD), and each level's data
+    zarr.json and cells. With a copy, these are read from disk only, never through `target`: the
+    zarr.json of the level groups and of the mask, coverage, coordinate and volatility arrays,
+    and their chunks.
     """
     limit = int(full_read_limit_mb * 1e6)
     if is_url(target):

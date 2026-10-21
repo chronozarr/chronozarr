@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import itertools
 import json
+import math
+import os
 import queue
 import re
 import shutil
@@ -12,8 +15,11 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
+import warnings
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import partial
@@ -23,14 +29,17 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import zarr
 from zarr.abc.store import OffsetByteRequest, RangeByteRequest, SuffixByteRequest
 from zarr.core.buffer import default_buffer_prototype
 
 import chronozarr
 import chronozarr.doctor as doctor_module
+import chronozarr.schema as schema_module
 import chronozarr.store as store_module
 from chronozarr.decode import HttpStore
 from chronozarr.doctor import DEFAULT_ORIGIN, Check, diagnose
+from chronozarr.schema import validate
 from chronozarr.view import StoreRequestHandler, serve_store, view
 from tests.round_trips import RoundTrips
 from tests.synthetic import build_store, make_truth
@@ -85,10 +94,27 @@ class FlakyHandler(StoreRequestHandler):
         return super().send_head()
 
 
+class NoHeadHandler(StoreRequestHandler):
+    """Refuses HEAD, as a host behind URLs presigned for GET does. Records each GET's Range."""
+
+    ranges: list[str | None]
+
+    def do_HEAD(self):
+        self.send_error(HTTPStatus.FORBIDDEN)
+
+    def do_GET(self):
+        self.ranges.append(self.headers.get("Range"))
+        super().do_GET()
+
+
+class LocalServer(ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = 128  # the default 5 drops connections from 32 requests at once
+
+
 @contextmanager
 def serving(handler: type[StoreRequestHandler], root: Path) -> Iterator[str]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(handler, root=root, prefix=root.name))
-    server.daemon_threads = True
+    server = LocalServer(("127.0.0.1", 0), partial(handler, root=root, prefix=root.name))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -467,6 +493,150 @@ def test_ctrl_c_during_a_hung_check_stops_doctor_at_once(masked_store, hang, exi
         stdout.close()
 
 
+# --- validate over HTTP: `chronozarr doctor <url>` and `chronozarr validate <url>` -----------
+
+
+@pytest.fixture(scope="module")
+def sharded_masked_store(tmp_path_factory) -> Path:
+    path = tmp_path_factory.mktemp("doctor") / "sharded-masked"
+    mask = np.ones((4, 40, 50), dtype=np.uint8)
+    mask[:, :5, :5] = 0
+    build_store(path, make_truth(4, 1, 40, 50), shard=True, shard_time=2, chunk_size=16, mask=mask)
+    return path
+
+
+def object_paths(store: Path, variable: str) -> set[str]:
+    """URL path of every chunk object (shard, when sharded) of `variable`, stored or not."""
+    paths: set[str] = set()
+    for level in zarr.open_group(store, mode="r").group_keys():
+        array = zarr.open_array(store / level / variable, mode="r")
+        extent = array.shards or array.chunks
+        grid = (range(math.ceil(n / e)) for n, e in zip(array.shape, extent, strict=True))
+        paths |= {
+            f"/{store.name}/{level}/{variable}/c/{'/'.join(map(str, index))}"
+            for index in itertools.product(*grid)
+        }
+    return paths
+
+
+def test_remote_validate_reads_each_metadata_object_once(unsharded_store, monkeypatch):
+    with serving(StoreRequestHandler, unsharded_store) as url:
+        trips = RoundTrips(monkeypatch)
+        problems = validate(url)
+    assert problems == []
+    reads = Counter(path for path in trips.paths() if path.endswith("zarr.json"))
+    assert max(reads.values()) == 1, {path: n for path, n in reads.items() if n > 1}
+    # The root; every node it names, at once; each level's coordinates together (three levels);
+    # the volatility array.
+    assert trips.rounds() <= 6, trips.paths()
+
+
+def test_remote_validate_reads_every_mask_chunk_once_and_many_at_a_time(masked_store, monkeypatch):
+    with serving(StoreRequestHandler, masked_store) as url:
+        trips = RoundTrips(monkeypatch)
+        problems = validate(url)
+    assert problems == []
+    reads = Counter(path for path in trips.paths() if "/mask/c/" in path)
+    assert set(reads) == object_paths(masked_store, "mask")  # the check still reads every chunk
+    assert max(reads.values()) == 1
+    # Six as for an unmasked store, plus the mask: level 0's 48 chunks in two rounds of up to 32
+    # requests, then 16 and 4 chunks in one round each.
+    assert trips.rounds() <= 10, trips.paths()
+
+
+def test_remote_validate_reads_each_mask_shard_once(sharded_masked_store, monkeypatch):
+    with serving(StoreRequestHandler, sharded_masked_store) as url:
+        trips = RoundTrips(monkeypatch)
+        problems = validate(url)
+    assert problems == []
+    reads = Counter(path for path in trips.paths() if "/mask/c/" in path)
+    assert set(reads) == object_paths(sharded_masked_store, "mask")
+    # A batch spans whole time shards, so each shard is read whole: no index read, and no read
+    # per timestep.
+    assert max(reads.values()) == 1, reads
+
+
+def test_remote_validate_holds_no_more_mask_than_the_budget(masked_store, monkeypatch):
+    monkeypatch.setattr(schema_module, "_MASK_BYTES", 16 * 16)  # one mask chunk
+    with serving(StoreRequestHandler, masked_store) as url:
+        trips = RoundTrips(monkeypatch)
+        problems = validate(url)
+    assert problems == []
+    mask = [(started, ended) for started, ended, _, path in trips.requests if "/mask/c/" in path]
+    assert len(mask) == 68
+    overlapping = [
+        (a, b) for a, b in itertools.combinations(mask, 2) if a[0] < b[1] and b[0] < a[1]
+    ]
+    assert not overlapping  # two mask chunks were never read at the same time
+
+
+def test_remote_validate_stops_reading_a_mask_at_the_first_bad_chunk(
+    masked_store, tmp_path, monkeypatch
+):
+    copy = tmp_path / masked_store.name
+    shutil.copytree(masked_store, copy)
+    plane = zarr.open_array(copy / "0" / "mask", mode="r+")
+    plane[0, 0, 0] = 2  # in the first chunk read
+    monkeypatch.setattr(schema_module, "_MASK_BYTES", 16 * 16)  # one chunk at a time
+    with serving(StoreRequestHandler, copy) as url:
+        trips = RoundTrips(monkeypatch)
+        problems = validate(url)
+    assert problems == ["level 0/mask: mask must contain only 0 and 1"]
+    level_0 = [path for path in trips.paths() if f"/{copy.name}/0/mask/c/" in path]
+    # The bad chunk, and at most the next one, already under way when the bad one was found.
+    assert len(level_0) <= 2, level_0
+
+
+@pytest.mark.parametrize("remote", [False, True], ids=["local", "http"])
+def test_a_mask_value_other_than_0_or_1_fails_validate(masked_store, tmp_path, remote):
+    copy = tmp_path / masked_store.name
+    shutil.copytree(masked_store, copy)
+    plane = zarr.open_array(copy / "0" / "mask", mode="r+")
+    plane[3, 39, 49] = 2  # the last timestep, last chunk
+    if remote:
+        with serving(StoreRequestHandler, copy) as url:
+            problems = validate(url)
+    else:
+        problems = validate(copy)
+    assert problems == ["level 0/mask: mask must contain only 0 and 1"]
+
+
+def test_remote_validate_sizes_shards_with_head_requests(sharded_store, monkeypatch):
+    with serving(StoreRequestHandler, sharded_store) as url:
+        trips = RoundTrips(monkeypatch)
+        problems = validate(url)
+    assert problems == []
+    shards = [(method, path) for _, _, method, path in trips.requests if "/data/c/" in path]
+    assert {path for _, path in shards} == object_paths(sharded_store, "data")
+    assert {method for method, _ in shards} == {"HEAD"}  # shard_bytes: no shard downloaded
+    # Six as for an unsharded store, plus every shard's HEAD at once.
+    assert trips.rounds() <= 7, trips.paths()
+
+
+def test_doctor_on_a_masked_store_over_http_takes_eighteen_round_trips(masked_store, monkeypatch):
+    with serving(StoreRequestHandler, masked_store) as url:
+        trips = RoundTrips(monkeypatch)
+        checks = diagnose(url, full_read_limit_mb=0)
+    assert not failures(checks), failures(checks)
+    # Three for the HTTP checks, ten to validate, one to open the store, four to decode.
+    assert trips.rounds() <= 18, trips.paths()
+
+
+def test_remote_validate_sizes_shards_with_one_byte_reads_when_the_host_refuses_head(
+    sharded_store, monkeypatch
+):
+    handler = type("NoHead", (NoHeadHandler,), {"ranges": []})
+    with serving(handler, sharded_store) as url:
+        trips = RoundTrips(monkeypatch)
+        problems = validate(url)
+    assert problems == []
+    shards = [(method, path) for _, _, method, path in trips.requests if "/data/c/" in path]
+    assert sorted(path for method, path in shards if method == "GET") == sorted(
+        object_paths(sharded_store, "data")
+    )
+    assert handler.ranges.count("bytes=0-0") == len(object_paths(sharded_store, "data"))
+
+
 # --- chronozarr.decode.HttpStore against the local range server -----------------------------
 
 
@@ -489,6 +659,44 @@ def test_http_store_reads_ranges_and_reports_missing_keys(sharded_store):
         assert asyncio.run(read(store, "no/such/key")) is None
         assert asyncio.run(store.exists("zarr.json")) is True
         assert asyncio.run(store.exists("no/such/key")) is False
+
+
+def test_http_store_sizes_an_object_when_the_host_refuses_head(sharded_store):
+    key = "0/data/c/0/0/0/0"
+    handler = type("NoHead", (NoHeadHandler,), {"ranges": []})
+    with serving(handler, sharded_store) as url:
+        store = HttpStore(url)
+        assert asyncio.run(store.getsize(key)) == (sharded_store / key).stat().st_size
+        with pytest.raises(FileNotFoundError):
+            asyncio.run(store.getsize("no/such/key"))
+    assert handler.ranges == ["bytes=0-0", "bytes=0-0"]
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="os.fork is POSIX only")
+def test_http_store_reads_in_a_process_forked_after_a_read(sharded_store):
+    async def read(store: HttpStore):
+        return await store.get("zarr.json", default_buffer_prototype())
+
+    with serving(StoreRequestHandler, sharded_store) as url:
+        store = HttpStore(url)
+        assert asyncio.run(read(store)) is not None  # the request threads exist now
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)  # fork with threads running
+            pid = os.fork()
+        if pid == 0:  # the child exits 0 only if its read returns
+            code = 1
+            try:
+                code = 0 if asyncio.run(read(store)) is not None else 1
+            finally:
+                os._exit(code)
+        deadline = time.monotonic() + 10
+        while (waited := os.waitpid(pid, os.WNOHANG))[0] == 0 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if waited[0] == 0:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            pytest.fail("the forked process's read hung")
+    assert os.waitstatus_to_exitcode(waited[1]) == 0
 
 
 def test_http_store_slices_locally_when_the_server_ignores_range(sharded_store):

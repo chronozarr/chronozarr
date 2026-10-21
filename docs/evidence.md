@@ -964,7 +964,22 @@ Now `share` validates the folder it serves from disk: 0.3 s for this store, and 
 | validate from disk, run 1 | 18.9 s | 2.1 s | 21.4 s |
 | validate from disk, run 2 | 24.3 s | 2.2 s | 26.9 s |
 
-The runs alternated between the two versions. Each one stopped its tunnel; no cloudflared process remained. `chronozarr doctor <url>` still validates over HTTP, so on a store with a mask behind a slow link it remains slow; only its probe and decode round trips are fewer.
+The runs alternated between the two versions. Each one stopped its tunnel; no cloudflared process remained. At this point `chronozarr doctor <url>` still validated over HTTP one round trip after another, so it stayed slow on a store with a mask behind a slow link; [Validation over HTTP](#validation-over-http-2026-10-20) below brings it from about a minute to 8 s.
+
+### Validation over HTTP (2026-10-20)
+
+`chronozarr doctor <url>` with no local copy, on the same WorldClim tmax store, before and after validation sends its reads together. Validation now reads every node's `zarr.json` once: the root, then every node the root names at the same time. It reads and checks each stored mask object (a chunk, or a whole shard when sharded) on its own, up to 32 at a time and at most 64 MiB of mask values. Each level's coordinate arrays are read together, and the `shard_bytes` sizes come from HEAD requests sent together. A host that refuses HEAD gets a one-byte GET instead, and the size comes from Content-Range. Before, zarr's `WrapperStore` did not pass `getsize` on, so each listed shard was downloaded in full. HTTP requests now run on 32 threads of their own, which a forked process starts afresh. They used to share asyncio's default pool, which holds a 4-core machine to 8 requests at once. Every mask chunk is still read and checked.
+
+| Code | Link | Doctor | Requests | Round trips one after another |
+|---|---|---:|---:|---:|
+| PR #136 (64caa84) | 240 ms added to each request, local server | 61.2 s | 759 | 244 |
+| this change | 240 ms added to each request, local server | 10.1 s | 697 | 39 |
+| PR #136, run 1 / run 2 | quick tunnel | 55.3 s / 56.8 s | 760 | 246 |
+| this change, run 1 / run 2 | quick tunnel | 7.9 s / 8.7 s | 698 | 40 |
+
+The tunnel runs alternated between the two versions on a laptop at load 9 to 31. Requests and round trips come from a third run of each version, which made every request through the same tunnel; it took 54.0 s before and 6.9 s after. The tunnel was stopped afterwards; no cloudflared process remained. Most of the remaining requests are the 576 mask chunks, now in waves of up to 32. In tests/test_doctor.py, validation of a 3-level masked test store takes 10 round trips, where it took 103 before. doctor takes 18, where it took 111.
+
+The tunnel runs above used the first version of this change, which read the mask a timestep per task. A review measured two problems with it. Ctrl-C drained every queued read: with 3 s per request, the process exited 31.1 s after SIGINT, after 394 requests. And `np.isin` on the mask grew local validation's peak memory: +458 MiB on this store, against +46 MiB on PR #136. The current version reads one stored object per task and checks `max() <= 1` on the uint8 values. It exits 0.9 s after SIGINT, and local validation peaks at +21 MiB. With 240 ms added to each request it gives the same 10.1 s, 697 requests and 39 round trips.
 
 ## Local preview and remote notebooks
 
