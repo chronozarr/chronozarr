@@ -4,10 +4,12 @@
 //
 //   cold open       loadStore -> first complete frame at LOD 0, HTTP cache bypassed, with and without
 //                   consolidated metadata in the root zarr.json.
-//   warm switch     goToTime -> frame finished on the GPU, with every chunk already decoded in the cache:
-//                   stepping one timestep at a time with pauses (the GPU window keeps neighbours resident,
-//                   so a step is a uniform change), jumping several timesteps at once, and with the
-//                   texture pool emptied so every switch uploads from the decoded cache.
+//   warm switch     goToTime -> frame finished on the GPU, after the idle prefetch: stepping one timestep at a
+//                   time with pauses (the GPU window keeps neighbours resident, so a step is a uniform change),
+//                   jumping several timesteps at once, and with the texture pool emptied so every switch
+//                   uploads from the decoded cache. Each loop reports the requests and bytes from before its
+//                   first switch to 1 s after its last, and the frames drawn without every cell (`incomplete`):
+//                   a store larger than the idle prefetch allowance fetches during the loop.
 //   product switch  setProduct -> frame finished.
 //   decode          per-chunk zarrita decode time, replayed from recorded bytes (no network).
 //
@@ -91,37 +93,41 @@ async function coldOpen(viewer, url, fetchImpl, runs) {
   return rows;
 }
 
+// How long a warm loop waits after its last switch for the responses to what its switches started or scheduled.
+const SETTLE_MS = 1000;
+
+/**
+ * Times each switch of `sequence` and counts the requests and bytes of the whole loop, from before its first switch to
+ * SETTLE_MS after its last. A switch is synchronous, so no response arrives inside it, and what the viewer schedules
+ * after a switch starts after it.
+ */
 async function switchTimings(viewer, sequence, { emptyPool = false, pauseMs = 0 } = {}) {
   const { renderer, store } = viewer;
+  const network = store.stats.network;
+  const before = { requests: network.requests, bytes: network.bytes };
   const rows = [];
   for (const t of sequence) {
     if (pauseMs) await sleep(pauseMs);
     if (emptyPool) renderer.clearResident();
-    const before = { requests: store.stats.network.requests, bytes: store.stats.network.bytes, uploads: renderer.stats.uploads, misses: store.stats.cache.misses };
+    const uploads = renderer.stats.uploads;
+    const misses = store.stats.cache.misses;
     const started = performance.now();
     viewer.goToTime(t);
     const frame = viewer.renderNow();
     renderer.finish();
     const ms = performance.now() - started;
-    rows.push({
-      t,
-      ms,
-      complete: frame.complete,
-      requests: store.stats.network.requests - before.requests,
-      bytes: store.stats.network.bytes - before.bytes,
-      uploads: renderer.stats.uploads - before.uploads,
-      misses: store.stats.cache.misses - before.misses,
-    });
+    rows.push({ t, ms, complete: frame.complete, uploads: renderer.stats.uploads - uploads, misses: store.stats.cache.misses - misses });
   }
-  return rows;
+  await sleep(SETTLE_MS);
+  return { rows, requests: network.requests - before.requests, bytes: network.bytes - before.bytes };
 }
 
-function describeSwitches(rows) {
+function describeSwitches({ rows, requests, bytes }) {
   return {
     ...Object.fromEntries(Object.entries(summarize(rows.map((r) => r.ms))).map(([k, v]) => [k, round(v)])),
     incomplete: rows.filter((r) => !r.complete).length,
-    networkRequests: rows.reduce((n, r) => n + r.requests, 0),
-    wireBytes: rows.reduce((n, r) => n + r.bytes, 0),
+    networkRequests: requests,
+    wireBytes: bytes,
     uploadsPerSwitch: rows.reduce((n, r) => n + r.uploads, 0) / rows.length,
     cacheMisses: rows.reduce((n, r) => n + r.misses, 0),
   };
