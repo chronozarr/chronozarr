@@ -1,7 +1,12 @@
 import { expect, test } from './fixtures.js';
 import { captureFrame, expectFrameMatchesStore, openViewer, waitForPaintedTime } from './viewer-helpers.js';
 
+const BUILT_VIEWER = Boolean(process.env.CHRONOZARR_E2E_BUILT_VIEWER);
+// The u16_mask store is 4 cells x 6 timesteps x 128 KiB = 3 MiB: more than 0.9 of this cap, so the viewer's cache policy packs it.
+const CAP_BYTES = 2 * 1024 * 1024;
+
 test('compact GPU reads match raw rendering across bit widths, boundaries, masks and bands', async ({ page, servers }) => {
+  test.skip(BUILT_VIEWER, 'imports Renderer and packUint16 from their source files, which the built viewer does not serve; the next test draws its compact shader');
   await page.route('**/compact-test.html', (route) => route.fulfill({ contentType: 'text/html', body: '<!doctype html><link rel="icon" href="data:,">' }));
   await page.goto(`${servers.appUrl}/compact-test.html`);
   const results = await page.evaluate(async () => {
@@ -71,48 +76,58 @@ test('compact GPU reads match raw rendering across bit widths, boundaries, masks
   expect(results.length % 128).not.toBe(0);
 });
 
+// Runs on the sources and on the built viewer alike: it uses only what the page itself starts (its decode workers, its
+// store, its renderer), so in the build the packing happens in the bundled worker.
 test('compact worker reader preserves CPU values and real viewer masked frames', async ({ page, servers, storeUrl }) => {
+  await page.addInitScript(() => {
+    const NativeWorker = window.Worker;
+    window.__packedReplies = 0;
+    window.Worker = class extends NativeWorker {
+      constructor(...args) {
+        super(...args);
+        this.addEventListener('message', ({ data }) => {
+          if (data.type === 'decoded' && data.data?.words) window.__packedReplies++;
+        });
+      }
+    };
+  });
   const url = await storeUrl('u16_mask');
   await openViewer(page, servers, url);
-  const facts = await page.evaluate(async (url) => {
-    const { openStore } = await import('/chronozarr/decoder.js');
-    const golden = await openStore(url, { workers: 0 });
-    const expected = new Map();
-    for (const t of [0, 1]) for (const row of [0, 1]) for (const col of [0, 1]) {
-      expected.set(`${t}/${row}/${col}`, (await golden.getRaw(0, row, col, t)).slice());
-    }
-    golden.close();
-    let readyCount = 0, packedMessages = 0, resolveReady;
-    const ready = new Promise((resolve) => { resolveReady = resolve; });
-    const store = await openStore(url, { workers: 2, spawnWorker: () => {
-      const worker = new Worker('/chronozarr/decode-worker.js', { type: 'module' });
-      worker.addEventListener('message', ({ data }) => {
-        if (data.type === 'ready' && ++readyCount === 2) resolveReady();
-        if (data.type === 'decoded' && data.data?.words) packedMessages++;
-      });
-      return worker;
-    } });
-    await ready;
-    store.enableCompactCache();
-    for (const t of [0, 1]) for (const row of [0, 1]) for (const col of [0, 1]) {
-      const ensured = await store.ensureRaw(0, row, col, t);
-      if (ensured !== undefined || !store.hasCachedRaw(0, row, col, t)) throw new Error('ensureRaw did not retain its chunk without returning CPU data');
-      const packed = store.peekCompact(0, row, col, t);
-      if (!packed) throw new Error('Synthetic chunk did not retain GPU compact backing');
-      const raw = await store.getRaw(0, row, col, t), cell = await store.getCell(0, row, col, t);
-      const want = expected.get(`${t}/${row}/${col}`);
-      if (!(raw instanceof Uint16Array) || !(cell.data instanceof Uint16Array)) throw new Error('CPU APIs stopped returning uint16 arrays');
-      for (let i = 0; i < want.length; i++) if (want[i] !== raw[i] || want[i] !== cell.data[i]) throw new Error(`CPU values changed at ${t}/${row}/${col}/${i}`);
-      if (store.peekCompact(0, row, col, t) !== packed) throw new Error('CPU access replaced compact resident backing');
-      const sample = store.samplePixel(0, row, col, t, 17, 9), plane = 128 * 128;
-      for (let band = 0; band < sample.length; band++) if (sample[band] !== want[band * plane + 9 * 128 + 17]) throw new Error('Pixel inspector values changed');
-    }
-    await window.chronozarr.viewer.loadStore(url, { store, lod: 0 });
-    return { readyCount, packedMessages, compact: store.compactCacheEnabled };
-  }, url);
-  expect(facts.readyCount).toBe(2);
-  expect(facts.packedMessages).toBeGreaterThanOrEqual(8);
+  const chunks = [0, 1].flatMap((t) => [0, 1].flatMap((row) => [0, 1].map((col) => [t, row, col])));
+  // The reference: the same chunks of the store as the viewer first opened it, with ordinary decoded arrays.
+  await page.evaluate(async (chunks) => {
+    const { store } = window.chronozarr.viewer;
+    if (store.compactCacheEnabled) throw new Error('a store that fits its cache must not be packed');
+    window.__golden = new Map();
+    for (const [t, row, col] of chunks) window.__golden.set(`${t}/${row}/${col}`, (await store.getRaw(0, row, col, t)).slice());
+  }, chunks);
+  const facts = await page.evaluate(
+    async ({ url, chunks, totalBytes }) => {
+      const { viewer } = window.chronozarr;
+      await viewer.loadStore(url, { lod: 0, totalBytes });
+      const { store } = viewer;
+      for (const [t, row, col] of chunks) {
+        const ensured = await store.ensureRaw(0, row, col, t);
+        if (ensured !== undefined || !store.hasCachedRaw(0, row, col, t)) throw new Error('ensureRaw did not retain its chunk without returning CPU data');
+        const packed = store.peekCompact(0, row, col, t);
+        if (!packed) throw new Error('Synthetic chunk did not retain GPU compact backing');
+        const raw = await store.getRaw(0, row, col, t);
+        const cell = await store.getCell(0, row, col, t);
+        const want = window.__golden.get(`${t}/${row}/${col}`);
+        if (!(raw instanceof Uint16Array) || !(cell.data instanceof Uint16Array)) throw new Error('CPU APIs stopped returning uint16 arrays');
+        for (let i = 0; i < want.length; i++) if (want[i] !== raw[i] || want[i] !== cell.data[i]) throw new Error(`CPU values changed at ${t}/${row}/${col}/${i}`);
+        if (store.peekCompact(0, row, col, t) !== packed) throw new Error('CPU access replaced compact resident backing');
+        const sample = store.samplePixel(0, row, col, t, 17, 9);
+        const plane = 128 * 128;
+        for (let band = 0; band < sample.length; band++) if (sample[band] !== want[band * plane + 9 * 128 + 17]) throw new Error('Pixel inspector values changed');
+      }
+      return { compact: store.compactCacheEnabled, packedReplies: window.__packedReplies };
+    },
+    { url, chunks, totalBytes: CAP_BYTES },
+  );
   expect(facts.compact).toBe(true);
+  // The reference reads were decoded and sent unpacked; every chunk read after the switch came back from a worker as packed words.
+  expect(facts.packedReplies, 'chunks that a decode worker packed before sending them').toBeGreaterThanOrEqual(chunks.length);
   await waitForPaintedTime(page, 0);
   expectFrameMatchesStore(await captureFrame(page), 'u16_mask', 0);
   await page.keyboard.press('ArrowRight');

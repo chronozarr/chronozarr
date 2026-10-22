@@ -247,7 +247,7 @@ class Viewer {
    * metadata (`openMs`), to the first frame that covers the whole view at some level (`coarseMs`, from the call;
    * `coarseAfterMetadataMs`) and to the first complete frame at the target level (`firstPaintMs`).
    * @param {string} url
-   * @param {{lod?:number, fetch?:typeof fetch, maxCacheBytes?:number, workers?:number, camera?:{cx:number,cy:number,scale:number},
+   * @param {{lod?:number, fetch?:typeof fetch, maxCacheBytes?:number, totalBytes?:number, workers?:number, camera?:{cx:number,cy:number,scale:number},
    *   viewSearch?:string, store?:object, startTime?:(store:object)=>Promise<number>}} [options]  `viewSearch`: a query string whose t, p, b, z, c parameters restore the view (see permalink.js).
    *   `store`: a store the caller has opened and checked (open-store.js); it is used as is, with no second read.
    *   `startTime`: where to start in time when `viewSearch` names no timestep (start-time.js); without it, the first timestep.
@@ -263,7 +263,7 @@ class Viewer {
     const started = performance.now();
     let store = options.store ?? null;
     try {
-      store ??= await openStore(url, { fetch: options.fetch, maxCacheBytes: options.maxCacheBytes, workers: options.workers });
+      store ??= await openStore(url, { fetch: options.fetch, maxCacheBytes: options.maxCacheBytes, totalBytes: options.totalBytes, workers: options.workers });
       checkUniformChunks(store);
     } catch (error) {
       const failure = await explainOpenError(error, { url });
