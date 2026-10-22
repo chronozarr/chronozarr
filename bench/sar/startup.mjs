@@ -1,24 +1,26 @@
 // node bench/sar/full-resolution.mjs [label=after] [repeats=1]
 // BASELINE_DIR optionally serves an immutable snapshot with js/... paths.
+// BUILT_ROOT optionally opens the built viewer (a folder holding demo/, as js/support/build-viewer.mjs writes it) instead of the sources.
 // CASES=full,bounded SENSORS=sentinel1,nisar FPS=30,60 CAP_MS=45000 TOTAL_GIB optional diagnostic
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import {startServer,launchBrowser,newPage,attachNet,subtract} from '../lib/harness.mjs';
+import {startStaticServer} from '../../js/support/static-server.js';
 const label=process.argv[2]??'after', repeats=Number(process.argv[3]??1);
 const out=process.env.OUT??`bench/sar/results/startup-${label}.jsonl`;
 const stores={sentinel1:'ucayali_santa_maria/s1-rtc-monthly-v1',nisar:'colorado_yuma/nisar-gcov-v2'};
 const sourceRoot=process.env.BASELINE_DIR??'.';
 const hash=p=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 const provenance=Object.fromEntries(['js/demo/viewer.js','js/demo/renderer.js','js/demo/cache-policy.js','js/demo/playback.js','js/chronozarr/compact.js','js/chronozarr/pool.js','js/chronozarr/decode-worker.js','js/chronozarr/decoder.js','js/chronozarr/cache.js','js/chronozarr/aux-cache.js'].filter(p=>fs.existsSync(path.join(sourceRoot,p))).map(p=>[p,hash(path.join(sourceRoot,p))]));
-const server=await startServer(); fs.mkdirSync(path.dirname(out),{recursive:true});
+const server=await startServer(); const app=process.env.BUILT_ROOT?await startStaticServer(process.env.BUILT_ROOT):null; fs.mkdirSync(path.dirname(out),{recursive:true});
 try {
 for(const sensor of (process.env.SENSORS??'nisar').split(','))
 for(const view of (process.env.CASES??'full').split(','))
 for(let repeat=0;repeat<repeats;repeat++) {
  const browser=await launchBrowser({channel:'chromium'});
- const row={label,sensor,view,repeat,harnessHash:hash('bench/sar/startup.mjs'),storeRootHash:hash(`data/stores/${stores[sensor]}/zarr.json`),at:new Date().toISOString(),provenance,environment:{cpu:os.cpus()[0].model,totalMemory:os.totalmem()},phases:[]};
+ const row={label,sensor,view,repeat,harnessHash:hash('bench/sar/startup.mjs'),storeRootHash:hash(`data/stores/${stores[sensor]}/zarr.json`),at:new Date().toISOString(),provenance,builtViewerHash:process.env.BUILT_ROOT?hash(path.join(process.env.BUILT_ROOT,'demo/viewer.js')):null,environment:{cpu:os.cpus()[0].model,totalMemory:os.totalmem()},phases:[]};
  try {
  const {page,context}=await newPage(browser,{width:1440,height:900,deviceScaleFactor:2,blockCatalog:true});
  if(process.env.BASELINE_DIR) await page.route('**/js/**/*.js',async route=>{
@@ -29,7 +31,7 @@ for(let repeat=0;repeat<repeats;repeat++) {
  const {counter,cdp}=await attachNet(context,page,[url]);
  await page.addInitScript(()=>{window.__gpuAllocations=[];const original=WebGL2RenderingContext.prototype.texStorage3D;WebGL2RenderingContext.prototype.texStorage3D=function(target,levels,format,w,h,d){window.__gpuAllocations.push({target,levels,format,w,h,d,bytes:w*h*d*({[this.R32UI]:4,[this.RG32UI]:8,[this.R8UI]:1,[this.R16UI]:2,[this.R16I]:2,[this.R32F]:4}[format]??0)});return original.apply(this,arguments);};});
  row.errors=[];page.on('pageerror',e=>row.errors.push(e.message));
- await page.goto(`${server.url}/js/demo/index.html?store=${encodeURIComponent(url)}`);
+ await page.goto(`${app?`${app.url}/demo`:`${server.url}/js/demo`}/index.html?store=${encodeURIComponent(url)}`);
  await page.waitForFunction(()=>window.chronozarr?.ready,null,{timeout:60000});
  // Every phase has a wall clock cap; reader stats count worker traffic, unlike page-only CDP.
  const phase=async(name,args)=>{
@@ -94,4 +96,4 @@ for(let repeat=0;repeat<repeats;repeat++) {
  }catch(e){row.error=e.stack;console.error(e);}
  finally{fs.appendFileSync(out,JSON.stringify(row)+'\n');await browser.close();}
 }
-}finally{await server.close();}
+}finally{await server.close();await app?.close();}
