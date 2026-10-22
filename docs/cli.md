@@ -6,7 +6,7 @@ Run `chronozarr <command> --help` for every option. In a uv project, run `uv run
 
 | Command | What it does |
 |---------|--------------|
-| `convert SOURCE OUT` | The command for existing raster files. Writes a store one timestep at a time from a directory, quoted glob or `s3://` prefix of dated GeoTIFFs, a manifest of COGs or PNG frames, a Zarr store or a NetCDF file. `--dry-run` checks every file and reports all problems per file. Also converts a v0.2 store to v0.3 |
+| `convert SOURCE OUT` | The command for existing raster files. Writes a store one timestep at a time from a directory, quoted glob or `s3://` prefix of dated rasters (GeoTIFF, BIL, GRIB2, HDF5, zips of one raster), a manifest of COGs or PNG frames, a Zarr store or a NetCDF file. `--dry-run` checks every file and reports all problems per file. Also converts a v0.2 store to v0.3 |
 | `encode INPUT OUT` | Writes a store in memory from a Zarr store, a NetCDF file or a quoted glob of GeoTIFFs. Points to `convert` for anything else |
 | `append STORE INPUT` | Adds timesteps at the end of a store. See [Append timesteps](append.md) |
 | `bands STORE` | Lists the bands, the role each plays and the viewer products they allow. `--band-role B04=red` sets a band's `common_name`. `encode` and `convert` take the same flag. See [Band roles](python.md#band-roles-and-the-first-view) |
@@ -15,8 +15,8 @@ Run `chronozarr <command> --help` for every option. In a uv project, run `uv run
 
 | Command | What it does |
 |---------|--------------|
-| `validate STORE` | Checks a store against the spec. Exits with status 1 on failure |
-| `info STORE` | Prints the times, bands and levels of a store |
+| `validate STORE` | Checks a store against the spec. Exits with status 1 on failure. It prints a `note:` for each SHOULD the store leaves out, which does not fail it |
+| `info STORE` | Prints the times, bands and levels of a store, and a `note:` for each deviation the reader read through |
 | `doctor TARGET` | Checks a hosted URL or a local store. See [hosting-requirements.md](hosting-requirements.md#checklist) |
 
 ## Explore and share
@@ -26,7 +26,7 @@ Run `chronozarr <command> --help` for every option. In a uv project, run `uv run
 | `share STORE` | Starts a disposable Cloudflare quick tunnel for a local store, doctor-checks the public route, and prints a viewer link that opens on any computer. Needs `cloudflared`; Ctrl-C stops both processes. See [Share a temporary link](share.md) |
 | `preview STORE` | Serves a local store on `127.0.0.1` and opens it in the viewer. Its link opens only on this computer. Ctrl-C stops it. See [Preview a store](preview.md) |
 | `publish STORE --destination s3://BUCKET/PREFIX` | Uploads a store to S3 or R2; `gs://` and `az://` destinations publish to Google Cloud Storage and Azure Blob Storage. It checks the hosted store and prints a viewer link. `--update` publishes eligible appended timesteps to the same prefix and link. Install the matching `publish` extra. See [Publish a permanent link](publish.md) |
-| `link STORE_URL` | Prints a viewer URL with an initial product, band, display limits, colormap and timestep, checked against the hosted store |
+| `link STORE_URL` | Prints a viewer URL with an initial product, band, display limits, colormap, timestep, centre and zoom, checked against the hosted store. The centre is a longitude and latitude (`--lonlat`) or a point in the store's coordinates (`--xy`). See [Choose a date and a place](viewer.md#choose-a-date-and-a-place) |
 
 ## Export
 
@@ -39,8 +39,9 @@ Run `chronozarr <command> --help` for every option. In a uv project, run `uv run
 
 | Extra | Adds |
 |-------|------|
-| `geo` | GeoTIFF input and output |
+| `geo` | GeoTIFF input and output, and `link --lonlat` for a store in a projected coordinate system |
 | `notebook` | `chronozarr.view(store)` for Jupyter. See [notebooks](notebooks.md) |
-| `netcdf`, `dask` | NetCDF input and dask arrays |
+| `netcdf`, `dask` | NetCDF input (with cftime) and dask arrays |
+| `cftime` | Zarr time axes on a `360_day`, `noleap`, `all_leap` or `julian` calendar, without a NetCDF reader |
 | `s3` | Listing of an `s3://` prefix for `convert` |
 | `publish`, `publish-gcs`, `publish-azure` | The SDK that `publish` uses for S3 or R2, Google Cloud Storage or Azure. See [Publish a permanent link](publish.md) |

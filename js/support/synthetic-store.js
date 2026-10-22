@@ -48,7 +48,9 @@ export const coverageValue = (t, y, x, lod = 0) => (t * 3 + y + x * 2 + lod) % 7
  * @param {number} [spec.nLevels=1]        levels, each half the size of the previous (ceil)
  * @param {'uint8'|'uint16'|'int16'|'float32'} [spec.dtype='uint16']
  * @param {number} [spec.shardTime]        timesteps per shard (default nTime); several shards along time when smaller
- * @param {string} [spec.specVersion='0.3.0']
+ * @param {string} [spec.specVersion]      default "0.3.0" for a store with an EPSG code and "0.4.0" for one without, as the writers choose
+ * @param {string|{code?: string, wkt2?: string, projjson?: object}} [spec.crs='EPSG:32631']  the CRS every spatial array declares: a code, or any of
+ *   `proj:code`, `proj:wkt2` and `proj:projjson`. The `crs` mirrors of the root and the level groups hold the code and are absent when there is none.
  * @param {string[]} [spec.bands]          band names (default B0, B1, ...)
  * @param {object[]} [spec.bandObjects]    band objects; writes `bands` as objects plus `band_names`
  * @param {number|null} [spec.nodata=0]
@@ -70,6 +72,9 @@ export function buildSyntheticStore(spec) {
   const shardTime = sharded ? (spec.shardTime ?? nTime) : 1;
   const values = spec.values ?? defaultValues(dtype);
   const nodata = spec.nodata === undefined ? 0 : spec.nodata;
+  const { code = null, wkt2 = null, projjson = null } = typeof spec.crs === 'string' ? { code: spec.crs } : (spec.crs ?? { code: 'EPSG:32631' });
+  const projAttrs = { ...(code ? { 'proj:code': code } : {}), ...(wkt2 ? { 'proj:wkt2': wkt2 } : {}), ...(projjson ? { 'proj:projjson': projjson } : {}) };
+  const crsMirror = code ? { crs: code } : {};
   const bandNames = spec.bands ?? spec.bandObjects?.map((b) => b.name) ?? Array.from({ length: nBand }, (_, i) => `B${i}`);
   const files = new Map();
   const bytesCodec = { name: 'bytes', configuration: { endian: 'little' } };
@@ -102,7 +107,7 @@ export function buildSyntheticStore(spec) {
         : codecs,
       dimension_names: dims,
       attributes: { _ARRAY_DIMENSIONS: dims, zarr_conventions: [CONVENTIONS.proj, CONVENTIONS.spatial],
-        'proj:code': 'EPSG:32631', 'spatial:dimensions': ['y', 'x'], 'spatial:registration': 'pixel',
+        ...projAttrs, 'spatial:dimensions': ['y', 'x'], 'spatial:registration': 'pixel',
         'spatial:transform': groupAttrs(level).transform },
     };
   };
@@ -188,7 +193,7 @@ export function buildSyntheticStore(spec) {
   };
 
   const transform = spec.transform ?? [10, 0, 0, 0, -10, 0];
-  const groupAttrs = (level) => ({ crs: 'EPSG:32631',
+  const groupAttrs = (level) => ({ ...crsMirror,
     transform: [transform[0] * 2 ** level.lod, transform[1], transform[2], transform[3], transform[4] * 2 ** level.lod, transform[5]],
     resolution: transform[0] * 2 ** level.lod });
   for (const level of levels) {
@@ -198,7 +203,7 @@ export function buildSyntheticStore(spec) {
     files.set(`/${level.lod}/zarr.json`, json({ zarr_format: 3, node_type: 'group', attributes: groupAttrs(level) }));
   }
 
-  const specVersion = spec.specVersion ?? '0.3.0';
+  const specVersion = spec.specVersion ?? (code?.startsWith('EPSG:') ? '0.3.0' : '0.4.0');
   const chronozarr = {
     spec_version: specVersion,
     variable: 'data',
@@ -206,7 +211,7 @@ export function buildSyntheticStore(spec) {
     bands: spec.bandObjects ?? bandNames.map((name) => ({ name, scale: 1e-4, offset: 0 })),
     band_names: bandNames,
     nodata,
-    crs: 'EPSG:32631',
+    ...crsMirror,
     ...(spec.mask ? { mask_variable: 'mask' } : {}),
     ...(spec.coverage ? { coverage_variable: 'coverage' } : {}),
     ...(spec.provenance ? { provenance: spec.provenance } : {}),

@@ -16,6 +16,7 @@ from zarr.errors import ZarrUserWarning
 from chronozarr import schema
 from chronozarr._convert_source import Grid, Source, SourceInfo, Step
 from chronozarr._writer import _mean_comparison, _shard_bytes
+from chronozarr.crs import Crs
 from chronozarr.encode import EncodeReport, LevelReport, _tree_stats
 
 
@@ -25,6 +26,13 @@ def legacy_metadata(path: str | Path) -> dict[str, Any] | None:
     if not manifest.is_file():
         return None
     return json.loads(manifest.read_text()).get("attributes", {}).get("chronozarr")
+
+
+def _legacy_crs(level: schema.LevelAttrs, where: str) -> str:
+    """The `crs` of a v0.2 level group, which always carried one."""
+    if level.crs is None:
+        raise ValueError(f"{where}: a v0.2 level group must carry crs")
+    return level.crs
 
 
 class LegacySource(Source):
@@ -51,7 +59,12 @@ class LegacySource(Source):
         self.data = [schema.get_array(g, self.meta["variable"], "legacy") for g in self.groups]
         level = schema.parse_level_attrs(self.groups[0].attrs.asdict(), "legacy level 0")
         self.info = SourceInfo(
-            Grid(level.crs, level.transform, self.data[0].shape[2], self.data[0].shape[3]),
+            Grid(
+                _legacy_crs(level, "legacy level 0"),
+                level.transform,
+                self.data[0].shape[2],
+                self.data[0].shape[3],
+            ),
             len(bands),
             self.data[0].dtype,
             self.meta["nodata"],
@@ -148,7 +161,7 @@ def migrate(source: LegacySource, out: Path, progress: Any = None) -> EncodeRepo
                 if name is not None:
                     array = schema.get_array(group, name, "destination")
                     new_attrs = schema.data_array_attrs(
-                        attrs.crs,
+                        Crs.from_string(_legacy_crs(attrs, "destination")).with_wkt2(),
                         attrs.transform,
                         h,
                         w,

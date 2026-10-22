@@ -17,7 +17,7 @@ src/chronozarr/           Python package; CLI `chronozarr` (commands: append | e
   decode.py               open_store() / ChronoStore: lazy reads, to_xarray(); HttpStore (stdlib HTTP range store)
   backend.py              xarray backend: xr.open_dataset(path_or_url, engine="chronozarr")
   convert.py              streaming conversion of dated GeoTIFFs (directory, glob, s3:// prefix), COG manifests, Zarr variables and NetCDF into a store;
-                          _convert_discover.py lists and dates the files, _convert_preflight.py collects every incompatibility per file
+                          _convert_discover.py lists and dates the files, _convert_band_dates.py reads the dates of a file whose bands are dates (`--bands-are-dates`), _convert_tiles.py decides whether files that share a date tile one grid (`--mosaic-tiles`), _convert_preflight.py collects every incompatibility per file
   stac.py                 static STAC Collection and Item JSON for a store (datacube extension)
   bands.py                band roles: which bands answer to red, green, blue, nir, the products that follow, `set_band_roles` (CLI `bands`, `--band-role`); mirrors js/shared/products.js
   export.py               export_cog(): true-value Cloud Optimized GeoTIFFs for GDAL and QGIS
@@ -27,9 +27,11 @@ src/chronozarr/           Python package; CLI `chronozarr` (commands: append | e
 js/chronozarr/            DOM-free reader on zarrita (spec 0.3): decoder.js (openStore, getCell, prefetch), metadata.js,
                           http.js, cache.js, bandwidth.js, limiter.js, pool.js + decode-worker.js, codec.js, shard.js, redact.js (URLs without login or signed query, for messages)
 js/maplibre/              MapLibre custom layer on the reader: layer.js, mesh.js, projection.js, shader.js, slots.js, view.js; demo.js + index.html
-js/demo/                 viewer: index.html?store=<url>, viewer.js, renderer.js (WebGL2), products.js, playback.js, chart.js, export.js, permalink.js, open-store.js (the "Open store URL" field), bench.js
+js/demo/                 viewer: index.html?store=<url>, viewer.js, renderer.js (WebGL2), products.js, playback.js, chart.js, export.js, permalink.js, open-store.js (the "Open store URL" field), bench.js,
+                          early.js (the inline script of index.html starts catalog.json and the root zarr.json before viewer.js loads; early.js hands those responses to the viewer)
 js/test/                  node --test suites (fixtures skip if data/spike is absent)
-js/support/               static-server.js (byte ranges), synthetic-store.js, test fixtures
+js/support/               static-server.js (byte ranges, optional HTTP/2), synthetic-store.js, test fixtures;
+                          build-viewer.mjs (esbuild: js/demo and the reader into demo/viewer.js, demo/decode-worker.js and lazy codec files; the site and the npm package publish this build, the sources stay for development and the tests), viewer-bundle.mjs (chronozarr-viewer CLI)
 tests/                    pytest, marker `unit`
 docs/                     user guides: hosting.md (overview), publish.md, hosting-providers.md (S3 + CloudFront, R2, GCS, Source Cooperative), hosting-requirements.md (doctor checklist), append.md,
                           embedding.md, private.md, viewer-distribution.md, png-frames.md, format-comparison.md, python.md (API reference);
@@ -46,6 +48,8 @@ data/                     gitignored: mosaics/, stores/, spike/ (P0 fixtures)
 uv sync --locked                   # includes the dev group; add --extra ingest for the Sentinel-2 example
 uv run pytest -q -m unit
 cd js && node --test
+cd js && npx playwright test                                  # browser specs on the sources
+cd js && CHRONOZARR_E2E_BUILT_VIEWER=1 npx playwright test e2e/viewer-   # the viewer specs on the built viewer (what the site publishes)
 # dev server with byte ranges (needed for sharded stores), from .claude/launch.json "spike":
 uv run --with rangehttpserver python -m RangeHTTPServer 8000
 # then: http://localhost:8000/js/demo/index.html?store=http://localhost:8000/data/spike/synthetic_sharded
@@ -64,4 +68,4 @@ Always `uv run python`, never bare `python`. Never override uv's 7-day release-a
 
 ## Speed gates (measure before and after any change to the read path)
 
-Cold open ≤ 500 ms at LOD 0 for 36 cells; warm timestep switch ≤ 16 ms; decode ≤ 5 ms per chunk; 0 wire bytes on a warm switch. `await chronozarr.bench()` in the viewer console. Numbers live in the README and `.napkin.md`.
+Cold open ≤ 500 ms at LOD 0 for 36 cells; warm timestep switch ≤ 16 ms; decode ≤ 5 ms per chunk; 0 wire bytes on a warm switch. The verdicts come from `node js/support/gate-bench/run.mjs` (CONTRIBUTING.md; the Speed gates workflow runs it), which loads every chunk before its warm switches. `await chronozarr.bench()` in the viewer console gives the cold open and the decode of the open store; its warm loops report all their traffic, which is 0 only on a store that the idle prefetch holds. Numbers live in the README and `.napkin.md`.

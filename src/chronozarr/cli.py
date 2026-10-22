@@ -5,9 +5,10 @@ from __future__ import annotations
 import glob
 import inspect
 import re
+import shlex
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,8 +19,19 @@ import numpy as np
 import xarray as xr
 
 from chronozarr import schema
+from chronozarr._calendar import (
+    RULES,
+    CalendarMapping,
+    calendar_name,
+    is_cftime,
+    provenance_with_note,
+    to_gregorian,
+)
 from chronozarr._convert_discover import TIFF_SUFFIXES, is_discovery_source
 from chronozarr._convert_source import UndeclaredNaNError
+from chronozarr._convert_tiles import OPTION as MOSAIC_TILES
+from chronozarr._convert_tiles import SameDateFixes
+from chronozarr._convert_xarray import open_netcdf, open_zarr
 from chronozarr._install import extra_hint
 from chronozarr.append import append, is_store
 from chronozarr.bands import (
@@ -38,12 +50,14 @@ from chronozarr.convert import (
     Plan,
     convert,
 )
-from chronozarr.decode import open_store
+from chronozarr.crs import Crs
+from chronozarr.decode import ChronoStore, open_store
 from chronozarr.doctor import DEFAULT_ORIGIN, diagnose, is_url
 from chronozarr.encode import EncodeReport, encode
 from chronozarr.export import export_cog, select_times
-from chronozarr.schema import Band, SchemaError, validate
-from chronozarr.share import share
+from chronozarr.place import check_xy, lonlat_to_xy
+from chronozarr.schema import Band, SchemaError, validate_report
+from chronozarr.share import share, wait_for_address
 from chronozarr.stac import write_stac
 from chronozarr.store import redact_url
 from chronozarr.view import (
@@ -84,12 +98,14 @@ class _GeotiffStack:
     bands: tuple[Band, ...]
 
 
-def _read_geotiffs(pattern: str, crs: str | None) -> _GeotiffStack:
+def _read_geotiffs(pattern: str, crs: str | None, join_tiles: str) -> _GeotiffStack:
     """One GeoTIFF per timestep (date parsed from the file name), bands stacked.
 
     The files are read as `chronozarr convert` reads a manifest of COGs, so dtype, band names,
     scale, offset, units, nodata and masks follow its fidelity rules (`convert --help`). Every
     file must be on one grid; nothing is resampled. `crs` stands in for a file that has none.
+    Files that share a date are refused; when they are tiles of one grid, the fix is
+    `join_tiles`, the command that joins them (this one cannot).
     """
     paths = [pattern] if Path(pattern).is_file() else glob.glob(pattern)
     if not paths:
@@ -104,6 +120,7 @@ def _read_geotiffs(pattern: str, crs: str | None) -> _GeotiffStack:
         resampling="nearest",  # only so that an off-grid file is reported below, not warped
         nodata="auto",
         chunk_size=_READ_ROWS,
+        same_date_fixes=SameDateFixes(join=join_tiles, distinct=None),
     )
     if 0 in source.warped:
         raise click.ClickException(
@@ -160,7 +177,7 @@ def _refuse_files_for_convert(input: str, out: Path) -> None:
     elif lowered.startswith("s3://") or (
         not any(ch in input for ch in _GLOB_CHARS) and is_discovery_source(input)
     ):
-        kind = "a directory, S3 prefix or file of GeoTIFFs"
+        kind = "a directory, S3 prefix or file of rasters"
     else:
         return
     raise click.ClickException(
@@ -219,15 +236,26 @@ def _check_validity_matches_store(store: Path, stack: _GeotiffStack) -> None:
         )
 
 
-def _read_xarray(path: str, variable: str | None) -> xr.DataArray:
+def _read_xarray(
+    path: str,
+    variable: str | None,
+    calendar_to_gregorian: str | None = None,
+    *,
+    can_choose: bool = True,
+) -> tuple[xr.DataArray, CalendarMapping | None]:
+    """The variable as (time, band, y, x), and how its time axis was mapped to Gregorian.
+
+    A time axis on a calendar that numpy cannot hold (360_day, noleap, ...) needs
+    `calendar_to_gregorian`; `can_choose` is False for a command that has no such option.
+    """
     source = Path(path)
     if not source.exists():
         raise click.ClickException(f"input '{path}' does not exist")
-    dataset = (
-        xr.open_dataset(source)
-        if source.suffix == ".nc"
-        else xr.open_zarr(source, chunks=None, consolidated=False)
-    )
+    with _command_errors():
+        if source.suffix == ".nc":
+            dataset = open_netcdf(source)
+        else:
+            dataset = open_zarr(source, chunks=None, consolidated=False)
     if variable is None:
         names = list(dataset.data_vars)
         if len(names) != 1:
@@ -246,7 +274,18 @@ def _read_xarray(path: str, variable: str | None) -> xr.DataArray:
     for key in ("crs", "transform"):
         if key not in da.attrs and key in dataset.attrs:
             da.attrs[key] = dataset.attrs[key]
-    return da
+    mapping = None
+    if is_cftime(da["time"].values):
+        with _command_errors():
+            mapping = to_gregorian(
+                da["time"].values,
+                calendar_name(da["time"]),
+                calendar_to_gregorian,
+                name="time",
+                can_choose=can_choose,
+            )
+        da = da.assign_coords(time=mapping.stored)
+    return da, mapping
 
 
 @contextmanager
@@ -273,6 +312,20 @@ _band_role_option = click.option(
     help="Give band NAME the STAC common name ROLE (red, green, blue, nir, ...), so the "
     "viewer's products find it; 'none' removes one. Repeatable or comma-separated: "
     "--band-role B04=red,B08=nir. Only unambiguous names are detected without it.",
+)
+
+
+_calendar_option = click.option(
+    "--calendar-to-gregorian",
+    "calendar_to_gregorian",
+    type=click.Choice(RULES),
+    default=None,
+    help="Zarr/NetCDF on a 360_day, noleap, all_leap or julian calendar (needs the cftime "
+    "extra). date: keep each step's date and time of day as its Gregorian timestamp (30-day "
+    "months become 28 to 31 days apart); stops at a date Gregorian lacks, such as 360_day "
+    "Feb 30. date-or-month-end: move such a date to the last day of its month. The store's "
+    "provenance records the calendar, the rule and the dates moved. Without it such a source "
+    "is refused.",
 )
 
 
@@ -381,14 +434,20 @@ def main() -> None:
 @click.argument("input", metavar="INPUT")
 @click.argument("out", type=click.Path(path_type=Path))
 @_encode_options
-@click.option("--crs", default=None, help="CRS such as EPSG:32631 (default: from the input).")
+@click.option(
+    "--crs",
+    default=None,
+    help="CRS such as EPSG:32631, or WKT2 text (default: from the input).",
+)
 @click.option("--variable", default=None, help="Variable to encode from a Zarr/NetCDF input.")
+@_calendar_option
 @_band_role_option
 def encode_command(
     input: str,
     out: Path,
     crs: str | None,
     variable: str | None,
+    calendar_to_gregorian: str | None,
     band_roles: tuple[str, ...],
     **options: Any,
 ) -> None:
@@ -413,13 +472,22 @@ def encode_command(
     file_options: dict[str, Any] = {}
     _refuse_files_for_convert(input, out)
     if any(ch in input for ch in _GLOB_CHARS):
+        if calendar_to_gregorian is not None:
+            raise click.UsageError("--calendar-to-gregorian applies to Zarr and NetCDF input")
+        join = (
+            f"use `chronozarr convert {shlex.quote(input)} {shlex.quote(str(out))} "
+            f"{MOSAIC_TILES}`, which joins the tiles of each date into one timestep (encode does "
+            "not)"
+        )
         with _command_errors():
-            stack = _read_geotiffs(input, crs)
+            stack = _read_geotiffs(input, crs, join)
         da = stack.data
         crs = None  # da.attrs holds the files' CRS, which --crs had to match
         file_options = {"bands": stack.bands, "nodata": stack.nodata, "mask": stack.mask}
     else:
-        da = _read_xarray(input, variable)
+        da, mapping = _read_xarray(input, variable, calendar_to_gregorian)
+        if mapping is not None:
+            file_options["provenance"] = provenance_with_note(input, mapping, None)
     with _command_errors():
         if roles:
             named = file_options.get("bands") or [Band(str(n)) for n in da.coords["band"].values]
@@ -461,11 +529,17 @@ def append_command(
         elif any(ch in input for ch in _GLOB_CHARS) or (
             Path(input).is_file() and input.lower().endswith(TIFF_SUFFIXES)
         ):
-            stack = _read_geotiffs(input, crs)
+            join = (
+                f"join them into a new store with `chronozarr convert {shlex.quote(input)} "
+                f"NEW_STORE {MOSAIC_TILES}`, then append that store with `chronozarr append "
+                f"{shlex.quote(str(store))} NEW_STORE`"
+            )
+            stack = _read_geotiffs(input, crs, join)
             _check_validity_matches_store(store, stack)
             report = append(store, stack.data, workers=workers, bands=stack.bands, mask=stack.mask)
         else:
-            report = append(store, _read_xarray(input, variable), crs=crs, workers=workers)
+            da, _ = _read_xarray(input, variable, can_choose=False)
+            report = append(store, da, crs=crs, workers=workers)
     click.echo(
         f"appended {report.n_appended} timestep(s) to {store}: {report.n_time} in total, "
         f"wrote {report.objects_written} objects ({report.bytes_written / 1e6:.1f} MB) "
@@ -477,13 +551,46 @@ def append_command(
 @click.argument("store")
 def validate_command(store: str) -> None:
     """Check STORE against the chronozarr spec. Exit status 1 if it does not conform."""
-    problems = validate(store)
-    if problems:
-        for problem in problems:
+    report = validate_report(store)
+    if report.problems:
+        for problem in report.problems:
             click.echo(problem, err=True)
-        click.echo(f"{store}: {len(problems)} problem(s)", err=True)
+        for note in [*report.notes, *_decoding_notes(store, [*report.problems, *report.notes])]:
+            click.echo(f"note: {note}", err=True)
+        click.echo(f"{store}: {len(report.problems)} problem(s)", err=True)
         sys.exit(1)
-    click.echo(f"{store}: conforms to chronozarr {schema.SPEC_VERSION}")
+    click.echo(f"{store}: conforms to chronozarr {report.spec_version}")
+    for note in report.notes:
+        click.echo(f"note: {note}")
+
+
+def _decoding_notes(store: str, reported: Sequence[str]) -> list[str]:
+    """Whether a store that does not conform still decodes, and what the reader assumed.
+
+    Notes the reader shares with the validation report are not repeated.
+    """
+    try:
+        opened = open_store(store)
+    except (ValueError, OSError) as exc:
+        return [f"does not decode: {exc}"]
+    shape = opened.levels[0].shape
+
+    def count(n: int, noun: str) -> str:
+        return f"{n} {noun}{'' if n == 1 else 's'}"
+
+    summary = (
+        f"decodes: {count(len(opened.levels), 'level')}, {count(shape[1], 'band')}, "
+        f"{count(shape[0], 'timestep')}"
+    )
+    return [summary, *(n for n in opened.notes if not any(n in r for r in reported))]
+
+
+def _resolution_unit(crs: Crs) -> str:
+    """The unit of a pixel size as the CRS names it, or `CRS-unit` when that cannot be told."""
+    try:
+        return schema.axis_unit(crs.to_string())
+    except Exception:  # rasterio raises its own CRSError for a definition it cannot read
+        return "CRS-unit"
 
 
 @main.command("info")
@@ -494,8 +601,13 @@ def info_command(store: str) -> None:
         opened = open_store(store)
     attrs = opened.attrs
     click.echo(f"store:     {redact_url(store)}")
-    click.echo(f"version:   chronozarr {attrs.spec_version}")
-    click.echo(f"crs:       {attrs.crs}")
+    version = (
+        f"chronozarr {attrs.spec_version}"
+        if attrs.spec_version is not None
+        else "not a chronozarr store (read from its multiscales layout)"
+    )
+    click.echo(f"version:   {version}")
+    click.echo(f"crs:       {opened.crs.describe()}")
     click.echo(f"times:     {len(opened.times)} ({attrs.times[0]} .. {attrs.times[-1]})")
     click.echo(f"bands:     {', '.join(opened.bands)}")
     click.echo(f"nodata:    {attrs.nodata}")
@@ -510,13 +622,20 @@ def info_command(store: str) -> None:
     ]
     if extras:
         click.echo(f"extras:    {', '.join(extras)}")
+    notes = attrs.provenance.get("notes") if attrs.provenance else None
+    if notes:
+        click.echo(f"notes:     {notes}")
     click.echo("levels:")
+    unit = _resolution_unit(opened.crs)
     for level in opened.levels:
         layout = f"shards {level.data.shards}" if level.data.shards else "unsharded"
+        named = "" if level.path == str(level.index) else f" ({level.path})"
         click.echo(
-            f"  {level.index}: shape {level.shape}, {level.resolution:g} m/px, "
+            f"  {level.index}{named}: shape {level.shape}, {level.resolution:.10g} {unit} pixels, "
             f"grid {level.grid[0]}x{level.grid[1]}, chunks {level.data.chunks}, {layout}"
         )
+    for note in opened.notes:
+        click.echo(f"note: {note}")
 
 
 _STATUS_LABEL = {"ok": "[ ok ]", "info": "[info]", "warn": "[warn]", "fail": "[FAIL]"}
@@ -789,7 +908,13 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
 @click.argument("source")
 @click.argument("out", type=click.Path(path_type=Path))
 @_encode_options
-@click.option("--variable", default=None, help="Variable to convert from a Zarr or NetCDF source.")
+@click.option(
+    "--variable",
+    default=None,
+    help="Variable to convert from a Zarr or NetCDF source (also from every file of a NetCDF "
+    "series); for rasters, the subdataset to read "
+    "from files that hold several, such as HDF5 (Group/name, or the name alone when unique).",
+)
 @click.option(
     "--dims",
     default=None,
@@ -799,9 +924,9 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
 @click.option(
     "--crs",
     default=None,
-    help="EPSG:xxxxx. Manifest: the target CRS (default: the first source's) and the CRS of "
-    "sources that declare none (a PNG with a world file). Zarr/NetCDF: the CRS of the data "
-    "when the file does not declare one.",
+    help="EPSG:xxxxx, or WKT2 text. Manifest: the target CRS (default: the first source's) "
+    "and the CRS of sources that declare none (a PNG with a world file). Zarr/NetCDF: the CRS "
+    "of the data when the file does not declare one.",
 )
 @click.option(
     "--transform",
@@ -825,7 +950,25 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     "--nodata",
     default=None,
     help="Nodata value, 'none', or 'nan' (float data). Default: what the sources declare; none "
-    "declared means no nodata, not 0. An explicit value replaces the declared one.",
+    "declared means no nodata, not 0. An explicit value replaces the declared one. A value the "
+    "files do not declare that looks like a fill and holds a large share of the sampled pixels "
+    "(-9999 in rainfall) is refused until you pass this option: a number marks it invalid, "
+    "'none' keeps every value as data.",
+)
+@click.option(
+    "--scale",
+    type=float,
+    default=None,
+    help="Replace the scale of every band (stored * scale + offset) in place of what the files "
+    "declare; the files then need not agree. A scale of 100, 1000, 10000 ... that gives values "
+    "past 1e6 is refused until you pass this: MODIS NDVI declares 10000 meaning stored / 10000, "
+    "so --scale 0.0001. --scale 10000 keeps the declared scale.",
+)
+@click.option(
+    "--offset",
+    type=float,
+    default=None,
+    help="Replace the offset of every band in place of what the files declare.",
 )
 @click.option(
     "--mask-var",
@@ -843,16 +986,38 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
 @click.option(
     "--date-pattern",
     default=None,
-    help="Directory, glob or S3 prefix only: where the date is in each file name, with %Y %m "
-    "%d %H %M %S (for example 'ndvi_%Y%m%d'). Default: YYYYMMDD, YYYY-MM-DD or YYYY-MM, read "
-    "only when a name holds exactly one date.",
+    help="Directory, glob or S3 prefix of rasters only: where the date is in each file name, "
+    "with %Y %m %d %H %M %S (for example 'ndvi_%Y%m%d'), or %Y %j for a year and day of year "
+    "(for example 'MOD13A1.A%Y%j' or 'HLS.S30.T17SQV.%Y%jT%H%M%S'). Default: YYYYMMDD, "
+    "YYYY-MM-DD or YYYY-MM, read only when a name holds exactly one date. With "
+    "--bands-are-dates it reads the band descriptions instead of the file name.",
+)
+@click.option(
+    "--bands-are-dates",
+    is_flag=True,
+    help="SOURCE is one raster file whose bands are dates, as Earth Engine's toBands() exports "
+    "a time series: read the date of each band from its description (2020_01_01_NDVI) and "
+    "convert the bands as a series. The part of the description besides the date names the "
+    "band; several bands per date (2020_01_01_NDVI, 2020_01_01_EVI) become the bands of each "
+    "timestep. Never assumed: a multi-band file is normally bands.",
+)
+@click.option(
+    "--mosaic-tiles",
+    is_flag=True,
+    help="Directory, glob or S3 prefix only: files that share a date are tiles of one image, as "
+    "Earth Engine splits a large export into name-0000000000-0000000000.tif files; join the "
+    "tiles of each date into one timestep. They must share one CRS, pixel size and pixel grid, "
+    "and no two tiles of a date may share a pixel. Pixels no tile of a date covers are invalid. "
+    "Never assumed: files that share a date can also be copies.",
 )
 @click.option(
     "--write-manifest",
     type=click.Path(path_type=Path),
     default=None,
     help="Directory, glob or S3 prefix only: write the files and dates found as a manifest "
-    "(.csv or .json) that convert reads back. Refuses to overwrite.",
+    "(.csv or .json) that convert reads back, with a bands column when the files name "
+    "their bands. Written even when the checks find problems; a file with no date gets "
+    "an empty datetime to fill in. Refuses to overwrite.",
 )
 @click.option(
     "--dry-run",
@@ -867,6 +1032,7 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     show_default=True,
     help="Timesteps read concurrently while staging; memory is about this many timesteps.",
 )
+@_calendar_option
 @_band_role_option
 def convert_command(
     source: str,
@@ -879,13 +1045,18 @@ def convert_command(
     bounds: str | None,
     resampling: str | None,
     nodata: str | None,
+    scale: float | None,
+    offset: float | None,
     mask_var: str | None,
     work_dir: Path | None,
     resume: bool,
     dry_run: bool,
     read_ahead: int,
+    calendar_to_gregorian: str | None,
     band_roles: tuple[str, ...],
     date_pattern: str | None,
+    bands_are_dates: bool,
+    mosaic_tiles: bool,
     write_manifest: Path | None,
     **options: Any,
 ) -> None:
@@ -894,15 +1065,27 @@ def convert_command(
     This is the command for files on disk or in S3. SOURCE is one of:
 
     \b
-      a directory, quoted glob or s3:// prefix of GeoTIFFs, each dated from its file name
-      a manifest (.csv with columns uri,datetime[,bands] or .json) of COG or PNG frame URIs
+      a directory, quoted glob or s3:// prefix of rasters (GeoTIFF, BIL, GRIB2, HDF5, ...),
+        or local zips that hold one raster each, dated from their file names
+      one raster whose bands are dates (Earth Engine toBands()), with --bands-are-dates
+      a manifest (.csv with columns uri,datetime[,bands] or .json) of raster or PNG frame URIs
       a Zarr store (path or URL) or a NetCDF file, the last two with --variable
+      a directory or quoted glob of NetCDF files, one file per day or month, which together
+        form one time series dated by the time coordinate in each file (with --variable)
 
     A directory or S3 prefix is not searched recursively; use a glob such as 'dir/**/*.tif'
-    for subdirectories. S3 prefixes are listed with your AWS credentials and need
-    `pip install 'chronozarr[s3]'`. A date is read from a name only when it holds exactly one
-    (YYYYMMDD, YYYY-MM-DD or YYYY-MM); otherwise the file is reported and --date-pattern or a
-    manifest says where the date is. --write-manifest saves what was found.
+    or 'dir/**/*.nc' for subdirectories. S3 prefixes are listed with your AWS credentials and need
+    `pip install 'chronozarr[s3]'`. A file that holds subdatasets and no band (HDF5, HDF-EOS5)
+    needs --variable to pick one; one without georeferencing needs --crs and --bounds. A date is
+    read from a name only when it holds exactly one (YYYYMMDD, YYYY-MM-DD or YYYY-MM); otherwise
+    the file is reported and --date-pattern or a manifest says where the date is. MODIS and HLS
+    names carry a year and day of year, which --date-pattern reads with %Y%j (for example
+    'MOD13A1.A%Y%j'). --write-manifest saves what was found, also when the checks report
+    problems, so you can edit it and run convert on it. One multi-band file whose band
+    descriptions each hold a date (2020_01_01_NDVI, as toBands() names them) is refused with
+    the option that reads it, --bands-are-dates; it is never assumed. Files that share a date and
+    tile one grid (Earth Engine splits a large export into name-0000000000-0000000000.tif files)
+    are refused with the option that joins them, --mosaic-tiles; that is never assumed either.
 
     Every file is checked before anything is read in bulk: dates, grid and CRS, bands, dtype,
     scale, offset, units and nodata. All problems are reported together, per file, with a
@@ -943,6 +1126,8 @@ def convert_command(
             bounds=_parse_numbers(bounds, 4, "--bounds", float),
             resampling=resampling,
             nodata=_parse_nodata(nodata),
+            scale=scale,
+            offset=offset,
             mask_var=mask_var,
             band_roles=_band_roles(band_roles),
             work_dir=work_dir,
@@ -950,6 +1135,9 @@ def convert_command(
             dry_run=dry_run,
             read_ahead=read_ahead,
             date_pattern=date_pattern,
+            bands_are_dates=bands_are_dates,
+            mosaic_tiles=mosaic_tiles,
+            calendar_to_gregorian=calendar_to_gregorian,
             write_manifest_to=write_manifest,
             on_plan=show_plan,
             progress=show_progress,
@@ -1212,6 +1400,48 @@ def bands_command(store: str, band_roles: tuple[str, ...], dry_run: bool) -> Non
     _print_bands(bands)
 
 
+def _view_center(
+    opened: ChronoStore, lon_lat: tuple | None, store_xy: tuple | None
+) -> tuple[float, float] | None:
+    """The map centre, in store coordinates, that --lonlat or --xy asks for; None if neither.
+
+    Raises click.BadParameter for a point the store does not cover. The converted position of a
+    longitude and latitude goes to stderr, so that it can be given again as --xy.
+    """
+    level = opened.levels[0]
+    extent = schema.bounds(level.transform, level.shape[2], level.shape[3])
+    crs = opened.crs.to_string()
+    shown = opened.crs.describe()
+    if store_xy is not None:
+        x, y = store_xy
+        try:
+            check_xy(shown, extent, x, y)
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), param_hint="--xy") from exc
+        return x, y
+    if lon_lat is None:
+        return None
+    lon, lat = lon_lat
+    try:
+        x, y = lonlat_to_xy(crs, extent, lon, lat)
+    except ImportError as exc:
+        if exc.name != "pyproj":
+            raise
+        raise click.BadParameter(
+            f"a store in {shown} needs pyproj to place a longitude and latitude: "
+            f"{extra_hint('geo')}. Or give --xy, a point in {shown}",
+            param_hint="--lonlat",
+        ) from exc
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--lonlat") from exc
+    click.echo(
+        f"centre: longitude {lon:.12g}, latitude {lat:.12g} is x {x:.12g}, y {y:.12g} in {shown}, "
+        "inside the store",
+        err=True,
+    )
+    return x, y
+
+
 @main.command("link")
 @click.argument("store_url")
 @click.option("--product", default=None, help="Initial product id (see `chronozarr bands`).")
@@ -1222,16 +1452,42 @@ def bands_command(store: str, band_roles: tuple[str, ...], dry_run: bool) -> Non
     default=None,
     metavar="LOW,HIGH",
     help="Display limits of the single-band product, in physical units (the band's scale and "
-    "offset applied). Needs --product band.",
+    "offset applied). Needs --product band unless the single band is the only product the "
+    "store has, which link then uses.",
 )
 @click.option(
     "--colormap",
     type=click.Choice(COLORMAPS),
     default=None,
     help="Colormap of the single-band product (the viewer's default is gray). "
-    "Needs --product band.",
+    "Needs --product band unless the single band is the only product the store has, which "
+    "link then uses.",
 )
 @click.option("--time", "t", type=int, default=None, help="Initial timestep index.")
+@click.option(
+    "--lonlat",
+    default=None,
+    metavar="LON,LAT",
+    help="Centre the map on this longitude and latitude, in degrees (WGS 84), longitude first: "
+    "--lonlat -64.62,-3.41. Converted to the store's coordinate system, which needs pyproj (the "
+    "geo extra) unless the store is in EPSG:4326. Refused if the store does not cover the point.",
+)
+@click.option(
+    "--xy",
+    default=None,
+    metavar="X,Y",
+    help="Centre the map on this point in the store's own coordinate system (the CRS that "
+    "`chronozarr info` shows), instead of --lonlat.",
+)
+@click.option(
+    "--zoom",
+    type=float,
+    default=None,
+    metavar="Z",
+    help="Screen pixels per stored pixel: 1 draws each stored pixel as one screen pixel, 4 as a "
+    "square of 4 by 4, 0.5 fits 2 by 2 stored pixels in one. With a centre it defaults to 1. "
+    "The viewer limits how far it zooms in and out.",
+)
 @click.option("--viewer", default=VIEWER_URL, show_default=True, help="Viewer URL.")
 def link_command(
     store_url: str,
@@ -1240,14 +1496,18 @@ def link_command(
     limits: str | None,
     colormap: str | None,
     t: int | None,
+    lonlat: str | None,
+    xy: str | None,
+    zoom: float | None,
     viewer: str,
 ) -> None:
     """Print a viewer URL that opens the hosted store STORE_URL at a chosen initial view.
 
-    The product, band, display limits, colormap and timestep live in the URL, not in the store,
-    so the store stays readable by every client and anyone with the URL sees the same first view.
-    Each value is checked against the store (read over HTTP), because the viewer silently ignores
-    one the store cannot honor. To set the bands a product uses, see `chronozarr bands`.
+    The product, band, display limits, colormap, timestep and place (centre and zoom) live in the
+    URL, not in the store, so the store stays readable by every client and anyone with the URL
+    sees the same first view. Each value is checked against the store (read over HTTP), because
+    the viewer silently ignores one the store cannot honor, or moves a centre outside the store to
+    its edge. To set the bands a product uses, see `chronozarr bands`.
     """
     if not is_url(store_url):
         raise click.ClickException(
@@ -1257,14 +1517,35 @@ def link_command(
             "use chronozarr.view()"
         )
     low_high = _parse_numbers(limits, 2, "--range", float)
-    if low_high is not None and product != "band":
-        raise click.UsageError("--range sets the single-band product: add --product band")
-    if colormap is not None and product != "band":
-        raise click.UsageError("--colormap colors the single-band product: add --product band")
+    needs_band = []
+    if low_high is not None:
+        needs_band.append("--range sets the single-band product")
+    if colormap is not None:
+        needs_band.append("--colormap colors the single-band product")
+    if needs_band and product not in (None, "band"):
+        raise click.UsageError(f"{needs_band[0]}: add --product band")
+    lon_lat = _parse_numbers(lonlat, 2, "--lonlat", float)
+    store_xy = _parse_numbers(xy, 2, "--xy", float)
+    if lon_lat is not None and store_xy is not None:
+        raise click.UsageError("--lonlat and --xy both set the centre of the map: give one")
     with _command_errors():
+        wait_for_address(store_url, lambda line: click.echo(line, err=True))
         opened = open_store(store_url)
         bands = opened.attrs.bands
         statuses = {s.id: s for s in product_status(bands)}
+        if product is None and needs_band:
+            others = [i for i, s in statuses.items() if s.available and i != "band"]
+            if others:
+                raise click.UsageError(
+                    f"{needs_band[0]}: add --product band (this store also has "
+                    f"{', '.join(others)}, so the product is ambiguous)"
+                )
+            product = "band"
+            click.echo(
+                "no --product: this store has no product but the single band, so using "
+                "--product band",
+                err=True,
+            )
         if product is not None:
             if product not in statuses:
                 raise click.BadParameter(
@@ -1294,6 +1575,13 @@ def link_command(
                     f"band {chosen.name} is shown as reflectance with fixed limits, so --range "
                     "would be ignored; choose a band whose values are not reflectance-like"
                 )
+        center = _view_center(opened, lon_lat, store_xy)
+        if center is not None and zoom is None:
+            zoom = 1.0
+            click.echo(
+                "no --zoom with the centre: using zoom 1, one stored pixel per screen pixel",
+                err=True,
+            )
         click.echo(
             viewer_url(
                 store_url,
@@ -1303,6 +1591,8 @@ def link_command(
                 band=band,
                 range=low_high,
                 colormap=colormap,
+                zoom=zoom,
+                center=center,
             )
         )
     click.echo(

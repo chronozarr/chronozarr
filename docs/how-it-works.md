@@ -18,7 +18,7 @@ my_store/
 
 The chunks hold the stored numbers in their original type: uint8, uint16, int16 or float32. A scale and offset per band give physical units. An optional mask marks invalid pixels. An optional coverage plane counts the valid observations behind each pixel. The viewer draws these numbers on the GPU and computes products such as true color or NDVI there. It also downloads the timesteps around the current one in the background, so stepping through time usually needs no new download.
 
-The layout follows the Zarr conventions for pyramids (`multiscales`), coordinate systems (`proj`) and georeferencing (`spatial`), all at v0.1. This is why other tools can read a store without chronozarr installed: xarray, GDAL 3.13, and CarbonPlan's zarr-layer for MapLibre.
+The layout follows the Zarr conventions for pyramids (`multiscales`), coordinate systems (`proj`) and georeferencing (`spatial`), all at v0.1. This is why other tools can read a store without chronozarr installed: xarray, GDAL 3.13, and CarbonPlan's zarr-layer for MapLibre. They read the stored values. Plain xarray and zarr-layer 0.11.0 do not read chronozarr's band scale and offset or its mask. xarray returns the stored values with neither applied. zarr-layer shows the stored values, treats an array fill value of 0 as nodata and draws masked pixels; in a test store it hid valid zeros. This was measured on 2026-10-19 ([GeoZarr review](../spec/review-2026-10-geozarr.md)). chronozarr's own readers and its viewer apply the scale, the offset and the mask.
 
 To publish a store, upload it to a static host that sends CORS headers. A sharded store also needs byte-range requests. The demo store is on Cloudflare R2, and there is no server code to run.
 
@@ -70,5 +70,7 @@ import xarray as xr
 
 ds = xr.open_zarr("my_store", group="0", zarr_format=3, chunks=None)
 ```
+
+This returns the stored values, without the band scale and offset or the mask. See [Analyze a store in Python](analyze.md#without-chronozarr-installed).
 
 GDAL 3.13 reads the CRS, the georeferencing and the values. It attaches the coarser levels as overviews when you open the data array as `ZARR:"my_store":/0/data`. A single time-slice subdataset shows no overviews. To get Cloud Optimized GeoTIFFs for older GDAL or QGIS, run `chronozarr export-cog my_store out_dir`.

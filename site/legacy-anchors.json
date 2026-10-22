@@ -58,5 +58,12 @@
   },
   "/guides/publish": {
     "chronozarr-publish": "/guides/publish#publish"
+  },
+  "/guides/format-comparison": {
+    "ndpyramid-and-zarr-layer": "/guides/format-comparison#zarr-layer-topozarr-and-ndpyramid"
+  },
+  "/specification": {
+    "23-epsg-north-up-grid-restriction": "/specification#23-north-up-grid-in-any-crs",
+    "10-changes-from-02": "/specification#10-changes-from-03-and-02"
   }
 }

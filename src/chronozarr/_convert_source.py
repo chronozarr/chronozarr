@@ -4,19 +4,22 @@ from __future__ import annotations
 
 import math
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
 
-from chronozarr.schema import Band, Transform
+from chronozarr.crs import Crs, is_code_text
+from chronozarr.schema import Band, Transform, axis_unit
 
 Bounds = tuple[float, float, float, float]  # west, south, east, north in the units of the CRS
+_EDGE_TOLERANCE = 1e-6  # degrees; a pixel edge at 180 that arithmetic puts a hair beyond
 
 
 @dataclass(frozen=True)
 class Grid:
-    """Target pixel grid: a CRS (EPSG string), a north-up transform and a shape."""
+    """Target pixel grid: a CRS (`EPSG:<code>`, or WKT2 text when it has no code), a north-up
+    transform and a shape."""
 
     crs: str
     transform: Transform
@@ -25,9 +28,27 @@ class Grid:
 
     def describe(self) -> str:
         return (
-            f"{self.crs}, {self.height} x {self.width} px, "
-            f"{abs(self.transform[0]):.10g} m pixels (transform origin "
+            f"{_crs_label(self.crs)}, {self.height} x {self.width} px, "
+            f"{abs(self.transform[0]):.10g} {axis_unit(self.crs)} pixels (transform origin "
             f"{self.transform[2]:.10g}, {self.transform[5]:.10g})"
+        )
+
+    def longitude_note(self) -> str | None:
+        """A plan line when the axes are degrees and x runs outside -180 to 180, else None.
+
+        Such a store is placed correctly by GDAL and zarr-layer, but a lookup with a longitude in
+        the other convention finds no column and `sel(method="nearest")` returns an edge one.
+        """
+        if axis_unit(self.crs) != "degree":
+            return None
+        west = self.transform[2]
+        east = west + self.transform[0] * self.width
+        if west >= -180 - _EDGE_TOLERANCE and east <= 180 + _EDGE_TOLERANCE:
+            return None
+        return (
+            f"x runs {west:.10g} to {east:.10g} degrees, outside -180 to 180, and is stored as "
+            "given. Look longitudes up in the same convention (shift by 360): "
+            'sel(x=-80, method="nearest") returns an edge column, with no error'
         )
 
 
@@ -97,14 +118,24 @@ def check_bounds(values: object, where: str) -> Bounds:
     return (west, south, east, north)
 
 
-def _epsg(crs: Any, where: str) -> str:
-    code = crs.to_epsg() if crs is not None else None
-    if code is None:
-        raise ValueError(
-            f"{where}: the CRS has no EPSG code; chronozarr stores declare EPSG:<code>. "
-            "Pass --crs EPSG:xxxxx"
-        )
-    return f"EPSG:{code}"
+def _crs_string(crs: Any) -> str:
+    """A rasterio CRS as the text a `Grid` carries: `EPSG:<code>` if it has a code, else WKT2."""
+    code = crs.to_epsg()
+    return f"EPSG:{code}" if code is not None else crs.to_wkt(version="WKT2_2019")
+
+
+def _crs_label(crs: str) -> str:
+    """A short name of a `Grid` CRS for messages: the code, or the name in its WKT2."""
+    return crs if is_code_text(crs) else Crs(wkt2=crs).describe()
+
+
+def _same_crs(a: str, b: str) -> bool:
+    """Whether two `Grid` CRS texts name the same CRS; rasterio compares them, names aside."""
+    if a == b:
+        return True
+    from rasterio.crs import CRS  # ty: ignore[unresolved-import]  # compiled, no stubs
+
+    return bool(CRS.from_user_input(a) == CRS.from_user_input(b))
 
 
 def _bounds_grid(bounds: Bounds, crs: str, height: int, width: int) -> Grid:
@@ -126,7 +157,7 @@ def _check_north_up(transform: Sequence[float], where: str) -> Transform:
 
 
 def _same_grid(a: Grid, b: Grid) -> bool:
-    if a.crs != b.crs or (a.height, a.width) != (b.height, b.width):
+    if (a.height, a.width) != (b.height, b.width) or not _same_crs(a.crs, b.crs):
         return False
     tolerance = 1e-6 * abs(a.transform[0])
     return all(abs(x - y) <= tolerance for x, y in zip(a.transform, b.transform, strict=True))
@@ -134,8 +165,8 @@ def _same_grid(a: Grid, b: Grid) -> bool:
 
 def _grid_difference(found: Grid, wanted: Grid) -> str:
     parts = []
-    if found.crs != wanted.crs:
-        parts.append(f"CRS {found.crs} vs {wanted.crs}")
+    if not _same_crs(found.crs, wanted.crs):
+        parts.append(f"CRS {_crs_label(found.crs)} vs {_crs_label(wanted.crs)}")
     if (found.height, found.width) != (wanted.height, wanted.width):
         parts.append(f"shape {found.height}x{found.width} vs {wanted.height}x{wanted.width}")
     if not all(
@@ -204,14 +235,14 @@ def _decide_validity(
     *,
     override: float | int | None | str,
     explicit: Sequence[str],
-    footprint: bool,
+    footprint: str | None,
 ) -> Validity:
     """Choose between a nodata sentinel and a mask.
 
     `declared` are the nodata tokens of every source and band (None where a band declares
     none); `override` is "auto", None or the explicit nodata; `explicit` names the sources'
-    own masks (alpha band, internal mask, `--mask-var`); `footprint` says warped timesteps
-    leave pixels with no source behind them.
+    own masks (alpha band, internal mask, `--mask-var`); `footprint` says why some pixels have
+    no source behind them (warped timesteps, tiles that leave a gap), or is None.
     """
     reasons = list(explicit)
     candidate: float | int | None = None
@@ -236,11 +267,12 @@ def _decide_validity(
             reasons.append("nodata nan was requested")
         else:
             candidate = _checked_nodata(override, dtype)
-    if footprint and candidate is None:
-        reasons.append("warped timesteps leave pixels outside the source footprint")
+    if footprint is not None and candidate is None:
+        reasons.append(footprint)
     if not reasons:
         if candidate is None:
-            return Validity(False, None, "no nodata and no mask: every pixel is valid")
+            what = "no nodata declared" if override == "auto" else "no nodata (--nodata none)"
+            return Validity(False, None, f"{what} and no mask: every pixel is stored as data")
         return Validity(False, candidate, f"nodata {candidate} sentinel, no mask")
     kept = None if override == "auto" else candidate
     note = "no nodata" if kept is None else f"nodata {kept}"
@@ -296,3 +328,37 @@ def _scaling(scale: float, offset: float, where: str) -> tuple[float, float]:
             "non-zero and the offset finite"
         )
     return scale, offset
+
+
+def override_scaling(
+    bands: Sequence[Band], scale: float | None, offset: float | None
+) -> tuple[tuple[Band, ...], str]:
+    """`bands` with the scale and offset the user gave in place of the sources' own, and the plan
+    line that says so. A value left as None keeps what the sources declare; ValueError when a given
+    scale is zero or not finite, or a given offset is not finite."""
+    if scale is not None and not (math.isfinite(scale) and scale != 0):
+        raise ValueError(f"--scale must be finite and non-zero, got {scale}")
+    if offset is not None and not math.isfinite(offset):
+        raise ValueError(f"--offset must be finite, got {offset}")
+
+    def declared(values: Sequence[float | None], none: float) -> str:
+        return ", ".join(dict.fromkeys(f"{none if v is None else v:.10g}" for v in values))
+
+    parts = []
+    if scale is not None:
+        parts.append(
+            f"--scale {scale:.10g}; the files declare {declared([b.scale for b in bands], 1.0)}"
+        )
+    if offset is not None:
+        parts.append(
+            f"--offset {offset:.10g}; the files declare {declared([b.offset for b in bands], 0.0)}"
+        )
+    changed = tuple(
+        replace(
+            band,
+            scale=band.scale if scale is None else scale,
+            offset=band.offset if offset is None else offset,
+        )
+        for band in bands
+    )
+    return changed, ". ".join(parts)

@@ -79,7 +79,7 @@ verified. Open the store in the viewer:
   https://chronozarr.org/demo/?store=https%3A%2F%2Fmy-bucket.s3.us-east-1.amazonaws.com%2Fmy_store-v1
 ```
 
-Open the link, choose the view that you want to show, and click Copy link. The copied link also holds the date, the product and the map view. `chronozarr link URL` prints a link with a chosen product and date from the command line.
+Open the link, choose the view that you want to show, and click Copy link. The copied link also holds the date, the product and the map view. `chronozarr link URL` prints a link with a chosen date, product, colormap and place from the command line; see [Choose a date and a place](viewer.md#choose-a-date-and-a-place).
 
 ## Provider examples
 
@@ -143,6 +143,8 @@ The objects stay in the bucket, no link is printed, and the exit status is 1. Fi
 4. Uploads in four phases: data chunks, then the time and volatility chunks, then the group and array `zarr.json` files, then the root `zarr.json`. A phase starts after the previous one is fully stored. If an upload fails, the command stops with no root `zarr.json` in the bucket and names the failing key. boto3 and the Azure client retry each request up to five times. The Google client retries transient errors with its default policy.
 5. Runs the doctor checks against the public URL, with `Origin: https://chronozarr.org`.
 6. Prints `https://chronozarr.org/demo/?store=<URL-encoded public URL>` only when no check failed. Warnings are printed and do not block the link.
+
+The upload count is the store's file count. A store writes every chunk, including chunks that hold only the fill value, so a store that is mostly empty has many small objects: 4,155 files for an 8192 by 4096 store of 24 timesteps whose cells are 69 % empty. Encoded with `--shard`, the same store has 564 files, and a viewer then makes one small range read for each empty chunk it shows ([measurements](evidence.md#every-chunk-written-2026-10-20)).
 
 Cache headers follow the [cache classes](append.md#cache-classes). Every `zarr.json`, each level's `time/c/0` and the `volatility` chunks get `public, max-age=300`. Every other object gets `public, max-age=31536000, immutable`. The command does not mark the last shard of a sharded store as short-lived, so `--update` refuses a sharded append that rewrites a trailing shard.
 

@@ -67,7 +67,7 @@ Result:
 | Whole area at 40 m, 60/s requested, current viewer | series in memory | 30.0 achieved, equal to the 30 Hz frame cap, 0 holds, 0 partial frames, 0 requests | 2026-10-12, two runs |
 | Local store, 36 level-0 cells, one timestep at a time | series in memory | step time 4.9 ms median (v0.2), 4.5 ms (v0.3); p95 5.8 ms | 2026-10-03, five interleaved runs |
 
-The viewer clamps its speed to the display's refresh rate, so 60 steps per second needs a display of 60 Hz or more. Since 2026-10-01 it also shows each frame whole or not at all, buffers two seconds before it starts, and drops to a coarser level when the loop does not fit in memory (cache cap 1.5 GiB, or 768 MiB on machines with under 8 GB). With a view that does not fit, 10 steps per second were achieved on the natural link and 7.8 at 50 Mbit/s and 40 ms (2026-10-01, [whole frames](evidence.md#whole-frames-and-buffered-playback)).
+The viewer clamps its speed to the display's refresh rate, so 60 steps per second needs a display of 60 Hz or more. Since 2026-10-01 it also shows each frame whole or not at all, buffers two seconds before it starts, and drops to a coarser level when the loop does not fit in memory (cache cap 1.5 GiB, or 768 MiB on machines with under 8 GB). With a view that does not fit, 10 steps per second were achieved on the natural link and 7.8 at 50 Mbit/s and 40 ms (2026-10-01, [whole frames](evidence.md#whole-frames-and-buffered-playback)). Since 2026-10-19 it also plays at the speed the measured link can feed when even the coarsest level cannot be fed at the speed you chose, and shows both speeds. At 0.7 MB/s with 100 ms the loop played at about 0.8 steps per second with no pause, where it had played bursts of 9 steps and waited 7 to 14 s between them ([speculative bandwidth](evidence.md#speculative-bandwidth-and-playback-on-a-slow-link-2026-10-19)).
 
 Method: `chronozarr.playBench({ stepsPerSecond, loops, lod, warm })` in the viewer console; headless Chromium, 1440 x 900 at pixel ratio 2. See [playback](evidence.md#playback).
 
@@ -75,7 +75,15 @@ What this does not show: The 60-per-second rows are one run each from before the
 
 ### Comparison with other readers
 
-No head-to-head timings are published. A local benchmark of this viewer, CarbonPlan's zarr-layer and COG-per-date through TiTiler exists (`bench/v03`, 2026-10-09). Its summary is marked provisional: the machine was shared, the servers ran on localhost over HTTP/1.1, and no CDN was involved. It shows that the viewer revisits a date it has cached in 2 to 5 ms, and that over 50 and 10 Mbit/s links its step time at the default (finer) overview level is longer than the other two, because it fetches more bytes per step. Results with matched view resolution are closer. Until the full experiment is run on a quiet machine with a CDN, this page makes no claim of being faster than another tool. Capability statements about other tools are in [format-comparison.md](format-comparison.md) and are dated in [comparison notes](evidence.md#comparison-notes).
+The [GeoZarr review](../spec/review-2026-10-geozarr.md) measured this viewer, chronozarr's MapLibre layer and CarbonPlan's zarr-layer 0.11.0 (on maplibre-gl 6.10.0) on the same local and public stores, with a new browser for every run. It ran on 2026-10-18 and 2026-10-19 on one Apple M3 Max with other work running (load average 5 to 35 on 16 cores).
+
+- On a fast link all three drew 239 or 240 of the 240 steps of a 60 s scrub. A warm timestep switch took one display frame in zarr-layer and in the viewer, with no request.
+- With the link limited to 12 MB/s and 30 ms, the viewer drew 240 of 240 steps by dropping to coarser levels, chronozarr's MapLibre layer drew 128, and zarr-layer drew 45. A new step took 12 to 15 ms in the viewer, and 22 to 77 ms in zarr-layer on the local store and 66 ms on the public one.
+- The viewer downloads more. It fetched 187 to 226 MB in the 1.5 s after the first frame, and 1,450 MB over the 60 s scrub where zarr-layer fetched 544 MB.
+
+These are results from one machine and one link limit. They show how the tools behaved there, not a ranking.
+
+An earlier local benchmark of the viewer, zarr-layer 0.10.0 and COG-per-date through TiTiler exists (`bench/v03`, 2026-10-09). Its summary is marked provisional: the machine was shared, the servers ran on localhost over HTTP/1.1, and no CDN was involved. It shows that the viewer revisits a date it has cached in 2 to 5 ms, and that over 50 and 10 Mbit/s links its step time at the default (finer) overview level is longer than the other two, because it fetches more bytes per step. Results with matched view resolution are closer. The review's slow-link run let the viewer drop to coarser levels. This page makes no claim of being faster than another tool. Capability statements about other tools are in [format-comparison.md](format-comparison.md) and are dated in [comparison notes](evidence.md#comparison-notes).
 
 ## 2. Scientific correctness of stored values
 
@@ -182,7 +190,7 @@ await chronozarr.scrubBench()
 await chronozarr.interactionBench()
 ```
 
-Headless, with software WebGL, against a local fixture: `node scripts/audit_browser.mjs js data/spike/stress6x6 data/reports/browser-bench.json` ([CONTRIBUTING.md](../CONTRIBUTING.md)). Codec sizes and decode: `js/support/codec-bench/` and `scripts/bench_codecs.py`. Delivery comparison with zarr-layer and COG: `node bench/v03/run.mjs` (several hours; needs Docker and a local copy of the store; see [bench/v03/README.md](../bench/v03/README.md)). Value check against independent readers: `node bench/v03/values.mjs`.
+Headless, with software WebGL, the viewer of two commits against each other on a generated 36-cell store: `node js/support/gate-bench/run.mjs` ([CONTRIBUTING.md](../CONTRIBUTING.md)); the Speed gates workflow runs it on every pull request that changes `js/`. Codec sizes and decode: `js/support/codec-bench/` and `scripts/bench_codecs.py`. Delivery comparison with zarr-layer and COG: `node bench/v03/run.mjs` (several hours; needs Docker and a local copy of the store; see [bench/v03/README.md](../bench/v03/README.md)). Value check against independent readers: `node bench/v03/values.mjs`.
 
 Ingestion, from the repository root:
 

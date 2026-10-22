@@ -52,8 +52,8 @@ for(let repeat=0;repeat<repeats;repeat++) {
    } else if(name==='diagnostic') {
     const previous=v.store.budgets();v.store.setBudgets({decodedBytes:384*1024**2});
     const original=v.store.prefetch.bind(v.store);
-    v.store.prefetch=(options={})=>original({...options,maxTimesteps:undefined});
-    result={previous,current:v.store.budgets(),override:'decoded ceiling384MiB; maxTimesteps removed for compressed lookahead'};
+    v.store.prefetch=(options={})=>original({...options,maxSteps:undefined});
+    result={previous,current:v.store.budgets(),override:'decoded ceiling384MiB; maxSteps removed for compressed lookahead'};
    } else if(name==='budget') {const previous=v.store.budgets();v.store.setBudgets({totalBytes:args.totalBytes});result={previous,current:v.store.budgets()};}
    else if(name==='prefetch') result=await bounded(v.prefetchNow({movie:true}));
    else if(name==='switch') {

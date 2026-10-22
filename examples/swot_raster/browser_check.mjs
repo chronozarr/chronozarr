@@ -61,7 +61,7 @@ try {
   const sample = await page.evaluate(async ({ index }) => {
     const { layer } = window.chronozarrDemo;
     const { createProjection } = await import('/js/maplibre/projection.js');
-    const projection = createProjection(layer.store.crs);
+    const projection = await createProjection(layer.store);
     const [a, , c, , e, f] = layer.store.levels[0].transform;
     const col = index % 512 + 0.5, row = Math.floor(index / 512) + 0.5;
     return layer.getValueAt(projection.toLonLat(c + a * col, f + e * row), { t: 1 });

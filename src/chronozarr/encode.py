@@ -23,6 +23,7 @@ from chronozarr import schema
 from chronozarr._writer import (
     DEFAULT_CELLS_IN_FLIGHT,
     VOLATILITY_SCALE,
+    WRITE_EVERY_CHUNK,
     Block,
     _ArraySource,
     _CellWriter,
@@ -42,6 +43,7 @@ from chronozarr._writer import (
     _spill_timesteps,
     _write_time_coord,
 )
+from chronozarr.crs import Crs
 from chronozarr.schema import (
     Band,
     Chronozarr,
@@ -164,7 +166,7 @@ class _Layout:
     chunk_size: int
     shard: bool
     shard_time: int
-    crs: str
+    crs: Crs
     transform: Transform
     times_iso: list[str]
     times_ms: np.ndarray
@@ -186,7 +188,7 @@ def _create_level(root: zarr.Group, k: int, layout: _Layout) -> _LevelArrays:
     cs = layout.chunk_size
     transform = schema.scale_transform(layout.transform, k)
     group = root.create_group(str(k))
-    group.attrs.update(schema.LevelAttrs(layout.crs, transform, transform[0]).to_attrs())
+    group.attrs.update(schema.LevelAttrs(layout.crs.code, transform, transform[0]).to_attrs())
     compressor = _compressors(layout.codec, layout.level)
 
     def create(name: str, lead: tuple[int, ...], dtype: np.dtype, fill: int | float, dims: tuple):
@@ -201,6 +203,7 @@ def _create_level(root: zarr.Group, k: int, layout: _Layout) -> _LevelArrays:
             shards=(layout.shard_time, *lead, cs, cs) if layout.shard else None,
             compressors=compressor,
             filters=None,
+            config=WRITE_EVERY_CHUNK,
         )
         attrs = schema.data_array_attrs(
             layout.crs, transform, height, width, layout.nodata, dimensions=dims
@@ -325,6 +328,7 @@ def _write_store(
             dtype="float32",
             fill_value=0.0,
             dimension_names=("row", "col"),
+            config=WRITE_EVERY_CHUNK,
         )
         vol[:] = volatility
         vol.attrs["_ARRAY_DIMENSIONS"] = ["row", "col"]
@@ -342,7 +346,8 @@ def _write_store(
     meta = Chronozarr(
         times=tuple(layout.times_iso),
         bands=layout.bands,
-        crs=layout.crs,
+        crs=layout.crs.code,
+        spec_version=schema.spec_version_for(layout.crs),
         volatility_path=schema.VOLATILITY_PATH if layout.volatility else None,
         nodata=layout.nodata,
         mask_variable=schema.MASK_VARIABLE if layout.has_mask else None,
@@ -351,7 +356,7 @@ def _write_store(
         levels=summaries,
         shard_bytes=_shard_bytes(out, len(layout.shapes)) if layout.shard else None,
     )
-    datasets = tuple(LevelRef(str(k), layout.crs) for k in range(len(layout.shapes)))
+    datasets = tuple(LevelRef(str(k), layout.crs.code) for k in range(len(layout.shapes)))
     root.attrs.update(RootAttrs(meta, datasets).to_attrs())
     with warnings.catch_warnings():
         # zarr-python warns that consolidated metadata is outside the Zarr v3 spec. chronozarr
@@ -415,7 +420,7 @@ def encode(
     workers: int | None = None,
     spill_dir: str | Path | None = None,
 ) -> EncodeReport:
-    """Write `data` as a chronozarr v0.3 store at `out`.
+    """Write `data` as a chronozarr store at `out` (spec 0.3.0, or 0.4.0 without an EPSG code).
 
     Args:
         data: Either a DataArray with dims (time, band, y, x) whose dtype is uint8, uint16,
@@ -424,7 +429,10 @@ def encode(
             `crs`, `transform` and `bands`. An iterable is written once to cell-major temp
             files, then encoded cell by cell, so memory does not grow with the raster.
         out: Directory to create. Must not exist or must be empty (stores are immutable).
-        crs: CRS string such as "EPSG:32631". Falls back to `data.attrs["crs"]`.
+        crs: An authority code such as "EPSG:32631", or WKT2 text for a CRS that has no code.
+            WKT1, PROJJSON and PROJ strings are converted to WKT2 when pyproj is installed. A
+            CRS with an EPSG code gives a 0.3.0 store and any other a 0.4.0 store. Falls back to
+            `data.attrs["crs"]`.
         transform: Affine coefficients (a, b, c, d, e, f) of the north-up level-0 grid. Falls
             back to `data.attrs["transform"]`, then to the x/y pixel-centre coordinates.
         times: datetime64 timestamps, strictly increasing (iterable input only).
@@ -475,8 +483,7 @@ def encode(
     resolved_crs = crs if crs is not None else prepared.attrs.get("crs")
     if not resolved_crs:
         raise ValueError("no crs: pass crs='EPSG:xxxxx' or set da.attrs['crs']")
-    if schema._EPSG_RE.fullmatch(str(resolved_crs)) is None:
-        raise ValueError("only EPSG north-up grids are supported")
+    stored_crs = Crs.from_string(str(resolved_crs)).with_wkt2()
     base_transform = _resolve_transform(transform, prepared.da)
     times_iso, times_ms = _iso_times(prepared.times)
     if len(times_iso) != prepared.n_time:
@@ -505,7 +512,7 @@ def encode(
         chunk_size=chunk_size,
         shard=shard,
         shard_time=shard_time if shard_time is not None else prepared.n_time,
-        crs=str(resolved_crs),
+        crs=stored_crs,
         transform=base_transform,
         times_iso=times_iso,
         times_ms=times_ms,

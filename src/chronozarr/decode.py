@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
+import warnings
 from collections.abc import Sequence
-from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,81 +15,129 @@ import zarr
 from zarr.errors import GroupNotFoundError
 from zarr.storage import LocalStore
 
-from chronozarr import schema
-from chronozarr.schema import Chronozarr, SchemaError, Transform
+from chronozarr import outside, schema
+from chronozarr.crs import Crs, same_crs
+from chronozarr.level import Level, LevelData
+from chronozarr.schema import Chronozarr, SchemaError
 from chronozarr.store import HttpStore as HttpStore
 from chronozarr.store import IndexStore, redact_url
 from chronozarr.store import as_store as as_store
 
 
-@dataclass(frozen=True)
-class Level:
-    """One pyramid level of a store."""
-
-    index: int
-    shape: tuple[int, int, int, int]  # (time, band, y, x)
-    transform: Transform
-    resolution: float
-    chunk_size: int
-    grid: tuple[int, int]  # (rows, cols) of cells
-    data: zarr.Array
-    mask: zarr.Array | None = None
-    coverage: zarr.Array | None = None
-
-    @property
-    def shard_time(self) -> int | None:
-        """Timesteps per shard along time; None for an unsharded array."""
-        return None if self.data.shards is None else int(self.data.shards[0])
-
-
 class ChronoStore:
-    """A chronozarr store opened for reading. Use `open_store` to create one."""
+    """A store opened for reading. Use `open_store` to create one.
+
+    A chronozarr store opens through its `chronozarr` block. A store with no block opens when its
+    multiscales layout and arrays say where the values are and where they are on the ground
+    (`chronozarr.outside`); level 0 is the finest, whatever order the layout lists.
+
+    `notes` lists what the store leaves out or spells otherwise and the reader read through: an
+    absent mirror, a registration spelled with other URLs, an overview method other than the
+    block mean, a chunk layout the format does not write. For a store with no block it also lists
+    every assumption: the scale and offset taken as 1 and 0, a placeholder time. Values, geometry,
+    validity and scale are read as declared whatever the notes say. `chronozarr validate` says
+    which deviations also keep the store from conforming.
+    """
 
     def __init__(self, group: zarr.Group, source: str) -> None:
-        root = schema.parse_root_attrs(group.attrs.asdict())
         self._group = group
         self.source = source
-        self.attrs: Chronozarr = root.chronozarr
-        self.times: np.ndarray = np.array(
+        state = schema._LevelState()
+        if "chronozarr" in group.attrs:
+            self._open_chronozarr(group, state)
+        else:
+            self._open_outside(group, state)
+        self.dtype: np.dtype = self.levels[0].data.dtype
+        self.nodata: int | float | None = self.attrs.nodata
+        self._scale = np.array(
+            [1.0 if b.scale is None else b.scale for b in self.attrs.bands], dtype=np.float32
+        )
+        self._offset = np.array(
+            [0.0 if b.offset is None else b.offset for b in self.attrs.bands], dtype=np.float32
+        )
+
+    def _open_outside(self, group: zarr.Group, state: schema._LevelState) -> None:
+        opened = outside.read_outside(group, state.found)
+        self.attrs: Chronozarr = opened.attrs
+        self.times: np.ndarray = opened.times
+        self.bands: tuple[str, ...] = opened.attrs.band_names
+        self.levels: tuple[Level, ...] = opened.levels
+        self._stored_crs: Crs = opened.crs
+        self.notes: tuple[str, ...] = (*state.found.breaks, *state.found.advice)
+
+    def _open_chronozarr(self, group: zarr.Group, state: schema._LevelState) -> None:
+        found = state.found
+        root = schema.read_root_attrs(group.attrs.asdict(), found)
+        self.attrs = root.chronozarr
+        self.times = np.array(
             [schema.parse_time(t) for t in root.chronozarr.times], dtype="datetime64[ms]"
         )
-        self.bands: tuple[str, ...] = root.chronozarr.band_names
+        self.bands = root.chronozarr.band_names
         levels = []
+        stored_crs: list[Crs] = []
+        mirror_problems: list[str] = []
         for index, dataset in enumerate(root.datasets):
             where = f"level {dataset.path}"
             level_group = schema.get_group(group, dataset.path, "store")
             data = schema.get_array(level_group, root.chronozarr.variable, where)
-            level_attrs = schema.canonical_level(data, where)
+            level_attrs = schema.read_geometry(data, where, found)
             mirrors = level_group.attrs.asdict()
-            for key, expected in level_attrs.to_attrs().items():
+            schema.note_absent_level_mirrors(mirrors, where, found)
+            for key, expected in (
+                ("transform", list(level_attrs.transform)),
+                ("resolution", level_attrs.resolution),
+            ):
                 if key in mirrors and mirrors[key] != expected:
                     raise SchemaError(f"{where}: {key} mirror differs from canonical geometry")
-            if level_attrs.crs != root.chronozarr.crs:
-                raise SchemaError(f"{where}: CRS differs from root")
+            stored_crs.append(level_attrs.crs)
+            if index:
+                match = same_crs(level_attrs.crs, stored_crs[0])
+                if match.same is False:
+                    raise SchemaError(
+                        f"{where}: CRS differs from level 0 (compared by {match.method})"
+                    )
+            if "crs" in mirrors:
+                schema.check_crs_mirror(
+                    f"{where}: crs", mirrors["crs"], stored_crs[0], mirror_problems, found.notes
+                )
+            else:
+                state.absent.append(where)
             schema.check_codecs(data, where)
             if data.dtype.name not in schema.DTYPES:
                 raise SchemaError(f"{where}: unsupported data_type {data.dtype.name}")
-            cs = schema.cell_size(data, f"{where}/data")
-            shape = (data.shape[0], data.shape[1], data.shape[2], data.shape[3])
+            if data.ndim != 4:
+                raise SchemaError(
+                    f"{where}/data: expected 4 dimensions (time, band, y, x), got shape "
+                    f"{data.shape}"
+                )
+            level_data = LevelData((data,), schema.DIMENSIONS)
+            rows, cols = level_data.cell_shape
+            shape = level_data.shape
             levels.append(
                 Level(
                     index=index,
+                    path=dataset.path,
                     shape=shape,
                     transform=level_attrs.transform,
                     resolution=level_attrs.resolution,
-                    chunk_size=cs,
-                    grid=schema.grid_shape(shape[2], shape[3], cs),
-                    data=data,
+                    grid=(math.ceil(shape[2] / rows), math.ceil(shape[3] / cols)),
+                    data=level_data,
+                    nodata=root.chronozarr.nodata,
                     mask=_plane(level_group, root.chronozarr.mask_variable, where),
                     coverage=_plane(level_group, root.chronozarr.coverage_variable, where),
                 )
             )
-        self.levels: tuple[Level, ...] = tuple(levels)
-        problems: list[str] = []
-        state = schema._LevelState()
+        self.levels = tuple(levels)
+        self._stored_crs = stored_crs[0]
+        state.crs = self._stored_crs
+        problems: list[str] = mirror_problems
+        if root.chronozarr.crs is not None:
+            schema.check_crs_mirror(
+                "chronozarr.crs", root.chronozarr.crs, self._stored_crs, problems, found.notes
+            )
         for level in levels:
             shape = schema._check_data_array(
-                level.data,
+                level.data.arrays[0],
                 f"level {level.index}/data",
                 self.attrs,
                 state.shape,
@@ -107,23 +157,32 @@ class ChronoStore:
                     mirror = self.attrs.levels[level.index]
                     if (
                         mirror.shape != level.shape
-                        or mirror.grid != level.grid
                         or mirror.transform != level.transform
                         or mirror.resolution != level.resolution
                     ):
                         problems.append(f"level {level.index}: chronozarr.levels mirror mismatch")
+                    elif mirror.grid != level.grid:
+                        found.must(
+                            f"level {level.index}",
+                            f"chronozarr.levels grid {list(mirror.grid)} differs from the "
+                            f"{list(level.grid)} cells of the stored chunks; the chunks decide",
+                        )
             for plane in (level.mask, level.coverage):
                 if plane is not None:
+                    plane_where = f"level {plane.path}"
                     schema._check_spatial(
                         plane,
-                        self.attrs.crs,
+                        self._stored_crs,
                         level.transform,
                         level.shape[2],
                         level.shape[3],
-                        plane.path,
+                        plane_where,
                         problems,
+                        found,
                     )
-                    schema._check_dims(plane, schema.PLANE_DIMENSIONS, plane.path, problems)
+                    schema._check_dims(
+                        plane, schema.PLANE_DIMENSIONS, plane_where, problems, found
+                    )
                     if plane.shape != (
                         level.shape[0],
                         *level.shape[2:],
@@ -131,42 +190,48 @@ class ChronoStore:
                         problems.append(f"{plane.path}: incompatible shape or dtype")
         if problems:
             raise SchemaError("; ".join(problems))
+        self.notes = (*found.breaks, *found.advice, *schema._crs_notes(root, state))
         if isinstance(group.store, IndexStore):
-            for level in levels:
-                for array in (level.data, level.mask, level.coverage):
-                    if array is None or array.shards is None:
-                        continue
-                    codec = cast("Any", array.metadata).codecs[0]
-                    counts = tuple(s // c for s, c in zip(array.shards, array.chunks, strict=True))
-                    index_size = codec._shard_index_size(counts)
-                    interval = array.shards[0]
-                    mutable = array.shape[0] // interval if array.shape[0] % interval else -1
-                    inventory = (
-                        (self.attrs.shard_bytes or {}).get(str(level.index), {})
-                        if array is level.data
-                        else {}
-                    )
-                    lengths = {
-                        f"{array.path}/c/{key.split('/')[0]}/0/{'/'.join(key.split('/')[1:])}": n
-                        for key, n in inventory.items()
-                    }
-                    # zarr 3.1.6 uses an enum; zarr 3.4.0 uses a string for index_location.
-                    index_location = getattr(codec.index_location, "value", codec.index_location)
-                    group.store.configure(
-                        f"{array.path}/c/",
-                        index_size,
-                        index_location,
-                        mutable,
-                        lengths,
-                    )
-        self.dtype: np.dtype = levels[0].data.dtype
-        self.nodata: int | float | None = self.attrs.nodata
-        self._scale = np.array(
-            [1.0 if b.scale is None else b.scale for b in self.attrs.bands], dtype=np.float32
-        )
-        self._offset = np.array(
-            [0.0 if b.offset is None else b.offset for b in self.attrs.bands], dtype=np.float32
-        )
+            self._configure_shard_indices(group.store)
+
+    def _configure_shard_indices(self, store: IndexStore) -> None:
+        """Tell the index cache where each sharded array's shard index sits."""
+        for level in self.levels:
+            data = level.data.arrays[0]
+            for array in (data, level.mask, level.coverage):
+                if array is None or array.shards is None:
+                    continue
+                codec = cast("Any", array.metadata).codecs[0]
+                counts = tuple(s // c for s, c in zip(array.shards, array.chunks, strict=True))
+                index_size = codec._shard_index_size(counts)
+                interval = array.shards[0]
+                mutable = array.shape[0] // interval if array.shape[0] % interval else -1
+                inventory = (
+                    (self.attrs.shard_bytes or {}).get(str(level.index), {})
+                    if array is data
+                    else {}
+                )
+                lengths = {
+                    f"{array.path}/c/{key.split('/')[0]}/0/{'/'.join(key.split('/')[1:])}": n
+                    for key, n in inventory.items()
+                }
+                # zarr 3.1.6 uses an enum; zarr 3.4.0 uses a string for index_location.
+                index_location = getattr(codec.index_location, "value", codec.index_location)
+                store.configure(f"{array.path}/c/", index_size, index_location, mutable, lengths)
+
+    @cached_property
+    def crs(self) -> Crs:
+        """The CRS of the store, from level 0's `proj:` attributes (wkt2 over projjson over code).
+
+        A representation that is shown to disagree with a higher-ranked one is dropped, and a
+        warning says so: proj v0.1 asks readers to surface the discrepancy.
+        """
+        for message in self._stored_crs.disagreements():
+            warnings.warn(
+                f"{message}. Ask whoever wrote {_shown(self.source)} to correct it.",
+                stacklevel=3,
+            )
+        return self._stored_crs.resolved()
 
     def _level(self, lod: int) -> Level:
         if not 0 <= lod < len(self.levels):
@@ -184,10 +249,10 @@ class ChronoStore:
             raise IndexError(
                 f"cell ({row}, {col}) out of range: level {lod} has a {rows} x {cols} cell grid"
             )
-        cs = level.chunk_size
+        cell_rows, cell_cols = level.cell_shape
         return (
-            slice(row * cs, min((row + 1) * cs, level.shape[2])),
-            slice(col * cs, min((col + 1) * cs, level.shape[3])),
+            slice(row * cell_rows, min((row + 1) * cell_rows, level.shape[2])),
+            slice(col * cell_cols, min((col + 1) * cell_cols, level.shape[3])),
         )
 
     def _read_region(
@@ -195,12 +260,12 @@ class ChronoStore:
     ) -> np.ndarray:
         """Read the stored values of `timesteps` over a window: (time, band, y, x)."""
         try:
-            return np.asarray(level.data.oindex[np.asarray(timesteps, dtype=np.int64), :, ys, xs])
+            return level.data.read(timesteps, ys, xs)
         except (ValueError, OSError, IndexError):
             if level.data.shards is None or not isinstance(self._group.store, IndexStore):
                 raise
             self._group.store.invalidate_indices()
-            return np.asarray(level.data.oindex[np.asarray(timesteps, dtype=np.int64), :, ys, xs])
+            return level.data.read(timesteps, ys, xs)
 
     def _read_plane(
         self, array: zarr.Array, timesteps: Sequence[int], ys: slice, xs: slice
@@ -215,8 +280,8 @@ class ChronoStore:
         raw = self._read_region(level, timesteps, ys, xs)
         if level.mask is not None:
             valid = self._read_plane(level.mask, timesteps, ys, xs).astype(bool)[:, None]
-        elif self.nodata is not None:
-            valid = raw != self.dtype.type(self.nodata)
+        elif level.nodata is not None:
+            valid = raw != self.dtype.type(level.nodata)
         else:
             valid = None
         values = raw.astype(np.float32)
@@ -236,7 +301,7 @@ class ChronoStore:
         """Decode one cell of timestep `t`: a (band, y, x) array of the stored dtype.
 
         Costs one data chunk read after metadata/index discovery. Edge cells are smaller than
-        `chunk_size`; padding beyond the level shape is never returned.
+        `Level.cell_shape`; padding beyond the level shape is never returned.
         """
         level = self._level(lod)
         ys, xs = self._window(level, row, col, lod)
@@ -298,7 +363,7 @@ class ChronoStore:
         read = self._physical_region if physical else self._read_region
         values = read(level, selected, window, window)
         y, x = schema.pixel_centers(level.transform, level.shape[2], level.shape[3])
-        attrs: dict[str, Any] = {"crs": self.attrs.crs, "transform": list(level.transform)}
+        attrs: dict[str, Any] = {"crs": self.crs.to_string(), "transform": list(level.transform)}
         coords: dict[str, Any] = {
             "time": self.times[selected].astype("datetime64[ns]"),
             "band": list(self.bands),
@@ -313,8 +378,8 @@ class ChronoStore:
                 schema.PLANE_DIMENSIONS,
                 self._read_plane(level.mask, selected, window, window),
             )
-        elif self.nodata is not None and not physical:
-            attrs["nodata"] = self.nodata
+        elif level.nodata is not None and not physical:
+            attrs["nodata"] = level.nodata
         return xr.DataArray(
             values,
             dims=schema.DIMENSIONS,

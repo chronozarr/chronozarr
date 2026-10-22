@@ -4,6 +4,7 @@
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { DAYMET_LCC, MODIS_SINUSOIDAL } from '../support/crs-fixtures.js';
 import { buildSyntheticStore, defaultValues } from '../support/synthetic-store.js';
 
 /** Level pixels left of this column hold the store's nodata value: the viewer paints them as background. */
@@ -48,6 +49,19 @@ export const STORES = {
   u16_plain: {
     dtype: 'uint16',
     spec: { ...BASE, nTime: 4, sharded: false, nBand: 4, bands: S2_BANDS, nodata: 0, transform: GEOREFERENCE, values: wobbled(0) },
+    enabledProducts: ALL_PRODUCTS,
+  },
+  // A step is 2 x 2 chunks of 524 KB at level 0 and one chunk at level 1: more than a link of 1 MB/s carries at the speed of a movie, at either level.
+  link_plain: {
+    dtype: 'uint16',
+    spec: { ...BASE, height: 512, width: 512, chunk: 256, nTime: 12, sharded: false, nBand: 4, bands: S2_BANDS, nodata: 0, transform: GEOREFERENCE, values: wobbled(0) },
+    enabledProducts: ALL_PRODUCTS,
+  },
+  // A step is 2 x 2 chunks of 2 MiB at level 0 and one at level 1: the 10 steps of level 0 are 80 MiB, more than idle
+  // prefetch may start (32 MiB), so stepping through time goes past what was prefetched and fetches.
+  beyond_idle: {
+    dtype: 'uint16',
+    spec: { ...BASE, height: 1024, width: 1024, chunk: 512, nTime: 10, sharded: false, nBand: 4, bands: S2_BANDS, nodata: 0, transform: GEOREFERENCE, values: wobbled(0) },
     enabledProducts: ALL_PRODUCTS,
   },
   // Display-ready 8-bit true-value RGB.
@@ -108,6 +122,18 @@ export const STORES = {
       values: sarValues,
     },
     enabledProducts: ['Single band', 'Dual-pol composite'],
+  },
+  // Spec 0.4 stores whose CRS has no EPSG code: the arrays carry only proj:wkt2 and the root has no crs mirror. The
+  // grids and the pyproj reference values for their placement are in support/crs-fixtures.js.
+  u16_lcc: {
+    dtype: 'uint16',
+    spec: { ...BASE, nBand: 4, bands: S2_BANDS, nodata: 0, crs: { wkt2: DAYMET_LCC.wkt2 }, transform: DAYMET_LCC.grid.transform, values: wobbled(0) },
+    enabledProducts: ALL_PRODUCTS,
+  },
+  u16_sinusoidal: {
+    dtype: 'uint16',
+    spec: { ...BASE, nBand: 4, bands: S2_BANDS, nodata: 0, crs: { wkt2: MODIS_SINUSOIDAL.wkt2 }, transform: MODIS_SINUSOIDAL.grid.transform, values: wobbled(0) },
+    enabledProducts: ALL_PRODUCTS,
   },
   // 1792 x 1024 pixels x 4 bands: a level-0 frame of 14.7 MB that takes over a second at the bandwidth the viewer
   // assumes before it has measured any, so the viewer stages it (a coarse level first). One file per chunk.

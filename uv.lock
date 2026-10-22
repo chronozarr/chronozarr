@@ -14,7 +14,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-10-07T14:15:50.29412Z"
+exclude-newer = "2026-10-12T17:01:50.395642Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -559,6 +559,23 @@ wheels = [
 ]
 
 [[package]]
+name = "cftime"
+version = "1.6.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/16/6c/a441b7760eff421d7165fafbe124dd8babb34461aa1574dce5628e80137f/cftime-1.6.6.tar.gz", hash = "sha256:7b2716b3dce97ba1740189c424ce97bd6f8e65391b7fe323c6f0f817f6a8ad56", size = 380802, upload-time = "2026-09-28T19:26:47.659Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ef/d4/8dfd6eb487869d3e1032721d4d5dcb294a9d2fe767475e4f2bf7b0c6fc26/cftime-1.6.6-cp311-abi3-macosx_10_9_x86_64.whl", hash = "sha256:7a3e80e48b8cdb61a6f46b135e79e669ffd56ca586bafdb834ffb2cceeb81e6c", size = 549426, upload-time = "2026-09-28T19:26:37.905Z" },
+    { url = "https://files.pythonhosted.org/packages/8a/7e/d4d8e1aa5b3083ef387c6c6a4d2e4fe7445d1d0bfbe6ebc52eeea0fbe674/cftime-1.6.6-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:6aa8944676baa3f2a05c0663723d29a99cbd5bd573588207b48ed9129520e893", size = 543496, upload-time = "2026-09-28T19:26:39.9Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/aa/e2e5c07f57233d171a0506153d2f50dc3d09e9f6273b2a578f76379d1526/cftime-1.6.6-cp311-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:59a2c7821642b62c18e71ea67f84ce13ec2bb51ce7ee348cf0a3c50d55fd91cb", size = 1672639, upload-time = "2026-09-28T19:26:41.765Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/cc/916e9fcb206176f9e9535079b8217e2f158e61ded73afbd2fe1a2a8682a6/cftime-1.6.6-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:81c62149a7c614491596d8f897f2026c1dc23f2a4695b2b27871cc9c50084e94", size = 1641425, upload-time = "2026-09-28T19:26:43.437Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/5c/2e0ec08350739e9b000b24ff413788838c5f8a47392418464e03497cb4b4/cftime-1.6.6-cp311-abi3-win_amd64.whl", hash = "sha256:5f8aeb9410d0124df40c272d9c13dc761a2e9d1e96f44695804a38472a136c67", size = 512693, upload-time = "2026-09-28T19:26:44.827Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/55/f4e24f5734578fa6952674c319519481174ec6d7e8a3eae83f067b56da3d/cftime-1.6.6-cp311-abi3-win_arm64.whl", hash = "sha256:0d1a6bcfa29bf05f14460e4aedac2b210acdb50a038e5e8e16486a7eead06a3b", size = 494572, upload-time = "2026-09-28T19:26:46.25Z" },
+]
+
+[[package]]
 name = "charset-normalizer"
 version = "3.4.7"
 source = { registry = "https://pypi.org/simple" }
@@ -649,7 +666,7 @@ wheels = [
 
 [[package]]
 name = "chronozarr"
-version = "0.4.1"
+version = "0.5.0.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -661,6 +678,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+cftime = [
+    { name = "cftime" },
+]
 dask = [
     { name = "dask" },
 ]
@@ -670,6 +690,8 @@ geemap = [
     { name = "leafmap" },
 ]
 geo = [
+    { name = "pyproj", version = "3.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "pyproj", version = "3.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "rasterio", version = "1.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "rasterio", version = "1.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
@@ -685,6 +707,7 @@ leafmap = [
     { name = "leafmap" },
 ]
 netcdf = [
+    { name = "cftime" },
     { name = "h5netcdf" },
     { name = "h5py" },
 ]
@@ -733,6 +756,8 @@ requires-dist = [
     { name = "azure-storage-blob", marker = "extra == 'publish-azure'", specifier = ">=12.19" },
     { name = "boto3", marker = "extra == 'publish'", specifier = ">=1.34" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.34" },
+    { name = "cftime", marker = "extra == 'cftime'", specifier = ">=1.6" },
+    { name = "cftime", marker = "extra == 'netcdf'", specifier = ">=1.6" },
     { name = "click", specifier = ">=8.1" },
     { name = "dask", marker = "extra == 'dask'", specifier = ">=2024.1" },
     { name = "earthaccess", marker = "extra == 'nisar'", specifier = ">=0.14" },
@@ -748,6 +773,7 @@ requires-dist = [
     { name = "numcodecs", specifier = ">=0.14" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "planetary-computer", marker = "extra == 'ingest'", specifier = ">=1.0" },
+    { name = "pyproj", marker = "extra == 'geo'", specifier = ">=3.6" },
     { name = "pyproj", marker = "extra == 'nisar'", specifier = ">=3.6" },
     { name = "pystac", marker = "extra == 'ingest'", specifier = ">=1.10" },
     { name = "pystac-client", marker = "extra == 'ingest'", specifier = ">=0.8" },
@@ -755,9 +781,9 @@ requires-dist = [
     { name = "rasterio", marker = "extra == 'geo'", specifier = ">=1.3" },
     { name = "rasterio", marker = "extra == 'ingest'", specifier = ">=1.3" },
     { name = "xarray", specifier = ">=2024.1" },
-    { name = "zarr", specifier = ">=3.1" },
+    { name = "zarr", specifier = ">=3.1.6" },
 ]
-provides-extras = ["geo", "notebook", "leafmap", "geemap", "dask", "netcdf", "s3", "nisar", "ingest", "publish", "publish-gcs", "publish-azure"]
+provides-extras = ["geo", "notebook", "leafmap", "geemap", "dask", "netcdf", "cftime", "s3", "nisar", "ingest", "publish", "publish-gcs", "publish-azure"]
 
 [package.metadata.requires-dev]
 dev = [

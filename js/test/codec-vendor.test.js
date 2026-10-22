@@ -46,8 +46,32 @@ test('the reader and its workers reach no third-party host: no CDN URL in the re
   }
 });
 
-test('package.json pins zarrita, which only the vendoring script and the tests still need', () => {
+test('package.json pins zarrita, proj4 and esbuild, which only the vendoring script and the tests still need', () => {
   const manifest = JSON.parse(readFileSync(path.join(JS_DIR, 'package.json'), 'utf8'));
   assert.equal(manifest.dependencies, undefined, 'the reader has no runtime dependencies');
   assert.equal(manifest.devDependencies.zarrita, '0.7.5', 'an exact version, not a range');
+  assert.equal(manifest.devDependencies.proj4, '2.22.0');
+  assert.match(manifest.devDependencies.esbuild, /^\d+\.\d+\.\d+$/, 'the bundle is byte-for-byte reproducible only with one esbuild version');
+  assert.ok(manifest.files.includes('vendor/proj4/'), 'the tarball carries the build that createProjection imports');
+});
+
+const PROJ4 = path.join(JS_DIR, 'vendor/proj4/proj4.js');
+
+test('vendor/proj4 names its packages, the bundler and the hash of its sources, and ships both licenses', () => {
+  const text = readFileSync(PROJ4, 'utf8');
+  const head = text.slice(0, 900);
+  assert.match(head, /^\/\*! Vendored by js\/support\/vendor\.mjs/);
+  assert.match(head, /packages: proj4 2\.22\.0 and wkt-parser 1\.5\.6, license MIT and MIT/);
+  assert.match(head, /esbuild \d+\.\d+\.\d+, minified/);
+  assert.match(head, /sha256 over their paths and contents [0-9a-f]{64}/);
+  const licenses = readFileSync(path.join(JS_DIR, 'vendor/proj4/LICENSE'), 'utf8');
+  assert.match(licenses, /^proj4 2\.22\.0\n/);
+  assert.match(licenses, /\nwkt-parser 1\.5\.6\n/);
+  assert.ok(text.length < 80_000, `the bundle is ${text.length} bytes; the design measured 73 KB minified for these projections`);
+});
+
+test('the proj4 bundle is one self-contained module with a default export and no import of its own', () => {
+  const code = readFileSync(PROJ4, 'utf8').replace(/^\/\*![\s\S]*?\*\/\n/, '');
+  assert.doesNotMatch(code, /\bimport\b/);
+  assert.match(code, /export\s*\{\s*\w+ as default\s*\}\s*;?\s*$/);
 });

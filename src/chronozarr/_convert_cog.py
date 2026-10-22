@@ -3,17 +3,27 @@
 from __future__ import annotations
 
 import math
+import re
 import warnings
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import wraps
 from typing import Any, NoReturn, ParamSpec, TypeVar
 
 import numpy as np
 
 from chronozarr import schema
-from chronozarr._convert_manifest import Entry
+from chronozarr._convert_band_dates import BandDates, NotBandDates, read_band_dates
+from chronozarr._convert_discover import DATE_MARK, mask_dates, show_time
+from chronozarr._convert_gdal_open import (
+    HDF4_DETAIL,
+    HDF4_FIX,
+    SubdatasetChoiceError,
+    hdf4_without_driver,
+    opened,
+)
+from chronozarr._convert_manifest import Entry, ManifestDraft
 from chronozarr._convert_preflight import PreflightError, Problem
 from chronozarr._convert_source import (
     Bounds,
@@ -23,15 +33,25 @@ from chronozarr._convert_source import (
     Step,
     _bounds_grid,
     _check_north_up,
+    _crs_label,
+    _crs_string,
     _decide_validity,
     _declared_nodata,
-    _epsg,
     _grid_difference,
+    _same_crs,
     _same_grid,
     _scaling,
     _settle_nan,
     _value_valid,
 )
+from chronozarr._convert_tiles import (
+    CONVERT_FIXES,
+    SameDateFixes,
+    TileLayout,
+    lay_out,
+    same_date_problems,
+)
+from chronozarr._convert_tiles import OPTION as TILES_OPTION
 from chronozarr.schema import Band, Transform
 
 GDAL_ENV = {
@@ -41,10 +61,18 @@ GDAL_ENV = {
 }
 
 
-# Formats whose georeferencing lives in sidecar files (world file, .aux.xml); GDAL finds them only
-# by probing for each candidate name, which GDAL_ENV switches off for everything else.
-SIDECAR_SUFFIXES = (".png",)
+# Formats whose georeferencing lives in sidecar files (a world file or .aux.xml, the .hdr of BIL
+# and FLT, the .prj of an ASCII grid); GDAL finds them only by probing for each candidate name,
+# which GDAL_ENV switches off for everything else.
+SIDECAR_SUFFIXES = (".png", ".bil", ".flt", ".asc")
 
+
+# A file whose bands are dates is read once per date. When it is pixel-interleaved GDAL decodes
+# every band of a tile to give one, so a conversion decodes the whole file once per date: 13 GB
+# against 0.3 GB for a 40-band, 2048 x 2048 px int16 file, and a read of 1.5 s per date instead of
+# 0.08 s once the file is rewritten band-interleaved (measured 2026-10-19). The plan says so from
+# this many decoded bytes on.
+PIXEL_INTERLEAVE_NOTE_BYTES = 2_000_000_000
 
 RESAMPLING_METHODS = ("nearest", "bilinear", "cubic", "average", "mode", "min", "max", "med")
 
@@ -61,8 +89,9 @@ def _frame_grid(src: Any, crs: str | None, bounds: Bounds | None) -> Grid:
     from rasterio.crs import CRS  # ty: ignore[unresolved-import]  # compiled, no stubs
 
     located = not src.transform.is_identity  # GDAL answers the identity when it finds nothing
-    given = None if crs is None else _epsg(CRS.from_user_input(crs), "--crs")
-    declared = None if src.crs is None else _epsg(src.crs, "the frame")
+    given_crs = None if crs is None else CRS.from_user_input(crs)
+    given = None if given_crs is None else _crs_string(given_crs)
+    declared = None if src.crs is None else _crs_string(src.crs)
     if bounds is not None:
         if given is None:
             raise ValueError("--bounds needs --crs, the CRS the bounds are in")
@@ -71,8 +100,10 @@ def _frame_grid(src: Any, crs: str | None, bounds: Bounds | None) -> Grid:
                 "it carries its own geotransform (a world file or .aux.xml) and --bounds "
                 "was given; drop --bounds, or remove the sidecar of the frames that have one"
             )
-        if declared is not None and declared != given:
-            raise ValueError(f"it declares {declared} but --crs is {given}")
+        if src.crs is not None and src.crs != given_crs:
+            raise ValueError(
+                f"it declares {_crs_label(declared or '')} but --crs is {_crs_label(given)}"
+            )
         return _bounds_grid(bounds, given, src.height, src.width)
     if not located:
         raise ValueError(
@@ -92,6 +123,7 @@ def _frame_grid(src: Any, crs: str | None, bounds: Bounds | None) -> Grid:
 
 @dataclass(frozen=True)
 class _CogHeader:
+    dataset: str  # what GDAL opens to read it: the file, the raster in a zip or a subdataset
     driver: str  # GDAL driver short name: GTiff, PNG, ...
     grid: Grid
     own_grid: bool  # the file carries its own CRS and geotransform (else `grid` came from options)
@@ -106,6 +138,7 @@ class _CogHeader:
     scales: tuple[float, ...]
     offsets: tuple[float, ...]
     units: tuple[str | None, ...]
+    pixel_interleaved: bool  # GeoTIFF whose bands share each tile, so one band decodes them all
 
     @property
     def count(self) -> int:
@@ -142,12 +175,20 @@ def _tolerate_unlocated_frames(func: Callable[_P, _R]) -> Callable[_P, _R]:
 _COLOR_NAMES = ("red", "green", "blue")
 
 
-def _read_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader:
+def _warp_nodata(tokens: tuple[float | int | str | None, ...]) -> float | int | None:
+    """The nodata value the warper is given for bands with these declared tokens: the first
+    band's, NaN for a token that is the text 'nan'."""
+    return math.nan if isinstance(tokens[0], str) else tokens[0]
+
+
+def _read_header(
+    uri: str, crs: str | None, bounds: Bounds | None, variable: str | None
+) -> _CogHeader:
     import rasterio
-    from rasterio.enums import ColorInterp, MaskFlags
+    from rasterio.enums import ColorInterp, Interleaving, MaskFlags
 
     try:
-        with rasterio.Env(**_gdal_env(uri)), rasterio.open(uri) as src:
+        with opened(uri, variable, _gdal_env) as (src, dataset, subdataset):
             if src.driver == "PNG" and ColorInterp.palette in src.colorinterp:
                 raise ValueError(
                     "it is a palette (indexed colour) PNG, so its values are palette indices, "
@@ -169,12 +210,17 @@ def _read_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader
             internal_mask = alpha is None and any(
                 MaskFlags.per_dataset in src.mask_flag_enums[i - 1] for i in indexes
             )
+            descriptions = tuple(src.descriptions[i - 1] or None for i in indexes)
+            if subdataset is not None and len(indexes) == 1 and descriptions[0] is None:
+                descriptions = (subdataset,)  # the one band of a chosen variable is that variable
             tokens = tuple(_declared_nodata(src.nodatavals[i - 1], dtype) for i in indexes)
+            warp_nodata = _warp_nodata(tokens)
             scaling = [
                 _scaling(float(src.scales[i - 1]), float(src.offsets[i - 1]), f"band {i}")
                 for i in indexes
             ]
             return _CogHeader(
+                dataset=dataset,
                 driver=src.driver,
                 grid=grid,
                 own_grid=src.crs is not None and not src.transform.is_identity,
@@ -183,8 +229,8 @@ def _read_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader
                 internal_mask=internal_mask,
                 dtype=dtype,
                 nodata=tokens,
-                warp_nodata=math.nan if isinstance(tokens[0], str) else tokens[0],
-                descriptions=tuple(src.descriptions[i - 1] or None for i in indexes),
+                warp_nodata=warp_nodata,
+                descriptions=descriptions,
                 colors=tuple(
                     c if (c := src.colorinterp[i - 1].name) in _COLOR_NAMES else None
                     for i in indexes
@@ -192,9 +238,61 @@ def _read_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader
                 scales=tuple(s for s, _ in scaling),
                 offsets=tuple(o for _, o in scaling),
                 units=tuple(src.units[i - 1] or None for i in indexes),
+                pixel_interleaved=src.driver == "GTiff" and src.interleaving == Interleaving.pixel,
             )
+    except SubdatasetChoiceError:
+        raise
     except (rasterio.errors.RasterioIOError, ValueError) as exc:
         raise ValueError(str(exc)) from exc
+
+
+@dataclass(frozen=True)
+class _FileLabels:
+    """Single-band descriptions that label their files instead of naming the band."""
+
+    name: str | None  # what the descriptions share once the dates are taken out; None: nothing
+    examples: tuple[str, str]  # two descriptions that differ, for the dry run to show
+
+
+def _file_labels(good: list[tuple[str, _CogHeader]]) -> _FileLabels | None:
+    """Whether the band descriptions of a single-band series are labels of their files.
+
+    A store holds one band for every timestep, so descriptions that disagree are refused. A label
+    such as WorldClim's `wc2.1_10m_tmax_2020-01.tif` says which file it came from, not which band
+    it is. Descriptions are taken for labels only when every file has one and they are identical
+    once the dates in them (read as in file names) are masked: they can then differ only in the
+    date, so they cannot name different bands (B04 and B08, tmax and tmin). Files with several
+    bands are never taken for labelled: a band's description is its only identity there.
+    """
+    if any(header.count != 1 for _, header in good):
+        return None
+    described = [header.descriptions[0] for _, header in good]
+    descriptions = [d for d in described if d is not None]
+    if len(descriptions) != len(described) or len(set(descriptions)) == 1:
+        return None
+    shapes = {mask_dates(d) for d in descriptions}
+    if len(shapes) != 1:
+        return None
+    other = next(d for d in descriptions if d != descriptions[0])
+    shared = re.sub(r"\.tiff?$", "", shapes.pop(), flags=re.IGNORECASE).replace(DATE_MARK, "")
+    shared = re.sub(r"([ _.:/-])\1+", r"\1", shared).strip(" _-.:/")
+    return _FileLabels(shared or None, (descriptions[0], other))
+
+
+def _agreed_names(
+    good: list[tuple[str, _CogHeader]], labels: _FileLabels | None
+) -> tuple[str, ...] | None:
+    """The band names the files' descriptions give, for a manifest to carry; None when a band has
+    no description (or one with a `;`, which a CSV could not hold) or the files disagree."""
+    first = good[0][1]
+    if labels is not None:
+        descriptions: tuple[str | None, ...] = (labels.name,)
+    elif any(header.descriptions != first.descriptions for _, header in good):
+        return None
+    else:
+        descriptions = first.descriptions
+    named = tuple(d for d in descriptions if d and ";" not in d)
+    return named if len(named) == len(descriptions) else None
 
 
 def _open_fix(uri: str, exc: ValueError) -> str | None:
@@ -215,11 +313,92 @@ def _open_fix(uri: str, exc: ValueError) -> str | None:
     return "check that the file exists and is a readable raster, or leave it out"
 
 
-def _open_header(uri: str, crs: str | None, bounds: Bounds | None) -> _CogHeader | Problem:
+def _open_header(
+    uri: str, crs: str | None, bounds: Bounds | None, variable: str | None
+) -> _CogHeader | Problem:
     try:
-        return _read_header(uri, crs, bounds)
+        return _read_header(uri, crs, bounds, variable)
+    except SubdatasetChoiceError:
+        raise
     except ValueError as exc:
+        if hdf4_without_driver(uri):
+            return Problem(uri, HDF4_DETAIL, HDF4_FIX)
         return Problem(uri, f"cannot open source: {exc}", _open_fix(uri, exc))
+
+
+@dataclass(frozen=True)
+class BandSeries:
+    """One file whose bands are dates: the series its band descriptions describe, and for every
+    timestep the file's header restricted to the bands of that date."""
+
+    uri: str
+    dates: BandDates
+    headers: tuple[_CogHeader, ...]
+
+    @property
+    def entries(self) -> list[Entry]:
+        return [Entry(self.uri, time) for time in self.dates.times]
+
+    @property
+    def labels(self) -> list[str]:
+        """What names a timestep in a problem report: the file and the bands of that date."""
+        return [f"{self.uri} ({', '.join(d)})" for d in self.dates.descriptions]
+
+
+def _timestep_header(header: _CogHeader, numbers: tuple[int, ...]) -> _CogHeader:
+    """`header` restricted to the data bands `numbers` (1-based file numbers), in that order."""
+    positions = [header.data_indexes.index(number) for number in numbers]
+    nodata = tuple(header.nodata[i] for i in positions)
+    return replace(
+        header,
+        data_indexes=numbers,
+        nodata=nodata,
+        warp_nodata=_warp_nodata(nodata),
+        descriptions=tuple(header.descriptions[i] for i in positions),
+        colors=tuple(header.colors[i] for i in positions),
+        scales=tuple(header.scales[i] for i in positions),
+        offsets=tuple(header.offsets[i] for i in positions),
+        units=tuple(header.units[i] for i in positions),
+    )
+
+
+def open_band_series(
+    uri: str,
+    crs: str | None,
+    bounds: Bounds | None,
+    variable: str | None,
+    date_pattern: str | None,
+) -> BandSeries:
+    """Open the raster `uri` whose bands are dates and read its series from the band descriptions.
+
+    Raises `PreflightError` when the file cannot be opened or its descriptions do not describe a
+    series (every problem, with a remedy).
+    """
+    header = _open_header(uri, crs, bounds, variable)
+    if isinstance(header, Problem):
+        raise PreflightError([header], 1)
+    try:
+        dates = read_band_dates(uri, header.data_indexes, header.descriptions, date_pattern)
+    except NotBandDates as exc:
+        raise PreflightError(exc.problems, 1) from None
+    return BandSeries(uri, dates, tuple(_timestep_header(header, n) for n in dates.numbers))
+
+
+def _offer_band_dates(
+    problems: list[Problem], uri: str, header: _CogHeader, date_pattern: str | None
+) -> list[Problem]:
+    """`problems` of a single undated file, each with the fix that reads its bands as dates put
+    first when its band descriptions describe a series; else unchanged."""
+    try:
+        dates = read_band_dates(uri, header.data_indexes, header.descriptions, date_pattern)
+    except NotBandDates:
+        return problems
+    return [
+        Problem(p.uri, p.detail, f"{dates.offer()}. Otherwise {p.fix}" if p.fix else dates.offer())
+        if p.uri == uri
+        else p
+        for p in problems
+    ]
 
 
 def _parse_resampling(name: str) -> Any:
@@ -245,50 +424,130 @@ class CogManifestSource(Source):
         nodata: float | int | None | str,
         chunk_size: int,
         bounds: Bounds | None = None,
+        variable: str | None = None,
         undated: Sequence[str] = (),
         prior_problems: Sequence[Problem] = (),
+        scale_given: bool = False,
+        offset_given: bool = False,
+        band_series: BandSeries | None = None,
+        band_date_pattern: str | None = None,
+        mosaic_tiles: bool = False,
+        same_date_fixes: SameDateFixes = CONVERT_FIXES,
     ) -> None:
         """Open every source's header and check the set is one series.
 
         Every incompatibility is collected, per file, and raised together as a `PreflightError`
         (with `prior_problems`, found before this point). `undated` are files that could not be
         given a time: they are checked like the rest but are not timesteps.
+
+        A `band_series` is one file whose bands are dates (`open_band_series`): `entries` and
+        `band_names` come from it, and each timestep reads the bands of its date. A single
+        undated file whose band descriptions would make a series is refused with the option that
+        reads them (`band_date_pattern` is the `--date-pattern` that option would use).
+
+        Files that share a date are refused, each with the fix that is true of it
+        (`same_date_problems`, worded by `same_date_fixes` for the command), unless `mosaic_tiles`
+        says they are tiles: then they must tile one grid (`lay_out`), which becomes the target
+        grid, and each timestep joins the tiles of its date. With `mosaic_tiles`, at least two
+        files must share a date. Tiles are never warped, so `target_transform`, `target_shape`,
+        `resampling` and `bounds` do not apply, and `target_crs` may only name the CRS the tiles
+        have.
         """
         self.entries = entries
         self.times = [e.time for e in entries]
         self.resampling = resampling
         self.chunk_size = chunk_size
-        uris = [*(e.uri for e in entries), *undated]
-        workers = min(8, len(uris))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            opened = list(pool.map(lambda uri: _open_header(uri, target_crs, bounds), uris))
-        problems = [*prior_problems, *(r for r in opened if isinstance(r, Problem))]
-        good = [(u, h) for u, h in zip(uris, opened, strict=True) if isinstance(h, _CogHeader)]
+        self.variable = variable
+        self.draft = ManifestDraft(entries, tuple(undated))
+        self._band_series = band_series
+        self._layout: TileLayout | None = None
+        if band_series is None:
+            uris = [*(e.uri for e in entries), *undated]
+            workers = min(8, len(uris))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                headers_or_problems = list(
+                    pool.map(lambda uri: _open_header(uri, target_crs, bounds, variable), uris)
+                )
+            problems = [
+                *prior_problems,
+                *(r for r in headers_or_problems if isinstance(r, Problem)),
+            ]
+            good = [
+                (u, h)
+                for u, h in zip(uris, headers_or_problems, strict=True)
+                if isinstance(h, _CogHeader)
+            ]
+        else:
+            uris = band_series.labels
+            problems = []
+            good = list(zip(uris, band_series.headers, strict=True))
         if not good:
             self._raise(problems, uris)
+        if band_series is None and not entries and len(undated) == 1:
+            problems = _offer_band_dates(problems, *good[0], band_date_pattern)
         first_uri, first = good[0]
+        labels = _file_labels(good) if band_names is None else None
+        self.draft = ManifestDraft(
+            entries, tuple(undated), _agreed_names(good, labels) if band_names is None else None
+        )
         if bounds is not None:
             problems += self._size_problems(good)
-        self.grid = self._target_grid(first, target_crs, target_transform, target_shape)
-        problems += self._consistency_problems(good, band_names is None)
-        if resampling is None:
-            problems += self._grid_problems(good, first_uri)
+        excused: frozenset[str] = frozenset()
+        nothing_to_join = False
+        if band_series is None:
+            dated = [(e.time, e.uri) for e in entries]
+            grids = {uri: header.grid for uri, header in good}
+            if mosaic_tiles:
+                nothing_to_join = len({time for time, _ in dated}) == len(dated)
+                files = [(time, uri, grids[uri]) for time, uri in dated if uri in grids]
+                layout = None if nothing_to_join or not files else lay_out(files, same_date_fixes)
+                if isinstance(layout, TileLayout):
+                    self._layout = layout
+                elif layout is not None:
+                    problems += layout
+            else:
+                shared, excused = same_date_problems(dated, grids, same_date_fixes)
+                problems += shared
+        if self._layout is None:
+            self.grid = self._target_grid(first, target_crs, target_transform, target_shape)
+        else:
+            self.grid = self._tiles_grid(self._layout, target_crs)
+        problems += self._consistency_problems(
+            good,
+            compare_labels=band_names is None,
+            compare_descriptions=labels is None,
+            compare_scales=not scale_given,
+            compare_offsets=not offset_given,
+        )
+        if resampling is None and not mosaic_tiles:
+            problems += [p for p in self._grid_problems(good, first_uri) if p.uri not in excused]
         if problems:
             self._raise(problems, uris)
+        if nothing_to_join:
+            raise ValueError(
+                f"{TILES_OPTION} joins files that share a date, and no two of the {len(entries)} "
+                f"dated files do, so there is nothing to join. Leave {TILES_OPTION} out; if some "
+                "files are tiles of one image, their names must give them one date (a "
+                "--date-pattern without a time of day)"
+            )
         headers = [h for _, h in good]
         self._headers = headers
+        self._tile_headers = dict(good)
+        if self._layout is not None:
+            self.times = list(self._layout.times)
         if all(h.driver == "PNG" for h in headers):
             self.kind = "manifest of PNG frames"
         if band_names is None:
             # a description names the band; else a colour band is named by its colour and says so
-            labels = [
+            descriptions = first.descriptions if labels is None else (labels.name,)
+            named = [
                 (d, None) if d else (c, c) if c else (str(i + 1), None)
-                for i, (d, c) in enumerate(zip(first.descriptions, first.colors, strict=True))
+                for i, (d, c) in enumerate(zip(descriptions, first.colors, strict=True))
             ]
         else:
-            labels = [(n, None) for n in band_names]
-        names = tuple(name for name, _ in labels)
-        common_names = tuple(common for _, common in labels)
+            named = [(n, None) for n in band_names]
+        names = tuple(name for name, _ in named)
+        common_names = tuple(common for _, common in named)
         if len(names) != first.count:
             raise ValueError(
                 f"{entries[0].uri} has {first.count} bands but {len(names)} band names were "
@@ -297,7 +556,9 @@ class CogManifestSource(Source):
         if len(set(names)) != len(names):
             raise ValueError(f"band names must be unique, got {list(names)}")
         self.warped = frozenset(
-            i for i, h in enumerate(headers) if not _same_grid(h.grid, self.grid)
+            i
+            for i, h in enumerate(headers)
+            if self._layout is None and not _same_grid(h.grid, self.grid)
         )
         if self.warped:
             assert resampling is not None
@@ -307,14 +568,24 @@ class CogManifestSource(Source):
             explicit.append("alpha band")
         if any(h.internal_mask for h in headers):
             explicit.append("internal mask")
+        if self.warped:
+            footprint = "warped timesteps leave pixels outside the source footprint"
+        else:
+            footprint = None if self._layout is None else self._layout.footprint()
         validity = _decide_validity(
             first.dtype,
             {token for h in headers for token in h.nodata},
             override=nodata,
             explicit=explicit,
-            footprint=bool(self.warped),
+            footprint=footprint,
         )
-        self.notes = self._nodata_notes(good) if nodata == "auto" else ()
+        self.notes = (
+            *(() if band_series is None else (f"bands:      {band_series.dates.note()}",)),
+            *(() if self._layout is None else (self._layout.note(),)),
+            *self._interleave_notes(),
+            *(self._nodata_notes(good) if nodata == "auto" else ()),
+            *self._label_notes(labels, names),
+        )
         self._auto_nodata = nodata == "auto"
         # Values equal to an explicit --nodata are invalid; declared nodata is GDAL's to judge.
         self._sentinels: tuple[float | int, ...] = (
@@ -340,11 +611,10 @@ class CogManifestSource(Source):
             validity=validity.why,
         )
 
-    @staticmethod
-    def _raise(problems: list[Problem], uris: list[str]) -> NoReturn:
+    def _raise(self, problems: list[Problem], uris: list[str]) -> NoReturn:
         order = {uri: i for i, uri in enumerate(uris)}
         problems.sort(key=lambda p: order.get(p.uri, len(order)))
-        raise PreflightError(problems, len(uris))
+        raise PreflightError(problems, len(uris), self.draft)
 
     @staticmethod
     def _target_grid(
@@ -359,7 +629,12 @@ class CogManifestSource(Source):
         if transform is not None:
             if shape is None or crs is None:
                 raise ValueError("--transform needs --shape and --crs as well")
-            return Grid(crs, _check_north_up(transform, "--transform"), shape[0], shape[1])
+            return Grid(
+                _crs_string(CRS.from_user_input(crs)),
+                _check_north_up(transform, "--transform"),
+                shape[0],
+                shape[1],
+            )
         if crs is None or CRS.from_user_input(crs) == CRS.from_user_input(first.grid.crs):
             if shape is not None:
                 raise ValueError("--shape is only meaningful together with --transform")
@@ -375,11 +650,27 @@ class CogManifestSource(Source):
             source.crs, crs, source.width, source.height, west, south, east, north
         )
         return Grid(
-            _epsg(CRS.from_user_input(crs), "--crs"),
+            _crs_string(CRS.from_user_input(crs)),
             _check_north_up(tuple(dst)[:6], "--crs"),
             height,
             width,
         )
+
+    @staticmethod
+    def _tiles_grid(layout: TileLayout, crs: str | None) -> Grid:
+        """The grid that holds every tile; `crs` must be the tiles' own, since tiles are not
+        warped."""
+        from rasterio.crs import CRS  # ty: ignore[unresolved-import]  # compiled, no stubs
+
+        if crs is not None and not _same_crs(
+            _crs_string(CRS.from_user_input(crs)), layout.grid.crs
+        ):
+            raise ValueError(
+                f"--crs {crs} is not the CRS of the tiles ({_crs_label(layout.grid.crs)}), and "
+                f"{TILES_OPTION} joins the tiles on their own grid. Leave --crs out, or join and "
+                "warp the tiles yourself first"
+            )
+        return layout.grid
 
     @staticmethod
     def _size_problems(good: list[tuple[str, _CogHeader]]) -> list[Problem]:
@@ -401,10 +692,16 @@ class CogManifestSource(Source):
 
     @staticmethod
     def _consistency_problems(
-        good: list[tuple[str, _CogHeader]], compare_labels: bool
+        good: list[tuple[str, _CogHeader]],
+        *,
+        compare_labels: bool,
+        compare_descriptions: bool,
+        compare_scales: bool,
+        compare_offsets: bool,
     ) -> list[Problem]:
         """What differs from the first source: band count, dtype, scale, offset, units and
-        (unless the manifest names the bands) band descriptions and colours."""
+        (unless the manifest names the bands) band colours and descriptions, the latter unless
+        they are labels of their files. Scales and offsets are left out when the user gave them."""
         first_uri, first = good[0]
         problems = []
         for uri, header in good:
@@ -429,13 +726,14 @@ class CogManifestSource(Source):
                         "chronozarr does not change a dtype for you",
                     )
                 )
-            fields = [
-                ("scales", header.scales, first.scales),
-                ("offsets", header.offsets, first.offsets),
-                ("units", header.units, first.units),
-            ]
+            fields = [("units", header.units, first.units)]
+            if compare_offsets:
+                fields.insert(0, ("offsets", header.offsets, first.offsets))
+            if compare_scales:
+                fields.insert(0, ("scales", header.scales, first.scales))
             if compare_labels:
-                fields.append(("band descriptions", header.descriptions, first.descriptions))
+                if compare_descriptions:
+                    fields.append(("band descriptions", header.descriptions, first.descriptions))
                 fields.append(("band colours", header.colors, first.colors))
             for what, found, wanted in fields:
                 if found == wanted:
@@ -448,7 +746,7 @@ class CogManifestSource(Source):
                         "A store holds one value per band for every timestep, so the sources "
                         "must agree",
                         "name the bands in a manifest (a bands column or key; --write-manifest "
-                        "writes one to edit), or relabel the odd files"
+                        "writes a manifest to add it to), or relabel the odd files"
                         if relabel
                         else "if the metadata is wrong, correct it (gdal_edit.py -scale -offset "
                         "-units); if the values really are on another scale, rescale the odd "
@@ -482,6 +780,40 @@ class CogManifestSource(Source):
         ]
 
     @staticmethod
+    def _label_notes(labels: _FileLabels | None, names: tuple[str, ...]) -> tuple[str, ...]:
+        """One line when the band's description differs per file and was taken for a file label."""
+        if labels is None:
+            return ()
+        first, second = labels.examples
+        shared = ", the part the descriptions share" if labels.name else ""
+        return (
+            f"bands:      the band description differs per file ('{first}', '{second}', ...) and "
+            "looks like a file label, not a band name, so the band is named "
+            f"'{names[0]}'{shared}. To name it yourself, run again with --write-manifest "
+            "found.csv, set the bands column of the manifest it writes, and convert the manifest",
+        )
+
+    def _interleave_notes(self) -> tuple[str, ...]:
+        """One line when a band-per-date file is pixel-interleaved and big enough for it to cost:
+        each date decodes every band, so the conversion decodes the whole file once per date."""
+        series = self._band_series
+        if series is None or not series.headers[0].pixel_interleaved:
+            return ()
+        header = series.headers[0]
+        plane = header.grid.height * header.grid.width * header.dtype.itemsize
+        file_bytes = series.dates.n_bands * plane
+        decoded = file_bytes * len(series.dates.times)
+        if decoded < PIXEL_INTERLEAVE_NOTE_BYTES:
+            return ()
+        return (
+            f"interleave: the file is pixel-interleaved, so each date decodes all "
+            f"{series.dates.n_bands} bands: {decoded / 1e9:.1f} GB in all, against "
+            f"{file_bytes / 1e9:.1f} GB for one pass. Rewrite it band-interleaved first for a "
+            "much faster read: gdal_translate -co INTERLEAVE=BAND -co TILED=YES "
+            "-co COMPRESS=DEFLATE in.tif out.tif",
+        )
+
+    @staticmethod
     def _nodata_notes(good: list[tuple[str, _CogHeader]]) -> tuple[str, ...]:
         """One line when the sources declare different nodata, which makes the store use a mask."""
         if len({token for _, h in good for token in h.nodata}) < 2:
@@ -501,10 +833,38 @@ class CogManifestSource(Source):
             "none to ignore the declared values",
         )
 
+    def listing(self) -> list[str]:
+        """The `files:` lines of the dry run: every file with its date, or for one file whose
+        bands are dates, every date with its bands."""
+        if self._band_series is not None:
+            return ["files:      1, a band per date", *self._band_series.dates.listing()]
+        if self._layout is not None:
+            return self._layout.listing()
+        return [
+            f"files:      {len(self.entries)}, dated from their names",
+            *(f"  {show_time(e.time)}  {e.uri}" for e in self.entries),
+        ]
+
     def fingerprint(self) -> Any:
         return {
             "kind": "manifest",
             "entries": [[e.uri, str(e.time)] for e in self.entries],
+            **(
+                {"band_indexes": [list(h.data_indexes) for h in self._headers]}
+                if self._band_series is not None
+                else {}
+            ),
+            **(
+                {
+                    "tiles": [
+                        [[uri, window.row, window.col] for uri, window in date]
+                        for date in self._layout.tiles
+                    ]
+                }
+                if self._layout is not None
+                else {}
+            ),
+            "variable": self.variable,
             "grid": [self.grid.crs, list(self.grid.transform), self.grid.height, self.grid.width],
             "bands": [b.to_attrs() for b in self.info.bands],
             "dtype": self.info.dtype.name,
@@ -518,12 +878,14 @@ class CogManifestSource(Source):
     def read(self, t: int) -> Step:
         import rasterio
 
+        if self._layout is not None:
+            return self._read_tiles(t)
         entry, header = self.entries[t], self._headers[t]
         grid, info = self.grid, self.info
         data = np.empty((info.n_band, grid.height, grid.width), dtype=info.dtype)
         valid = np.empty((grid.height, grid.width), dtype=np.uint8) if info.mask else None
         try:
-            with rasterio.Env(**_gdal_env(entry.uri)), rasterio.open(entry.uri) as src:
+            with rasterio.Env(**_gdal_env(header.dataset)), rasterio.open(header.dataset) as src:
                 if t in self.warped:
                     self._read_warped(src, header, data, valid)
                 else:
@@ -538,6 +900,40 @@ class CogManifestSource(Source):
         except rasterio.errors.RasterioError as exc:
             raise OSError(f"reading {entry.uri} (timestep {t}): {exc}") from exc
         _settle_nan(data, valid, info.nodata, f"{entry.uri} (timestep {t})")
+        return Step(data, valid)
+
+    def _read_tiles(self, t: int) -> Step:
+        """Timestep `t` joined from the tiles of its date, which do not overlap. Pixels no tile
+        covers hold the fill value and are invalid."""
+        import rasterio
+
+        assert self._layout is not None
+        grid, info = self.grid, self.info
+        fill = 0 if info.nodata is None else info.nodata
+        data = np.full((info.n_band, grid.height, grid.width), fill, dtype=info.dtype)
+        valid = np.zeros((grid.height, grid.width), dtype=np.uint8) if info.mask else None
+        tiles = self._layout.tiles[t]
+        for uri, window in tiles:
+            header = self._tile_headers[uri]
+            try:
+                with (
+                    rasterio.Env(**_gdal_env(header.dataset)),
+                    rasterio.open(header.dataset) as src,
+                ):
+                    for top in range(0, window.height, self.chunk_size):
+                        rows = min(self.chunk_size, window.height - top)
+                        read_window = ((top, top + rows), (0, window.width))
+                        block = src.read(list(header.data_indexes), window=read_window)
+                        ys = slice(window.row + top, window.row + top + rows)
+                        xs = slice(window.col, window.col + window.width)
+                        data[:, ys, xs] = block
+                        if valid is not None:
+                            valid[ys, xs] = self._declared_valid(src, header, read_window)
+                            valid[ys, xs] &= _value_valid(block, self._sentinels)
+            except rasterio.errors.RasterioError as exc:
+                raise OSError(f"reading {uri} (timestep {t}): {exc}") from exc
+        where = f"{tiles[0][0]} and the other tiles of {show_time(self.times[t])} (timestep {t})"
+        _settle_nan(data, valid, info.nodata, where)
         return Step(data, valid)
 
     def _declared_valid(

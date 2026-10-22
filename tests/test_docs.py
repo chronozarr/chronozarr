@@ -11,9 +11,15 @@ import tomllib
 from pathlib import Path
 
 import click
+import numpy as np
 import pytest
+import xarray as xr
+from packaging.version import Version
 
+import chronozarr
 from chronozarr.cli import main
+from chronozarr.schema import Band
+from tests.synthetic import make_times
 
 pytestmark = pytest.mark.unit
 
@@ -93,20 +99,34 @@ def test_the_docs_show_the_commands_people_need() -> None:
 
 
 def test_install_pins_match_the_release() -> None:
+    """The docs pin the release that PyPI has. A development version on main is the next one."""
     version = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))["project"][
         "version"
     ]
     npm = json.loads((REPO / "js/package.json").read_text(encoding="utf-8"))["version"]
-    assert npm == version, "pyproject.toml and js/package.json must release the same version"
+    # PEP 440 writes a development release 0.5.0.dev0; npm's semver writes it 0.5.0-dev.0.
+    assert npm == re.sub(r"\.dev(\d+)$", r"-dev.\1", version), (
+        f"pyproject.toml ({version}) and js/package.json ({npm}) must be the same version"
+    )
     # Install pins, and the `chronozarr --version` output that the quickstart shows.
     pin = re.compile(r"chronozarr(?:\[[^\]]*\])?(?:==|@|, version )(\d+\.\d+\.\d+)")
     # The evidence log and release notes record the versions that were measured or released.
     records = {"evidence.md", *(p.name for p in USER_DOCS if p.name.startswith("release-"))}
+    pinned: dict[str, list[str]] = {}
     for path in (p for p in USER_DOCS if p.name not in records):
         for found in pin.findall(path.read_text(encoding="utf-8")):
-            assert found == version, (
-                f"{path.name} pins chronozarr {found}; the release is {version}"
-            )
+            pinned.setdefault(found, []).append(path.name)
+    assert pinned, "no user doc pins a chronozarr version"
+    assert len(pinned) == 1, f"the docs pin more than one release: {pinned}"
+    release = Version(next(iter(pinned)))
+    if Version(version).is_devrelease:
+        assert Version(version) > release, (
+            f"pyproject.toml is {version}, not after the release {release} that the docs pin"
+        )
+    else:
+        assert Version(version) == release, (
+            f"the docs pin chronozarr {release}; the release is {version}: {pinned}"
+        )
 
 
 def test_the_readme_quickstart_is_part_of_the_full_quickstart() -> None:
@@ -179,3 +199,85 @@ def test_the_agent_skill_cites_pages_and_options_that_exist() -> None:
         known = _options(main.commands[words[1]])
         unknown = sorted(set(re.findall(r"(?<![\w-])--[\w-]+", span)) - known)
         assert not unknown, f"SKILL.md: `chronozarr {words[1]}` has no option {unknown}"
+
+
+def _python_blocks(text: str) -> list[str]:
+    """The bodies of fenced code blocks tagged `python`."""
+    blocks: list[str] = []
+    body: list[str] = []
+    inside = python = False
+    for line in text.splitlines():
+        fence = re.match(r"^\s*```(\S*)", line)
+        if fence and not inside:
+            body, inside, python = [], True, fence.group(1) == "python"
+        elif fence:
+            if python:
+                blocks.append("\n".join(body))
+            inside = False
+        elif inside:
+            body.append(line)
+    return blocks
+
+
+def _guide_store(path: Path, *, units: str | None) -> np.ndarray:
+    """The store that docs/analyze.md and docs/quickstart.md describe: 12 months, four bands,
+    692 x 690 pixels at 40 m, two pyramid levels."""
+    rng = np.random.default_rng(3)
+    rows, cols = np.mgrid[0:692, 0:690]
+    truth = (1000 + 4 * rows + 3 * cols)[None, None] + rng.integers(0, 50, size=(12, 4, 692, 690))
+    truth = truth.astype(np.uint16)
+    names = ["B02", "B03", "B04", "B08"]
+    array = xr.DataArray(
+        truth,
+        dims=("time", "band", "y", "x"),
+        coords={"time": make_times(12), "band": names},
+        attrs={"crs": "EPSG:32718", "transform": (40.0, 0.0, 485650.0, 0.0, -40.0, 9169880.0)},
+    )
+    bands = [Band(name, scale=0.0001, offset=0.0, units=units) for name in names]
+    chronozarr.encode(array, path, bands=bands)
+    return truth
+
+
+def _run_python_blocks(doc: str, tmp_path: Path, monkeypatch, *, units: str | None):
+    """Run the Python blocks of `docs/<doc>` in order, in a folder that holds `my_store`."""
+    truth = _guide_store(tmp_path / "my_store", units=units)
+    monkeypatch.chdir(tmp_path)
+    blocks = _python_blocks((REPO / "docs" / doc).read_text(encoding="utf-8"))
+    assert blocks, f"docs/{doc} has no Python examples"
+    scope: dict[str, object] = {}
+    for block in blocks:
+        exec(compile(block, f"docs/{doc}", "exec"), scope)
+    return scope, truth
+
+
+@pytest.mark.parametrize("units", [None, "reflectance"], ids=["no-units", "units"])
+def test_the_analyze_guide_python_examples_run(tmp_path, monkeypatch, units) -> None:
+    """Each Python block of docs/analyze.md, against a store with and without units."""
+    scope, truth = _run_python_blocks("analyze.md", tmp_path, monkeypatch, units=units)
+
+    # The guide says `band_units` exists only when the source declares units.
+    opened = xr.open_dataset("my_store", engine="chronozarr")
+    assert ("band_units" in opened.coords) == (units is not None)
+    if units is None:
+        with pytest.raises(AttributeError):
+            _ = opened.band_units
+    series = scope["series"]
+    # A single pixel, selected at the grid centre nearest to the point the guide names.
+    assert series.dims == ("time",) and series.sizes["time"] == 12
+    assert series.band.item() == "B08"
+    assert abs(series.x.item() - 496000) <= 20 and abs(series.y.item() - 9160000) <= 20
+    col = round((series.x.item() - 485670) / 40)
+    row = round((9169860 - series.y.item()) / 40)
+    np.testing.assert_allclose(series.values, truth[:, 3, row, col] * 0.0001, rtol=1e-5)
+    assert scope["ndvi"].sizes["time"] == 12
+    assert scope["overview"].attrs["lod"] == 1
+
+
+def test_the_quickstart_python_example_runs(tmp_path, monkeypatch) -> None:
+    scope, truth = _run_python_blocks("quickstart.md", tmp_path, monkeypatch, units="reflectance")
+    assert scope["ds"].sizes["time"] == 12
+    np.testing.assert_allclose(
+        scope["ds"]["data"].sel(band="B08").isel(time=0, x=100, y=80).item(),
+        truth[0, 3, 80, 100] * 0.0001,
+        rtol=1e-5,
+    )

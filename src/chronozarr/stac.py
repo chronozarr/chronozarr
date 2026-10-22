@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 
 from chronozarr import schema
+from chronozarr.crs import Crs
 from chronozarr.decode import ChronoStore, open_store
 from chronozarr.doctor import is_url
 
@@ -47,6 +48,24 @@ def default_id(source: str) -> str:
 def _epsg_number(crs: str) -> int | str:
     match = re.fullmatch(r"EPSG:(\d+)", crs)
     return int(match.group(1)) if match else crs
+
+
+def _proj_properties(crs: Crs) -> dict[str, Any]:
+    """STAC projection 2.0: `proj:code`, or a null `proj:code` with the CRS definition."""
+    if crs.code is not None:
+        return {"proj:code": crs.code}
+    properties: dict[str, Any] = {"proj:code": None}
+    if crs.wkt2 is not None:
+        properties["proj:wkt2"] = crs.wkt2
+    if crs.projjson is not None:
+        properties["proj:projjson"] = crs.projjson
+    return properties
+
+
+def _proj_summaries(crs: Crs) -> dict[str, Any]:
+    if crs.code is not None:
+        return {"proj:code": [crs.code]}
+    return {key: [value] for key, value in _proj_properties(crs).items() if value is not None}
 
 
 def _footprint(
@@ -97,7 +116,7 @@ def _band_objects(store: ChronoStore) -> list[dict[str, Any]]:
 def _cube(store: ChronoStore, bounds: tuple[float, float, float, float]) -> tuple[dict, dict]:
     level = store.levels[0]
     left, bottom, right, top = bounds
-    crs = _epsg_number(store.attrs.crs)
+    crs = _epsg_number(store.crs.to_string())
     times = list(store.attrs.times)
     dimensions = {
         "x": {
@@ -156,11 +175,17 @@ def build_stac(
     item_href: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """The Collection and Item documents for `store`, whose Zarr root is at `href`."""
+    if store.attrs.spec_version is None:
+        raise ValueError(
+            "this store has no chronozarr block, and the STAC documents describe chronozarr "
+            "stores: write one with chronozarr convert"
+        )
     level = store.levels[0]
     a, _, c, _, e, f = level.transform
     height, width = level.shape[2:]
     bounds = (c, f + e * height, c + a * width, f)  # left, bottom, right, top
-    ring, bbox = _footprint(store.attrs.crs, bounds)
+    stored_crs = store.crs.to_string()
+    ring, bbox = _footprint(stored_crs, bounds)
     times = list(store.attrs.times)
     dimensions, variables = _cube(store, bounds)
     bands = _band_objects(store)
@@ -168,7 +193,8 @@ def build_stac(
     provenance = provenance if isinstance(provenance, dict) else None
     text = description or (
         f"chronozarr time series: {len(times)} timesteps, {len(bands)} bands, "
-        f"{abs(a):g} m pixels in {store.attrs.crs}, {len(store.levels)} pyramid levels."
+        f"{abs(a):g} {schema.axis_unit(stored_crs)} pixels in {store.crs.describe()}, "
+        f"{len(store.levels)} pyramid levels."
     )
     asset = {
         "href": href,
@@ -183,7 +209,7 @@ def build_stac(
         "start_datetime": times[0],
         "end_datetime": times[-1],
         "title": title or id,
-        "proj:code": store.attrs.crs,
+        **_proj_properties(store.crs),
         "proj:shape": [height, width],
         "proj:transform": [a, 0.0, c, 0.0, e, f, 0.0, 0.0, 1.0],
         "proj:bbox": list(bounds),
@@ -244,7 +270,7 @@ def build_stac(
             "spatial": {"bbox": [bbox]},
             "temporal": {"interval": [[times[0], times[-1]]]},
         },
-        "summaries": {"proj:code": [store.attrs.crs]},
+        "summaries": _proj_summaries(store.crs),
         "cube:dimensions": dimensions,
         "cube:variables": variables,
         "links": [

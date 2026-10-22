@@ -58,7 +58,7 @@ import xarray as xr
 ds = xr.open_dataset("my_store", engine="chronozarr")
 ```
 
-A store is a Zarr v3 group, so xarray, zarr-python and GDAL 3.13 also read it without chronozarr. See [Analyze a store in Python](https://chronozarr.org/guides/analyze).
+A store is a Zarr v3 group, so xarray, zarr-python and GDAL 3.13 also read it without chronozarr. They return the stored values: plain xarray and CarbonPlan's zarr-layer 0.11.0 do not apply its band scale and offset or its mask ([GeoZarr review](https://github.com/chronozarr/chronozarr/blob/main/spec/review-2026-10-geozarr.md)). See [Analyze a store in Python](https://chronozarr.org/guides/analyze).
 
 ## JavaScript
 

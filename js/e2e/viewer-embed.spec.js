@@ -9,6 +9,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createProjection } from '../maplibre/projection.js';
+import { DAYMET_LCC } from '../support/crs-fixtures.js';
 import { STORES, storedValue } from './stores.js';
 import { expect, test as base } from './fixtures.js';
 import { captureFrame, expectFrameMatchesStore } from './viewer-helpers.js';
@@ -36,7 +37,7 @@ const test = base.extend({
 });
 
 const STORE = 'u16_sharded';
-const PROJECTION = createProjection('EPSG:32631');
+const PROJECTION = await createProjection('EPSG:32631');
 const TRANSFORM = STORES[STORE].spec.transform;
 
 /** The origin of the page that embeds the viewer. */
@@ -408,6 +409,19 @@ test.describe('postMessage', () => {
     const empty = await waitForMessage(page, 'chronozarr:click', { pixel: { x: 2, y: 100 } });
     expect(empty.valid).toBe(false);
     expect(empty.values).toEqual({ B02: null, B03: null, B04: null, B08: null });
+  });
+
+  test('a store with no EPSG code reports ready with crs null and a click with the lon/lat that pyproj gives, read from its proj:wkt2', async ({ page, servers, stores, storeUrl }) => {
+    const store = await storeUrl('u16_lcc');
+    const frame = await openHost(page, servers, stores, viewerUrl(servers, store, { origin: hostOf(servers) }));
+    const ready = await waitForMessage(page, 'chronozarr:ready');
+    expect(ready.store).toEqual({ url: store, name: 'u16_lcc', crs: null });
+    await clickPixel(page, frame, 100, 100);
+    const click = await waitForMessage(page, 'chronozarr:click');
+    expect(click.pixel).toEqual({ x: 100, y: 100 });
+    const [, , lon, lat] = DAYMET_LCC.grid.centres.find(([col, row]) => col === 100 && row === 100);
+    expect(click.lon).toBeCloseTo(lon, 5);
+    expect(click.lat).toBeCloseTo(lat, 5);
   });
 
   test('a click on the coarser frame of a fast scrub reports that level and its stored values; paintedT waits for level 0', async ({ page, servers, stores, storeUrl }) => {

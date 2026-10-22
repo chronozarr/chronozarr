@@ -361,7 +361,11 @@ export class ChronozarrLayer {
         store.close();
         return;
       }
-      this.#configure(store);
+      await this.#configure(store);
+      if (this.#disposed) {
+        store.close();
+        return;
+      }
     } catch (error) {
       store?.close();
       this.#fail(error);
@@ -379,12 +383,12 @@ export class ChronozarrLayer {
     this.#repaint();
   }
 
-  /** Validates the store for map use and derives everything that does not depend on the GL context. */
-  #configure(store) {
+  /** Validates the store for map use and derives everything that does not depend on the GL context. Async because a CRS outside the built-in projections loads proj4. */
+  async #configure(store) {
     const { url } = this.#options;
     if (!Array.isArray(store.transform)) throw new Error(`${url}: level 0 declares no affine "transform", so the store cannot be placed on a map. Re-encode it with the current chronozarr writer.`);
     if (!TEXTURE_FORMATS[store.dtype]) throw new Error(`${url}: data type ${store.dtype} is not supported by the MapLibre layer (supported: ${Object.keys(TEXTURE_FORMATS).join(', ')})`);
-    const projection = createProjection(store.crs);
+    const projection = await createProjection(store);
 
     const bands = normalizeBands(store.attrs.bands);
     this.#bandInfo = { bands, names: bands.map((band) => band.name), nodata: typeof store.nodata === 'number' ? store.nodata : null, products: resolveProducts(store.attrs.bands) };
@@ -971,7 +975,7 @@ export class ChronozarrLayer {
     const store = this.#store;
     const { lod, cells } = this.#lastView;
     if (!store || this.#disposed || cells.length === 0) return;
-    this.#prefetchController?.abort();
+    const previous = this.#prefetchController;
     const controller = new AbortController();
     this.#prefetchController = controller;
     const seek = Math.abs(this.#t - this.#prefetchedAt) > SEEK_DISTANCE;
@@ -993,5 +997,7 @@ export class ChronozarrLayer {
       .then((result) => {
         if (result.errors.length > 0) this.#emit('error', { error: result.errors[0].error, prefetch: true, errors: result.errors });
       }, report);
+    // The new job has taken over the requests it shares with the old one (the reader plans synchronously): now the old one can stop.
+    previous?.abort();
   }
 }

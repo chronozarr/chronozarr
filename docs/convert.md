@@ -5,8 +5,12 @@
 | Your data | Section |
 |---|---|
 | A folder, a glob or an `s3://` prefix of GeoTIFFs with a date in each name | [From dated GeoTIFFs](#from-dated-geotiffs) |
+| BIL, GRIB2, HDF5 or any other raster that GDAL reads, or zips that hold one | [From other raster formats](#from-other-raster-formats) |
+| One GeoTIFF whose bands are dates, such as an Earth Engine `toBands()` export | [From Earth Engine exports](#from-earth-engine-exports) |
+| Several files per date that tile one image, as Earth Engine splits a large export (`name-0000000000-0000000000.tif`) | [Exports split into tiles](#exports-split-into-tiles) |
 | COGs at URLs, with dates in a table | [From a manifest of URLs](#from-a-manifest-of-urls) |
 | A NetCDF file or a Zarr store with a time axis | [From NetCDF or Zarr](#from-netcdf-or-zarr) |
+| A folder or glob of NetCDF files, one per day or month | [A series of NetCDF files](#a-series-of-netcdf-files) |
 | An xarray `DataArray` in Python | [From xarray](#from-xarray) |
 | Rendered PNG frames | [PNG frames](png-frames.md) |
 
@@ -21,9 +25,18 @@ chronozarr convert "scenes/*.tif" my_store --dry-run   # check every file, write
 chronozarr convert "scenes/*.tif" my_store
 ```
 
-The dry run runs the same discovery and checks as conversion. It prints each file with its date, the grid, the bands, the scaling, the validity rule and the expected size. A directory or `s3://` prefix is not searched recursively; use a glob such as `"scenes/**/*.tif"` for subdirectories. Listing an S3 prefix needs the `s3` extra (`uv tool install --python 3.13 'chronozarr[geo,s3]==0.4.1'`) and uses your AWS credentials.
+The dry run runs the same discovery and checks as conversion. It prints each file with its date, the grid, the bands, the scaling, the validity rule and the expected size. The pixel size is in the unit of the CRS: `m`, `degree` or `US survey foot`. A geographic grid whose longitudes run outside -180 to 180, such as 0 to 360, gets a `longitude:` line. The store keeps those values, so a lookup in xarray must use the same convention. A directory or `s3://` prefix is not searched recursively; use a glob such as `"scenes/**/*.tif"` for subdirectories. Listing an S3 prefix needs the `s3` extra (`uv tool install --python 3.13 'chronozarr[geo,s3]==0.4.1'`) and uses your AWS credentials.
 
-A date is read from a name only when the name holds exactly one. A name with no date, with several (`20240215_2024-03`), or two files with the same date are reported, never guessed. `--date-pattern` says where the date is, for example `--date-pattern "ndvi_%Y%m%d"`. `--write-manifest found.csv` saves discovered files and dates as a manifest that `convert` reads back; it is the one output allowed with `--dry-run`.
+A date is read from a name only when the name holds exactly one. A name with no date, with several (`20240215_2024-03`), or two files with the same date are reported, never guessed. When the files that share a date are tiles of one image, the report says so and names `--mosaic-tiles` ([exports split into tiles](#exports-split-into-tiles)). `--date-pattern` says where the date is, for example `--date-pattern "ndvi_%Y%m%d"`. `--write-manifest found.csv` saves discovered files and dates as a manifest that `convert` reads back; it is the one output allowed with `--dry-run`. The manifest is written even when the checks find problems, and the problems are reported after it. A file whose date was not found gets a row with an empty `datetime`, and the report says which rows; fill them in or delete them, then convert the manifest. When the files name their bands, the manifest has a `bands` column with those names to edit.
+
+MODIS and HLS name a file by year and day of year. `MOD13A1.A2020001.h12v04.061.2020326023424_500m_16_days_NDVI.tif` is 1 January 2020, and `HLS.S30.T17SQV.2020061T155151.v2.0.B04.tif` is 1 March 2020 at 15:51:51. `%j` reads the three-digit day of year, 001 to 366, and goes with `%Y`, alone or with `%H%M%S`:
+
+```bash
+chronozarr convert "modis/*.tif" my_store --date-pattern "MOD13A1.A%Y%j" --dry-run
+chronozarr convert "hls/*.tif" my_store --date-pattern "HLS.S30.T17SQV.%Y%jT%H%M%S" --dry-run
+```
+
+`%j` cannot be combined with `%m` or `%d`, and day 366 is refused in a year that has 365 days. Such a name has no date by the default rules, because seven digits can be anything. When one holds seven digits that read as a year and a day of year, the fix line under `no date in the file name` shows the pattern for that name, with the date it reads.
 
 Before it reads any pixels in bulk, `convert` checks every file for its date, grid and CRS, bands, dtype, scale, offset, units and nodata. It reports all problems at once, grouped by file, each with a suggested fix, and writes nothing:
 
@@ -41,7 +54,175 @@ scenes/readme_copy.tif
 
 Files on another grid fail with a suggestion to pass `--resampling`, which warps them to the grid of the first file.
 
-The store takes each band's description (its name), scale, offset and units from the files, so a Sentinel-2 file with a scale of 0.0001 gives reflectance. These must be identical in every file. A file whose bands have no description gives bands named `1`, `2` and so on. To name them, write the files and dates to a manifest with `--write-manifest found.csv`, add a `bands` column such as `ndvi`, and convert the manifest. The store also takes the nodata value that the files declare. Files that declare none give a store with no nodata, so a stored 0 is data. `--nodata 0` sets one.
+The store takes each band's description (its name), scale, offset and units from the files, so a Sentinel-2 file with a scale of 0.0001 gives reflectance. These must be identical in every file, unless you give the scale or the offset yourself: `--scale 0.0001` and `--offset 0` replace them for every band, and the files then need not agree. A file whose bands have no description gives bands named `1`, `2` and so on. To name them, write the files and dates to a manifest with `--write-manifest found.csv`, add a `bands` column such as `ndvi`, and convert the manifest. A `bands` column replaces whatever the files say, so it is also the way to rename a band.
+
+Some files carry a description that is the file's own name, such as the one band of a WorldClim file `wc2.1_10m_tmax_2020-01.tif`. When every file has one band and the descriptions are identical once the dates in them are left out, `convert` takes them for file labels and not for a band name. The band is named by the part they share (`wc2.1_10m_tmax`), or `1` when nothing is left, and the dry run prints a `bands:` line that says what it chose and how to change it. Descriptions that differ in anything but the date, such as `B04` and `B08` or `tmax` and `tmin`, are refused, and so are differing descriptions in files with more than one band. In those cases name the bands in a manifest. The store also takes the nodata value that the files declare. Files that declare none give a store with no nodata, so a stored 0 is data. `--nodata 0` sets one.
+
+The dry run also reads three timesteps and checks their pixels. A value that the files do not declare as nodata but that looks like a fill is one far outside the other values, such as `-9999` in rainfall, or a common code such as `-3000`. When it holds 5 % of the valid pixels (1 % for `-9999`, `-999`, `-3000` and `-32768`), `convert` stops, the dry run too, and the message gives both answers: `--nodata -9999` marks the value invalid, and `--nodata none` keeps every value as data. Any `--nodata` ends the refusal. `--nodata` takes one value, so when two flag values are found, such as NSIDC's 2540 for land and 2530 for coast, the second stays data. To mark both, rewrite one as the other in the files first, or give the files a mask (an alpha band or an internal mask). A smaller share gets a `fill:` line that names the value and the option that marks it, and the store keeps it as data, because it could be real. A `range:` line gives the values of each band after scale and offset. GDAL and the store compute stored * scale + offset, but MODIS and other HDF-EOS products write a divisor: their NDVI files declare a scale of 10000 and mean stored / 10000, which gives values near 1e8. A scale of exactly 100, 1000, 10000 and so on, with no offset, that carries a value past 1e6 stops `convert` before anything is written, the dry run too. The message shows the range and gives both answers: `--scale 0.0001` reads the divisor correctly, and `--scale 10000` keeps the scale as the files declare it. Other scales, such as 0.0001 for reflectance or 0.02 for temperature, are never refused.
+
+## From other raster formats
+
+`convert` reads any raster that GDAL can open through rasterio, not only GeoTIFF. A folder, a quoted glob or an `s3://` prefix is searched for files with these extensions. Everything else is ignored, including the sidecars that GDAL reads for itself (`.hdr`, `.prj`, `.aux.xml`, `.stx`, `.xml`, `.txt`, `.csv`).
+
+| Format | Extensions |
+|---|---|
+| GeoTIFF | `.tif`, `.tiff` |
+| ESRI BIL and FLT, with their `.hdr` and `.prj` | `.bil`, `.flt` |
+| ESRI ASCII grid, with its `.prj` | `.asc` |
+| Erdas Imagine | `.img` |
+| GRIB and GRIB2 | `.grib`, `.grib2`, `.grb`, `.grb2` |
+| HDF5 and HDF-EOS5 | `.h5`, `.hdf5`, `.he5` |
+| HDF4, only with a GDAL that has the driver | `.hdf` |
+| JPEG 2000 | `.jp2` |
+| GDAL virtual raster | `.vrt` |
+| One raster in a zip, local files only | `.zip` |
+
+A file with another extension goes in a [manifest](#from-a-manifest-of-urls), which takes any path that GDAL opens. NetCDF is not in the list: NetCDF files keep their own route, [From NetCDF or Zarr](#from-netcdf-or-zarr), for one file as well as for a [series](#a-series-of-netcdf-files). The dates, the checks and the dry run are those of [dated GeoTIFFs](#from-dated-geotiffs); the first line of the plan says `dated rasters`. A date is read from the file name only, not from the folders above it. If the date is only in a folder name, as in `hrrr.20240115/conus/hrrr.t00z.wrfsfcf00.grib2`, run `--write-manifest found.csv`, fill in the `datetime` column and convert the manifest.
+
+A BIL or FLT file needs its `.hdr`, which carries the grid and the nodata value, beside it, and a `.prj` for the CRS. An ASCII grid takes its CRS from a `.prj`.
+
+### Zips
+
+PRISM delivers one zip per day, each with a BIL file and its sidecars. Point `convert` at the folder of zips, or a quoted glob such as `"zips/*.zip"`:
+
+```bash
+chronozarr convert zips/ prism_ppt --dry-run
+```
+
+Each raster is read inside its zip, so nothing is unpacked. A zip must hold exactly one raster; its sidecars do not count. The date comes from the zip's name or, when that has none, from the name of the raster inside. A zip with no raster or several, or one that cannot be read, is reported with the other problems and never guessed at. For those, unzip the files and convert the folder. A zip at an `s3://` or `https://` address is not read.
+
+### Files with several variables
+
+An HDF5 or HDF-EOS5 file holds many arrays, which GDAL calls subdatasets, and no raster band of its own. Without `--variable`, `convert` stops once and lists them by group, with their shapes:
+
+```text
+Error: SMAP_L3_SM_P_20200601_R19240_001.h5 has no raster band: it holds 104 subdatasets. Choose one with --variable NAME ...:
+  Soil_Moisture_Retrieval_Data_AM/ [406x964]
+    EASE_column_index, EASE_row_index, albedo, ..., soil_moisture, ...
+```
+
+`--variable Soil_Moisture_Retrieval_Data_AM/soil_moisture` reads that array from every file. The group can be left out when no other group has the name, so `--variable soil_moisture` works here. A name that matches none, or several, is refused with the list. A single-band variable gives a band named after it, and `--variable` is refused for files that have no subdatasets.
+
+HDF5 from NASA often has no geotransform that GDAL can read, and the dry run says so. A file that carries none needs `--crs` and `--bounds` with the grid of the product. SMAP L3 is on the 36 km EASE-Grid 2.0, which is EPSG:6933:
+
+```bash
+chronozarr convert smap/ smap_sm --variable soil_moisture --crs EPSG:6933 \
+  --bounds=-17367530.445,-7314540.795,17367530.445,7314540.795
+```
+
+### GRIB and HDF4
+
+GDAL gives GRIB values as 64-bit floats, which a store does not hold, so the dry run reports `sources are float64`. Write float32 files first with `gdal_translate -ot Float32`. A GRIB file with several messages is read as one band per message.
+
+MODIS products on LP DAAC are HDF4. The GDAL inside the rasterio wheel has no HDF4 driver, so each file is reported as `an HDF4 file and this GDAL build has no HDF4 driver`. Write GeoTIFFs with a GDAL that has the driver (`gdalinfo --formats | grep HDF4` shows whether yours does; conda-forge's `libgdal-hdf4` adds it), and convert those. `gdalinfo FILE` lists the subdatasets to translate:
+
+```bash
+gdal_translate 'HDF4_EOS:EOS_GRID:"MOD13A3.A2020001.h09v05.061.2020328133217.hdf":MOD_Grid_monthly_1km_VI:1 km monthly NDVI' ndvi_2020001.tif
+```
+
+The MODIS names carry a year and day of year, so the GeoTIFFs convert with `--date-pattern`, as under [dated GeoTIFFs](#from-dated-geotiffs).
+
+## From Earth Engine exports
+
+`ee.ImageCollection.toBands()` stacks a collection into one image, and exporting it gives one GeoTIFF whose bands are the dates. Each band is named `<image id>_<band>`. For a collection of dated composites the image id is the date, so a year of MODIS NDVI has bands `2020_01_01_NDVI`, `2020_01_17_NDVI` and so on. GDAL keeps the names as band descriptions.
+
+A file with several bands is normally several bands, not several dates, so `convert` does not assume the second. Without an option it stops at the file name, and when the descriptions would make a series it names the option and what it would read:
+
+```text
+/data/modis_ndvi_2020.tif
+  - no date in the file name
+    fix: pass --bands-are-dates to read the file as a series: its 23 bands read as 23 dates from their descriptions ('2020_01_01_NDVI' to '2020_12_18_NDVI'), as one band named NDVI. Otherwise name the date ...
+```
+
+`--bands-are-dates` says that the bands of the file are its dates. The dry run prints each date with the band it reads, and a `bands:` line that says what was read:
+
+```bash
+chronozarr convert modis_ndvi_2020.tif my_store --bands-are-dates --dry-run
+chronozarr convert modis_ndvi_2020.tif my_store --bands-are-dates
+```
+
+```text
+source:     GeoTIFF with a date per band, 23 timesteps (2020-01-01 .. 2020-12-18)
+files:      1, a band per date
+  2020-01-01  band 1   2020_01_01_NDVI
+  ...
+bands:      23 bands read as 23 dates from their descriptions ('2020_01_01_NDVI' to '2020_12_18_NDVI'); the band is named 'NDVI', the part they share
+```
+
+The rules:
+
+- Every band needs a description with exactly one date, written as a file name's date is: `20200101`, `2020-01-01`, `2020_01_01`, `2020-01` or `2020_01`. `--date-pattern` reads other forms from the descriptions, not from the file name, for example `--date-pattern "A%Y%j"` for `A2020001_NDVI`. See [dated GeoTIFFs](#from-dated-geotiffs) for the directives. The default forms read the day and drop a time of day, as in `20200101T184731_T10SEG_B4`; `--date-pattern "%Y%m%dT%H%M%S"` keeps it.
+- The part of a description besides the date names the band. It must be the same in every description: `NDVI` in `2020_01_01_NDVI`. The bands need not be in date order; the store is.
+- Several variables per date, such as `2020_01_01_NDVI` and `2020_01_01_EVI`, become the bands of each timestep, in the order the file first lists them. Every date must have the same variables. A file that lists all the NDVI dates and then all the EVI dates works the same way.
+- Scale, offset, units and nodata come from the file, as for any raster, and must agree for a variable on every date. An export often leaves the fill undeclared, as MODIS NDVI does with `-3000`: the `fill:` line names it, and `--nodata -3000` marks it invalid.
+- The store keeps the CRS of the file, including a CRS with no EPSG code such as MODIS's sinusoidal grid.
+
+When the descriptions cannot be read as dates, `convert` lists every reason at once, grouped as for other files: bands with no description, descriptions with no date or with several, two bands that are the same date and name, and dates that do not have the same bands, which includes descriptions that differ in more than the date, such as `LC08_...` on one date and `LC09_...` on the next. Fix the descriptions, or write one file per date with `gdal_translate -b` and convert the folder.
+
+`--bands-are-dates` takes one raster file. A manifest, and a folder or glob that holds more than one file, are refused, and so is `--write-manifest`, because a manifest lists files and this is one.
+
+### Reading a file with many bands
+
+`convert` reads the file once for each date. A multi-band GeoTIFF is pixel-interleaved unless it was written otherwise, which is GDAL's default, so GDAL decodes every band of a tile to give one, and a conversion decodes the whole file once per date. On a deflate-compressed int16 file of 40 bands and 2048 by 2048 pixels in 256 pixel tiles, reading took 1.5 s per date, against 0.03 s for the same data as 40 files and 0.08 s once the file was rewritten band-interleaved. The total grows with the square of the number of dates. For a file this size or larger the dry run adds an `interleave:` line with the command:
+
+```bash
+gdal_translate -co INTERLEAVE=BAND -co TILED=YES -co COMPRESS=DEFLATE in.tif band_interleaved.tif
+```
+
+### Exports split into tiles
+
+`Export.image` writes an image that is larger than its file limit as several files, each a part of one grid, named by the row and column offset of the part: `<fileNamePrefix>-<row>-<column>.tif`. A series of such exports has several files per date:
+
+```text
+NDVI_2020_01_01-0000000000-0000000000.tif
+NDVI_2020_01_01-0000000000-0000000500.tif
+NDVI_2020_01_01-0000000500-0000000000.tif
+NDVI_2020_01_01-0000000500-0000000500.tif
+NDVI_2020_01_17-0000000000-0000000000.tif
+...
+```
+
+Files that share a date can also be copies, so `convert` does not join them by itself. It reads their grids and says which case it found. For tiles, the fix names the option that joins them:
+
+```text
+/data/raw/NDVI_2020_01_01-0000000000-0000000000.tif
+  - has the same date 2020-01-01 as NDVI_2020_01_01-0000000000-0000000500.tif, NDVI_2020_01_01-0000000500-0000000000.tif and NDVI_2020_01_01-0000000500-0000000500.tif, and together they are tiles of one 1000 x 1000 px grid, each a different part of it, as Earth Engine splits a large export into files
+    fix: pass --mosaic-tiles to join the tiles of each date into one timestep; keeping one file per date would store only part of the area
+```
+
+Do not leave files out to get one per date: the store would hold a quarter of the area. `--mosaic-tiles` joins the tiles of each date into one timestep:
+
+```bash
+chronozarr convert raw ndvi_store --mosaic-tiles --nodata -3000 --dry-run
+chronozarr convert raw ndvi_store --mosaic-tiles --nodata -3000
+```
+
+The dry run prints every tile with its date and its place in the grid, and a `tiles:` line:
+
+```text
+source:     dated GeoTIFF tiles, 8 timesteps (2020-01-01 .. 2020-04-22)
+files:      32, dated from their names and placed by their grids
+  2020-01-01  rows 0..499, columns 0..499      /data/raw/NDVI_2020_01_01-0000000000-0000000000.tif
+  2020-01-01  rows 0..499, columns 500..999    /data/raw/NDVI_2020_01_01-0000000000-0000000500.tif
+  ...
+grid:       WKT2 "unnamed", 1000 x 1000 px, 463.3127165 m pixels (transform origin -6301052.945, 5189102.425)
+validity:   nodata -3000 sentinel, no mask
+tiles:      32 files are tiles of one 1000 x 1000 px grid, 4 per date, and the tiles of each date are joined into one timestep; every date covers the whole grid
+```
+
+The rules:
+
+- The files are tiles of one grid when they have one CRS and one pixel size, their origins are a whole number of pixels apart, and no two files of a date share a pixel. The grid of the store is the smallest that holds every file of every date. Nothing is resampled.
+- At least two files must share a date. When no two do, `--mosaic-tiles` is refused: there is nothing to join, and joining files of different dates and extents would only leave pixels empty.
+- Pixels that no tile of a date covers, as when one date is missing a tile, are invalid on that date. When the files declare no nodata and you give none, the store gets a mask for them. The `tiles:` line says on how many dates this happens.
+- Scale, offset, units and nodata come from the files, as for any GeoTIFFs. Earth Engine leaves MODIS NDVI's `-3000` fill undeclared; on this mosaic it holds 3.7 % of the pixels, so `convert` stops until `--nodata -3000` marks it invalid.
+- `--mosaic-tiles` applies to a folder, a glob or an `s3://` prefix. It is refused with `--resampling`, `--transform`, `--shape`, `--bounds`, `--bands-are-dates` and `--write-manifest`, and with a `--crs` other than the CRS of the tiles.
+
+When the files of a date are not tiles of one grid, the report does not offer `--mosaic-tiles`:
+
+- Files of one date that cover the same pixels are copies, or two images of one area. Keep one of them, or, if their names carry a time of day, read it with `--date-pattern` and `%H%M%S`.
+- Files of one date that overlap in part, as Earth Engine's tiles never do, need a rule for the pixels they share, and that rule is your decision. Join them yourself, for example with `gdal_merge.py`, where the last file wins, and convert the joined files.
+- Files with different CRSs or pixel sizes, or whose pixels are not aligned, can be joined only by resampling, and the method is your decision. Join them onto one grid with `gdalwarp` (with `-tap -tr` for an aligned grid) and convert the joined files, or export them again with `crs` and `crsTransform` so that every tile sits on one grid.
 
 ## From a manifest of URLs
 
@@ -67,9 +248,90 @@ chronozarr convert model.nc my_store --variable tas
 chronozarr convert data.zarr my_store --variable ndvi --crs EPSG:32618
 ```
 
-`--variable` names the array to convert. Its dimensions must be time, y and x, with an optional band dimension. `--dims time=NAME,y=NAME,x=NAME[,band=NAME]` names them when they are not `time`, `y`, `x` or common aliases such as `lat` and `lon`. `--crs` gives the coordinate system when the file does not declare it. The CF `scale_factor`, `add_offset` and `units` of the variable apply to every band. `--mask-var` names a variable whose nonzero values mark valid pixels.
+Reading a NetCDF4 file needs the `netcdf` extra, which adds h5netcdf and h5py. The quickstart install does not include it, so add it to the extras that you already use:
+
+```bash
+uv tool install --python 3.13 'chronozarr[geo,netcdf]==0.4.1'
+```
+
+In a uv project, run `uv add 'chronozarr[netcdf]==0.4.1'`. With pip, install `'chronozarr[netcdf]==0.4.1'` in your environment. Without the extra, `convert` stops with `reading a NetCDF4 file needs h5netcdf and h5py` and these commands. A Zarr store needs no extra. A classic NetCDF3 file, which starts with the bytes `CDF`, is not a NetCDF4 file: add `scipy` to the environment instead, for example `uv tool install --python 3.13 'chronozarr[geo]==0.4.1' --with scipy`.
+
+`--variable` names the array to convert. Its dimensions must be time, y and x, with an optional band dimension. `--dims time=NAME,y=NAME,x=NAME[,band=NAME]` names them when they are not `time`, `y`, `x` or common aliases such as `lat` and `lon`. The coordinate system comes from a `crs`, `crs_wkt` or `spatial_ref` attribute, or from the CF grid mapping variable that the variable names in `grid_mapping`; reading a grid mapping needs pyproj. `--crs` gives it, as an EPSG code or WKT2 text, when the file does not declare it. A CRS with no EPSG code, such as Daymet's Lambert conformal conic, is stored as it is and is never reprojected. The CF `scale_factor`, `add_offset` and `units` of the variable apply to every band. `--mask-var` names a variable whose nonzero values mark valid pixels.
 
 For an array that fits in memory, `chronozarr encode FILE my_store --variable NAME` is the shorter route.
+
+### Dimensions of length 1
+
+Many products keep a length-1 dimension next to time, y and x: OISST has `zlev`, others have `height` or `level`. `convert` squeezes it, and the dry run says which dimension it dropped and the coordinate value it held:
+
+```text
+squeezed:   zlev (length 1, value 0 meters)
+```
+
+A dimension that is longer than 1 is not squeezed, because choosing among its values is a decision about your data. The error names it. If its values are the bands of your series, pass `--dims band=level`. If you want one of them, select it first, for example with xarray: `ds.isel(level=0)`.
+
+### A series of NetCDF files
+
+NOAA, NASA and ESGF deliver a time series as one file per day, month or decade. Give `convert` the folder, or a quoted glob, and it reads the files as one series:
+
+```bash
+chronozarr convert "oisst/**/*.nc" oisst_store --variable sst --crs EPSG:4326 --dry-run
+chronozarr convert "oisst/**/*.nc" oisst_store --variable sst --crs EPSG:4326
+```
+
+A folder is not searched recursively; the glob `"oisst/**/*.nc"` searches its subfolders. The folder or glob must hold NetCDF files (`.nc`, `.nc4` or `.cdf`) and no rasters. A file can hold one step or many.
+
+Each file is dated by the time coordinate inside it, not by its name, so `--date-pattern` does not apply. The store lists the steps in time order, whatever the order of the names. The dry run prints one line per file with its dates, so you can see the order before anything is written.
+
+Before it writes anything, `convert` checks every file against the first. The files must have the same variable, dimensions, `x` and `y` values, data type, `scale_factor`, `add_offset`, `units`, declared nodata and calendar, and the same CRS if they declare one. It reports every file that differs, with the same grouping as for [dated GeoTIFFs](#from-dated-geotiffs):
+
+```text
+2 problem(s) in 2 of 4 source file(s); nothing was written:
+
+/data/oisst/202001/oisst-avhrr-v02r01.20200117.nc
+  - has scale_factor 0.1 and add_offset 0; /data/oisst/202001/oisst-avhrr-v02r01.20200101.nc has 0.01 and 0. A store holds one value per band for every timestep, so the files must agree
+    fix: if the attributes are wrong, correct them; otherwise convert the files that share them in separate stores
+
+/data/oisst/202002/oisst-avhrr-v02r01.20200203.nc
+  - has times 2020-02-02T12:00:00 that overlap those of /data/oisst/202002/oisst-avhrr-v02r01.20200202.nc (2020-02-02T12:00:00). Each time must come from one file
+    fix: drop one of the two files, or narrow the glob so every time is in one file
+```
+
+Two files that share a time, or whose times interleave, are an error. Which one to keep is your decision.
+
+Packed data stays packed. OISST stores sea surface temperature as `int16` with a `scale_factor` of 0.01 and a `_FillValue` of -999; the store holds the same integers, the band has a scale of 0.01, and -999 is the store's nodata. This is also what a single file gives.
+
+Each timestep is read from the file that holds it, and the files are opened as they are needed. Memory does not grow with the number of files: the reading holds a few files open at a time, and the encoder sets the peak, as it does for a single file. Opening a NetCDF file takes about as long as reading one step from it (22 ms against 9 ms for an OISST day), so a series of many small files takes longer than the same data in one file.
+
+Model output split by decade, as in CMIP6, is one series too. The files must use the same calendar, and `--calendar-to-gregorian` applies to the joined time axis ([climate model calendars](#climate-model-calendars)). Zarr stores are not read as a series.
+
+### Climate model calendars
+
+Climate models often write time on a calendar with no Gregorian equivalent: `360_day` (twelve months of 30 days), `noleap` or `365_day`, `all_leap` or `366_day`, and `julian`. CMIP6 files from HadGEM3 (`360_day`) and CESM2 (`noleap`) are examples. A store holds Gregorian timestamps ([specification](../spec/CHRONOZARR.md), section 2.2), so `convert` stops and names the choice:
+
+```text
+Error: the time coordinate 'time' uses the 360_day calendar, and a store holds Gregorian timestamps. Pass --calendar-to-gregorian date to keep each step's date and time of day as its Gregorian timestamp; the store then records the source calendar in its provenance. The time elapsed between steps is not kept: steps 30 days apart in the source are 28 to 31 days apart in the store (519 of 779 gaps change). Use it when the dates matter more than that.
+```
+
+`--calendar-to-gregorian date` keeps each step's year, month, day and time of day as the Gregorian timestamp, so a step stamped 16 January stays 16 January. It cannot keep the time between steps: months of 30 days become 28 to 31 days apart. The dry run prints a `calendar:` line with that change in numbers. Use it when the date, the month or the season is what matters. For rates per day over a span, compute from the source file, where the days are the model's own.
+
+```bash
+chronozarr convert tas_Amon_HadGEM3.nc my_store --variable tas --crs EPSG:4326 --calendar-to-gregorian date --dry-run
+```
+
+A date that Gregorian does not have, such as 30 February on a `360_day` calendar or 29 February in a `julian` century year, stops the conversion and is listed. `--calendar-to-gregorian date-or-month-end` moves each such date to the last day of its month instead. If a move puts two steps on the same day, as daily `360_day` data does on 28, 29 and 30 February, the conversion stops again: drop one step of each pair first, for example with xarray, and convert the result.
+
+The store records what was done in its provenance: the source calendar, the option, the change in spacing and the dates that moved. `chronozarr info STORE` prints it as `notes:`, and `chronozarr stac` copies it into the STAC item. In Python it is `chronozarr.open_store("STORE").attrs.provenance["notes"]`. A `provenance=` that you pass to `chronozarr.convert` keeps its fields and gets the note added to its `notes`.
+
+These calendars need cftime. The `netcdf` extra installs it with the NetCDF reader. A Zarr store needs no NetCDF reader, so cftime is also an extra of its own. Add it to the extras that you already use:
+
+```bash
+uv tool install --python 3.13 'chronozarr[geo,netcdf,cftime]==0.4.1'
+```
+
+In a uv project, run `uv add 'chronozarr[cftime]==0.4.1'`. With pip, install `'chronozarr[cftime]==0.4.1'` in your environment. Without the extra, `convert` stops with `the time coordinate 'time' uses the 360_day calendar, which needs cftime` and these commands.
+
+`chronozarr encode` takes the same option for a file with dimensions `(time, band, y, x)`. `chronozarr append` does not convert calendars, because it cannot record the conversion in the store you append to; convert the whole series instead. The option has no effect on a Gregorian time axis. In Python, `convert` has `calendar_to_gregorian="date"`. `chronozarr.encode` of a `DataArray` whose time coordinate holds cftime dates stops and says so; map the dates yourself, for example with `da.convert_calendar("proleptic_gregorian", align_on="date")`, which drops a date that Gregorian lacks, and describe that in `provenance=`.
 
 ## From xarray
 

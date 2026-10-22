@@ -537,11 +537,44 @@ def test_link_refuses_what_the_viewer_would_ignore(hosted, args, message):
     assert message in _run("link", hosted, *args, ok=False).output
 
 
-@pytest.mark.parametrize("args", [["--colormap", "viridis"], ["--range", "1,2"]])
-def test_link_reports_a_usage_error_before_reading_the_store(args):
+@pytest.mark.parametrize("option", [["--colormap", "viridis"], ["--range", "1,2"]])
+def test_link_reports_a_usage_error_before_reading_the_store(option):
     # nothing listens on port 9 (discard): a read would fail with a connection error instead
-    refused = _run("link", "http://127.0.0.1:9/nope", *args, ok=False).output
+    refused = _run(
+        "link", "http://127.0.0.1:9/nope", "--product", "ndvi", *option, ok=False
+    ).output
     assert "add --product band" in refused
+
+
+@pytest.mark.parametrize("names", [["elev"], ["elev", "slope"]])
+def test_link_implies_the_single_band_when_it_is_the_only_product(tmp_path, names):
+    bands = [Band(name, scale=1.0, offset=0.0) for name in names]
+    server = serve_store(_store(tmp_path / "plain", names, bands=bands))
+    try:
+        result = _run("link", server.url, "--colormap", "viridis", "--range", "100,5000")
+    finally:
+        server.close()
+    params = parse_qs(urlsplit(result.stdout.strip()).query)
+    assert (params["p"], params["cm"], params["r"]) == (["band"], ["viridis"], ["100,5000"])
+    assert "b" not in params, "the band stays the viewer's choice"
+    assert "no --product: this store has no product but the single band" in result.stderr
+
+
+def test_link_without_those_options_leaves_the_product_to_the_viewer(tmp_path):
+    server = serve_store(_store(tmp_path / "plain", ["elev"]))
+    try:
+        result = _run("link", server.url, "--time", "1")
+    finally:
+        server.close()
+    assert "p" not in parse_qs(urlsplit(result.stdout.strip()).query)
+    assert "using --product band" not in result.stderr
+
+
+@pytest.mark.parametrize("option", [["--colormap", "viridis"], ["--range", "1,2"]])
+def test_link_names_the_products_that_make_the_choice_ambiguous(hosted, option):
+    refused = _run("link", hosted, *option, ok=False).output
+    assert "add --product band" in refused
+    assert "also has ndvi" in refused
 
 
 def test_link_opens_a_sar_store_on_the_composite(tmp_path):

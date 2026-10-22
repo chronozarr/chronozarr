@@ -1,12 +1,19 @@
 // Benchmarks for the chronozarr decoder and the chronozarr viewer, run against the store that is
-// currently open. From the page console: `await chronozarr.bench()`.
+// currently open. From the page console: `await chronozarr.bench()`, or `await chronozarr.bench({ coldRuns: 1, switches: 10 })`
+// for fewer cold opens per variant (default 5) and switches per warm loop (default 30).
 //
 //   cold open       loadStore -> first complete frame at LOD 0, HTTP cache bypassed, with and without
 //                   consolidated metadata in the root zarr.json.
-//   warm switch     goToTime -> frame finished on the GPU, with every chunk already decoded in the cache:
-//                   stepping one timestep at a time with pauses (the GPU window keeps neighbours resident,
-//                   so a step is a uniform change), jumping several timesteps at once, and with the
-//                   texture pool emptied so every switch uploads from the decoded cache.
+//   warm switch     goToTime -> frame finished on the GPU, after the idle prefetch: stepping one timestep at a
+//                   time with pauses (the GPU window keeps neighbours resident, so a step is a uniform change),
+//                   jumping several timesteps at once, and with the texture pool emptied so every switch
+//                   uploads from the decoded cache. `networkRequests` and `wireBytes` are per loop: all the
+//                   traffic from before its first switch until 1 s after its last and no request in flight
+//                   (10 s at most; `inflightAtEnd` counts what was still on the way then), the viewer's
+//                   look-ahead included. `incomplete` (frames drawn without every cell), `uploadsPerSwitch`
+//                   and `cacheMisses` are counted per switch. A store larger than the idle prefetch allowance
+//                   fetches during the loops, so their traffic is 0 only on a store the prefetch holds; the
+//                   gate "0 wire bytes on a warm switch" is measured by support/gate-bench/run.mjs.
 //   product switch  setProduct -> frame finished.
 //   decode          per-chunk zarrita decode time, replayed from recorded bytes (no network).
 //
@@ -90,37 +97,53 @@ async function coldOpen(viewer, url, fetchImpl, runs) {
   return rows;
 }
 
+// After its last switch a warm loop waits SETTLE_MS, then until no request is in flight (checked every SETTLE_POLL_MS),
+// for the responses to what its switches started or scheduled; SETTLE_CAP_MS in all at most.
+const SETTLE_MS = 1000;
+const SETTLE_POLL_MS = 50;
+const SETTLE_CAP_MS = 10000;
+
+/** Resolves with the number of requests still in flight when it gives up (0 unless it reached SETTLE_CAP_MS). */
+async function settle(network) {
+  const started = performance.now();
+  await sleep(SETTLE_MS);
+  while (network.inflight > 0 && performance.now() - started < SETTLE_CAP_MS) await sleep(SETTLE_POLL_MS);
+  return network.inflight;
+}
+
+/**
+ * Times each switch of `sequence` and counts the requests and bytes of the whole loop, from before its first switch until
+ * it has settled after its last. A switch is synchronous, so no response arrives inside it, and what the viewer schedules
+ * after a switch starts after it.
+ */
 async function switchTimings(viewer, sequence, { emptyPool = false, pauseMs = 0 } = {}) {
   const { renderer, store } = viewer;
+  const network = store.stats.network;
+  const before = { requests: network.requests, bytes: network.bytes };
   const rows = [];
   for (const t of sequence) {
     if (pauseMs) await sleep(pauseMs);
     if (emptyPool) renderer.clearResident();
-    const before = { requests: store.stats.network.requests, bytes: store.stats.network.bytes, uploads: renderer.stats.uploads, misses: store.stats.cache.misses };
+    const uploads = renderer.stats.uploads;
+    const misses = store.stats.cache.misses;
     const started = performance.now();
     viewer.goToTime(t);
     const frame = viewer.renderNow();
     renderer.finish();
     const ms = performance.now() - started;
-    rows.push({
-      t,
-      ms,
-      complete: frame.complete,
-      requests: store.stats.network.requests - before.requests,
-      bytes: store.stats.network.bytes - before.bytes,
-      uploads: renderer.stats.uploads - before.uploads,
-      misses: store.stats.cache.misses - before.misses,
-    });
+    rows.push({ t, ms, complete: frame.complete, uploads: renderer.stats.uploads - uploads, misses: store.stats.cache.misses - misses });
   }
-  return rows;
+  const inflightAtEnd = await settle(network);
+  return { rows, requests: network.requests - before.requests, bytes: network.bytes - before.bytes, inflightAtEnd };
 }
 
-function describeSwitches(rows) {
+function describeSwitches({ rows, requests, bytes, inflightAtEnd }) {
   return {
     ...Object.fromEntries(Object.entries(summarize(rows.map((r) => r.ms))).map(([k, v]) => [k, round(v)])),
     incomplete: rows.filter((r) => !r.complete).length,
-    networkRequests: rows.reduce((n, r) => n + r.requests, 0),
-    wireBytes: rows.reduce((n, r) => n + r.bytes, 0),
+    networkRequests: requests,
+    wireBytes: bytes,
+    inflightAtEnd,
     uploadsPerSwitch: rows.reduce((n, r) => n + r.uploads, 0) / rows.length,
     cacheMisses: rows.reduce((n, r) => n + r.misses, 0),
   };

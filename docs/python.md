@@ -20,7 +20,9 @@ import chronozarr
 chronozarr.encode(da, "my_store", crs="EPSG:32631")
 ```
 
-`da` is an xarray `DataArray` with dims `(time, band, y, x)`. Its dtype is uint8, uint16, int16 or float32. Its `x` and `y` coordinates are the projected pixel centres of an EPSG grid with north up.
+`da` is an xarray `DataArray` with dims `(time, band, y, x)`. Its dtype is uint8, uint16, int16 or float32. Its `x` and `y` coordinates are the projected pixel centres of a grid with north up.
+
+`crs` is an authority code such as `EPSG:32631`, or WKT2 text for a CRS with no code, such as a Lambert conformal conic or a sinusoidal grid. Without `crs`, `encode` reads `da.attrs["crs"]`. WKT1, PROJJSON and PROJ strings are converted to WKT2 when pyproj is installed. A store whose CRS has an EPSG code is written as spec 0.3.0 and any other as 0.4.0. `convert` keeps the CRS of its sources as it finds it and does not reproject unless you pass `--crs` for another CRS with `--resampling`.
 
 The output directory must not exist, or it must be empty. The store is unsharded unless you pass `shard=True`.
 
@@ -42,6 +44,21 @@ da = store.to_xarray(lod=0, times=[0], physical=False)
 
 `to_xarray` loads the requested level into memory.
 
+`store.notes` lists what the store leaves out or spells otherwise and the reader read through, such as an absent `levels` mirror or a registration with other URLs. It is empty for a store that conforms. A store can open with notes and still fail `chronozarr validate`: the reader decodes what it can read as declared, and `validate` checks the spec's rules for writers.
+
+`store.crs` is the CRS the store declares: an authority code, WKT2 text, PROJJSON, or several of them. `store.crs.to_string()` returns the code when there is one and otherwise the WKT2 or PROJJSON text, which pyproj and rasterio accept. When representations disagree, the WKT2 is used and a warning says so.
+
+## Read a store that chronozarr did not write
+
+`open_store` also reads a pyramid written by ndpyramid or by ESA's EOPF, or any Zarr v3 store whose root `multiscales` lists the levels. It finds the levels, the geometry and the CRS in the store's own metadata, and `store.notes` says what it had to assume: scale and offset taken as 1 and 0, no time axis (one timestep dated 1970-01-01), the fill value that marks a missing pixel, levels left out or in another order. Level 0 is the finest level whatever order the layout lists.
+
+```python
+store = chronozarr.open_store("https://example.org/product.zarr/measurements/reflectance")
+store.notes
+```
+
+A store of this kind never conforms: `chronozarr validate` reports the missing `chronozarr` block and says that the store decodes. `chronozarr info` prints its levels and notes. The JavaScript reader and the viewer still open only chronozarr stores. [Spec section 9.4](../spec/CHRONOZARR.md#94-stores-with-no-chronozarr-block) has the rules.
+
 ## Open a store in xarray
 
 ```python
@@ -51,7 +68,7 @@ ds = xr.open_dataset("my_store", engine="chronozarr")
 raw = xr.open_dataset("my_store", engine="chronozarr", physical=False)
 ```
 
-The backend reads lazily. It returns physical values unless you pass `physical=False`. The `lod` argument selects the level, and the default is 0.
+The backend reads lazily. It returns physical values unless you pass `physical=False`. The `lod` argument selects the level, and the default is 0. When the store has notes, `ds.attrs["chronozarr_notes"]` lists them.
 
 Install `chronozarr[dask]` to pass `chunks=` and get dask arrays.
 
@@ -100,8 +117,11 @@ The initial product, display limits and colormap are presentation. They are not 
 ```sh
 chronozarr link https://data.example.org/my_store --product band --band B8 --range 0,4000 --colormap viridis
 # https://chronozarr.org/demo/?store=...&p=band&b=B8&r=0,4000&cm=viridis
+
+chronozarr link https://data.example.org/my_store --time 71 --lonlat -64.62,-3.41 --zoom 2
+# https://chronozarr.org/demo/?store=...&t=71&z=2&c=684500,9123350
 ```
 
-`link` checks each value against the store and prints the URL, because the viewer ignores a value that the store cannot honor. A product needs its roles. Display limits only apply to the single-band product of a band that is not reflectance-like: an unsigned 8-bit or 16-bit band whose largest possible physical value is 10 or less is toned with fixed reflectance limits, and every other band has adjustable ones. A colormap only applies to the single-band product. `from chronozarr.view import viewer_url` builds the same URL from Python and refuses an unknown colormap. The viewer keeps the limits you set in its address bar, so copying the address shares them.
+`--lonlat` and `--xy` set the map centre and `--zoom` its zoom; [Choose a date and a place](viewer.md#choose-a-date-and-a-place) explains them. `link` checks each value against the store and prints the URL, because the viewer ignores a value that the store cannot honor. A product needs its roles. Display limits only apply to the single-band product of a band that is not reflectance-like: an unsigned 8-bit or 16-bit band whose largest possible physical value is 10 or less is toned with fixed reflectance limits, and every other band has adjustable ones. A colormap only applies to the single-band product. `--range` and `--colormap` need `--product band`, unless the single band is the only product the store has, as with a store of one elevation band: `link` then uses it and says so on stderr. `from chronozarr.view import viewer_url` builds the same URL from Python and refuses an unknown colormap. It, like `view`, takes `colormap` and `range` without a `product`; the viewer then applies them if the store opens on the single band. Its `zoom` and `center` arguments take the zoom and the centre `(x, y)` in the store's own coordinate system, not longitude and latitude. The viewer keeps the limits you set in its address bar, so copying the address shares them.
 
 `chronozarr.add_chronozarr` adds a store as a layer on a leafmap or geemap MapLibre map. Install the `leafmap` or `geemap` extra. See [examples/leafmap](../examples/leafmap/README.md).

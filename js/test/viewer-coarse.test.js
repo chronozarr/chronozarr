@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ASSUMED_BANDWIDTH, COARSE_FRAME_BYTES, COARSE_MAX_OVERHEAD, COARSE_MIN_DIRECT_MS, ancestorCells, planCoarseStages, stageLeadMs } from '../demo/coarse.js';
+import { ASSUMED_BANDWIDTH, COARSE_FRAME_BYTES, COARSE_LOOP_MIN_STEPS, COARSE_LOOP_SECONDS, COARSE_MAX_OVERHEAD, COARSE_MIN_DIRECT_MS, ancestorCells, coarseLoopDrifted, coarseLoopSteps, planCoarseStages, stageLeadMs } from '../demo/coarse.js';
 
 const MB = 1024 * 1024;
 
@@ -72,4 +72,32 @@ test('stage lead: two store round trips, at least 30 ms and at most 400 ms', () 
   assert.equal(stageLeadMs(0), 30, 'a local store: hardly any lead');
   assert.equal(stageLeadMs(2), 30);
   assert.equal(stageLeadMs(900), 400, 'a very slow first response does not delay the stages for seconds');
+});
+
+// ---- the coarse loop's window ----
+
+test('coarse loop: as many timesteps as the measured link carries in 20 s, the whole loop when that is more, never fewer than eight', () => {
+  const step = 0.69e6; // a level-3 step of the Ucayali store on the wire
+  assert.equal(COARSE_LOOP_SECONDS, 20);
+  assert.equal(COARSE_LOOP_MIN_STEPS, 8);
+  assert.equal(coarseLoopSteps({ bytesPerStep: step, bandwidth: 0.7e6, count: 117 }), 20, 'a 0.7 MB/s link: 14 MB, 20 steps');
+  assert.equal(coarseLoopSteps({ bytesPerStep: step, bandwidth: 2e6, count: 117 }), 57);
+  assert.equal(coarseLoopSteps({ bytesPerStep: step, bandwidth: 6e6, count: 117 }), 117, 'from about 4 MB/s up it is the whole loop');
+  assert.equal(coarseLoopSteps({ bytesPerStep: step, bandwidth: 600e6, count: 117 }), 117, 'a fast local link: all of it, as before');
+  assert.equal(coarseLoopSteps({ bytesPerStep: step, bandwidth: 0.1e6, count: 117 }), 8, 'a link slower than the floor still gets two seconds of a movie');
+  assert.equal(coarseLoopSteps({ bytesPerStep: step, bandwidth: 0.1e6, count: 5 }), 5, 'a loop shorter than the floor is the loop');
+  assert.equal(coarseLoopSteps({ bytesPerStep: step, bandwidth: null, count: 117 }), 117, 'nothing measured: the whole loop');
+  assert.equal(coarseLoopSteps({ bytesPerStep: 0, bandwidth: 1e6, count: 117 }), 117);
+  assert.equal(coarseLoopSteps({ bytesPerStep: step, bandwidth: 0.7e6, count: 117, seconds: 60 }), 60, 'the window is an option');
+});
+
+test('coarse loop: planned again once the playhead is more than a quarter of the window away, either way round the loop', () => {
+  const plan = { planned: 10, steps: 20, count: 117 };
+  assert.equal(coarseLoopDrifted({ ...plan, t: 10 }), false);
+  assert.equal(coarseLoopDrifted({ ...plan, t: 15 }), false, 'five steps is a quarter of 20');
+  assert.equal(coarseLoopDrifted({ ...plan, t: 16 }), true);
+  assert.equal(coarseLoopDrifted({ ...plan, t: 4 }), true, 'behind it too');
+  assert.equal(coarseLoopDrifted({ ...plan, t: 115 }), true, 'around the wrap: 115 is 12 behind 10');
+  assert.equal(coarseLoopDrifted({ planned: 115, steps: 20, count: 117, t: 1 }), false, 'and 1 is 3 ahead of 115');
+  assert.equal(coarseLoopDrifted({ planned: 0, steps: 117, count: 117, t: 60 }), false, 'a loop that covers every timestep is never planned again');
 });

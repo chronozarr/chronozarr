@@ -39,7 +39,7 @@ const sources = {
   'docs/performance.md': { route: 'performance', description: 'Measured viewer speed, value correctness, Sentinel-2 ingest speed and memory, with methods, hardware and limits.' },
   'docs/evidence.md': { route: 'reference/evidence', title: 'Measurement log', description: 'Dated measurements, tested reader versions and observations behind the chronozarr documentation.' },
   'docs/troubleshooting.md': { route: 'troubleshooting', description: 'Fixes for common chronozarr problems: installation, conversion, the viewer, preview, share and publish.' },
-  'docs/format-comparison.md': { route: 'guides/format-comparison', description: 'chronozarr compared with PMTiles, Mapbox raster-array, COG per date and CarbonPlan zarr-layer.' },
+  'docs/format-comparison.md': { route: 'guides/format-comparison', description: 'chronozarr compared with PMTiles, Mapbox raster-array, zarr-layer, COG with TiTiler, titiler-multidim and the GeoZarr readers.' },
 };
 
 /** The page title: the override, or the first level-1 heading of the document. */

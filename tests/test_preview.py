@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Iterator
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from click.testing import CliRunner
@@ -27,6 +28,7 @@ from chronozarr.view import (
     serve_store,
     share_command,
     view,
+    viewer_url,
 )
 from tests.synthetic import make_da, make_truth
 
@@ -255,6 +257,17 @@ def test_view_colors_the_single_band_and_refuses_an_unknown_colormap():
     assert "cm=" not in view("https://example.org/store", product="band").data
     with pytest.raises(ValueError, match="colormap must be one of gray, viridis, magma, turbo"):
         view("https://example.org/store", colormap="jet")
+
+
+def test_viewer_url_and_view_take_a_colormap_and_range_without_a_product():
+    pytest.importorskip("IPython")
+    url = viewer_url("https://example.org/store", colormap="viridis", range=(0, 5))
+    params = parse_qs(urlsplit(url).query)
+    assert (params["cm"], params["r"]) == (["viridis"], ["0,5"])
+    assert "p" not in params
+    page = view("https://example.org/store", colormap="viridis", range=(0, 5)).data
+    assert "&amp;r=0,5&amp;cm=viridis" in page
+    assert "&amp;p=" not in page
 
 
 def test_player_with_base_url_and_error_hint(store):

@@ -27,7 +27,8 @@ from xarray.backends import BackendArray, BackendEntrypoint
 from xarray.core import indexing
 
 from chronozarr import schema
-from chronozarr.decode import ChronoStore, Level, open_store
+from chronozarr.decode import ChronoStore, open_store
+from chronozarr.level import Level
 
 
 def _axis_index(key: int | slice | np.ndarray, size: int) -> tuple[np.ndarray, bool]:
@@ -92,8 +93,9 @@ class _ChronoArray(BackendArray):
 
 
 def _variable(array: _ChronoArray, dims: tuple[str, ...], level: Level) -> xr.Variable:
-    cs = level.chunk_size
-    chunks = {"time": 1, "band": level.shape[1], "y": cs, "x": cs}
+    rows, cols = level.cell_shape
+    time_chunk = level.data.time_chunk if dims == schema.DIMENSIONS else 1
+    chunks = {"time": time_chunk, "band": level.shape[1], "y": rows, "x": cols}
     encoding = {"preferred_chunks": {d: chunks[d] for d in dims}}
     return xr.Variable(dims, indexing.LazilyIndexedArray(array), encoding=encoding)
 
@@ -117,7 +119,8 @@ def open_dataset(
 
     Variables: the data variable (time, band, y, x), plus `mask` and `coverage` (time, y, x)
     when the store has them. Coordinates: time (datetime64), band, y, x (projected pixel
-    centres), and `common_name` along band when any band declares one.
+    centres), and `common_name` along band when any band declares one. The attribute
+    `chronozarr_notes` lists what the store leaves out or spells otherwise (`ChronoStore.notes`).
     """
     store = _as_store(filename_or_obj)
     level = store._level(lod)
@@ -151,14 +154,16 @@ def open_dataset(
             )
 
     attrs: dict[str, Any] = {
-        "crs": store.attrs.crs,
+        "crs": store.crs.to_string(),
         "transform": list(level.transform),
         "resolution": level.resolution,
         "lod": lod,
         "chronozarr_spec_version": store.attrs.spec_version,
     }
-    if store.nodata is not None and level.mask is None:  # a mask carries validity instead
-        attrs["nodata"] = store.nodata
+    if level.nodata is not None and level.mask is None:  # a mask carries validity instead
+        attrs["nodata"] = level.nodata
+    if store.notes:
+        attrs["chronozarr_notes"] = list(store.notes)
     dropped = {drop_variables} if isinstance(drop_variables, str) else set(drop_variables or ())
     return xr.Dataset(
         {k: v for k, v in variables.items() if k not in dropped}, coords=coords, attrs=attrs

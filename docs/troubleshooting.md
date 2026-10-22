@@ -19,20 +19,45 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 
 | Message | Cause and fix |
 |---|---|
-| `no date in the file name` | Put one date in each name, as `20240131`, `2024-01-31` or `2024-01`. Or pass `--date-pattern`, such as `--date-pattern "ndvi_%Y%m%d"`, or list the files in a [manifest](convert.md#from-a-manifest-of-urls) |
+| `no date in the file name` | Put one date in each name, as `20240131`, `2024-01-31` or `2024-01`. Or pass `--date-pattern`, such as `--date-pattern "ndvi_%Y%m%d"` (`%Y%j` reads a year and day of year, as in MODIS and HLS names: `--date-pattern "MOD13A1.A%Y%j"`), or list the files in a [manifest](convert.md#from-a-manifest-of-urls) |
+| `no date in the file name` for one multi-band file, and the `fix:` names `--bands-are-dates` | The bands of the file are dates, as in an Earth Engine `toBands()` export. Pass `--bands-are-dates`. See [From Earth Engine exports](convert.md#from-earth-engine-exports) |
+| `has the same date` for several files, and the `fix:` names `--mosaic-tiles` | The files of each date are tiles of one image, as Earth Engine splits a large export into `name-0000000000-0000000000.tif` files. Pass `--mosaic-tiles`; do not leave files out, or the store holds part of the area. See [Exports split into tiles](convert.md#exports-split-into-tiles) |
+| `has the same date` and `covers the same pixels` | The files are copies, or two images of one area. Keep one, or read a time of day from the names with `--date-pattern` and `%H%M%S` |
 | `several dates` in one name | Pass `--date-pattern` to say which part is the date |
 | A month name, such as `scene_Jan2024.tif` | `--date-pattern` reads numbers only. Write a CSV manifest with the columns `uri,datetime`, one row per file, and convert the manifest |
 | `Got unexpected extra arguments` | The shell expanded an unquoted glob into many files. Quote it: `"scenes/*.tif"` |
 | The bands are named `1`, `2` | The GeoTIFFs have no band descriptions. Add a `bands` column to a manifest, as in [Convert your data](convert.md#from-dated-geotiffs) |
 | Two files `share the datetime` | Each timestep needs one file. Remove or rename the duplicate |
 | A file on another grid or CRS | All timesteps of a store share one grid. Fix the files, or pass `--resampling` to warp every file to the grid of the first |
-| Different scale, offset, units or band names | A store holds one value of each per band. Correct the metadata, for example with `gdal_edit.py -scale -offset -units` |
+| Different scale, offset, units or band names | A store holds one value of each per band. Correct the metadata, for example with `gdal_edit.py -scale -offset -units`. For a scale or offset, `--scale` and `--offset` give one value for every band instead |
 | A float file with undeclared NaN | Pass `--nodata nan` to treat NaN as invalid |
+| `-9999 (48 % of the valid pixels in the 3 sampled timesteps) lies far outside the other values`, and the command stops | The files declare no nodata, and a value that looks like a fill holds a large share of the pixels. If it marks missing pixels, pass `--nodata -9999`. If it is data, pass `--nodata none`. `--nodata` takes one value: with two flag values the message says which stays data and how to mark both |
+| A `fill:` line names a value such as `-9999` | The files declare no nodata, and the value looks like a fill but holds a small share of the pixels. Pass `--nodata -9999` to mark it invalid. Leave it out if the value is data |
+| `500m 16 days NDVI declares scale 10000 and would run -2e+07 to 1e+08`, and the command stops | The file's scale is a divisor, as in MODIS and other HDF-EOS products, and the store multiplies. Pass `--scale 0.0001`. If 10000 is right, pass `--scale 10000` |
+| A `range:` line shows values far outside the physical range, and the command did not stop | The scale is applied as stored * scale + offset. Pass `--scale` and `--offset` with the right values, or correct the files, for example with `gdal_edit.py -scale -offset` |
 | A palette PNG is refused | Expand it to RGB first: `gdal_translate -expand rgba` |
 | The output folder exists | A store is never overwritten. Choose a new folder |
+| `reading a NetCDF4 file needs h5netcdf and h5py`. Older releases print xarray's `found the following matches with the input file in xarray's IO backends`, or `No module named 'h5py'` | The `netcdf` extra is missing. Install it the way you installed chronozarr: `uv tool install --python 3.13 'chronozarr[geo,netcdf]==0.4.1'`, listing every extra you use at once; `uv add 'chronozarr[netcdf]==0.4.1'` in a uv project; or pip with `'chronozarr[netcdf]==0.4.1'`. A classic NetCDF3 file (it starts with `CDF`) needs `scipy` instead: add `--with scipy` to `uv tool install`. See [From NetCDF or Zarr](convert.md#from-netcdf-or-zarr) |
+| `the time coordinate 'time' uses the 360_day calendar, which needs cftime` (also `noleap`, `all_leap`, `julian`). Older releases print xarray's `unable to decode time units ... installing cftime` | cftime is missing. The `netcdf` extra includes it, so this appears for a Zarr store or an install that predates it. Install the `cftime` extra the way you installed chronozarr: `uv tool install --python 3.13 'chronozarr[geo,netcdf,cftime]==0.4.1'`, listing every extra you use at once; `uv add 'chronozarr[cftime]==0.4.1'` in a uv project; or pip with `'chronozarr[cftime]==0.4.1'`. See [Climate model calendars](convert.md#climate-model-calendars) |
+| `uses the 360_day calendar, and a store holds Gregorian timestamps`. Older releases print `the time coordinate 'time' is object, not datetimes` | The time axis is on a calendar with no Gregorian equivalent. Pass `--calendar-to-gregorian date` to keep each step's date and time of day as its Gregorian timestamp. The message says what that does to the spacing between steps, and the store records it. See [Climate model calendars](convert.md#climate-model-calendars) |
+| `2 of 780 dates that Gregorian does not have` | The calendar has days Gregorian lacks, such as 30 February on a `360_day` calendar. `--calendar-to-gregorian date-or-month-end` moves each to the last day of its month and records which |
+| `both land on` or `on or before the previous step`, with `date-or-month-end` | Moving the dates put two steps on one day, as daily `360_day` data does on 28, 29 and 30 February. Drop one step of each pair first, for example with xarray, then convert the result |
 | `listing an S3 prefix needs boto3` | Install the `s3` extra. The message gives the command |
 
 `convert --help` lists every source type, option and validity rule. [Convert your data](convert.md) explains them.
+
+## Opening a store
+
+A store whose CRS has no EPSG code, such as a Lambert conformal conic or a sinusoidal grid, declares `spec_version` `0.4.0`. A store whose CRS has an EPSG code declares `0.3.0`, and every chronozarr release opens it. Releases up to 0.4.1 refuse a `0.4.0` store, and their message names the wrong fix.
+
+| Message | Cause and fix |
+|---|---|
+| `chronozarr.spec_version: unsupported or missing version '0.4.0'; expected 0.3.0; use chronozarr convert before opening with a v0.3 reader` | The store has no EPSG code and the installed chronozarr is 0.4.1 or older. Do not run `chronozarr convert`: it reads v0.2 stores, not this one. Upgrade chronozarr past 0.4.1: `uv tool upgrade chronozarr` for a tool install, `uv add --upgrade-package chronozarr chronozarr` in a uv project, or the `--upgrade` option of your installer. Then check `chronozarr --version` |
+| `not a valid chronozarr store: unsupported spec_version 0.4.0; use chronozarr convert to convert this store to v0.3` in the viewer or the JavaScript package | The viewer or package is older than the store. Use a newer build. The hosted viewer at chronozarr.org/demo changes when the site is deployed, and a copy you host or embed needs a newer build. See [viewer distribution](viewer-distribution.md) |
+| `unsupported or missing version '0.2.0'` | The store is v0.2. `chronozarr convert OLD NEW` writes a v0.3 store from it |
+| `unsupported or missing version` with a version later than 0.4.0 | The store was written by a newer chronozarr. Upgrade chronozarr |
+| `cannot read the CRS ... Pass an authority code such as EPSG:32631 or WKT2 text` | `encode` was given a CRS it could not parse. Pass `EPSG:xxxxx`, or WKT2 text. WKT1, PROJJSON and PROJ strings need pyproj to be converted: install it, or convert the CRS to WKT2 yourself |
+| `crs: the input is ..., the store is ...` from `append` | The new data is in another CRS than the store. Append data on the store's grid. A code and a WKT2 can be compared only when pyproj is installed |
 
 ## The viewer
 

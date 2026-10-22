@@ -16,6 +16,7 @@ from zarr.storage import LocalStore
 import chronozarr
 from chronozarr import schema
 from chronozarr.convert import convert
+from chronozarr.crs import Crs
 from tests.narrow import array_at, attrs_block, required
 from tests.synthetic import build_store, make_da, make_truth, reference_reduce
 from tests.test_reads import CountingStore
@@ -66,7 +67,7 @@ def test_v03_roundtrip_every_level(tmp_path, dtype, shard):
             assert np.array_equal(required(store.read_coverage(t, k)), coverage[t])
 
 
-@pytest.mark.parametrize("version", ["0.2.0", "0.1.0", "0.3.1", "9.0.0", None])
+@pytest.mark.parametrize("version", ["0.2.0", "0.1.0", "9.0.0", None])
 def test_versions_rejected_before_values(tmp_path, version):
     path = tmp_path / "s"
     build_store(path, make_truth(2, 1, 4, 4), shard=False, chunk_size=4)
@@ -220,7 +221,7 @@ def test_append_matches_fresh_values_and_metric(tmp_path, volatility):
 
 
 @pytest.mark.parametrize("name", ["multiscales", "proj", "spatial"])
-def test_literal_registrations_required(tmp_path, name):
+def test_literal_registrations_are_a_writer_rule_and_readers_match_by_uuid(tmp_path, name):
     path = tmp_path / "s"
     build_store(path, make_truth(2, 1, 4, 4), shard=False, chunk_size=4)
     root = zarr.open_group(path, mode="r+", use_consolidated=False)
@@ -236,8 +237,9 @@ def test_literal_registrations_required(tmp_path, name):
     node.attrs["zarr_conventions"] = registrations
     consolidate(path)
     assert any("registration" in p for p in schema.validate(path))
-    with pytest.raises(ValueError, match="registration"):
-        chronozarr.open_store(path)
+    opened = chronozarr.open_store(path)
+    assert any(f"{name} registration" in note for note in opened.notes)
+    assert np.array_equal(opened.read(1), make_truth(2, 1, 4, 4)[1])
 
 
 def test_unknown_mandatory_extension_is_fail_closed(tmp_path):
@@ -278,9 +280,14 @@ def test_reader_falls_back_without_mirrors_or_consolidation(tmp_path):
     for key in ("levels", "band_names"):
         metadata["attributes"]["chronozarr"].pop(key)
     manifest.write_text(json.dumps(metadata))
-    assert np.array_equal(chronozarr.open_store(path).read(2), truth[2])
-    problems = schema.validate(path)
-    assert len(problems) == 2 and all("writer must emit" in p for p in problems)
+    opened = chronozarr.open_store(path)
+    assert np.array_equal(opened.read(2), truth[2])
+    report = schema.validate_report(path)
+    assert report.problems == []
+    assert len(report.notes) == 2
+    assert any("chronozarr.levels" in n for n in report.notes)
+    assert any("chronozarr.band_names" in n for n in report.notes)
+    assert len(opened.notes) == 2
 
 
 def test_unknown_ignorable_extension_does_not_block_reader(tmp_path):
@@ -346,7 +353,7 @@ def test_legacy_null_nodata_replaces_all_copied_attributes(tmp_path, shard):
             assert "nodata" not in array.attrs
             height, width = array.shape[-2:]
             assert array.attrs.asdict() == schema.data_array_attrs(
-                attrs.crs,
+                Crs.from_string(required(attrs.crs)).with_wkt2(),
                 attrs.transform,
                 height,
                 width,

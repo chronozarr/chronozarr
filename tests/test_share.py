@@ -7,15 +7,18 @@ import io
 import json
 import socket
 import subprocess
+import urllib.request
 from pathlib import Path
 from typing import cast
 
+import numpy as np
 import pytest
 from click.testing import CliRunner
 
 from chronozarr.cli import main
 from chronozarr.doctor import Check
 from chronozarr.view import serve_store
+from tests.round_trips import RoundTrips
 from tests.synthetic import build_store, make_truth
 
 pytestmark = pytest.mark.unit
@@ -122,7 +125,8 @@ def test_share_reports_stages_before_their_corresponding_work(store, monkeypatch
         "starting local server and quick tunnel...",
         "waiting for Cloudflare to assign a public address...",
         "waiting for https://bright-sea.trycloudflare.com to work; a new address usually takes "
-        "15 to 30 seconds (at most 90)...",
+        "15 to 30 seconds (at most 90). Use it after the open: line below: a lookup before then "
+        "can keep it failing for a minute...",
         "checking browser access...",
         "measuring first transfer...",
     ]
@@ -171,6 +175,46 @@ def test_share_reports_stages_before_their_corresponding_work(store, monkeypatch
     assert [line for line in lines if line in stages] == stages
 
 
+def test_share_checks_browser_access_in_a_few_round_trips_through_the_tunnel(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "masked"
+    build_store(
+        path,
+        make_truth(4, 1, 40, 50),
+        shard=False,
+        chunk_size=16,
+        mask=np.ones((4, 40, 50), dtype=np.uint8),
+    )
+    process = FakeProcess()
+    ports: list[int] = []
+
+    def start_tunnel(executable: str, port: int):
+        ports.append(port)
+        return share_module._Tunnel(
+            cast("subprocess.Popen[str]", process), share_module._TunnelLogs()
+        )
+
+    monkeypatch.setattr(share_module.shutil, "which", lambda _: "/mock/cloudflared")
+    monkeypatch.setattr(share_module, "_start_tunnel", start_tunnel)
+    # The fake tunnel's public address is the local server, so the real doctor and transfer
+    # measurement go over HTTP, each request held as long as a slow link holds it.
+    monkeypatch.setattr(share_module, "_tunnel_url", lambda _: f"http://127.0.0.1:{ports[0]}")
+    monkeypatch.setattr(share_module, "_wait_for_public_store", lambda *args, **kwargs: None)
+    monkeypatch.setattr(share_module, "_wait_for_tunnel", _interrupt)
+    trips = RoundTrips(monkeypatch)
+    lines: list[str] = []
+
+    share_module.share(path, open_browser=False, echo=lines.append)
+
+    assert any(line.startswith("open: ") for line in lines)
+    # The layout is checked in the directory being served; the mask is never read remotely.
+    assert not [p for p in trips.paths() if "/mask/" in p], trips.paths()
+    # doctor: three for the HTTP checks, one to open the store, one level's four reads with
+    # every level read at the same time; then the measurement opens the store and reads a chunk.
+    assert trips.rounds() <= 10, trips.paths()
+
+
 def test_share_missing_cloudflared_never_starts_a_server(store, monkeypatch):
     monkeypatch.setattr(share_module.shutil, "which", lambda _: None)
 
@@ -208,6 +252,30 @@ def test_share_does_not_print_a_link_when_doctor_fails(store, monkeypatch):
     assert "checking browser access..." in lines
     assert "measuring first transfer..." not in lines
     assert not any("chronozarr.org/demo/?store=" in line for line in lines)
+    assert process.terminated
+    assert not view_module._servers
+
+
+def test_a_store_that_fails_validate_is_named_and_the_tunnel_is_not_blamed(store, monkeypatch):
+    process = FakeProcess()
+    _ready_share(monkeypatch, process)
+    hint = "Fix the listed layout problems or re-encode."
+    monkeypatch.setattr(
+        share_module,
+        "diagnose",
+        lambda _, **kwargs: [
+            Check("CORS on zarr.json", "ok", "allowed"),
+            Check("validate", "fail", "1 problem(s): level 0/time: values differ", hint),
+        ],
+    )
+
+    with pytest.raises(OSError) as raised:
+        share_module.share(store, open_browser=False, echo=lambda _: None)
+
+    message = str(raised.value)
+    assert "tunnel" not in message
+    assert "level 0/time: values differ" in message and hint in message
+    assert f"chronozarr validate '{store}'" in message  # quoted: the path has a space
     assert process.terminated
     assert not view_module._servers
 
@@ -390,3 +458,104 @@ def test_tunnel_logs_keep_only_a_bounded_diagnostic_tail():
     assert len(logs._lines) <= share_module._TUNNEL_LOG_LINES
     assert len(logs.recent()) <= 4
     assert logs.recent()[-1] == "created https://violet-rain.trycloudflare.com"
+
+
+# --- `chronozarr link` on the address `share` has just printed ----------------------------------
+
+QUICK_HOST = "brand-new-words.trycloudflare.com"
+
+
+@pytest.fixture
+def served(tmp_path):
+    path = tmp_path / "tunnelled"
+    build_store(path, make_truth(2, 1, 20, 24), shard=False, chunk_size=16)
+    server = serve_store(path)
+    yield server
+    server.close()
+
+
+def _name_resolves_after(monkeypatch, host: str, seconds: float) -> list[float]:
+    """`host` is unknown to this computer's resolver until `seconds` have passed on a fake clock,
+    then it is this computer. Returns the clock."""
+    now = [0.0]
+    real = socket.getaddrinfo
+
+    def getaddrinfo(name, *args, **kwargs):
+        if name != host:
+            return real(name, *args, **kwargs)
+        if now[0] < seconds:
+            raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+        return real("127.0.0.1", *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(share_module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        share_module.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
+    )
+    # Proxies come from the environment only, never from this computer's system settings.
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(urllib.request, "getproxies", urllib.request.getproxies_environment)
+    return now
+
+
+def test_link_waits_for_a_new_quick_tunnel_address_to_resolve(served, monkeypatch):
+    # Session 207 ran `link` on the address while `share` still waited for it to work.
+    now = _name_resolves_after(monkeypatch, QUICK_HOST, 40.0)
+    url = served.url.replace("127.0.0.1", QUICK_HOST)
+
+    result = CliRunner().invoke(main, ["link", url], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.startswith("https://chronozarr.org/demo/?store=")
+    assert f"{QUICK_HOST} does not resolve yet" in result.stderr
+    assert "waiting up to 90 seconds" in result.stderr
+    assert 40.0 <= now[0] < 45.0
+
+
+def test_link_says_what_to_do_when_a_quick_tunnel_address_never_resolves(monkeypatch):
+    now = _name_resolves_after(monkeypatch, QUICK_HOST, float("inf"))
+
+    result = CliRunner().invoke(main, ["link", f"https://{QUICK_HOST}/s"])
+
+    assert result.exit_code == 1
+    assert f"{QUICK_HOST} did not resolve within 90 seconds" in result.output
+    assert "only while the `chronozarr share` that printed it runs" in result.output
+    assert now[0] >= 90.0
+
+
+def test_link_does_not_wait_for_a_name_that_is_not_a_quick_tunnel(monkeypatch):
+    now = _name_resolves_after(monkeypatch, "store.example.org", float("inf"))
+
+    result = CliRunner().invoke(main, ["link", "https://store.example.org/s"])
+
+    assert result.exit_code == 1
+    assert "Name or service not known" in result.output
+    assert "does not resolve yet" not in result.output
+    assert now[0] < 5.0  # only the reader's own retries
+
+
+def test_link_does_not_wait_for_a_name_that_a_proxy_looks_up(monkeypatch):
+    # Behind a proxy this computer may never resolve the name; the reader asks the proxy.
+    now = _name_resolves_after(monkeypatch, QUICK_HOST, float("inf"))
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+
+    result = CliRunner().invoke(main, ["link", f"https://{QUICK_HOST}/s"])
+
+    assert result.exit_code == 1
+    assert "does not resolve yet" not in result.output
+    assert now[0] < 5.0  # only the reader's own retries
+
+
+def test_link_waits_when_the_proxy_is_bypassed_for_the_name(served, monkeypatch):
+    now = _name_resolves_after(monkeypatch, QUICK_HOST, 40.0)
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("NO_PROXY", ".trycloudflare.com")
+    url = served.url.replace("127.0.0.1", QUICK_HOST)
+
+    result = CliRunner().invoke(main, ["link", url], catch_exceptions=False)
+
+    assert result.exit_code == 0, result.output
+    assert f"{QUICK_HOST} does not resolve yet" in result.stderr
+    assert 40.0 <= now[0] < 45.0

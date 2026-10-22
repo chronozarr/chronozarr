@@ -99,7 +99,7 @@ These members are read-only: `opened`, `store`, `times`, `bounds`, `bandNames`, 
 
 A time change never refetches what the reader has cached. The GPU pool keeps recently shown chunks, and the reader cache (`layer.store`) holds decoded chunks. While a new timestep loads, the previous one stays on screen.
 
-With `prefetch: true` the reader also fills its caches in the background through `store.prefetch`. It fetches the nearest timesteps first, up to `horizonSteps` (12) on either side of `t`, within its cache and speculative-bandwidth budgets. While nobody scrubs, it starts at most `idleBytes` (64 MiB) per view. Both are `openStore` options, listed in [js/README.md](../README.md#read-a-store). A scrub then finds the timesteps near `t` cached. Prefetch can move hundreds of MB, and [evidence.md](../../docs/evidence.md#maplibre-layer) has a measured example.
+With `prefetch: true` the reader also fills its caches in the background through `store.prefetch`. It fetches the nearest timesteps first, up to `horizonSteps` (12) on either side of `t`, within its cache and speculative-bandwidth budgets. While nobody scrubs, it starts at most `idleBytes` (32 MiB) per view, and no more than the measured link delivers in `idleSeconds` (1 s). Both are `openStore` options, listed in [js/README.md](../README.md#read-a-store). A scrub then finds the timesteps near `t` cached. Prefetch can move hundreds of MB, and [evidence.md](../../docs/evidence.md#maplibre-layer) has a measured example.
 
 ### Stored data and colors
 
@@ -116,7 +116,11 @@ The product colors are `PRODUCT_GLSL` from `js/shared/products-glsl.js`, the sam
 
 ### Projections
 
-Each store has one projection. The layer supports WGS84 UTM (EPSG:326zz and EPSG:327zz), EPSG:3857 and EPSG:4326. For any other CRS it throws an error that names the supported set. A store that crosses the antimeridian or a UTM zone boundary is not supported. The store must declare its level-0 `transform`.
+Each store has one projection. WGS84 UTM (EPSG:326zz and EPSG:327zz), EPSG:3857 and EPSG:4326 are built in and recognized by `proj:code`, or by the ID that ends the store's `proj:wkt2`. Nothing is fetched for them.
+
+Any other CRS needs the store to carry it as `proj:wkt2` or `proj:projjson` (a store with no authority code always does). The layer then loads proj4 with `import()`, a 24 KB gzipped build in `js/vendor/proj4`, and reads the definition. The build has the Lambert conformal conic (`lcc`), sinusoidal (`sinu`), Albers (`aea`), Lambert azimuthal (`laea`), stereographic (`stere`), transverse Mercator (`tmerc`), Mercator and geographic projections. It matches pyproj to a millimetre for Daymet LCC, MODIS sinusoidal and EPSG:3413. It applies no datum grid shifts. A code that is not built in and has no WKT2 or PROJJSON, or a definition in another projection, throws an error that says so. To add a projection, import it in `js/support/proj4-entry.js` and run `node js/support/vendor.mjs`.
+
+A store that crosses the antimeridian or a UTM zone boundary is not supported. The store must declare its level-0 `transform`.
 
 The layer draws on Mercator maps only. In globe projection it draws nothing and emits an `error` once.
 

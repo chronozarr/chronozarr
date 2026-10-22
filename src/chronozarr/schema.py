@@ -3,18 +3,26 @@
 The layout is documented in spec/CHRONOZARR.md. This module owns
 everything both the writer and the reader must agree on: attribute names,
 pyramid geometry, dtype profiles, and the checks that decide whether a Zarr v3 store is a
-conforming chronozarr store. Only v0.3.0 is accepted; older stores need explicit conversion.
+conforming chronozarr store. Versions 0.3.0 and 0.4.0 are accepted; older stores need explicit
+conversion.
+
+Two kinds of function read the same metadata. `parse_*` is strict and raises on the first
+deviation: writers use it on a store they are about to change. `read_*` is tolerant. It raises
+only where the values or the geometry cannot be read as declared, and records every other
+deviation in a `Findings`: a MUST the store breaks, which `validate` reports as a problem, or a
+SHOULD it leaves out, which `validate` reports as a note. A reader keeps both as notes.
 """
 
 from __future__ import annotations
 
-import importlib
+import asyncio
 import math
 import re
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import suppress
-from dataclasses import dataclass
-from itertools import pairwise
+from dataclasses import dataclass, field
+from itertools import pairwise, product
 from typing import Any, cast
 
 import numpy as np
@@ -22,9 +30,20 @@ import zarr
 from zarr.core.sync import sync
 from zarr.errors import GroupNotFoundError
 
-from chronozarr.store import IndexStore, as_store, check_extensions
+from chronozarr.crs import CODE_RE, Crs, same_crs
+from chronozarr.store import (
+    REQUESTS_AT_ONCE,
+    IndexStore,
+    MetadataCache,
+    as_store,
+    check_extensions,
+)
 
 SPEC_VERSION = "0.3.0"
+SPEC_VERSION_ANY_CRS = "0.4.0"
+SPEC_VERSIONS = (SPEC_VERSION, SPEC_VERSION_ANY_CRS)  # what writers write
+# A patch version of a known minor does not change the layout, so a reader reads it.
+_PATCH_VERSION_RE = re.compile(r"^0\.[34]\.\d+$")
 VARIABLE = "data"
 MASK_VARIABLE = "mask"
 COVERAGE_VARIABLE = "coverage"
@@ -168,8 +187,8 @@ class Chronozarr:
 
     times: tuple[str, ...]
     bands: tuple[Band, ...]
-    crs: str
-    spec_version: str = SPEC_VERSION
+    crs: str | None  # the code as a mirror of proj:code; None when the store carries no mirror
+    spec_version: str | None = SPEC_VERSION  # None for a store that has no chronozarr block
     variable: str = VARIABLE
     nodata: int | float | None = NODATA
     volatility_path: str | None = None
@@ -191,8 +210,9 @@ class Chronozarr:
             "bands": [b.to_attrs() for b in self.bands],
             "band_names": list(self.band_names),
             "nodata": self.nodata,
-            "crs": self.crs,
         }
+        if self.crs is not None:
+            attrs["crs"] = self.crs
         if self.volatility_path is not None:
             attrs["volatility_path"] = self.volatility_path
         if self.mask_variable is not None:
@@ -218,7 +238,7 @@ class LevelRef:
     """
 
     path: str
-    crs: str
+    crs: str | None
 
 
 @dataclass(frozen=True)
@@ -264,57 +284,129 @@ def registration(name: str) -> dict[str, str]:
     }
 
 
-def check_registrations(attrs: Mapping[str, Any], names: Sequence[str], where: str) -> None:
+def read_registrations(
+    attrs: Mapping[str, Any], names: Sequence[str], where: str, found: Findings
+) -> None:
+    """Find each convention's registration in `zarr_conventions` by its UUID.
+
+    chronozarr has no UUID, so its registration is found by name. A registration that is absent,
+    or that names the convention or its URLs differently from the v0.1 literals (another tag
+    such as `refs/tags/v1`, another repository such as `geo-proj`, `proj:` for `proj`), breaks
+    the spec's MUST for writers. It does not change what a reader reads.
+    """
     registrations = attrs.get("zarr_conventions")
-    if not isinstance(registrations, list):
-        raise _fail(where, "missing zarr_conventions registrations")
+    entries = (
+        [r for r in registrations if isinstance(r, Mapping)]
+        if isinstance(registrations, list)
+        else []
+    )
     for name in names:
         expected = (
             registration(name) if name != "chronozarr" else {"name": name, "spec_url": PROFILE_URL}
         )
-        matches = [r for r in registrations if isinstance(r, dict) and r.get("name") == name]
-        if len(matches) != 1 or any(matches[0].get(k) != v for k, v in expected.items()):
-            raise _fail(where, f"invalid {name} registration; expected {expected}")
+        uuid = expected.get("uuid")
+        matches = [
+            r for r in entries if (r.get("uuid") == uuid if uuid else r.get("name") == name)
+        ]
+        label = f"{name} registration"
+        if not matches:
+            found.must(
+                where, f"no {label} in zarr_conventions" + (f" (UUID {uuid})" if uuid else "")
+            )
+        elif len(matches) > 1:
+            found.must(where, f"more than one {label} in zarr_conventions")
+        else:
+            differing = [
+                f"{key} is {matches[0].get(key)!r}"
+                for key, want in expected.items()
+                if key != "uuid" and matches[0].get(key) != want
+            ]
+            if differing:
+                found.must(
+                    where,
+                    f"{label} is not the v0.1 literal: {', '.join(differing)}"
+                    + ("; read by UUID" if uuid else ""),
+                )
 
 
 @dataclass(frozen=True)
 class LevelAttrs:
-    """Attributes of a level group (`{level}/zarr.json`)."""
+    """Attributes of a level group (`{level}/zarr.json`); `crs` is the optional code mirror."""
 
-    crs: str
+    crs: str | None
     transform: Transform
     resolution: float
 
     def to_attrs(self) -> dict[str, Any]:
-        return {"crs": self.crs, "transform": list(self.transform), "resolution": self.resolution}
+        attrs: dict[str, Any] = {
+            "transform": list(self.transform),
+            "resolution": self.resolution,
+        }
+        if self.crs is not None:
+            attrs = {"crs": self.crs, **attrs}
+        return attrs
+
+
+@dataclass(frozen=True)
+class LevelGeometry:
+    """What a level's data array says about where it is: the stored CRS and the transform."""
+
+    crs: Crs
+    transform: Transform
+
+    @property
+    def resolution(self) -> float:
+        return self.transform[0]
 
 
 _EPSG_RE = re.compile(r"^EPSG:(\d+)$")
 
 
-def crs_attr(crs: str) -> dict[str, str] | None:
-    """The `_CRS` array attribute GDAL's Zarr driver reads: an OGC URL, plus WKT if pyproj exists.
+def spec_version_for(crs: Crs) -> str:
+    """The version a writer declares: 0.3.0 for a CRS with an EPSG code, else 0.4.0.
 
-    Only `EPSG:<code>` strings map to a URL; any other CRS string returns None (no `_CRS`).
+    Readers up to chronozarr 0.4.1 refuse any other version, and they need an EPSG code, so a
+    store keeps the version they open whenever it can.
     """
-    match = _EPSG_RE.match(crs)
-    if match is None:
-        return None
-    code = int(match.group(1))
-    attr = {"url": f"http://www.opengis.net/def/crs/EPSG/0/{code}"}
+    return SPEC_VERSION if crs.epsg is not None else SPEC_VERSION_ANY_CRS
+
+
+def _epsg_url(epsg: int) -> str:
+    return f"http://www.opengis.net/def/crs/EPSG/0/{epsg}"
+
+
+def crs_attr(crs: Crs) -> dict[str, str] | None:
+    """The `_CRS` array attribute GDAL's Zarr driver reads: an OGC URL for an EPSG code, and WKT.
+
+    The WKT is the CRS's WKT2 when it has one. A CRS with neither returns None (no `_CRS`).
+    """
+    attr: dict[str, str] = {}
+    if crs.epsg is not None:
+        attr["url"] = _epsg_url(crs.epsg)
+    if crs.wkt2 is not None:
+        attr["wkt"] = crs.wkt2
+    return attr or None
+
+
+_UNIT_SYMBOLS = {"metre": "m", "meter": "m"}
+
+
+def axis_unit(crs: str) -> str:
+    """The unit of the CRS's horizontal axes as the CRS names it: `m`, `degree`, `US survey foot`.
+
+    rasterio reads it from PROJ; metres are written `m` and every other unit as named. Without
+    rasterio (`chronozarr[geo]`) the unit is not known, and `CRS-unit` says so instead of a guess.
+    """
     try:
-        # Resolve optional pyproj at runtime so minimal installations remain supported.
-        CRS = importlib.import_module("pyproj").CRS
-        CRSError = importlib.import_module("pyproj.exceptions").CRSError
+        from rasterio.crs import CRS  # ty: ignore[unresolved-import]  # compiled, no stubs
     except ImportError:
-        return attr
-    with suppress(CRSError):  # an EPSG code pyproj does not know: the URL alone still names it
-        attr["wkt"] = CRS.from_epsg(code).to_wkt()
-    return attr
+        return "CRS-unit"
+    unit = CRS.from_user_input(crs).units_factor[0]
+    return _UNIT_SYMBOLS.get(unit, unit)
 
 
 def data_array_attrs(
-    crs: str,
+    crs: Crs,
     transform: Transform,
     height: int,
     width: int,
@@ -324,22 +416,30 @@ def data_array_attrs(
 ) -> dict[str, Any]:
     """Attributes of a level's data-like array: `proj:`, `spatial:` and GDAL's `_CRS`.
 
-    `nodata` is omitted for arrays that are not the data variable (mask, coverage).
+    `proj:wkt2` is written whenever the CRS has one and `proj:code` and the `crs` alias whenever
+    it has a code. `nodata` is omitted for arrays that are not the data variable (mask, coverage).
     """
-    attrs: dict[str, Any] = {
-        "_ARRAY_DIMENSIONS": list(dimensions),
-        "nodata": nodata,
-        "crs": crs,
-        "transform": list(transform),
-        "proj:code": crs,
-        "zarr_conventions": [registration("proj"), registration("spatial")],
-        "spatial:registration": "pixel",
-        "spatial:transform_type": "affine",
-        "spatial:dimensions": ["y", "x"],
-        "spatial:shape": [height, width],
-        "spatial:transform": list(transform),
-        "spatial:bbox": list(bounds(transform, height, width)),
-    }
+    attrs: dict[str, Any] = {"_ARRAY_DIMENSIONS": list(dimensions), "nodata": nodata}
+    if crs.code is not None:
+        attrs["crs"] = crs.code
+    attrs["transform"] = list(transform)
+    if crs.code is not None:
+        attrs["proj:code"] = crs.code
+    if crs.wkt2 is not None:
+        attrs["proj:wkt2"] = crs.wkt2
+    if crs.projjson is not None:
+        attrs["proj:projjson"] = dict(crs.projjson)
+    attrs.update(
+        {
+            "zarr_conventions": [registration("proj"), registration("spatial")],
+            "spatial:registration": "pixel",
+            "spatial:transform_type": "affine",
+            "spatial:dimensions": ["y", "x"],
+            "spatial:shape": [height, width],
+            "spatial:transform": list(transform),
+            "spatial:bbox": list(bounds(transform, height, width)),
+        }
+    )
     if nodata is None:
         attrs.pop("nodata")
     gdal_crs = crs_attr(crs)
@@ -349,6 +449,48 @@ def data_array_attrs(
 
 
 # --- Parsing --------------------------------------------------------------------------------
+
+
+def _places(places: Sequence[str], shown: int = 3) -> str:
+    """`a, b, c and 4 more`: the places a finding applies to."""
+    head = ", ".join(places[:shown])
+    return head + (f" and {len(places) - shown} more" if len(places) > shown else "")
+
+
+@dataclass
+class Findings:
+    """What a tolerant read found that it read through.
+
+    `must` records a MUST of the spec that the store breaks and a reader can still read through:
+    `validate` fails on it. `should` records a SHOULD the store leaves out, or an assumption the
+    reader made: `validate` passes with it. Findings with the same text are reported once, naming
+    the first places they apply to. `notes` holds findings that already carry their own place.
+    """
+
+    notes: list[str] = field(default_factory=list)
+    _musts: dict[str, list[str]] = field(default_factory=dict)
+    _shoulds: dict[str, list[str]] = field(default_factory=dict)
+
+    def must(self, where: str, text: str) -> None:
+        places = self._musts.setdefault(text, [])
+        if where not in places:
+            places.append(where)
+
+    def should(self, where: str, text: str) -> None:
+        places = self._shoulds.setdefault(text, [])
+        if where not in places:
+            places.append(where)
+
+    @property
+    def breaks(self) -> list[str]:
+        """The MUSTs broken, one entry per distinct text."""
+        return [f"{_places(places)}: {text}" for text, places in self._musts.items()]
+
+    @property
+    def advice(self) -> list[str]:
+        """The SHOULDs left out and the assumptions made, one entry per distinct text."""
+        shoulds = [f"{_places(places)}: {text}" for text, places in self._shoulds.items()]
+        return [*self.notes, *shoulds]
 
 
 def _fail(where: str, message: str) -> SchemaError:
@@ -395,6 +537,54 @@ def _optional_number(mapping: Mapping[str, Any], key: str, where: str) -> float 
     if not _is_number(value) or not math.isfinite(value):
         raise _fail(f"{where}.{key}", f"expected a finite number, got {value!r}")
     return float(value)
+
+
+def parse_crs(attrs: Mapping[str, Any], where: str) -> Crs:
+    """The CRS of an array's attributes: `proj:code`, `proj:wkt2` and `proj:projjson` (any).
+
+    A key that is absent or null is not given. proj v0.1 asks for at least one of the three.
+    """
+    code = attrs.get("proj:code")
+    wkt2 = attrs.get("proj:wkt2")
+    projjson = attrs.get("proj:projjson")
+    if code is None and wkt2 is None and projjson is None:
+        raise _fail(where, "needs one of proj:code, proj:wkt2 or proj:projjson")
+    if code is not None and (not isinstance(code, str) or CODE_RE.fullmatch(code) is None):
+        raise _fail(
+            where, f"proj:code must be 'authority:code' such as 'EPSG:32631', got {code!r}"
+        )
+    if wkt2 is not None and (not isinstance(wkt2, str) or not wkt2.strip()):
+        raise _fail(where, "proj:wkt2 must be a non-empty string")
+    if projjson is not None and not isinstance(projjson, Mapping):
+        raise _fail(where, f"proj:projjson must be an object, got {type(projjson).__name__}")
+    return Crs(
+        code=code,
+        wkt2=wkt2,
+        projjson=None if projjson is None else dict(cast("Mapping[str, Any]", projjson)),
+    )
+
+
+def check_crs_mirror(
+    label: str, mirror: object, reference: Crs, problems: list[str], notes: list[str]
+) -> None:
+    """A `crs` mirror (a code string) must not contradict the stored CRS.
+
+    A proven difference is a problem. A comparison that needs pyproj, which is not installed, is
+    a note: the mirror may still be right.
+    """
+    if not isinstance(mirror, str) or not mirror:
+        problems.append(f"{label}: expected a non-empty string, got {mirror!r}")
+        return
+    match = same_crs(Crs(code=mirror), reference)
+    if match.same is False:
+        problems.append(
+            f"{label} {mirror!r} differs from the stored CRS (compared by {match.method})"
+        )
+    elif match.same is None:
+        notes.append(
+            f"{label} {mirror!r} was not compared with the stored CRS: a code and a WKT2 need "
+            "pyproj, which is not installed"
+        )
 
 
 def parse_band(raw: Any, where: str) -> Band:
@@ -451,7 +641,7 @@ def parse_provenance(raw: Any, where: str = "chronozarr.provenance") -> dict[str
     return parsed
 
 
-def _parse_transform(raw: Any, where: str) -> Transform:
+def parse_transform(raw: Any, where: str) -> Transform:
     if not isinstance(raw, list) or len(raw) != 6 or not all(_is_number(v) for v in raw):
         raise _fail(where, f"expected 6 numbers [a, b, c, d, e, f], got {raw!r}")
     return (
@@ -492,7 +682,7 @@ def _parse_levels(raw: Any, where: str) -> tuple[LevelSummary, ...]:
             LevelSummary(
                 path=path,
                 resolution=float(resolution),
-                transform=_parse_transform(_require(entry, "transform", at), f"{at}.transform"),
+                transform=parse_transform(_require(entry, "transform", at), f"{at}.transform"),
                 shape=cast("tuple[int, int, int, int]", shape),
                 grid=cast("tuple[int, int]", grid),
             )
@@ -527,32 +717,62 @@ def _parse_nodata(value: Any, where: str) -> int | float | None:
 
 
 def parse_chronozarr(block: Any, where: str = "chronozarr") -> Chronozarr:
-    """Validate and parse the `chronozarr` root attribute block (spec 0.3.0 only)."""
+    """Parse the `chronozarr` root attribute block strictly (spec 0.3.0 and 0.4.0)."""
+    found = Findings()
+    parsed = read_chronozarr(block, found, where)
+    if found.breaks:
+        raise SchemaError(found.breaks[0])
+    return parsed
+
+
+def read_chronozarr(block: Any, found: Findings, where: str = "chronozarr") -> Chronozarr:
+    """Read the `chronozarr` block of the root attributes, tolerating what does not change values.
+
+    A patch version of 0.3 or 0.4, an absent `variable` (read as `data`), and an absent
+    `band_names` or `levels` mirror are read through and recorded in `found`.
+    """
     version = block.get("spec_version") if isinstance(block, Mapping) else None
-    if version != SPEC_VERSION:
-        raise _fail(
+    if version not in SPEC_VERSIONS:
+        if not (isinstance(version, str) and _PATCH_VERSION_RE.fullmatch(version)):
+            raise _fail(
+                f"{where}.spec_version",
+                f"unsupported or missing version {version!r}; expected "
+                f"{' or '.join(SPEC_VERSIONS)}; a v0.2 store needs chronozarr convert, a newer "
+                "store needs a newer chronozarr",
+            )
+        found.must(
             f"{where}.spec_version",
-            f"unsupported or missing version {version!r}; expected {SPEC_VERSION}; "
-            "use chronozarr convert before opening with a v0.3 reader",
+            f"'{version}' is not one of {' or '.join(SPEC_VERSIONS)}; read as that minor "
+            "version, since a patch version does not change the layout",
         )
     if "temporal" in block:
         raise _fail(where, "temporal encoding is outside v0.3; use chronozarr convert")
-    variable = _require(block, "variable", where)
-    if not isinstance(variable, str) or not variable:
-        raise _fail(f"{where}.variable", f"expected a non-empty array name, got {variable!r}")
+    if "variable" in block:
+        variable = block["variable"]
+        if not isinstance(variable, str) or not variable:
+            raise _fail(f"{where}.variable", f"expected a non-empty array name, got {variable!r}")
+    else:
+        variable = VARIABLE
+        found.must(
+            f"{where}.variable", f"absent; read as '{VARIABLE}' (writers MUST declare the name)"
+        )
     times = _str_list(_require(block, "times", where), f"{where}.times")
     parsed = [parse_time(t) for t in times]
     if any(later <= earlier for earlier, later in pairwise(parsed)):
         raise _fail(f"{where}.times", "must be strictly increasing")
     bands = parse_bands(_require(block, "bands", where), f"{where}.bands")
-    if "band_names" in block and list(block["band_names"] or []) != [b.name for b in bands]:
-        raise _fail(f"{where}.band_names", "must list the names of chronozarr.bands in order")
+    if "band_names" in block:
+        if list(block["band_names"] or []) != [b.name for b in bands]:
+            raise _fail(f"{where}.band_names", "must list the names of chronozarr.bands in order")
+    else:
+        found.should(
+            f"{where}.band_names",
+            "absent; the names come from chronozarr.bands (SHOULD be written)",
+        )
     nodata = _parse_nodata(_require(block, "nodata", where), f"{where}.nodata")
-    crs = _require(block, "crs", where)
-    if not isinstance(crs, str) or not crs:
+    crs = block.get("crs")  # a mirror of proj:code; readers do not need it
+    if crs is not None and (not isinstance(crs, str) or not crs):
         raise _fail(f"{where}.crs", "expected a non-empty string such as 'EPSG:32631'")
-    if _EPSG_RE.fullmatch(crs) is None:
-        raise _fail(f"{where}.crs", "only EPSG CRSs are supported")
     if not all(isinstance(b, Mapping) for b in block["bands"]):
         raise _fail(f"{where}.bands", "v0.3 requires band objects")
     volatility_path = _optional_str(block, "volatility_path", where)
@@ -569,6 +789,12 @@ def parse_chronozarr(block: Any, where: str = "chronozarr") -> Chronozarr:
         if block.get("provenance") is not None
         else None
     )
+    if "levels" not in block:
+        found.should(
+            f"{where}.levels",
+            "absent; the levels come from the multiscales layout and the arrays "
+            "(SHOULD be written)",
+        )
     return Chronozarr(
         times=times,
         bands=bands,
@@ -589,15 +815,23 @@ def parse_chronozarr(block: Any, where: str = "chronozarr") -> Chronozarr:
     )
 
 
-def _parse_multiscales(attrs: Mapping[str, Any], crs: str) -> tuple[LevelRef, ...]:
+def _read_multiscales(
+    attrs: Mapping[str, Any], crs: str | None, found: Findings
+) -> tuple[LevelRef, ...]:
     multiscales = _require(attrs, "multiscales", "root attributes")
     if not isinstance(multiscales, Mapping):
         raise _fail("multiscales", "expected a layout object")
     raw = _require(multiscales, "layout", "multiscales")
     if not isinstance(raw, list) or not raw:
         raise _fail("multiscales.layout", "expected a non-empty list")
-    if multiscales.get("resampling_method") != "average":
-        raise _fail("multiscales", "resampling_method must be average")
+    method = multiscales.get("resampling_method")
+    if method != "average":
+        declared = "not declared" if method is None else f"declared as {method!r}"
+        found.must(
+            "multiscales",
+            f"resampling_method must be average, {declared}: level 0 reads as stored, but the "
+            "overview levels are not chronozarr's block means (spec 5)",
+        )
     datasets = []
     for i, entry in enumerate(raw):
         if not isinstance(entry, Mapping) or entry.get("asset") != str(i):
@@ -614,31 +848,59 @@ def _parse_multiscales(attrs: Mapping[str, Any], crs: str) -> tuple[LevelRef, ..
 
 
 def parse_root_attrs(attrs: Mapping[str, Any]) -> RootAttrs:
-    """Validate and parse the root group attributes (`multiscales` + `chronozarr`)."""
-    block = parse_chronozarr(_require(attrs, "chronozarr", "root attributes"))
-    check_registrations(attrs, ("chronozarr", "multiscales"), "root attributes")
-    return RootAttrs(chronozarr=block, datasets=_parse_multiscales(attrs, block.crs))
+    """Parse the root group attributes (`multiscales` + `chronozarr`) strictly."""
+    found = Findings()
+    parsed = read_root_attrs(attrs, found)
+    if found.breaks:
+        raise SchemaError(found.breaks[0])
+    return parsed
+
+
+def read_root_attrs(attrs: Mapping[str, Any], found: Findings) -> RootAttrs:
+    """Read the root group attributes, tolerating what does not change values (see `Findings`)."""
+    block = read_chronozarr(_require(attrs, "chronozarr", "root attributes"), found)
+    read_registrations(attrs, ("chronozarr", "multiscales"), "root attributes", found)
+    return RootAttrs(chronozarr=block, datasets=_read_multiscales(attrs, block.crs, found))
 
 
 def parse_level_attrs(attrs: Mapping[str, Any], where: str) -> LevelAttrs:
-    """Validate and parse a level group's attributes."""
-    crs = _require(attrs, "crs", where)
-    if not isinstance(crs, str) or not crs:
+    """Validate and parse a level group's attributes; `crs` is an optional mirror."""
+    crs = attrs.get("crs")
+    if crs is not None and (not isinstance(crs, str) or not crs):
         raise _fail(f"{where}.crs", "expected a non-empty string")
-    transform = _parse_transform(_require(attrs, "transform", where), f"{where}.transform")
+    transform = parse_transform(_require(attrs, "transform", where), f"{where}.transform")
     resolution = _require(attrs, "resolution", where)
     if not _is_number(resolution) or resolution <= 0:
         raise _fail(f"{where}.resolution", f"expected a positive number, got {resolution!r}")
     return LevelAttrs(crs=crs, transform=transform, resolution=float(resolution))
 
 
-def canonical_level(data: zarr.Array, where: str) -> LevelAttrs:
+def note_absent_level_mirrors(attrs: Mapping[str, Any], where: str, found: Findings) -> None:
+    """Record that a level group lacks its `transform` or `resolution` mirror (SHOULD)."""
+    absent = [key for key in ("transform", "resolution") if key not in attrs]
+    if absent:
+        found.should(
+            where,
+            f"level group {' and '.join(absent)} absent; read from the data array's "
+            "spatial:transform (SHOULD be written)",
+        )
+
+
+def canonical_level(data: zarr.Array, where: str) -> LevelGeometry:
+    """The CRS and transform a level's data array declares with `proj:` and `spatial:`."""
+    found = Findings()
+    geometry = read_geometry(data, where, found)
+    if found.breaks:
+        raise SchemaError(found.breaks[0])
+    return geometry
+
+
+def read_geometry(data: zarr.Array, where: str, found: Findings) -> LevelGeometry:
+    """`canonical_level`, tolerating registrations that are absent or spelled otherwise."""
     a = data.attrs.asdict()
-    check_registrations(a, ("proj", "spatial"), where)
-    crs = _require(a, "proj:code", where)
-    if not isinstance(crs, str) or _EPSG_RE.fullmatch(crs) is None:
-        raise _fail(where, "proj:code must be EPSG:<code>")
-    transform = _parse_transform(_require(a, "spatial:transform", where), where)
+    read_registrations(a, ("proj", "spatial"), where, found)
+    crs = parse_crs(a, where)
+    transform = parse_transform(_require(a, "spatial:transform", where), where)
     if not all(math.isfinite(v) for v in transform) or not (
         transform[0] > 0 and transform[4] < 0 and transform[1] == transform[3] == 0
     ):
@@ -647,27 +909,36 @@ def canonical_level(data: zarr.Array, where: str) -> LevelAttrs:
         raise _fail(where, "spatial dimensions must be y/x with pixel registration")
     if a.get("spatial:transform_type", "affine") != "affine":
         raise _fail(where, "spatial transform type must be affine")
-    return LevelAttrs(crs, transform, transform[0])
+    return LevelGeometry(crs, transform)
 
 
 def _check_spatial(
     data: zarr.Array,
-    crs: str,
+    crs: Crs | None,
     transform: Transform,
     h: int,
     w: int,
     where: str,
     problems: list[str],
+    found: Findings,
 ) -> None:
+    """Checks on a data-like array's geometry. `crs` is the level-0 data array's, or None."""
+    attrs = data.attrs.asdict()
     try:
-        canonical = canonical_level(data, where)
-        if canonical.crs != crs or not same_numbers(canonical.transform, transform):
+        canonical = read_geometry(data, where, found)
+        if not same_numbers(canonical.transform, transform):
             problems.append(f"{where}: canonical geometry differs from level/root mirrors")
+        if crs is not None:
+            match = same_crs(canonical.crs, crs)
+            if match.same is False:
+                problems.append(f"{where}: CRS differs from level 0 (compared by {match.method})")
+            if "crs" in attrs:
+                check_crs_mirror(
+                    f"{where}: crs", attrs["crs"], canonical.crs, problems, found.notes
+                )
     except SchemaError as exc:
         problems.append(str(exc))
-    attrs = data.attrs.asdict()
     for key, expected in (
-        ("crs", crs),
         ("transform", list(transform)),
         ("spatial:shape", [h, w]),
         ("proj:shape", [h, w]),
@@ -734,13 +1005,23 @@ def same_numbers(a: Sequence[Any], b: Sequence[float]) -> bool:
 
 
 def _check_dims(
-    array: zarr.Array, expected: Sequence[str], name: str, problems: list[str]
+    array: zarr.Array,
+    expected: Sequence[str],
+    name: str,
+    problems: list[str],
+    found: Findings,
 ) -> None:
+    """`dimension_names` must be `expected`. `_ARRAY_DIMENSIONS` may be absent, but not differ."""
     names = getattr(array.metadata, "dimension_names", None)  # absent on Zarr v2 metadata
     if names is None or tuple(names) != tuple(expected):
         problems.append(f"{name}: dimension_names must be {list(expected)}, got {names}")
     legacy = array.attrs.get("_ARRAY_DIMENSIONS")
-    if legacy != list(expected):
+    if legacy is None:
+        found.should(
+            name,
+            "_ARRAY_DIMENSIONS absent; dimension_names carry the names (SHOULD be written)",
+        )
+    elif legacy != list(expected):
         problems.append(
             f"{name}: attribute _ARRAY_DIMENSIONS must be {list(expected)}, got {legacy}"
         )
@@ -785,7 +1066,11 @@ def check_codecs(array: zarr.Array, where: str) -> None:
 
 @dataclass
 class _LevelState:
-    """What later levels compare against: level 0 values and the time shard length."""
+    """What later levels compare against: level 0 values and the time shard length.
+
+    `crs` is level 0's stored CRS. `found` collects what a tolerant read passed over, and
+    `absent` names the places a SHOULD-level `crs` mirror is missing from.
+    """
 
     attrs: LevelAttrs | None = None
     shape: tuple[int, int] | None = None
@@ -793,60 +1078,64 @@ class _LevelState:
     shard_time: int | None = None
     sharded: bool | None = None
     dtype: str | None = None
+    crs: Crs | None = None
+    found: Findings = field(default_factory=Findings)
+    absent: list[str] = field(default_factory=list)
 
 
-def _check_crs_attr(attrs: Mapping[str, Any], crs: str, where: str, problems: list[str]) -> None:
+def _check_crs_attr(
+    attrs: Mapping[str, Any], crs: Crs | None, where: str, problems: list[str]
+) -> None:
     """`_CRS` (GDAL), when present, must name the store CRS by URL and carry WKT as a string."""
     if "_CRS" not in attrs:
         return
     value = attrs["_CRS"]
-    expected = crs_attr(crs)
+    expected_url = _epsg_url(crs.epsg) if crs is not None and crs.epsg is not None else None
     if not isinstance(value, Mapping):
         problems.append(f"{where}: attribute _CRS must be an object, got {value!r}")
-    elif expected is not None and value.get("url") != expected["url"]:
+    elif expected_url is not None and "url" in value and value["url"] != expected_url:
         problems.append(
-            f"{where}: attribute _CRS url must be {expected['url']!r}, got {value.get('url')!r}"
+            f"{where}: attribute _CRS url must be {expected_url!r}, got {value['url']!r}"
         )
     elif "wkt" in value and not isinstance(value["wkt"], str):
         problems.append(f"{where}: attribute _CRS wkt must be a string, got {value['wkt']!r}")
 
 
 def _check_layout(
-    array: zarr.Array,
-    name: str,
-    lead: tuple[int, ...],
-    cs: int,
-    state: _LevelState,
-    problems: list[str],
+    array: zarr.Array, name: str, lead: tuple[int, ...], cs: int, state: _LevelState
 ) -> None:
-    """Chunks (1, *lead, cs, cs) and, if sharded, shards (shard_time, *lead, cs, cs)."""
+    """Chunks (1, *lead, cs, cs) and, if sharded, shards (shard_time, *lead, cs, cs).
+
+    A reader reads any chunking through Zarr, so a deviation breaks a MUST of the spec and is
+    reported as a finding that `validate` fails on.
+    """
+    must = state.found.must
     metadata = array.metadata.to_dict()
     if metadata.get("chunk_grid", {}).get("name") != "regular":
-        problems.append(f"{name}: grid must be regular")
+        must(name, "grid must be regular")
     if metadata.get("chunk_key_encoding") != {
         "name": "default",
         "configuration": {"separator": "/"},
     }:
-        problems.append(f"{name}: chunk keys must use default slash encoding")
+        must(name, "chunk keys must use default slash encoding")
     chunks = (1, *lead, cs, cs)
     if tuple(array.chunks) != chunks:
-        problems.append(f"{name}: chunks must be {chunks}, got {tuple(array.chunks)}")
+        must(name, f"chunks must be {chunks}, got {tuple(array.chunks)}")
     if array.shards is None:
         if state.sharded:
-            problems.append(f"{name}: must be sharded like the data array")
+            must(name, "must be sharded like the data array")
         return
     if state.sharded is False:
-        problems.append(f"{name}: must not be sharded when the data array is not")
+        must(name, "must not be sharded when the data array is not")
     shards = tuple(array.shards)
     if shards[1:] != (*lead, cs, cs) or shards[0] < 1:
-        problems.append(
-            f"{name}: shards must be (shard_time, {', '.join(str(n) for n in (*lead, cs, cs))}) "
-            f"with shard_time >= 1, got {shards}"
+        must(
+            name,
+            f"shards must be (shard_time, {', '.join(str(n) for n in (*lead, cs, cs))}) "
+            f"with shard_time >= 1, got {shards}",
         )
     elif state.shard_time is not None and shards[0] != state.shard_time:
-        problems.append(
-            f"{name}: shard_time {shards[0]} differs from level 0 ({state.shard_time})"
-        )
+        must(name, f"shard_time {shards[0]} differs from level 0 ({state.shard_time})")
 
 
 def _check_plane(
@@ -854,7 +1143,7 @@ def _check_plane(
     variable: str,
     shape: tuple[int, int, int],
     cs: int,
-    crs: str,
+    crs: Crs | None,
     state: _LevelState,
     prefix: str,
     problems: list[str],
@@ -866,13 +1155,13 @@ def _check_plane(
     except SchemaError as exc:
         problems.append(str(exc))
         return
-    _check_dims(array, PLANE_DIMENSIONS, where, problems)
+    _check_dims(array, PLANE_DIMENSIONS, where, problems, state.found)
     if array.dtype != np.dtype("uint8"):
         problems.append(f"{where}: dtype must be uint8, got {array.dtype}")
     if tuple(array.shape) != shape:
         problems.append(f"{where}: shape must be {shape}, got {tuple(array.shape)}")
         return
-    _check_layout(array, where, (), cs, state, problems)
+    _check_layout(array, where, (), cs, state)
     if array.fill_value != 0:
         problems.append(f"{where}: fill_value must be 0, got {array.fill_value}")
     _check_crs_attr(array.attrs.asdict(), crs, where, problems)
@@ -890,7 +1179,7 @@ def _check_data_array(
     problems: list[str],
 ) -> tuple[int, int] | None:
     """Checks on `{level}/data`. Returns its spatial shape, or None if it is not 4-D."""
-    _check_dims(data, DIMENSIONS, where, problems)
+    _check_dims(data, DIMENSIONS, where, problems, state.found)
     if data.dtype.name not in DTYPES:
         problems.append(f"{where}: dtype must be one of {list(DTYPES)}, got {data.dtype}")
     if data.ndim != 4:
@@ -917,8 +1206,8 @@ def _check_data_array(
     if state.cs is None:
         state.cs = int(data.chunks[2])  # the cell size is the chunk size of the first level read
     if state.cs < 2 or state.cs % 2:
-        problems.append(f"{where}: cell size must be positive and even")
-    _check_layout(data, where, (n_band,), state.cs, state, problems)
+        state.found.must(where, "cell size must be positive and even")
+    _check_layout(data, where, (n_band,), state.cs, state)
     names = _codec_names(data)
     if len(names) != 2 or names[0] != "bytes" or names[1] not in CODECS:
         problems.append(f"{where}: codecs must be bytes plus one of {list(CODECS)}, got {names}")
@@ -937,6 +1226,82 @@ def _check_data_array(
     return height, width
 
 
+def _level_attrs(
+    raw: Mapping[str, Any], data: zarr.Array | None, where: str, data_where: str, found: Findings
+) -> LevelAttrs:
+    """The mirrors of a level group. An absent `transform` or `resolution` is read from `data`."""
+    if data is not None and not ("transform" in raw and "resolution" in raw):
+        with suppress(SchemaError):  # the geometry checks report why `data` cannot be read
+            geometry = read_geometry(data, data_where, Findings())
+            note_absent_level_mirrors(raw, where, found)
+            raw = {"transform": list(geometry.transform), "resolution": geometry.resolution, **raw}
+    return parse_level_attrs(raw, where)
+
+
+def _check_time_coordinate(
+    time: zarr.Array, where: str, problems: list[str], found: Findings
+) -> None:
+    """int64 epoch milliseconds. The CF `units` and `calendar` may be absent, but not differ."""
+    if time.dtype != np.dtype("int64"):
+        problems.append(
+            f"{where}: dtype must be int64 (Unix epoch milliseconds), got {time.dtype}"
+        )
+    absent = []
+    for key, expected in (("units", TIME_UNITS), ("calendar", TIME_CALENDAR)):
+        value = time.attrs.get(key)
+        if value is None:
+            absent.append(key)
+        elif value != expected:
+            problems.append(f"{where}: {key} must be {expected!r}, got {value!r}")
+    if absent:
+        found.should(
+            where,
+            f"CF {' and '.join(absent)} absent; readers take the times from chronozarr.times "
+            "(SHOULD be written)",
+        )
+
+
+# Decoded mask values validation holds at once; as many stored objects as fit are read together.
+_MASK_BYTES = 64 * 2**20
+
+
+def _mask_is_binary(plane: zarr.Array) -> bool:
+    """Whether every value of the mask `plane` is 0 or 1.
+
+    Each stored object (a shard, or a chunk when unsharded) is read and checked on its own, up to
+    `REQUESTS_AT_ONCE` at a time and at most `_MASK_BYTES` of values: a remote store waits a
+    round trip per wave of reads, not per timestep. Reading stops at the first object holding
+    another value; after an interrupt or a failed read only the reads under way finish.
+    """
+    extent = plane.shards or plane.chunks
+    grid = product(*(range(math.ceil(n / e)) for n, e in zip(plane.shape, extent, strict=True)))
+    regions = [
+        tuple(slice(i * e, (i + 1) * e) for i, e in zip(at, extent, strict=True)) for at in grid
+    ]
+    object_bytes = math.prod(extent) * plane.dtype.itemsize
+    at_once = max(1, min(REQUESTS_AT_ONCE, _MASK_BYTES // object_bytes))
+
+    def binary(region: tuple[slice, ...]) -> bool:
+        values = np.asarray(plane[region])
+        if values.dtype == np.uint8:  # max() allocates nothing; isin needs several copies
+            return int(values.max(initial=0)) <= 1
+        return bool(np.isin(values, (0, 1)).all())  # a wrong dtype, which _check_plane reports
+
+    pool = ThreadPoolExecutor(max_workers=at_once)
+    try:
+        futures = [pool.submit(binary, region) for region in regions]
+        return all(future.result() for future in as_completed(futures))
+    finally:
+        pool.shutdown(cancel_futures=True)
+
+
+def _read_together(arrays: Mapping[str, zarr.Array]) -> dict[str, np.ndarray]:
+    """The values of `arrays`, read at the same time: one round trip for a remote store."""
+    with ThreadPoolExecutor(max_workers=max(1, len(arrays))) as pool:
+        values = pool.map(lambda array: np.asarray(array[:]), arrays.values())
+        return dict(zip(arrays, values, strict=True))
+
+
 def _check_level(
     root: zarr.Group,
     index: int,
@@ -947,9 +1312,34 @@ def _check_level(
 ) -> None:
     """Check one level group; level 0 fills `state` for the later levels."""
     prefix = f"level {dataset.path}"
+    found = state.found
     try:
         group = get_group(root, dataset.path, "store")
-        attrs = parse_level_attrs(group.attrs.asdict(), prefix)
+    except SchemaError as exc:
+        problems.append(str(exc))
+        return
+
+    members: dict[str, zarr.Array] = {}
+    missing: list[str] = []
+    for name in (meta.variable, "time", "band", "x", "y"):
+        try:
+            members[name] = get_array(group, name, prefix)
+        except SchemaError as exc:
+            if name == meta.variable or name in group:
+                problems.append(str(exc))
+            else:
+                missing.append(name)
+    if missing:
+        found.should(
+            prefix,
+            f"coordinate arrays absent: {', '.join(missing)}; readers take the times and bands "
+            "from the chronozarr block and the pixel centres from the transform "
+            "(SHOULD be written)",
+        )
+    try:
+        attrs = _level_attrs(
+            group.attrs.asdict(), members.get(meta.variable), prefix, f"{prefix}/data", found
+        )
     except SchemaError as exc:
         problems.append(str(exc))
         return
@@ -960,8 +1350,8 @@ def _check_level(
     ):
         if name in group and declaration is None:
             problems.append(f"{prefix}/{name}: array present without root declaration")
-    if attrs.crs != meta.crs:
-        problems.append(f"{prefix}: crs {attrs.crs!r} differs from chronozarr.crs {meta.crs!r}")
+    if attrs.crs is None:
+        state.absent.append(prefix)
     if state.attrs is not None and not same_numbers(
         attrs.transform, scale_transform(state.attrs.transform, index)
     ):
@@ -970,15 +1360,9 @@ def _check_level(
             f"by 2^{index}"
         )
 
-    members: dict[str, zarr.Array] = {}
-    for name in (meta.variable, "time", "band", "x", "y"):
-        try:
-            members[name] = get_array(group, name, prefix)
-        except SchemaError as exc:
-            problems.append(str(exc))
     for name in ("time", "band", "x", "y"):
         if name in members:
-            _check_dims(members[name], (name,), f"{prefix}/{name}", problems)
+            _check_dims(members[name], (name,), f"{prefix}/{name}", problems, found)
     if meta.variable not in members:
         if index == 0:
             state.attrs = attrs
@@ -986,6 +1370,11 @@ def _check_level(
 
     data = members[meta.variable]
     where = f"{prefix}/data"
+    if index == 0:
+        with suppress(SchemaError):  # `_check_spatial` reports why the CRS cannot be read
+            state.crs = read_geometry(data, where, Findings()).crs
+    if attrs.crs is not None and state.crs is not None:
+        check_crs_mirror(f"{prefix}: crs", attrs.crs, state.crs, problems, found.notes)
     shape = _check_data_array(data, where, meta, state.shape, index, state, problems)
     if index == 0:
         state.attrs, state.shape = attrs, (shape if shape is not None else None)
@@ -1000,7 +1389,7 @@ def _check_level(
                 variable,
                 (n_time, height, width),
                 state.cs,
-                meta.crs,
+                state.crs,
                 state,
                 prefix,
                 problems,
@@ -1015,27 +1404,29 @@ def _check_level(
         )
     for variable in (meta.variable, meta.mask_variable, meta.coverage_variable):
         if variable is not None and variable in group:
+            array = get_array(group, variable, prefix)
+            array_where = f"{prefix}/{variable}"
             _check_spatial(
-                get_array(group, variable, prefix),
-                meta.crs,
+                array,
+                state.crs,
                 attrs.transform,
                 height,
                 width,
-                f"{prefix}/{variable}",
+                array_where,
                 problems,
+                found,
             )
+            with suppress(SchemaError):  # `_check_spatial` reports why the CRS cannot be read
+                stored = parse_crs(array.attrs.asdict(), array_where)
+                problems.extend(f"{array_where}: {m}" for m in stored.disagreements())
     if attrs.resolution != attrs.transform[0]:
         problems.append(f"{prefix}: resolution differs from spatial transform")
     for name in ("time", "band", "x", "y"):
         if name not in members:
             continue
         coordinate = members[name]
-        if name == "time" and (
-            coordinate.dtype != np.dtype("int64")
-            or coordinate.attrs.get("units") != TIME_UNITS
-            or coordinate.attrs.get("calendar") != TIME_CALENDAR
-        ):
-            problems.append(f"{prefix}/time: requires int64 CF epoch-ms units and calendar")
+        if name == "time":
+            _check_time_coordinate(coordinate, f"{prefix}/time", problems, found)
         if name in ("x", "y") and coordinate.dtype != np.dtype("float64"):
             problems.append(f"{prefix}/{name}: dtype must be float64")
         if (
@@ -1058,29 +1449,28 @@ def _check_level(
             plane = get_array(group, variable, prefix)
             if _compression_config(plane) != _compression_config(data):
                 problems.append(f"{prefix}/{variable}: compression differs from data")
-            if variable == meta.mask_variable:
-                for t in range(plane.shape[0]):
-                    values = np.asarray(plane[t])
-                    if not np.isin(values, [0, 1]).all():
-                        problems.append(f"{prefix}/{variable}: mask must contain only 0 and 1")
-                        break
-    if "time" in members:
-        stored = np.asarray(members["time"][:])
+            if variable == meta.mask_variable and not _mask_is_binary(plane):
+                problems.append(f"{prefix}/{variable}: mask must contain only 0 and 1")
+    coordinates = _read_together(
+        {name: members[name] for name in ("time", "band", "x", "y") if name in members}
+    )
+    if "time" in coordinates:
+        stored = coordinates["time"]
         expected_ms = np.array([parse_time(t) for t in meta.times], dtype="datetime64[ms]")
         if stored.shape != expected_ms.shape or not np.array_equal(
             stored.astype("datetime64[ms]"), expected_ms
         ):
             problems.append(f"{prefix}/time: values differ from chronozarr.times")
-    if "band" in members and np.asarray(members["band"][:]).tolist() != (
+    if "band" in coordinates and coordinates["band"].tolist() != (
         list(range(len(meta.bands)))
         if members["band"].dtype == np.dtype("int32")
         else list(meta.band_names)
     ):
         problems.append(f"{prefix}/band: values differ from chronozarr.bands")
-    if "x" in members and "y" in members:
+    if "x" in coordinates and "y" in coordinates:
         y, x = pixel_centers(attrs.transform, height, width)
         for name, expected_axis in (("y", y), ("x", x)):
-            stored = np.asarray(members[name][:])
+            stored = coordinates[name]
             if stored.shape != expected_axis.shape or not np.allclose(stored, expected_axis):
                 problems.append(
                     f"{prefix}/{name}: values differ from pixel centres of the transform"
@@ -1102,8 +1492,8 @@ def _check_levels_attr(root: zarr.Group, attrs: RootAttrs, problems: list[str]) 
         where = f"chronozarr.levels[{summary.path}]"
         try:
             group = get_group(root, dataset.path, "store")
-            level_attrs = parse_level_attrs(group.attrs.asdict(), where)
             data = get_array(group, attrs.chronozarr.variable, where)
+            level_attrs = _level_attrs(group.attrs.asdict(), data, where, where, Findings())
         except SchemaError:
             continue  # reported by the level checks
         if not same_numbers(summary.transform, level_attrs.transform):
@@ -1114,7 +1504,10 @@ def _check_levels_attr(root: zarr.Group, attrs: RootAttrs, problems: list[str]) 
             problems.append(
                 f"{where}: shape {list(summary.shape)} differs from {list(data.shape)}"
             )
-        elif summary.grid != grid_shape(summary.shape[2], summary.shape[3], int(data.chunks[2])):
+        elif summary.grid != (
+            math.ceil(summary.shape[2] / data.chunks[2]),
+            math.ceil(summary.shape[3] / data.chunks[3]),
+        ):
             problems.append(f"{where}: grid {list(summary.grid)} does not match shape and chunks")
 
 
@@ -1124,6 +1517,7 @@ def _check_shard_bytes(root: zarr.Group, attrs: RootAttrs, problems: list[str]) 
     if shard_bytes is None:
         return
     variable = attrs.chronozarr.variable
+    listed: list[tuple[str, str, int]] = []  # where, store key, bytes listed
     for level, shards in shard_bytes.items():
         if level not in {d.path for d in attrs.datasets}:
             problems.append(f"chronozarr.shard_bytes: unknown level '{level}'")
@@ -1131,16 +1525,23 @@ def _check_shard_bytes(root: zarr.Group, attrs: RootAttrs, problems: list[str]) 
         for key, expected in shards.items():
             t_shard, row, col = (int(p) for p in key.split("/"))
             store_key = shard_key(level, variable, t_shard, row, col)
-            try:
-                actual = sync(root.store.getsize(store_key))
-            except (FileNotFoundError, KeyError):
-                problems.append(f"chronozarr.shard_bytes[{level}][{key}]: {store_key} is missing")
-                continue
-            if actual != expected:
-                problems.append(
-                    f"chronozarr.shard_bytes[{level}][{key}]: {expected} bytes listed, "
-                    f"{store_key} has {actual}"
-                )
+            listed.append((f"chronozarr.shard_bytes[{level}][{key}]", store_key, expected))
+
+    async def size(store_key: str) -> int | None:
+        try:
+            return await root.store.getsize(store_key)
+        except (FileNotFoundError, KeyError):
+            return None
+
+    async def sizes() -> list[int | None]:
+        # All at the same time: a remote store answers every HEAD in one round trip.
+        return await asyncio.gather(*(size(store_key) for _, store_key, _ in listed))
+
+    for (where, store_key, expected), actual in zip(listed, sync(sizes()), strict=True):
+        if actual is None:
+            problems.append(f"{where}: {store_key} is missing")
+        elif actual != expected:
+            problems.append(f"{where}: {expected} bytes listed, {store_key} has {actual}")
 
 
 def _check_consolidated(store: Any, direct: zarr.Group) -> list[str]:
@@ -1167,13 +1568,66 @@ def _check_consolidated(store: Any, direct: zarr.Group) -> list[str]:
     return problems
 
 
+@dataclass(frozen=True)
+class ValidationReport:
+    """What `validate_report` found: `problems` fail conformance, `notes` do not."""
+
+    problems: list[str]
+    notes: list[str]
+    spec_version: str | None  # of the store, None when its root attributes could not be read
+
+
 def validate(store: Any) -> list[str]:
     """Check a store against chronozarr. Returns a list of problems; empty means conforming.
 
     `store` is anything `zarr.open_group` accepts: a path, URL, or zarr Store. Per-node
     `zarr.json` files are checked directly; consolidated metadata, when present, must match them.
-    Only the exact v0.3.0 profile is accepted.
+    Spec versions 0.3.0 and 0.4.0 are accepted. `validate_report` also returns the notes.
     """
+    return validate_report(store).problems
+
+
+def validate_report(store: Any) -> ValidationReport:
+    """`validate`, plus notes: things to improve that a conforming store may still have.
+
+    A note is what a SHOULD rule leaves behind: a `crs` mirror that is absent, or a mirror that
+    could not be compared with the stored CRS because that needs pyproj.
+    """
+    problems: list[str] = []
+    notes: list[str] = []
+    version = _validate_into(store, problems, notes)
+    return ValidationReport(problems, notes, version)
+
+
+def _crs_notes(attrs: RootAttrs, state: _LevelState) -> list[str]:
+    """Notes on the CRS: an absent mirror, and a 0.3.0 store that released readers refuse."""
+    notes: list[str] = []
+    reference = state.crs
+    if reference is None:
+        return notes
+    absent = [*(["chronozarr"] if attrs.chronozarr.crs is None else []), *state.absent]
+    version = attrs.chronozarr.spec_version
+    has_epsg = reference.epsg is not None
+    if absent and reference.code is not None:
+        refused = (
+            " Readers up to chronozarr 0.4.1 refuse a 0.3.0 store without them."
+            if version == "0.3.0"
+            else ""
+        )
+        notes.append(
+            f'crs mirror absent from {", ".join(absent)}: write "crs": "{reference.code}" '
+            f"there (SHOULD).{refused}"
+        )
+    if version == "0.3.0" and not has_epsg:
+        notes.append(
+            "spec_version 0.3.0 without an EPSG proj:code: readers up to chronozarr 0.4.1 refuse "
+            "this store; use 0.4.0 for a CRS that has no EPSG code"
+        )
+    return notes
+
+
+def _validate_into(store: Any, problems: list[str], notes: list[str]) -> str | None:
+    """Fill `problems` and `notes` for `store`. Returns its spec_version when readable."""
     store = as_store(store)
     from pathlib import Path
 
@@ -1181,14 +1635,18 @@ def validate(store: Any) -> list[str]:
 
     if isinstance(store, str | Path):
         store = LocalStore(store, read_only=True)
-    store = IndexStore(store)
-    problems: list[str] = []
+    source = store
+    metadata = MetadataCache(store)
+    store = IndexStore(metadata)
+    state = _LevelState()
     try:
         root = zarr.open_group(store, mode="r", zarr_format=3, use_consolidated=False)
     except (GroupNotFoundError, FileNotFoundError):
-        return [f"{store}: no Zarr v3 group found (is this a chronozarr store?)"]
+        problems.append(f"{source}: no Zarr v3 group found (is this a chronozarr store?)")
+        return None
     except ValueError as exc:
-        return [str(exc)]
+        problems.append(str(exc))
+        return None
     try:
         import json
 
@@ -1197,38 +1655,59 @@ def validate(store: Any) -> list[str]:
         manifest = sync(root.store.get("zarr.json", default_buffer_prototype()))
         if manifest is not None:
             check_extensions(json.loads(manifest.to_bytes()))
-        attrs = parse_root_attrs(root.attrs.asdict())
+        attrs = read_root_attrs(root.attrs.asdict(), state.found)
     except ValueError as exc:
-        return [str(exc)]
+        problems.append(str(exc))
+        return None
+    sync(metadata.prefetch(_metadata_keys(attrs)))
 
-    raw_meta = cast("dict[str, Any]", root.attrs.asdict()["chronozarr"])
-    for key in ("band_names", "levels"):
-        if key not in raw_meta:
-            problems.append(
-                f"chronozarr: writer must emit {key}; reader fallback remains available"
-            )
-    state = _LevelState()
     for index, dataset in enumerate(attrs.datasets):
         try:
             _check_level(root, index, dataset, attrs.chronozarr, state, problems)
         except (ValueError, KeyError, TypeError) as exc:
             problems.append(f"level {dataset.path}: {exc}")
+    if attrs.chronozarr.crs is not None and state.crs is not None:
+        check_crs_mirror(
+            "chronozarr.crs", attrs.chronozarr.crs, state.crs, problems, state.found.notes
+        )
 
     _check_levels_attr(root, attrs, problems)
     _check_shard_bytes(root, attrs, problems)
     problems.extend(_check_consolidated(store, root))
+    _check_volatility(root, attrs, state, problems)
+    problems.extend(state.found.breaks)
+    notes.extend(state.found.advice)
+    notes.extend(_crs_notes(attrs, state))
+    return attrs.chronozarr.spec_version
 
+
+def _metadata_keys(attrs: RootAttrs) -> list[str]:
+    """The `zarr.json` of every node the checks open, known from the root attributes alone."""
+    meta = attrs.chronozarr
+    arrays = {meta.variable, "time", "band", "x", "y", MASK_VARIABLE, COVERAGE_VARIABLE}
+    arrays |= {name for name in (meta.mask_variable, meta.coverage_variable) if name is not None}
+    keys = [f"{meta.volatility_path or VOLATILITY_PATH}/zarr.json"]
+    for dataset in attrs.datasets:
+        keys.append(f"{dataset.path}/zarr.json")
+        keys.extend(f"{dataset.path}/{name}/zarr.json" for name in sorted(arrays))
+    return keys
+
+
+def _check_volatility(
+    root: zarr.Group, attrs: RootAttrs, state: _LevelState, problems: list[str]
+) -> None:
+    """The optional root `volatility` array: declared if present, and float32 in [0, 1]."""
     path = attrs.chronozarr.volatility_path
     if path is None:
         if VOLATILITY_PATH in root:
             problems.append("volatility: array present without declaration")
-        return problems
+        return
     try:
         volatility = get_array(root, path, "store")
     except SchemaError as exc:
         problems.append(str(exc))
     else:
-        _check_dims(volatility, ("row", "col"), path, problems)
+        _check_dims(volatility, ("row", "col"), path, problems, state.found)
         if tuple(volatility.chunks) != tuple(volatility.shape):
             problems.append(f"{path}: must occupy a single chunk")
         if "spatial:dimensions" in volatility.attrs:
@@ -1249,7 +1728,6 @@ def validate(store: Any) -> list[str]:
                     f"{path}: shape {volatility.shape} should equal the level-0 cell grid "
                     f"{expected_grid}"
                 )
-    return problems
 
 
 def _compression_config(array: zarr.Array) -> dict[str, Any]:

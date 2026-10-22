@@ -1,15 +1,21 @@
-// Copies zarrita and its codec dependencies from js/node_modules into js/vendor, so the viewer loads them
-// from its own origin and needs no third-party host at runtime.
+// Copies zarrita and its codec dependencies from js/node_modules into js/vendor, and bundles proj4, so the
+// viewer loads them from its own origin and needs no third-party host at runtime.
 //
-//   node js/support/vendor.mjs           regenerate js/vendor/{zarrita,zarrita-storage,numcodecs}
+//   node js/support/vendor.mjs           regenerate js/vendor/{zarrita,zarrita-storage,numcodecs,proj4}
 //   node js/support/vendor.mjs --check   exit 1 unless the vendored files are what regeneration would write
 //
-// The files are the published builds (package "files": dist/ of zarrita, @zarrita/storage and numcodecs),
+// The zarrita files are the published builds (package "files": dist/ of zarrita, @zarrita/storage and numcodecs),
 // unbundled, reached by following imports from zarrita's entry point. Three things change, each recorded in
 // the file's header comment: a header naming package, version, license and the SHA-256 of the original; bare
 // import specifiers of another package ("numcodecs/zstd") rewritten to relative paths, because workers do not
 // see import maps; and "//# sourceMappingURL" comments removed, because the maps are not shipped.
+//
+// proj4 is different: its own build registers every projection (131 KB minified), and its sources import without
+// file extensions, so a browser cannot load them. vendor/proj4/proj4.js is one minified ES module that esbuild
+// bundles from js/support/proj4-entry.js (proj4's core and the few projections stores use) and wkt-parser. Its
+// header names both packages, the esbuild version and a SHA-256 over every source file that went in.
 
+import { buildSync } from 'esbuild';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -29,6 +35,8 @@ const PACKAGES = {
       ' those C libraries carry their own permissive upstream licenses (BSD-style, zlib) and numcodecs ships no separate notice for them.',
   },
 };
+const PROJ4_DIR = path.join(VENDOR, 'proj4');
+const VENDORED_DIRS = [...Object.values(PACKAGES).map(({ out }) => path.join(VENDOR, out)), PROJ4_DIR];
 const ENTRY = { pkg: 'zarrita', file: 'dist/src/index.js' };
 const SPECIFIER = /(\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(["'])([^"']+)\2/g;
 
@@ -103,6 +111,40 @@ function render({ ref, original, imports }) {
   return header + text;
 }
 
+/** vendor/proj4/proj4.js and its LICENSE: the bundle of js/support/proj4-entry.js, with the licenses of the two packages in it. */
+function buildProj4() {
+  const proj4 = packageInfo('proj4');
+  const wktParser = packageInfo('wkt-parser');
+  const esbuild = packageInfo('esbuild');
+  const entry = path.join(JS_DIR, 'support/proj4-entry.js');
+  const result = buildSync({
+    entryPoints: [entry],
+    absWorkingDir: JS_DIR,
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    target: 'es2020',
+    minify: true,
+    legalComments: 'none',
+    metafile: true,
+    write: false,
+    logLevel: 'silent',
+  });
+  const sources = Object.keys(result.metafile.inputs).sort();
+  const inputsHash = sha256(sources.map((file) => `${file}\n${sha256(readFileSync(path.join(JS_DIR, file), 'utf8'))}\n`).join(''));
+  const header =
+    `/*! Vendored by js/support/vendor.mjs; regenerate, do not edit.\n` +
+    ` * packages: proj4 ${proj4.version} and wkt-parser ${wktParser.version}, license ${proj4.license} and ${wktParser.license}, ${proj4.repository}\n` +
+    ` * bundled:  esbuild ${esbuild.version}, minified, from js/support/proj4-entry.js (${sources.length} source files, sha256 over their paths and contents ${inputsHash})\n` +
+    ` * contents: proj4's core and the aea, laea, lcc, sinu, stere, tmerc, merc and longlat projections; no datum grid shifts, no MGRS, no UTM proj strings\n` +
+    ` */\n`;
+  const licenses = [proj4, wktParser].map((info, i) => `${['proj4', 'wkt-parser'][i]} ${info.version}\n\n${readFileSync(path.join(info.dir, 'LICENSE.md'), 'utf8')}`).join('\n\n');
+  return [
+    [path.join(PROJ4_DIR, 'proj4.js'), header + result.outputFiles[0].text],
+    [path.join(PROJ4_DIR, 'LICENSE'), licenses],
+  ];
+}
+
 /** Everything vendoring writes: path -> contents. */
 export function buildVendorTree() {
   const files = new Map();
@@ -110,6 +152,7 @@ export function buildVendorTree() {
   for (const [name, { out }] of Object.entries(PACKAGES)) {
     files.set(path.join(VENDOR, out, 'LICENSE'), readFileSync(path.join(packageInfo(name).dir, 'LICENSE'), 'utf8'));
   }
+  for (const [file, text] of buildProj4()) files.set(file, text);
   return files;
 }
 
@@ -131,8 +174,7 @@ export function checkVendorTree() {
     }
     if (actual !== text) problems.push(`differs ${path.relative(JS_DIR, file)}`);
   }
-  for (const { out } of Object.values(PACKAGES)) {
-    const dir = path.join(VENDOR, out);
+  for (const dir of VENDORED_DIRS) {
     if (!statSync(dir, { throwIfNoEntry: false })) continue;
     for (const file of listFiles(dir)) if (!expected.has(file)) problems.push(`unexpected ${path.relative(JS_DIR, file)}`);
   }
@@ -148,7 +190,7 @@ if (import.meta.filename === process.argv[1]) {
     }
     console.log('vendored files match js/node_modules');
   } else {
-    for (const { out } of Object.values(PACKAGES)) rmSync(path.join(VENDOR, out), { recursive: true, force: true });
+    for (const dir of VENDORED_DIRS) rmSync(dir, { recursive: true, force: true });
     const files = buildVendorTree();
     for (const [file, text] of files) {
       mkdirSync(path.dirname(file), { recursive: true });

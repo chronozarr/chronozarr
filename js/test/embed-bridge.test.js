@@ -230,7 +230,7 @@ function fakeViewer({ transform = GEOREF, crs = 'EPSG:32631' } = {}) {
   return { viewer, calls };
 }
 
-const realProjection = async (crs) => createProjection(crs);
+const realProjection = async (store) => createProjection(store);
 
 function connected(options = {}, viewerOptions = {}) {
   const w = fakeWindow();
@@ -305,7 +305,7 @@ test('connectEmbed: time, view and click messages wait for ready and carry lon/l
   assert.deepEqual([click.type, click.pixel, click.t, click.time, click.level, click.valid], ['chronozarr:click', { x: 10, y: 20 }, 2, '2024-03-01T00:00:00Z', 0, true]);
   assert.deepEqual(click.values, { B02: 0.0412, B04: 0.0633 });
   // The centre of pixel (10, 20): 500000 + 10.5 * 10 east, 4000000 - 20.5 * 10 north in UTM 31N.
-  const expected = createProjection('EPSG:32631').toLonLat(500105, 3999795);
+  const expected = (await createProjection('EPSG:32631')).toLonLat(500105, 3999795);
   assert.ok(Math.abs(click.lon - expected[0]) < 1e-6 && Math.abs(click.lat - expected[1]) < 1e-6, `lon/lat ${click.lon}, ${click.lat} vs ${expected}`);
 
   w.posted.length = 0;
@@ -342,7 +342,7 @@ test('connectEmbed: playing false pauses; a center in lon/lat goes through the p
   const { w, viewer, calls } = connected();
   viewer.hooks.ready();
   await sleep(5);
-  const [lon, lat] = createProjection('EPSG:32631').toLonLat(500500, 3999500);
+  const [lon, lat] = (await createProjection('EPSG:32631')).toLonLat(500500, 3999500);
   w.receive(setMessage({ playing: false, center: { lon, lat } }));
   await sleep(10);
   assert.deepEqual(calls[0], ['setView', { zoom: undefined, center: calls[0][1].center }]);
@@ -395,7 +395,7 @@ test('connectEmbed: a store whose CRS cannot be projected still reports and acce
   const center = w.posted[0].data.state.center;
   assert.deepEqual([center.x, center.y, center.lon, center.lat], [501000, 3999000, null, null]);
   assert.equal(warned.length, 1);
-  assert.match(warned[0], /no lon\/lat for this store.*unsupported store CRS "EPSG:2056"/);
+  assert.match(warned[0], /no lon\/lat for this store.*"EPSG:2056".*proj:wkt2/);
   w.receive(setMessage({ center: { x: 501000, y: 3999000 } }));
   await sleep(5);
   assert.equal(calls[0][0], 'setView');

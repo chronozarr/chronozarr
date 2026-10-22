@@ -6,28 +6,80 @@ by cell. Peak memory is about one timestep times `read_ahead`; disk is the raw s
 work directory, once more in `encode`'s cell-major spill, plus the output. Staged timesteps are
 the unit of `resume`: an interrupted run keeps them, and a rerun reads only the missing ones.
 
-Four input kinds are recognised from SOURCE:
+Five input kinds are recognised from SOURCE:
 
-* a manifest (`.csv` or `.json`) of COG or image-frame (PNG) URIs with timestamps, one URI per
-  timestep;
-* a directory, a glob or an S3 prefix of GeoTIFFs, listed and dated from their file names (the
+* a manifest (`.csv` or `.json`) of COG, raster or image-frame (PNG) URIs with timestamps, one URI
+  per timestep;
+* a directory, a glob or an S3 prefix of rasters, listed and dated from their file names (the
   manifest, written for you);
+* one raster whose bands are dates, with `bands_are_dates` (`--bands-are-dates`);
 * a Zarr store (local path or http(s) URL) with a chosen variable;
-* a NetCDF file (`.nc`, `.nc4`, `.cdf`) with a chosen variable (needs an xarray NetCDF engine).
+* a NetCDF file (`.nc`, `.nc4`, `.cdf`) with a chosen variable (needs an xarray NetCDF engine),
+  or a directory or glob of NetCDF files that together form one time series.
 
 Needs rasterio (`chronozarr[geo]`) for COG manifests and for the CRS handling of all kinds.
 
-Discovered GeoTIFFs. A directory, a glob (`dir/**/*.tif` recurses) or an S3 prefix
+Discovered rasters. A directory, a glob (`dir/**/*.tif` recurses) or an S3 prefix
 (`s3://bucket/path/`, listed with the AWS credential chain and boto3, `chronozarr[s3]`) is not
-searched recursively unless a glob says so, and only `.tif` and `.tiff` files count. A file is
+searched recursively unless a glob says so. Every file that GDAL reads through rasterio and has an
+extension in `RASTER_SUFFIXES` counts: GeoTIFF, BIL and FLT (with their `.hdr`), ASCII grids,
+Erdas Imagine, GRIB, HDF5 and HDF-EOS5, JPEG 2000 and VRT. Their sidecars (`.hdr`, `.prj`,
+`.aux.xml`, `.stx`, `.xml`, `.txt`, `.csv`) are read by GDAL and never listed as sources. A local
+`.zip` that holds exactly one raster, with its sidecars, is a source read in place through
+`/vsizip/`, dated from the zip's name or else from the raster's. A file that holds subdatasets and
+no band (HDF5, HDF-EOS5) needs `--variable`, which picks one, and a file without georeferencing
+needs `--crs` and `--bounds`. HDF4 is read only by a GDAL that has the HDF4 driver, which the
+rasterio wheel lacks. NetCDF stays on its own route above. A file is
 dated from its name only when the name holds exactly one date: YYYYMMDD, YYYY-MM-DD or YYYY_MM_DD
 (a day), YYYY-MM or YYYY_MM (the first of the month). A bare six-digit YYYYMM is not read because
 it cannot be told from YYMMDD. `date_pattern` (`--date-pattern`, strptime-like with `%Y %m %d %H
-%M %S`) replaces these rules and finds the date where the pattern says. A name with no date, with
+%M %S`, or `%Y` and `%j` for a year and day of year) replaces these rules and finds the date where
+the pattern says. A name with no date, with
 several different dates or with an impossible one, and two files with the same date, are reported;
-none is guessed or dropped. What the files hold is checked as for a manifest, and everything found
+none is guessed or dropped (files that share a date: see "Tiles"). What the files hold is checked
+as for a manifest, and everything found
 wrong, in the names and in the files, is reported together, per file, in one `PreflightError`
-(`--dry-run` writes nothing and reports the same). `write_manifest_to` exports the files and dates.
+(`--dry-run` writes nothing and reports the same). `write_manifest_to` exports the files, their
+dates and the band names the files agree on, also when the checks report problems: a file
+with no date gets a row with an empty datetime for the user to fill in.
+
+NetCDF series. A directory or glob (`dir/**/*.nc` recurses) that holds NetCDF files and no
+rasters is one source, as NOAA, NASA and ESGF deliver a series: one file per day, month or decade.
+Each file is dated by the time coordinate inside it, never by its name. The steps of all files are
+sorted by time and each is read from the file that holds it, one file open at a time per reader, so
+memory does not grow with the number of files. Every file is checked against the first: variable,
+dimensions, x/y coordinates, dtype, scale, offset, units, declared nodata, calendar and CRS. All
+that differs is reported per file in one `PreflightError`, as for rasters; so are files whose
+times overlap or repeat. A dimension of length 1 besides time, y and x (OISST's `zlev`, a `height`)
+is squeezed, with a `squeezed:` plan line naming it and its value, for a single file as well; a
+longer one needs `--dims band=NAME` or a selection first.
+
+Tiles. Earth Engine writes an image larger than its file limit as several files, named `<name>-<row
+offset>-<column offset>.tif`, each a part of one grid, so a series of such exports has several
+files per date. Files that share a date may also be copies, so they are joined only when the caller
+says so with `mosaic_tiles` (`--mosaic-tiles`). Without it each such file is refused, and the fix
+says which case the grids show: tiles of one grid (one CRS and pixel size, origins whole pixels
+apart, no two files of a date sharing a pixel), which the option joins; copies on the same pixels,
+of which to keep one; files that overlap in part, which only a rule the user chooses for the shared
+pixels can join; or files on different grids, which only a resampling the user chooses can join.
+With it at least two files must share a date, and every dated file must be a tile of one grid
+(`_convert_tiles`), which becomes the store's grid: the smallest that holds every file of every
+date. Each timestep places the tiles of its date in that grid. Pixels that no tile of a date covers
+are invalid, which can give the store a mask (rule 4). The plan says so (`tiles:`). Tiles are never
+warped: `--transform`, `--shape`, `--resampling` and `--bounds` are refused with it, and so is
+`write_manifest_to`.
+
+Bands as dates. One raster whose bands are dates, as Earth Engine's `ee.ImageCollection.toBands()`
+exports a series (`2020_01_01_NDVI`, `2020_01_17_NDVI`, ...), is a series only when the caller
+says so with `bands_are_dates`: a file with several bands is normally bands. The date of each band
+is read from its description, as a file name's date is (`date_pattern` then reads the
+descriptions); the part of a description besides its date names the band and must be the same on
+every date. Several bands per date become the bands of one timestep, and every date must have the
+same ones. The plan says what was read (`bands:`) and every problem in the descriptions is
+reported together (`_convert_band_dates`). A single undated multi-band file whose descriptions
+would make a series is refused with the option that reads them. The file is read once per date,
+which for a pixel-interleaved GeoTIFF decodes every band each time; the plan says so when that is
+large (`interleave:`). `write_manifest_to` does not apply: the source is one file.
 
 Fidelity rules. The store carries the source's scale, offset, units and validity, or the
 conversion fails; nothing is guessed.
@@ -38,10 +90,21 @@ Scale, offset and units:
    objects. Scale and offset are always written (1 and 0 when the source sets none). A store
    holds one value per band for every timestep, so each must be identical in all sources, band by
    band; the first source that differs fails the conversion and is named. Descriptions name the
-   bands unless the manifest does, and must agree too. An alpha band (colour interpretation
-   alpha) is not a data band: it is not stored as data and becomes the mask (rule 4).
+   bands unless the manifest does, and must agree too, except that a single-band series
+   whose descriptions differ only by a date (WorldClim's `wc2.1_10m_tmax_2020-01.tif`, the
+   file's own name) is taken for file labels: the band is named by what they share, else
+   `1`, and the plan says so. An alpha band (colour interpretation alpha) is not a data
+   band: it is not stored as data and becomes the mask (rule 4).
 2. Zarr and NetCDF: the variable's CF `scale_factor`, `add_offset` and `units` apply to every
-   band (1 and 0 when absent); a scale that is zero or not finite fails.
+   band (1 and 0 when absent); a scale that is zero or not finite fails. Packed integers stay
+   integers: the store holds the stored values and the band carries the scale and offset. The
+   files of a NetCDF series must agree on all three.
+
+`--scale` and `--offset` replace the scale and offset of every band, and the sources then need not
+agree on them. A scale of 100, 1000, 10000 ... with no offset that carries a value past 1e6 is
+refused until `--scale` is given: HDF-EOS products such as MODIS MOD13 write the divisor (NDVI,
+scale 10000, meaning stored / 10000) and GDAL multiplies. `--scale 0.0001` reads it as a divisor,
+`--scale 10000` keeps the file's value.
 
 Validity. A store marks invalid pixels either with one `nodata` sentinel, judged per band with no
 mask, or with a `mask` variable shared by all bands (spec 2.3, 2.4).
@@ -54,7 +117,8 @@ mask, or with a `mask` variable shared by all bands (spec 2.3, 2.4).
 4. Mask otherwise: the store gets a `mask` variable when any source has an alpha band, an
    internal or per-dataset mask, or a nodata value that cannot be the store's (NaN, infinite,
    differing between sources or bands, or declared on only some of them); when a timestep is
-   warped and the store has no nodata sentinel (pixels outside the source footprint are invalid);
+   warped, or tiles leave pixels of a date uncovered, and the store has no nodata sentinel (pixels
+   outside the source footprint are invalid);
    or when a Zarr/NetCDF variable names its mask with `--mask-var`. A store with a mask has no
    nodata (so a valid value equal to the old sentinel stays valid), unless `--nodata` gives one.
 5. Mask content, 1 = valid. COG: the alpha band is nonzero (alpha wins over everything else, as
@@ -77,6 +141,22 @@ mask, or with a `mask` variable shared by all bands (spec 2.3, 2.4).
    through a mask.
 8. Warped COG timesteps use the nearest-neighbour resampling of their validity plane, whatever
    `--resampling` says for the values.
+
+Plan lines from the pixels. The plan reads three timesteps, and from those pixels it adds a `fill:`
+line when a value that no declared nodata or mask covers looks like a fill (`_convert_pixels`
+says how it is judged), and a `range:` line, each band's values after scale and offset, when a band
+declares a scale or offset. The `range:` line changes nothing. A `fill:` line only names the value
+and the option that marks it, unless the value holds 5 % of the valid pixels (1 % for -9999, -999,
+-3000 and -32768): then the conversion is refused, a dry run too, until `--nodata VALUE` marks it
+or `--nodata none` keeps every value as data. Any explicit `--nodata` ends the refusal.
+
+Calendars. A Zarr or NetCDF time axis on a 360_day, noleap (365_day), all_leap (366_day) or
+julian calendar is decoded by cftime (`chronozarr[cftime]`) and refused unless
+`calendar_to_gregorian` (`--calendar-to-gregorian`) says how to map it: "date" keeps each step's
+year, month, day and time of day as a Gregorian timestamp and stops at a date that Gregorian lacks
+(360_day Feb 30); "date-or-month-end" moves such a date to the last day of its month. Time
+between steps is not kept (30-day months become 28 to 31 days). The plan has a `calendar:` line
+and the store's provenance notes the source calendar, the rule and the dates that moved.
 
 Image frames. A sequence of rendered, georeferenced PNGs (Earth Engine thumbnails, QGIS and
 matplotlib exports, drone pipelines) converts like COGs, with no GeoTIFF step; GDAL reads the
@@ -111,7 +191,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -119,6 +199,7 @@ import numpy as np
 from numcodecs import Zstd
 
 from chronozarr import schema
+from chronozarr._calendar import check_rule, provenance_with_note
 from chronozarr._convert_cog import (
     GDAL_ENV as GDAL_ENV,
 )
@@ -129,23 +210,26 @@ from chronozarr._convert_cog import (
     SIDECAR_SUFFIXES as SIDECAR_SUFFIXES,
 )
 from chronozarr._convert_cog import (
+    BandSeries,
+    _tolerate_unlocated_frames,
+    open_band_series,
+)
+from chronozarr._convert_cog import (
     CogManifestSource as CogManifestSource,
 )
 from chronozarr._convert_cog import (
     _gdal_env as _gdal_env,
 )
-from chronozarr._convert_cog import (
-    _tolerate_unlocated_frames,
-)
 from chronozarr._convert_discover import (
-    Discovery as Discovery,
-)
-from chronozarr._convert_discover import (
+    TIFF_SUFFIXES,
     check_manifest_target,
     discover,
     is_discovery_source,
-    show_time,
+    list_rasters,
     write_manifest,
+)
+from chronozarr._convert_discover import (
+    Discovery as Discovery,
 )
 from chronozarr._convert_manifest import (
     Entry as Entry,
@@ -154,10 +238,21 @@ from chronozarr._convert_manifest import (
     Manifest as Manifest,
 )
 from chronozarr._convert_manifest import (
+    ManifestDraft as ManifestDraft,
+)
+from chronozarr._convert_manifest import (
     parse_time as parse_time,
 )
 from chronozarr._convert_manifest import (
     read_manifest as read_manifest,
+)
+from chronozarr._convert_netcdf_files import find_netcdf_files
+from chronozarr._convert_pixels import (
+    fill_line,
+    fill_refusal,
+    likely_fills,
+    range_line,
+    scale_refusal,
 )
 from chronozarr._convert_preflight import (
     PreflightError as PreflightError,
@@ -185,6 +280,7 @@ from chronozarr._convert_source import (
 )
 from chronozarr._convert_source import (
     _check_north_up,
+    override_scaling,
 )
 from chronozarr._convert_source import (
     check_bounds as check_bounds,
@@ -214,7 +310,12 @@ Scale, offset, units and validity are carried over from the source, or the conve
 \b
 Scale and offset: COG per-band scales, offsets, units and descriptions become the band objects
 and must be identical in every source; an alpha band is not data, it becomes the mask.
-Zarr/NetCDF: the CF scale_factor, add_offset and units of the variable apply to every band.
+Zarr/NetCDF: the CF scale_factor, add_offset and units of the variable apply to every band;
+packed integers stay integers.
+--scale and --offset replace them for every band (the sources then need not agree). A scale of
+100, 1000, 10000 ... with no offset that gives values past 1e6 is refused, as MODIS NDVI is:
+HDF-EOS products write the divisor, GDAL multiplies. --scale 0.0001 reads it as a divisor;
+--scale 10000 keeps it.
 
 \b
 Validity is either one nodata sentinel (judged per band, no mask) or one mask shared by all bands:
@@ -226,6 +327,23 @@ Validity is either one nodata sentinel (judged per band, no mask) or one mask sh
             --nodata gives one. A pixel invalid in any band is invalid for all.
   NaN is never stored: under a mask it becomes 0. A float source with undeclared NaN fails;
   --nodata nan treats NaN as invalid. --nodata N replaces the declared nodata; none ignores it.
+  A value that looks like a fill and that the files do not declare fails too, a dry run included,
+  when it holds 5 % of the pixels (1 % for -9999, -999, -3000 and -32768): --nodata N marks it
+  invalid, --nodata none keeps it as data. Smaller findings are named in the plan only.
+
+\b
+Time: a Zarr or NetCDF time axis on a 360_day, noleap, all_leap or julian calendar needs the
+cftime extra and --calendar-to-gregorian. `date` keeps each step's date and time of day as a
+Gregorian timestamp (30-day months become 28 to 31 days apart) and stops at a date Gregorian
+lacks, such as 360_day Feb 30; `date-or-month-end` moves it to the last day of its month. The
+store's provenance records the calendar, the rule and the dates moved.
+
+\b
+NetCDF series: a directory or glob of NetCDF files is one time series, dated by the time coordinate
+in each file and sorted by time. Every file must match the first (variable, dimensions, x/y,
+dtype, scale, offset, units, nodata, calendar, CRS) and no two may share a time; all that differs
+is reported per file. A dimension of length 1 besides time, y and x (OISST's zlev) is squeezed
+and the plan says so; a longer one needs --dims band=NAME or a selection first.
 
 \b
 Image frames (PNG): GDAL reads them like COGs and the rules above apply; the values are stored
@@ -263,6 +381,10 @@ class Plan:
     warped: int
     samples: dict[int, Step] = field(default_factory=dict, repr=False)
     discovered: bool = False  # the files were found by listing, not named by a manifest
+    # From the sampled pixels (None: not sampled, or nothing to say): the value range after
+    # scale and offset, and a likely undeclared fill value.
+    value_range: str | None = None
+    fill: str | None = None
 
     def lines(self, read_ahead: int = 2, list_files: bool = False) -> list[str]:
         info = self.source.info
@@ -273,10 +395,18 @@ class Plan:
             f"{np.datetime_as_string(times[-1], unit='D')})",
         ]
         if list_files and self.discovered and isinstance(self.source, CogManifestSource):
-            out.append(f"files:      {len(self.source.entries)}, dated from their names")
-            out.extend(f"  {show_time(e.time)}  {e.uri}" for e in self.source.entries)
+            out.extend(self.source.listing())
+        if isinstance(self.source, XarraySource) and len(self.source.files) > 1:
+            out.append(
+                f"files:      {len(self.source.files)} NetCDF files, dated by their time "
+                "coordinate and joined in time order"
+            )
+            if list_files:
+                out.extend(self.source.file_lines())
+        longitude = info.grid.longitude_note()
         out += [
             f"grid:       {info.grid.describe()}",
+            *([f"longitude:  {longitude}"] if longitude else []),
             f"data:       {info.n_band} bands ({', '.join(info.band_names)}), {info.dtype.name}",
             "scaling:    "
             + ", ".join(
@@ -285,7 +415,9 @@ class Plan:
                 + (f" [{b.units}]" if b.units else "")
                 for b in info.bands
             ),
+            *([f"range:      {self.value_range}"] if self.value_range else []),
             f"validity:   {info.validity}",
+            *([f"fill:       {self.fill}"] if self.fill else []),
             *self.source.notes,
         ]
         if self.warped:
@@ -340,41 +472,71 @@ def plan_conversion(
     shape: tuple[int, int] | None = None,
     resampling: str | None = None,
     nodata: float | int | str | None = "auto",
+    scale: float | None = None,
+    offset: float | None = None,
     mask_var: str | None = None,
     bounds: Sequence[float] | None = None,
     chunk_size: int = 512,
     n_lods: int | None = None,
     sample: bool = True,
     date_pattern: str | None = None,
+    calendar_to_gregorian: str | None = None,
+    bands_are_dates: bool = False,
+    mosaic_tiles: bool = False,
 ) -> Plan:
     """Open the source, check it is consistent and estimate the conversion.
 
     Reads `SAMPLE_TIMESTEPS` timesteps (when `sample`) to measure read time and compression.
     Raises `PreflightError` with every problem found in the files (and, for a discovered series,
-    in their dated names) when the sources cannot be one series.
+    in their dated names) when the sources cannot be one series, and `ValueError` when the sampled
+    pixels hold an undeclared fill or a divisor scale that `nodata` or `scale` has not answered.
     """
+    check_rule(calendar_to_gregorian)
     text = str(source_path)
     suffix = Path(text).suffix.lower()
     is_manifest = suffix in (".csv", ".json")
-    discovered = not is_manifest and is_discovery_source(text)
+    netcdf_files = None if is_manifest else find_netcdf_files(text)
+    discovered = not is_manifest and netcdf_files is None and is_discovery_source(text)
+    if date_pattern is not None and netcdf_files is not None:
+        raise ValueError(
+            f"--date-pattern applies to rasters; NetCDF files are dated by their time coordinate "
+            f"({text})"
+        )
+    if bands_are_dates and not discovered:
+        raise ValueError(
+            f"--bands-are-dates applies to one raster file whose bands are dates, not to {text}"
+        )
     if date_pattern is not None and not discovered:
         raise ValueError(
-            f"--date-pattern applies to a directory, glob or S3 prefix of GeoTIFFs, not to {text}"
+            f"--date-pattern applies to a directory, glob or S3 prefix of rasters, not to {text}"
+        )
+    if mosaic_tiles:
+        _check_mosaic_options(
+            text, discovered, bands_are_dates, transform, shape, resampling, bounds
         )
     source: Source
     if is_manifest or discovered:
-        if variable is not None or dims is not None or mask_var is not None:
+        if dims is not None or mask_var is not None or calendar_to_gregorian is not None:
             raise ValueError(
-                "--variable, --dims and --mask-var apply to Zarr and NetCDF input, not "
-                "manifests or GeoTIFFs"
+                "--dims, --mask-var and --calendar-to-gregorian apply to Zarr and NetCDF input, "
+                "not manifests or rasters"
             )
         manifest_bounds: Bounds | None = None
+        band_series: BandSeries | None = None
         if is_manifest:
             manifest = read_manifest(Path(text))
             entries, band_names = manifest.entries, manifest.bands
             undated: list[str] = []
             prior: list[Problem] = []
             manifest_bounds = manifest.bounds
+        elif bands_are_dates:
+            files = list_rasters(text)
+            if len(files) != 1:
+                raise ValueError(
+                    f"--bands-are-dates reads one raster file whose bands are dates; {text} "
+                    f"holds {len(files)} files"
+                )
+            entries, band_names, undated, prior = [], None, [], []
         else:
             found = discover(text, date_pattern)
             entries, band_names, undated, prior = (
@@ -390,6 +552,9 @@ def plan_conversion(
         frame_bounds = manifest_bounds if bounds is None else check_bounds(bounds, "--bounds")
         if frame_bounds is not None and crs is None:
             raise ValueError("bounds need crs (--crs EPSG:xxxxx), the CRS they are in")
+        if bands_are_dates:
+            band_series = open_band_series(files[0], crs, frame_bounds, variable, date_pattern)
+            entries, band_names = band_series.entries, band_series.dates.names
         source = CogManifestSource(
             entries,
             band_names,
@@ -404,20 +569,43 @@ def plan_conversion(
             nodata=nodata,
             chunk_size=chunk_size,
             bounds=frame_bounds,
+            variable=variable,
+            scale_given=scale is not None,
+            offset_given=offset is not None,
+            band_series=band_series,
+            band_date_pattern=date_pattern,
+            mosaic_tiles=mosaic_tiles,
         )
-        if discovered and source.kind == CogManifestSource.kind:
+        if band_series is not None:
+            kind = "GeoTIFF" if band_series.uri.lower().endswith(TIFF_SUFFIXES) else "raster"
+            source.kind = f"{kind} with a date per band"
+        elif discovered and source.kind == CogManifestSource.kind:
             # The plan's first line names what the user gave: files found by name, not a manifest.
-            source.kind = "dated GeoTIFFs"
+            tiffs_only = all(e.uri.lower().endswith(TIFF_SUFFIXES) for e in entries)
+            source.kind = "dated GeoTIFF" if tiffs_only else "dated raster"
+            source.kind += " tiles" if mosaic_tiles else "s"
     else:
         from chronozarr._convert_legacy import LegacySource, legacy_metadata
 
-        metadata = legacy_metadata(source_path)
+        metadata = None if netcdf_files is not None else legacy_metadata(source_path)
         if metadata is not None:
             source = LegacySource(source_path)
             if (
                 any(
                     v is not None
-                    for v in (variable, dims, crs, transform, shape, resampling, mask_var, bounds)
+                    for v in (
+                        variable,
+                        dims,
+                        crs,
+                        transform,
+                        shape,
+                        resampling,
+                        mask_var,
+                        bounds,
+                        calendar_to_gregorian,
+                        scale,
+                        offset,
+                    )
                 )
                 or nodata != "auto"
             ):
@@ -431,8 +619,21 @@ def plan_conversion(
                 "(--crs only declares its CRS)"
             )
         if metadata is None:
-            source = XarraySource(text, variable, _parse_dims(dims), crs, nodata, mask_var)
+            source = XarraySource(
+                text,
+                variable,
+                _parse_dims(dims),
+                crs,
+                nodata,
+                mask_var,
+                calendar_to_gregorian,
+                files=netcdf_files,
+            )
 
+    if scale is not None or offset is not None:
+        bands, said = override_scaling(source.info.bands, scale, offset)
+        source.info = replace(source.info, bands=bands)
+        source.notes = (*source.notes, f"override:   {said}")
     info = source.info
     n_time = len(source.times)
     timestep_bytes = info.n_band * info.grid.height * info.grid.width * info.dtype.itemsize
@@ -466,7 +667,56 @@ def plan_conversion(
         plan.sample_read_s = float(np.mean(seconds))
         plan.sample_ratio = _sample_ratio(list(plan.samples.values()), chunk_size)
         plan.est_output_bytes = int(plan.raw_bytes * plan.sample_ratio * pyramid)
+        if not isinstance(source, LegacySource):  # a migration copies what the store holds
+            steps = list(plan.samples.values())
+            fills = likely_fills(steps, info)
+            refusals = [
+                *([fill_refusal(fills, len(steps), info)] if nodata == "auto" else []),
+                *([scale_refusal(steps, info)] if scale is None else []),
+            ]
+            if any(refusals):
+                raise ValueError("\n".join(r for r in refusals if r))
+            plan.value_range = range_line(steps, info)
+            plan.fill = fill_line(fills, len(steps), info, nodata)
     return plan
+
+
+def _check_mosaic_options(
+    text: str,
+    discovered: bool,
+    bands_are_dates: bool,
+    transform: Sequence[float] | None,
+    shape: tuple[int, int] | None,
+    resampling: str | None,
+    bounds: Sequence[float] | None,
+) -> None:
+    """Refuse what `mosaic_tiles` cannot honour: a source that is not files to list, a file whose
+    bands are dates, or options that would warp the tiles."""
+    if not discovered:
+        raise ValueError(
+            f"--mosaic-tiles joins the files of a directory, glob or S3 prefix that share a date; "
+            f"{text} is not one"
+        )
+    if bands_are_dates:
+        raise ValueError(
+            "--mosaic-tiles joins files that share a date, and --bands-are-dates reads one file; "
+            "give one of them"
+        )
+    given = [
+        name
+        for name, value in (
+            ("--transform", transform),
+            ("--shape", shape),
+            ("--resampling", resampling),
+            ("--bounds", bounds),
+        )
+        if value is not None
+    ]
+    if given:
+        raise ValueError(
+            f"--mosaic-tiles joins the tiles on their own grid, so {', '.join(given)} does not "
+            "apply. Leave it out, or join and warp the tiles yourself first (gdalwarp)"
+        )
 
 
 def _read_checked(source: Source, t: int) -> Step:
@@ -609,6 +859,29 @@ def _staged_masks(plan: Plan, work: Path) -> Iterator[np.ndarray]:
         yield np.load(_staged_mask_path(work, t))
 
 
+def _write_draft(draft: ManifestDraft, path: Path) -> str:
+    """Write what discovery found although the files have problems; the sentence that says so."""
+    write_manifest(draft.entries, path, undated=draft.undated, bands=draft.bands)
+    n_rows = len(draft.entries) + len(draft.undated)
+    said = f"wrote manifest {path}: {n_rows} row{'s' if n_rows != 1 else ''}"
+    if draft.bands:
+        said += f", band{'s' if len(draft.bands) != 1 else ''} {';'.join(draft.bands)}"
+    if not draft.undated:
+        return f"{said}. Edit it and run convert on it, or fix the files and run again."
+    shown = ", ".join(Path(uri).name for uri in draft.undated[:3])
+    more = f" and {len(draft.undated) - 3} more" if len(draft.undated) > 3 else ""
+    count = (
+        f"{len(draft.undated)} of {n_rows} rows have"
+        if len(draft.undated) > 1
+        else f"1 of {n_rows} rows has"
+    )
+    return (
+        f"{said}. {count} no datetime because a date could not be read from the name "
+        f"({shown}{more}). Fill them in (for example 2024-03-01) or delete those rows, then run "
+        "convert on the manifest; problems in the files themselves need the fixes listed above."
+    )
+
+
 @_tolerate_unlocated_frames
 def convert(
     source: str | Path,
@@ -621,6 +894,8 @@ def convert(
     shape: tuple[int, int] | None = None,
     resampling: str | None = None,
     nodata: float | int | str | None = "auto",
+    scale: float | None = None,
+    offset: float | None = None,
     mask_var: str | None = None,
     bounds: Sequence[float] | None = None,
     band_roles: Mapping[str, str | None] | None = None,
@@ -629,6 +904,9 @@ def convert(
     dry_run: bool = False,
     read_ahead: int = 2,
     date_pattern: str | None = None,
+    bands_are_dates: bool = False,
+    mosaic_tiles: bool = False,
+    calendar_to_gregorian: str | None = None,
     write_manifest_to: str | Path | None = None,
     on_plan: Callable[[Plan], None] | None = None,
     progress: Callable[[int, int], None] | None = None,
@@ -636,17 +914,31 @@ def convert(
 ) -> ConvertReport:
     """Convert `source` into a chronozarr store at `out` without holding the whole stack.
 
-    `source` is a manifest (`.csv`/`.json`), a directory, glob or S3 prefix of GeoTIFFs, a Zarr
-    store (path or URL) or a NetCDF file; see the module docstring. The grid comes from the first
+    `source` is a manifest (`.csv`/`.json`), a directory, glob or S3 prefix of rasters, a Zarr
+    store (path or URL), a NetCDF file, or a directory or glob of NetCDF files that form one
+    time series; see the module docstring. The grid comes from the first
     source (manifests, GeoTIFFs) or the x/y coordinates (Zarr, NetCDF) unless `crs`, `transform`
     and `shape` override it for a manifest, in which case sources off the grid are warped with the
     explicit `resampling`.
 
-    A directory, glob or S3 prefix of GeoTIFFs is listed and each file dated from its name, like
-    a manifest of those files (module docstring, "Discovered GeoTIFFs"). `date_pattern` is a
-    strptime-like pattern (`%Y %m %d %H %M %S`) that says where the date is; `write_manifest_to`
+    A directory, glob or S3 prefix of rasters is listed and each file dated from its name, like
+    a manifest of those files (module docstring, "Discovered rasters"). `date_pattern` is a
+    strptime-like pattern (`%Y %m %d %H %M %S`, or `%Y%j` for a day of year) that says where the
+    date is; `write_manifest_to`
     writes the files and dates found as a `.csv` or `.json` manifest (`convert` reads it back),
-    also on a dry run, and refuses to overwrite a file.
+    with a `bands` column or entry when the files name their bands. It is written on a dry
+    run too, and also when the checks raise a `PreflightError` (a file with no date gets an
+    empty datetime; the error carries a note saying so). It refuses to overwrite a file.
+
+    `bands_are_dates` converts one raster file whose bands are dates, as Earth Engine's
+    `toBands()` exports a series: the date of each band is read from its description
+    (`2020_01_01_NDVI`; `date_pattern` then reads the descriptions), and the part besides the date
+    names the band. Several bands per date become the bands of one timestep. The file is refused
+    without this argument, since a multi-band file is normally bands; the refusal names it.
+
+    `mosaic_tiles` joins the discovered files that share a date into one timestep, as Earth Engine
+    splits a large export into files (module docstring, "Tiles"). Without it such files are
+    refused, and the refusal names it when they tile one grid.
 
     Image frames (PNG) are manifest sources. `crs` names the CRS of frames that carry none (a
     world file has none). `bounds` is `(west, south, east, north)` in the units of `crs`, the
@@ -657,8 +949,22 @@ def convert(
     Scale, offset, units and validity follow the fidelity rules of the module docstring.
     `nodata` is "auto" (what the sources declare; none declared means no nodata, not 0), a
     number that replaces the declared nodata, None (no nodata) or NaN (float data: NaN pixels are
-    invalid, through a mask). `mask_var` names a boolean or integer (time, y, x) variable of a
-    Zarr or NetCDF source whose nonzero values are valid; the store then gets a mask.
+    invalid, through a mask). An undeclared value that looks like a fill and holds a large share of
+    the sampled pixels is refused unless `nodata` is given (a number, None or NaN). `scale` and
+    `offset` replace the scale and offset of every band that the sources declare; a scale that
+    reads like a divisor (10000 on MODIS NDVI, which gives values near 1e8) is refused unless
+    `scale` is given, and `scale=0.0001` fixes it. `mask_var` names a boolean or integer (time, y,
+    x) variable of a Zarr or NetCDF source whose nonzero values are valid; the store then gets a
+    mask. `variable` names the Zarr or NetCDF variable, or for rasters the subdataset to read from
+    files that hold several (HDF5, HDF-EOS5).
+
+    `calendar_to_gregorian` ("date" or "date-or-month-end") says how to store a Zarr or NetCDF
+    time axis on a calendar that is not Gregorian (360_day, noleap, all_leap, julian; needs
+    cftime). Without it such a source is refused. "date" keeps each step's date and time of day
+    as a Gregorian timestamp and stops at a date that Gregorian lacks; "date-or-month-end" moves
+    that date to the last day of its month. The plan has a `calendar:` line, and the store's
+    provenance `notes` record the calendar, the rule and the dates moved (added to `provenance`
+    when the caller passes one). It has no effect on a Gregorian axis.
 
     `band_roles` maps band names of the source to a STAC common name (`{"B04": "red"}`; "none"
     clears one) and writes it as the band's `common_name` (see `chronozarr.bands`). An unknown
@@ -674,37 +980,59 @@ def convert(
         raise ValueError(f"read_ahead must be >= 1, got {read_ahead}")
     if write_manifest_to is not None:
         check_manifest_target(Path(write_manifest_to))
+        if bands_are_dates:
+            raise ValueError(
+                "--write-manifest lists files with their dates, and a file whose bands are dates "
+                "is one file: leave --write-manifest out"
+            )
+        if mosaic_tiles:
+            raise ValueError(
+                "--write-manifest writes one file per datetime, and with --mosaic-tiles several "
+                "files share one: leave --write-manifest out"
+            )
+        if not is_discovery_source(str(source)):
+            raise ValueError(
+                "--write-manifest exports the files found in a directory, glob or S3 prefix; "
+                "this source is already a manifest or is not a set of rasters"
+            )
     out_path = Path(out)
     if not dry_run and out_path.exists() and any(out_path.iterdir()):
         raise FileExistsError(
             f"{out_path} already exists and is not empty; stores are immutable, write to a "
             "new path"
         )
-    plan = plan_conversion(
-        source,
-        variable=variable,
-        dims=dims,
-        crs=crs,
-        transform=transform,
-        shape=shape,
-        resampling=resampling,
-        nodata=nodata,
-        mask_var=mask_var,
-        bounds=bounds,
-        chunk_size=encode_options.get("chunk_size", 512),
-        n_lods=encode_options.get("n_lods"),
-        date_pattern=date_pattern,
-    )
+    try:
+        plan = plan_conversion(
+            source,
+            variable=variable,
+            dims=dims,
+            crs=crs,
+            transform=transform,
+            shape=shape,
+            resampling=resampling,
+            nodata=nodata,
+            scale=scale,
+            offset=offset,
+            mask_var=mask_var,
+            bounds=bounds,
+            chunk_size=encode_options.get("chunk_size", 512),
+            n_lods=encode_options.get("n_lods"),
+            date_pattern=date_pattern,
+            calendar_to_gregorian=calendar_to_gregorian,
+            bands_are_dates=bands_are_dates,
+            mosaic_tiles=mosaic_tiles,
+        )
+    except PreflightError as exc:
+        if write_manifest_to is not None and exc.draft is not None:
+            exc.wrote_manifest(_write_draft(exc.draft, Path(write_manifest_to)))
+        raise
     bands = list(plan.source.info.bands)
     if band_roles:
         bands = list(assign_roles(bands, band_roles))
     if write_manifest_to is not None:
-        if not plan.discovered or not isinstance(plan.source, CogManifestSource):
-            raise ValueError(
-                "--write-manifest exports the files found in a directory, glob or S3 prefix; "
-                "this source is already a manifest or is not a set of GeoTIFFs"
-            )
-        write_manifest(plan.source.entries, Path(write_manifest_to))
+        assert isinstance(plan.source, CogManifestSource)
+        draft = plan.source.draft
+        write_manifest(draft.entries, Path(write_manifest_to), bands=draft.bands)
     if on_plan is not None:
         on_plan(plan)
     if dry_run:
@@ -745,6 +1073,10 @@ def convert(
     )
     _check_work_dir(work, plan, resume)
     info = plan.source.info
+    if isinstance(plan.source, XarraySource) and plan.source.calendar is not None:
+        encode_options["provenance"] = provenance_with_note(
+            str(source), plan.source.calendar, encode_options.get("provenance")
+        )
     try:
         started = time.perf_counter()
         staged, reused = _stage(plan, work, read_ahead, progress)

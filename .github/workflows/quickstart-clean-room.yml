@@ -1,0 +1,116 @@
+name: Quickstart clean room
+
+# Runs the commands on docs/quickstart.md (https://chronozarr.org/quickstart) exactly as printed, in
+# order, on a fresh runner for each OS. If a documented command stops working for a newcomer, this
+# fails. There is no repository Python environment: the checkout supplies the page, the helper
+# scripts in scripts/trial and the git tag of the documented version.
+#
+# Supply chain: nothing that the job installs was published in the last 7 days.
+#   - uv: a pinned release (0.12.24, 2026-10-08) with its SHA-256; it brings its own list of Python builds
+#   - cloudflared: a pinned release (2026.10.0, 2026-10-05) with its SHA-256, per OS
+#   - Python packages: UV_EXCLUDE_NEWER, as in ci.yml. chronozarr itself is the exception the page needs:
+#     the page pins a release that is still inside the window, so the job builds that version from its
+#     git tag and hands it to uv with UV_FIND_LINKS. uv applies exclude-newer to PyPI files and not to a
+#     find-links file, so the page's install command runs unchanged and only chronozarr is exempt.
+#   - the actions: pinned by commit, as elsewhere in this repository
+# Raise these pins by hand, and only to releases that are at least 7 days old.
+
+on:
+  push:
+    branches: ["trial/**"]
+  workflow_dispatch:
+  schedule:
+    - cron: "23 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quickstart-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_EXCLUDE_NEWER: 7 days
+
+jobs:
+  quickstart:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            uv_sha256: b4dfaef47d491a7296981f8374a4595f55dbf84e8937c8ecd2983574d8bb3da6
+          - os: macos-latest
+            uv_sha256: 0c4346de7abdb49495b393b9ec809fe387aa43e586be20fecb972216c1e71732
+          - os: windows-latest
+            uv_sha256: 7c38608c8a18ee137d748a1773053b07ec8f3a30fab49aebaa6f4e4efeceb019
+    defaults:
+      run:
+        # Setup steps use bash on every OS (Git Bash on Windows). The quickstart steps themselves run
+        # in the shell a scientist uses: run_quickstart.py picks bash on Linux and macOS, pwsh on Windows.
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.24"
+          checksum: ${{ matrix.uv_sha256 }}
+          enable-cache: false
+      # The runner's own Python runs the helper scripts (standard library only). It is not the Python
+      # that the page installs chronozarr into: `uv tool install --python 3.13` finds or downloads that.
+      - name: Find the runner's Python
+        run: |
+          if command -v python >/dev/null 2>&1; then py=python; else py=python3; fi
+          "$py" --version
+          echo "PY=$py" >> "$GITHUB_ENV"
+      # The page says the install "puts the chronozarr command on your PATH". That holds for a person
+      # whose uv came from uv's installer, which adds uv's tool directory to the shell profile.
+      - name: Put uv's tool directory on PATH
+        run: uv tool dir --bin >> "$GITHUB_PATH"
+      - name: Read the commands from docs/quickstart.md
+        run: |
+          mkdir -p "$RUNNER_TEMP/quickstart"
+          "$PY" scripts/trial/quickstart_commands.py docs/quickstart.md \
+            --out "$RUNNER_TEMP/quickstart/steps.json"
+      - name: Install the pinned cloudflared
+        run: '"$PY" scripts/trial/runner_setup.py cloudflared --dest "$RUNNER_TEMP/cloudflared" --github-actions'
+      - name: Build the documented chronozarr version from its git tag
+        run: |
+          "$PY" scripts/trial/runner_setup.py wheel --steps "$RUNNER_TEMP/quickstart/steps.json" \
+            --out "$RUNNER_TEMP/quickstart/wheelhouse" --github-actions
+      - name: Run the quickstart
+        run: |
+          "$PY" scripts/trial/run_quickstart.py "$RUNNER_TEMP/quickstart/steps.json" \
+            --workdir "$RUNNER_TEMP/quickstart/work" --out "$RUNNER_TEMP/quickstart/out"
+      - name: Record the uv receipt of the installed chronozarr
+        if: always()
+        run: |
+          receipt="$(uv tool dir)/chronozarr/uv-receipt.toml"
+          if [ -f "$receipt" ]; then
+            cp "$receipt" "$RUNNER_TEMP/quickstart/uv-receipt.toml"
+            {
+              echo "### uv receipt (${RUNNER_OS}): the cutoff that resolved the install"
+              echo
+              echo '```toml'
+              cat "$receipt"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload steps, logs and results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: quickstart-${{ runner.os }}
+          path: |
+            ${{ runner.temp }}/quickstart/out
+            ${{ runner.temp }}/quickstart/steps.json
+            ${{ runner.temp }}/quickstart/uv-receipt.toml
+          if-no-files-found: warn
+          retention-days: 14

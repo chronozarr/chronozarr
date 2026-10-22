@@ -23,6 +23,7 @@ from chronozarr import schema
 from chronozarr._writer import (
     DEFAULT_CELLS_IN_FLIGHT,
     VOLATILITY_SCALE,
+    WRITE_EVERY_CHUNK,
     Block,
     _ArraySource,
     _CellWriter,
@@ -39,6 +40,7 @@ from chronozarr._writer import (
     _spill_timesteps,
     _write_time_coord,
 )
+from chronozarr.crs import Crs, same_crs
 from chronozarr.decode import ChronoStore, open_store
 from chronozarr.schema import Band, Chronozarr, LevelRef, SchemaError, Transform
 
@@ -81,12 +83,17 @@ class _Target:
     arrays: list[_LevelArrays]
 
     @property
+    def crs(self) -> Crs:
+        """The CRS level 0 declares, as readers resolve it."""
+        return schema.canonical_level(self.arrays[0].data, "level 0/data").crs.resolved()
+
+    @property
     def n_time(self) -> int:
         return len(self.meta.times)
 
     @property
     def transform(self) -> Transform:
-        return schema.parse_level_attrs(self.groups[0].attrs.asdict(), "level 0").transform
+        return schema.canonical_level(self.arrays[0].data, "level 0/data").transform
 
     @property
     def chunk_size(self) -> int:
@@ -115,19 +122,18 @@ def _open_target(store: str | Path) -> _Target:
     groups = [schema.get_group(root, d.path, "store") for d in parsed.datasets]
     arrays = []
     for group in groups:
-        data = schema.get_array(group, meta.variable, "store")
-        mask = (
-            None
-            if meta.mask_variable is None
-            else schema.get_array(group, meta.mask_variable, "store")
-        )
+        data = _writable(group, meta.variable)
+        mask = None if meta.mask_variable is None else _writable(group, meta.mask_variable)
         coverage = (
-            None
-            if meta.coverage_variable is None
-            else schema.get_array(group, meta.coverage_variable, "store")
+            None if meta.coverage_variable is None else _writable(group, meta.coverage_variable)
         )
         arrays.append(_LevelArrays(data, mask, coverage))
     return _Target(path, root, meta, parsed.datasets, groups, arrays)
+
+
+def _writable(group: zarr.Group, name: str) -> zarr.Array:
+    """Array `name` of `group`, opened to write its all-fill chunks too, as encode does."""
+    return schema.get_array(group, name, "store").with_config(WRITE_EVERY_CHUNK)
 
 
 # --- The new timesteps --------------------------------------------------------------------------
@@ -160,12 +166,27 @@ def _request_from_store(source: str | Path | ChronoStore) -> _Request:
         coverage=None
         if level0.coverage is None
         else (store.read_coverage(t) for t in range(count)),
-        crs=store.attrs.crs,
+        crs=store.crs.to_string(),
         transform=level0.transform,
         bands=store.attrs.bands,
         strict_bands=True,
         nodata=store.nodata,
     )
+
+
+def _crs_mismatch(given_text: str, stored: Crs) -> list[str]:
+    """The `crs:` finding when the input is not the store's CRS, or cannot be shown to be."""
+    try:
+        given = Crs.from_string(given_text)
+    except ValueError as exc:
+        return [f"crs: {exc}"]
+    match = same_crs(given, stored)
+    if match.same:
+        return []
+    found = f"crs: the input is {given.describe()!r}, the store is {stored.describe()!r}"
+    if match.same is None:
+        found += " (a code and a WKT2 can only be compared with pyproj, which is not installed)"
+    return [found]
 
 
 def _mismatches(
@@ -186,8 +207,8 @@ def _mismatches(
             "(chronozarr never converts dtype)"
         )
     crs = request.crs if request.crs is not None else prepared.attrs.get("crs")
-    if crs is not None and str(crs) != meta.crs:
-        found.append(f"crs: the input is {str(crs)!r}, the store is {meta.crs!r}")
+    if crs is not None:
+        found.extend(_crs_mismatch(str(crs), target.crs))
 
     georeferenced = request.transform is not None or (
         prepared.da is not None
@@ -293,7 +314,7 @@ def _append_cell(block: Block, arrays: _LevelArrays, ys: slice, xs: slice, plan:
 def _update_volatility(target: _Target, plan: _Plan) -> None:
     if target.meta.volatility_path is None:
         return
-    array = schema.get_array(target.root, target.meta.volatility_path, "store")
+    array = _writable(target.root, target.meta.volatility_path)
     cs = target.chunk_size
     updated = np.zeros(array.shape, dtype=np.float32)
     reference = schema.comparison_schedule(plan.new_n, COMPARISON_INTERVAL)

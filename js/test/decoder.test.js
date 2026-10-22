@@ -261,15 +261,15 @@ test('an explicit movie window bounds prefetch even when compressed bytes could 
     speculativeBytesInitial: 1e12, idleBytes: 1e12,
   });
   try {
-    const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 38, loop: true, playing: true, maxTimesteps: 9, concurrency: 1 });
+    const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 38, loop: true, playing: true, maxSteps: 9, concurrency: 1 });
     assert.equal(result.planned, 9, 'caller bounds the decoded movie window');
     assert.equal(result.errors.length, 0);
     assert.ok(store.stats.cache.usedBytes <= store.budgets().totalBytes);
     assert.ok(store.peekRaw(0, 0, 0, 38), 'current frame remains decoded');
     assert.ok(store.peekRaw(0, 0, 0, 0), 'the rolling window crosses the timeline wrap');
     assert.equal(store.peekRaw(0, 0, 0, 20), undefined, 'distant movie frames are not speculated into the active window');
-    for (const maxTimesteps of [0, -1, 1.5, NaN]) {
-      await assert.rejects(store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, maxTimesteps }), /maxTimesteps/);
+    for (const maxSteps of [0, -1, 1.5, NaN]) {
+      await assert.rejects(store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, maxSteps }), /maxSteps/);
     }
   } finally {
     store.close();
