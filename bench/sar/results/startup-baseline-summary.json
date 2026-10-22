@@ -1,0 +1,851 @@
+[
+  {
+    "label": "baseline",
+    "sensor": "nisar",
+    "repeat": 0,
+    "phases": [
+      {
+        "name": "cold",
+        "elapsedMs": 360,
+        "cadence": {
+          "medianMs": null,
+          "p95Ms": null,
+          "p99Ms": null,
+          "maxMs": 0,
+          "gapsOver50Ms": 0
+        },
+        "frameCost": {
+          "uploadMedianMs": 19.500000476837158,
+          "uploadP95Ms": 19.500000476837158,
+          "renderMedianMs": 32.19999980926514,
+          "renderP95Ms": 32.19999980926514
+        },
+        "longTasks": [],
+        "gpu": {
+          "allocatedBytes": 401702912,
+          "slots": 299,
+          "allocations": [
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33334,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 313524224
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33340,
+              "w": 256,
+              "h": 16,
+              "d": 299,
+              "bytes": 9797632
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33330,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 78381056
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33334,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 313524224
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33340,
+              "w": 256,
+              "h": 16,
+              "d": 299,
+              "bytes": 9797632
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33330,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 78381056
+            }
+          ],
+          "compactEnabled": true,
+          "compactRatio": 0.6850727698769458,
+          "budgetBytes": 402653184,
+          "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)"
+        },
+        "steadyNetwork": null,
+        "chunkProfile": [
+          {
+            "kind": "data",
+            "count": 0,
+            "fetchMsSum": 0,
+            "decodeMsSum": 0
+          },
+          {
+            "kind": "mask",
+            "count": 0,
+            "fetchMsSum": 0,
+            "decodeMsSum": 0
+          }
+        ],
+        "loopRates": [],
+        "paints": {
+          "count": 1,
+          "complete": 1,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "continuity": {
+          "count": 0,
+          "wraps": 0,
+          "discontinuities": 0
+        },
+        "network": {
+          "requests": 132,
+          "bytes": 51622329
+        },
+        "peakSampledImageryMiB": 50.43499755859375,
+        "peakSampledAuxMiB": 18.656367301940918,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        }
+      },
+      {
+        "name": "play",
+        "elapsedMs": 17145.599999904633,
+        "achievedFps": 30.001061130779544,
+        "initialBufferMs": 6765.099999809265,
+        "refillPauses": 0,
+        "cadence": {
+          "medianMs": 33.30000019073486,
+          "p95Ms": 34.200000286102295,
+          "p99Ms": 34.30000019073486,
+          "maxMs": 34.40000009536743,
+          "gapsOver50Ms": 0
+        },
+        "frameCost": {
+          "uploadMedianMs": 0,
+          "uploadP95Ms": 0,
+          "renderMedianMs": 0.09999990463256836,
+          "renderP95Ms": 0.10000038146972656
+        },
+        "longTasks": [],
+        "gpu": {
+          "allocatedBytes": 401702912,
+          "slots": 299,
+          "allocations": [
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33334,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 313524224
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33340,
+              "w": 256,
+              "h": 16,
+              "d": 299,
+              "bytes": 9797632
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33330,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 78381056
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33334,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 313524224
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33340,
+              "w": 256,
+              "h": 16,
+              "d": 299,
+              "bytes": 9797632
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33330,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 78381056
+            }
+          ],
+          "compactEnabled": true,
+          "compactRatio": 0.6758725664061909,
+          "budgetBytes": 402653184,
+          "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)"
+        },
+        "steadyNetwork": {
+          "requests": 0,
+          "bytes": 0
+        },
+        "chunkProfile": [
+          {
+            "kind": "data",
+            "count": 1800,
+            "fetchMsSum": 727103.5999937057,
+            "decodeMsSum": 14805.400013923645
+          },
+          {
+            "kind": "mask",
+            "count": 1800,
+            "fetchMsSum": 727031.6999921799,
+            "decodeMsSum": 10576.40000295639
+          }
+        ],
+        "loopRates": [
+          30.015608112783635,
+          29.998846204824996,
+          30.026561955348704,
+          29.991925247594587,
+          29.991925247594587,
+          29.988465974625143,
+          30.005770340450088,
+          30.026561971883847,
+          29.967727049986422,
+          30.01269768969953,
+          30.019628221756026,
+          30.00230785662939
+        ],
+        "paints": {
+          "count": 312,
+          "complete": 312,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "continuity": {
+          "count": 312,
+          "wraps": 12,
+          "discontinuities": 0
+        },
+        "network": {
+          "requests": 3600,
+          "bytes": 1369755959
+        },
+        "peakSampledImageryMiB": 1310.5393981933594,
+        "peakSampledAuxMiB": 93.44056129455566,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "pass": true
+      }
+    ]
+  },
+  {
+    "label": "baseline",
+    "sensor": "nisar",
+    "repeat": 1,
+    "phases": [
+      {
+        "name": "cold",
+        "elapsedMs": 363.2000002861023,
+        "cadence": {
+          "medianMs": null,
+          "p95Ms": null,
+          "p99Ms": null,
+          "maxMs": 0,
+          "gapsOver50Ms": 0
+        },
+        "frameCost": {
+          "uploadMedianMs": 19.300000190734863,
+          "uploadP95Ms": 19.300000190734863,
+          "renderMedianMs": 31,
+          "renderP95Ms": 31
+        },
+        "longTasks": [],
+        "gpu": {
+          "allocatedBytes": 401702912,
+          "slots": 299,
+          "allocations": [
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33334,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 313524224
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33340,
+              "w": 256,
+              "h": 16,
+              "d": 299,
+              "bytes": 9797632
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33330,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 78381056
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33334,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 313524224
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33340,
+              "w": 256,
+              "h": 16,
+              "d": 299,
+              "bytes": 9797632
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33330,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 78381056
+            }
+          ],
+          "compactEnabled": true,
+          "compactRatio": 0.6856312248100669,
+          "budgetBytes": 402653184,
+          "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)"
+        },
+        "steadyNetwork": null,
+        "chunkProfile": [
+          {
+            "kind": "data",
+            "count": 0,
+            "fetchMsSum": 0,
+            "decodeMsSum": 0
+          },
+          {
+            "kind": "mask",
+            "count": 0,
+            "fetchMsSum": 0,
+            "decodeMsSum": 0
+          }
+        ],
+        "loopRates": [],
+        "paints": {
+          "count": 1,
+          "complete": 1,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "continuity": {
+          "count": 0,
+          "wraps": 0,
+          "discontinuities": 0
+        },
+        "network": {
+          "requests": 132,
+          "bytes": 51622329
+        },
+        "peakSampledImageryMiB": 50.43499755859375,
+        "peakSampledAuxMiB": 18.656367301940918,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        }
+      },
+      {
+        "name": "play",
+        "elapsedMs": 17315.199999809265,
+        "achievedFps": 30.001350543111265,
+        "initialBufferMs": 6932.700000286102,
+        "refillPauses": 0,
+        "cadence": {
+          "medianMs": 33.30000019073486,
+          "p95Ms": 34.19999980926514,
+          "p99Ms": 34.40000009536743,
+          "maxMs": 35.59999990463257,
+          "gapsOver50Ms": 0
+        },
+        "frameCost": {
+          "uploadMedianMs": 0,
+          "uploadP95Ms": 0,
+          "renderMedianMs": 0.09999990463256836,
+          "renderP95Ms": 0.19999980926513672
+        },
+        "longTasks": [],
+        "gpu": {
+          "allocatedBytes": 401702912,
+          "slots": 299,
+          "allocations": [
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33334,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 313524224
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33340,
+              "w": 256,
+              "h": 16,
+              "d": 299,
+              "bytes": 9797632
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33330,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 78381056
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33334,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 313524224
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33340,
+              "w": 256,
+              "h": 16,
+              "d": 299,
+              "bytes": 9797632
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33330,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 78381056
+            }
+          ],
+          "compactEnabled": true,
+          "compactRatio": 0.6758408321210011,
+          "budgetBytes": 402653184,
+          "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)"
+        },
+        "steadyNetwork": {
+          "requests": 0,
+          "bytes": 0
+        },
+        "chunkProfile": [
+          {
+            "kind": "data",
+            "count": 1800,
+            "fetchMsSum": 743290.0999894142,
+            "decodeMsSum": 15171.80001449585
+          },
+          {
+            "kind": "mask",
+            "count": 1800,
+            "fetchMsSum": 743523.400010109,
+            "decodeMsSum": 11153.799996852875
+          }
+        ],
+        "loopRates": [
+          30.048076923076923,
+          29.967727049986422,
+          30.01616255567436,
+          30.005770340450088,
+          29.995385318734233,
+          30.019628221756026,
+          29.971181556195965,
+          30.01269768969953,
+          29.988465974625143,
+          30.023094688221708,
+          29.988465974625143,
+          30.016162539150667
+        ],
+        "paints": {
+          "count": 312,
+          "complete": 312,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "continuity": {
+          "count": 312,
+          "wraps": 12,
+          "discontinuities": 0
+        },
+        "network": {
+          "requests": 3600,
+          "bytes": 1369755959
+        },
+        "peakSampledImageryMiB": 1310.5393981933594,
+        "peakSampledAuxMiB": 93.44056129455566,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "pass": true
+      }
+    ]
+  },
+  {
+    "label": "baseline",
+    "sensor": "nisar",
+    "repeat": 2,
+    "phases": [
+      {
+        "name": "cold",
+        "elapsedMs": 355.90000009536743,
+        "cadence": {
+          "medianMs": null,
+          "p95Ms": null,
+          "p99Ms": null,
+          "maxMs": 0,
+          "gapsOver50Ms": 0
+        },
+        "frameCost": {
+          "uploadMedianMs": 20.600000381469727,
+          "uploadP95Ms": 20.600000381469727,
+          "renderMedianMs": 31.69999933242798,
+          "renderP95Ms": 31.69999933242798
+        },
+        "longTasks": [],
+        "gpu": {
+          "allocatedBytes": 401702912,
+          "slots": 299,
+          "allocations": [
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33334,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 313524224
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33340,
+              "w": 256,
+              "h": 16,
+              "d": 299,
+              "bytes": 9797632
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33330,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 78381056
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33334,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 313524224
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33340,
+              "w": 256,
+              "h": 16,
+              "d": 299,
+              "bytes": 9797632
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33330,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 78381056
+            }
+          ],
+          "compactEnabled": true,
+          "compactRatio": 0.6856030208476023,
+          "budgetBytes": 402653184,
+          "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)"
+        },
+        "steadyNetwork": null,
+        "chunkProfile": [
+          {
+            "kind": "data",
+            "count": 0,
+            "fetchMsSum": 0,
+            "decodeMsSum": 0
+          },
+          {
+            "kind": "mask",
+            "count": 0,
+            "fetchMsSum": 0,
+            "decodeMsSum": 0
+          }
+        ],
+        "loopRates": [],
+        "paints": {
+          "count": 1,
+          "complete": 1,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "continuity": {
+          "count": 0,
+          "wraps": 0,
+          "discontinuities": 0
+        },
+        "network": {
+          "requests": 132,
+          "bytes": 51622329
+        },
+        "peakSampledImageryMiB": 50.43499755859375,
+        "peakSampledAuxMiB": 18.656367301940918,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        }
+      },
+      {
+        "name": "play",
+        "elapsedMs": 17330.099999904633,
+        "achievedFps": 30.001061130779544,
+        "initialBufferMs": 6942.999999904632,
+        "refillPauses": 0,
+        "cadence": {
+          "medianMs": 33.39999961853027,
+          "p95Ms": 34.19999980926514,
+          "p99Ms": 34.30000019073486,
+          "maxMs": 34.40000009536743,
+          "gapsOver50Ms": 0
+        },
+        "frameCost": {
+          "uploadMedianMs": 0,
+          "uploadP95Ms": 0,
+          "renderMedianMs": 0.09999990463256836,
+          "renderP95Ms": 0.19999980926513672
+        },
+        "longTasks": [],
+        "gpu": {
+          "allocatedBytes": 401702912,
+          "slots": 299,
+          "allocations": [
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33334,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 313524224
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33340,
+              "w": 256,
+              "h": 16,
+              "d": 299,
+              "bytes": 9797632
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33330,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 78381056
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33334,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 313524224
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33340,
+              "w": 256,
+              "h": 16,
+              "d": 299,
+              "bytes": 9797632
+            },
+            {
+              "target": 35866,
+              "levels": 1,
+              "format": 33330,
+              "w": 512,
+              "h": 512,
+              "d": 299,
+              "bytes": 78381056
+            }
+          ],
+          "compactEnabled": true,
+          "compactRatio": 0.6750308398581046,
+          "budgetBytes": 402653184,
+          "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Max, Unspecified Version)"
+        },
+        "steadyNetwork": {
+          "requests": 0,
+          "bytes": 0
+        },
+        "chunkProfile": [
+          {
+            "kind": "data",
+            "count": 1800,
+            "fetchMsSum": 744942.799996376,
+            "decodeMsSum": 15126.099997520447
+          },
+          {
+            "kind": "mask",
+            "count": 1800,
+            "fetchMsSum": 744358.7999863625,
+            "decodeMsSum": 10583.700004577637
+          }
+        ],
+        "loopRates": [
+          30.24071610713434,
+          29.991925247594587,
+          29.998846204824996,
+          29.991925247594587,
+          30.023094688221708,
+          29.998846188320368,
+          29.97809294197717,
+          30.01269767317965,
+          29.988465974625143,
+          30.04043905257077,
+          29.95736835711838,
+          30.009233623554493
+        ],
+        "paints": {
+          "count": 312,
+          "complete": 312,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "continuity": {
+          "count": 312,
+          "wraps": 12,
+          "discontinuities": 0
+        },
+        "network": {
+          "requests": 3600,
+          "bytes": 1369755959
+        },
+        "peakSampledImageryMiB": 1310.5393981933594,
+        "peakSampledAuxMiB": 93.44056129455566,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "pass": true
+      }
+    ]
+  }
+]

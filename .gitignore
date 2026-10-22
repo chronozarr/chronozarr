@@ -60,3 +60,6 @@ HANDOVER.md
 
 # Jupyter autosaves
 .ipynb_checkpoints/
+
+# Raw SAR benchmark runs stay local; the summaries next to them are tracked
+bench/sar/results/*.jsonl

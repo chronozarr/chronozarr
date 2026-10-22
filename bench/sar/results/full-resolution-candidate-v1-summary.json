@@ -1,0 +1,455 @@
+{
+  "file": "bench/sar/results/full-resolution-candidate-v1.jsonl",
+  "errors": [],
+  "results": [
+    {
+      "sensor": "sentinel1",
+      "view": "full",
+      "phase": "cold",
+      "runs": 3,
+      "elapsedMs": 52.40000009536743,
+      "firstCompleteLod0Ms": 51.90000009536743,
+      "achievedStepsPerSecond": null,
+      "finished": [
+        null,
+        null,
+        null
+      ],
+      "steps": [
+        null,
+        null,
+        null
+      ],
+      "readerRequests": [
+        19,
+        19,
+        19
+      ],
+      "readerBytes": [
+        5798425,
+        5798425,
+        5798425
+      ],
+      "pageMaskRequests": [
+        {
+          "requests": 9,
+          "bytes": 5635,
+          "uniquePaths": 9,
+          "duplicateRequests": 0,
+          "maxRequestsPerPath": 1
+        },
+        {
+          "requests": 9,
+          "bytes": 5635,
+          "uniquePaths": 9,
+          "duplicateRequests": 0,
+          "maxRequestsPerPath": 1
+        },
+        {
+          "requests": 9,
+          "bytes": 5635,
+          "uniquePaths": 9,
+          "duplicateRequests": 0,
+          "maxRequestsPerPath": 1
+        }
+      ],
+      "cells": [
+        [
+          9
+        ],
+        [
+          9
+        ],
+        [
+          9
+        ]
+      ],
+      "paintLevels": [
+        [
+          0
+        ],
+        [
+          0
+        ],
+        [
+          0
+        ]
+      ],
+      "completePaints": [
+        1,
+        1,
+        1
+      ],
+      "partialPaints": [
+        0,
+        0,
+        0
+      ],
+      "switchComplete": null,
+      "switchCount": null,
+      "switchMedianMs": null,
+      "switchMaxMs": null,
+      "switchRequests": null,
+      "budgets": {
+        "totalBytes": 1610612736,
+        "decodedBytes": 1610612736,
+        "compressedBytes": 1610612736,
+        "auxBytes": 161061274,
+        "speculativeBytesInitial": 16777216
+      },
+      "gpuSlots": 307,
+      "cache": {
+        "entries": 9,
+        "bytes": 9437184,
+        "compressedEntries": 9,
+        "compressedBytes": 5757816
+      }
+    },
+    {
+      "sensor": "sentinel1",
+      "view": "full",
+      "phase": "prefetch",
+      "runs": 3,
+      "elapsedMs": 3578.3999996185303,
+      "firstCompleteLod0Ms": null,
+      "achievedStepsPerSecond": null,
+      "finished": [
+        null,
+        null,
+        null
+      ],
+      "steps": [
+        null,
+        null,
+        null
+      ],
+      "readerRequests": [
+        1962,
+        1962,
+        1962
+      ],
+      "readerBytes": [
+        608121131,
+        608121131,
+        608121131
+      ],
+      "pageMaskRequests": [
+        {
+          "requests": 981,
+          "bytes": 614215,
+          "uniquePaths": 981,
+          "duplicateRequests": 0,
+          "maxRequestsPerPath": 1
+        },
+        {
+          "requests": 981,
+          "bytes": 614215,
+          "uniquePaths": 981,
+          "duplicateRequests": 0,
+          "maxRequestsPerPath": 1
+        },
+        {
+          "requests": 981,
+          "bytes": 614215,
+          "uniquePaths": 981,
+          "duplicateRequests": 0,
+          "maxRequestsPerPath": 1
+        }
+      ],
+      "cells": [
+        [],
+        [],
+        []
+      ],
+      "paintLevels": [
+        [],
+        [],
+        []
+      ],
+      "completePaints": [
+        0,
+        0,
+        0
+      ],
+      "partialPaints": [
+        0,
+        0,
+        0
+      ],
+      "switchComplete": null,
+      "switchCount": null,
+      "switchMedianMs": null,
+      "switchMaxMs": null,
+      "switchRequests": null,
+      "budgets": {
+        "totalBytes": 1610612736,
+        "decodedBytes": 1610612736,
+        "compressedBytes": 1610612736,
+        "auxBytes": 161061274,
+        "speculativeBytesInitial": 16777216
+      },
+      "gpuSlots": 307,
+      "cache": {
+        "entries": 990,
+        "bytes": 1038090240,
+        "compressedEntries": 923,
+        "compressedBytes": 572113970
+      }
+    },
+    {
+      "sensor": "sentinel1",
+      "view": "full",
+      "phase": "play30",
+      "runs": 3,
+      "elapsedMs": 7494.5,
+      "firstCompleteLod0Ms": 126.30000019073486,
+      "achievedStepsPerSecond": 29.628226635640456,
+      "finished": [
+        true,
+        true,
+        true
+      ],
+      "steps": [
+        220,
+        220,
+        220
+      ],
+      "readerRequests": [
+        0,
+        0,
+        0
+      ],
+      "readerBytes": [
+        0,
+        0,
+        0
+      ],
+      "pageMaskRequests": [
+        null,
+        null,
+        null
+      ],
+      "cells": [
+        [
+          9
+        ],
+        [
+          9
+        ],
+        [
+          9
+        ]
+      ],
+      "paintLevels": [
+        [
+          0
+        ],
+        [
+          0
+        ],
+        [
+          0
+        ]
+      ],
+      "completePaints": [
+        220,
+        220,
+        220
+      ],
+      "partialPaints": [
+        0,
+        0,
+        0
+      ],
+      "switchComplete": null,
+      "switchCount": null,
+      "switchMedianMs": null,
+      "switchMaxMs": null,
+      "switchRequests": null,
+      "budgets": {
+        "totalBytes": 1610612736,
+        "decodedBytes": 1610612736,
+        "compressedBytes": 1610612736,
+        "auxBytes": 161061274,
+        "speculativeBytesInitial": 16777216
+      },
+      "gpuSlots": 307,
+      "cache": {
+        "entries": 990,
+        "bytes": 1038090240,
+        "compressedEntries": 923,
+        "compressedBytes": 572113970
+      }
+    },
+    {
+      "sensor": "sentinel1",
+      "view": "full",
+      "phase": "play60",
+      "runs": 3,
+      "elapsedMs": 13919.900000095367,
+      "firstCompleteLod0Ms": 318.69999980926514,
+      "achievedStepsPerSecond": 15.919052707550014,
+      "finished": [
+        true,
+        true,
+        true
+      ],
+      "steps": [
+        221,
+        220,
+        220
+      ],
+      "readerRequests": [
+        0,
+        0,
+        0
+      ],
+      "readerBytes": [
+        0,
+        0,
+        0
+      ],
+      "pageMaskRequests": [
+        null,
+        null,
+        null
+      ],
+      "cells": [
+        [
+          9
+        ],
+        [
+          9
+        ],
+        [
+          9
+        ]
+      ],
+      "paintLevels": [
+        [
+          0
+        ],
+        [
+          0
+        ],
+        [
+          0
+        ]
+      ],
+      "completePaints": [
+        221,
+        220,
+        220
+      ],
+      "partialPaints": [
+        0,
+        0,
+        0
+      ],
+      "switchComplete": null,
+      "switchCount": null,
+      "switchMedianMs": null,
+      "switchMaxMs": null,
+      "switchRequests": null,
+      "budgets": {
+        "totalBytes": 1610612736,
+        "decodedBytes": 1610612736,
+        "compressedBytes": 1610612736,
+        "auxBytes": 161061274,
+        "speculativeBytesInitial": 16777216
+      },
+      "gpuSlots": 307,
+      "cache": {
+        "entries": 990,
+        "bytes": 1038090240,
+        "compressedEntries": 923,
+        "compressedBytes": 572113970
+      }
+    },
+    {
+      "sensor": "sentinel1",
+      "view": "full",
+      "phase": "switch",
+      "runs": 3,
+      "elapsedMs": 658.3999996185303,
+      "firstCompleteLod0Ms": 0.39999961853027344,
+      "achievedStepsPerSecond": null,
+      "finished": [
+        null,
+        null,
+        null
+      ],
+      "steps": [
+        null,
+        null,
+        null
+      ],
+      "readerRequests": [
+        0,
+        0,
+        0
+      ],
+      "readerBytes": [
+        0,
+        0,
+        0
+      ],
+      "pageMaskRequests": [
+        null,
+        null,
+        null
+      ],
+      "cells": [
+        [
+          9
+        ],
+        [
+          9
+        ],
+        [
+          9
+        ]
+      ],
+      "paintLevels": [
+        [
+          0
+        ],
+        [
+          0
+        ],
+        [
+          0
+        ]
+      ],
+      "completePaints": [
+        20,
+        20,
+        20
+      ],
+      "partialPaints": [
+        0,
+        0,
+        0
+      ],
+      "switchComplete": 60,
+      "switchCount": 60,
+      "switchMedianMs": 2,
+      "switchMaxMs": 4.899999618530273,
+      "switchRequests": 0,
+      "budgets": {
+        "totalBytes": 1610612736,
+        "decodedBytes": 1610612736,
+        "compressedBytes": 1610612736,
+        "auxBytes": 161061274,
+        "speculativeBytesInitial": 16777216
+      },
+      "gpuSlots": 307,
+      "cache": {
+        "entries": 990,
+        "bytes": 1038090240,
+        "compressedEntries": 923,
+        "compressedBytes": 572113970
+      }
+    }
+  ]
+}
