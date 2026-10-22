@@ -192,3 +192,53 @@ test('closed main-thread decoders cannot resurrect their codec cache', async () 
   decoder.close(); decoder.close();
   await assert.rejects(decoder.decode(new Uint8Array(4), 0, undefined, spec), { name: 'AbortError' });
 });
+
+test('real decode workers pack before transfer and restore exact arrays through the hydrated backing', async (t) => {
+  const { Worker } = await import('node:worker_threads');
+  const workerUrl = new URL('../chronozarr/decode-worker.js', import.meta.url).href;
+  const received = [];
+  const spawn = () => {
+    const handle = {};
+    const node = new Worker(`
+      const { parentPort } = require('node:worker_threads');
+      global.self = { postMessage: (message, transfer) => parentPort.postMessage(message, transfer) };
+      const loaded = import(${JSON.stringify(workerUrl)});
+      parentPort.on('message', async message => { await loaded; self.onmessage({ data: message }); });
+    `, { eval: true });
+    node.on('message', message => { received.push(message); handle.onmessage?.({ data: message }); });
+    node.on('error', error => handle.onerror?.(error));
+    handle.postMessage = (message, transfer) => node.postMessage(message, transfer);
+    handle.terminate = () => node.terminate();
+    return handle;
+  };
+  const pool = new DecodePool({ size: 2, spawn, init: { type: 'init', zarritaUrl: 'data:text/javascript,export const registry = new Map();' } });
+  t.after(() => pool.close());
+  const spec = { key: 'raw-u16', dtype: 'uint16', shape: [1, 1, 128, 128], codecs: [{ name: 'bytes', configuration: { endian: 'little' } }] };
+  const expected = new Uint16Array(128 * 128).map((_, i) => 3000 + i % 256);
+  const bytes = () => new Uint8Array(expected.buffer.slice(0));
+  const packed = await pool.decode(bytes(), 1, undefined, spec, { compact: true });
+  assert.ok(packed.words && packed.blocks);
+  assert.equal(typeof packed.unpack, 'function');
+  assert.deepEqual(packed.unpack(), expected);
+  assert.ok(packed.byteLength < expected.byteLength);
+  const reply = received.find(message => message.type === 'decoded');
+  assert.equal(reply.data.buffer, undefined, 'the reply has only packed backing, with no raw array');
+  assert.equal(reply.data.byteLength, reply.data.words.byteLength + reply.data.blocks.byteLength);
+  const raw = await pool.decode(bytes(), 1, undefined, spec);
+  assert.ok(raw instanceof Uint16Array);
+  assert.deepEqual(raw, expected, 'ordinary jobs still return raw typed arrays');
+  const incompressible = new Uint16Array(128 * 128).map((_, i) => i % 2 ? 65535 : 0);
+  const fallback = await pool.decode(new Uint8Array(incompressible.buffer.slice(0)), 1, undefined, spec, { compact: true });
+  assert.ok(fallback instanceof Uint16Array, 'packing that would grow the data falls back to raw values');
+  assert.deepEqual(fallback, incompressible);
+});
+
+test('main-thread fallback supports the same optional compact result and exact CPU values', async () => {
+  const decoder = new MainThreadDecoder({ registry: new Map() });
+  const expected = new Uint16Array(512).map((_, i) => 1234 + i % 32);
+  const spec = { key: 'compact-fallback', dtype: 'uint16', shape: [512], codecs: [{ name: 'bytes' }] };
+  const packed = await decoder.decode(new Uint8Array(expected.buffer), 0, undefined, spec, { compact: true });
+  assert.ok(packed.words);
+  assert.deepEqual(packed.unpack(), expected);
+  decoder.close();
+});

@@ -252,6 +252,30 @@ test('prefetch window is sized by the cache budget, bounded to nearby timesteps'
   assert.equal(full.planned, 40, 'the whole axis when it fits and the viewer plays');
 });
 
+test('an explicit movie window bounds prefetch even when compressed bytes could reach further', async () => {
+  const spec = { nTime: 40, nBand: 1, height: 16, width: 16, chunk: 32, sharded: true };
+  const chunkBytes = 32 * 32 * 2;
+  const readable = buildSyntheticStore(spec);
+  const store = await openStore('memory://rolling-movie', {
+    store: readable, workers: 0, totalBytes: chunkBytes * 10,
+    speculativeBytesInitial: 1e12, idleBytes: 1e12,
+  });
+  try {
+    const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 38, loop: true, playing: true, maxTimesteps: 9, concurrency: 1 });
+    assert.equal(result.planned, 9, 'caller bounds the decoded movie window');
+    assert.equal(result.errors.length, 0);
+    assert.ok(store.stats.cache.usedBytes <= store.budgets().totalBytes);
+    assert.ok(store.peekRaw(0, 0, 0, 38), 'current frame remains decoded');
+    assert.ok(store.peekRaw(0, 0, 0, 0), 'the rolling window crosses the timeline wrap');
+    assert.equal(store.peekRaw(0, 0, 0, 20), undefined, 'distant movie frames are not speculated into the active window');
+    for (const maxTimesteps of [0, -1, 1.5, NaN]) {
+      await assert.rejects(store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, maxTimesteps }), /maxTimesteps/);
+    }
+  } finally {
+    store.close();
+  }
+});
+
 test('prefetch skips cached chunks and honours abort', async () => {
   const spec = { nTime: 10, nBand: 1, height: 16, width: 16, chunk: 32,  sharded: true };
   const store = await openStore('memory://synthetic', { store: buildSyntheticStore(spec) });

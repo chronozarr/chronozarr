@@ -1,10 +1,12 @@
-// Decoding backends behind one interface: decode(bytes, priority, signal, spec) -> Promise<typed array>.
+// Decoding backends behind one interface: decode(bytes, priority, signal, spec, options) -> Promise<typed array>.
+// With options.compact, uint16 output may instead be lossless GPU-readable backing with unpack().
 // `spec` = {key, dtype, shape, codecs} describes the chunk (see metadata.js decodeSpec); one backend serves
 // several arrays and several stores. Lower priority numbers run first (0 = a frame is waiting for it, 1 =
 // background prefetch). `priority` is a number or a handle {value} that can be lowered later; call
 // reprioritize() afterwards to re-sort the queue.
 
 import { createChunkDecoder } from './codec.js';
+import { packUint16, restoreCompactUint16 } from './compact.js';
 
 const abortError = () => new DOMException('Aborted', 'AbortError');
 const WORKER_IDLE_MS = 30000;
@@ -19,14 +21,15 @@ export class MainThreadDecoder {
     this.#zarrita = zarrita;
   }
 
-  decode(bytes, priority, signal, spec) {
-    return this.#decode(bytes, signal, spec);
+  decode(bytes, priority, signal, spec, options = {}) {
+    return this.#decode(bytes, signal, spec, options);
   }
 
-  async #decode(bytes, signal, spec) {
+  async #decode(bytes, signal, spec, options) {
     const decode = await this.#decoderFor(spec);
     if (signal?.aborted) throw abortError();
-    return decode(bytes);
+    const data = await decode(bytes);
+    return options.compact ? packUint16(data) ?? data : data;
   }
 
   #decoderFor(spec) {
@@ -104,15 +107,15 @@ export class DecodePool {
     for (const worker of this.#workers) if (worker.ready) worker.handle.postMessage({ type: 'warm', spec });
   }
 
-  decode(bytes, priority = 0, signal, spec) {
+  decode(bytes, priority = 0, signal, spec, options = {}) {
     if (this.#failure) return Promise.reject(this.#failure);
     if (signal?.aborted) return Promise.reject(abortError());
     const handle = typeof priority === 'number' ? { value: priority } : priority;
     if (this.#fallback && handle.value === 0 && !this.#workers.some((w) => w.ready)) {
-      return this.#fallback.decode(bytes, handle, signal, spec);
+      return this.#fallback.decode(bytes, handle, signal, spec, options);
     }
     return new Promise((resolve, reject) => {
-      const job = { id: this.#nextId++, bytes, handle, signal, spec, resolve, reject };
+      const job = { id: this.#nextId++, bytes, handle, signal, spec, options, resolve, reject };
       job.onAbort = () => {
         const at = this.#queue.indexOf(job);
         if (at >= 0) this.#queue.splice(at, 1);
@@ -157,7 +160,7 @@ export class DecodePool {
       this.#jobs.set(job.id, job);
       const own = job.bytes.byteOffset === 0 && job.bytes.buffer.byteLength === job.bytes.byteLength;
       const bytes = own ? job.bytes : job.bytes.slice();
-      worker.handle.postMessage({ type: 'decode', id: job.id, spec: job.spec, bytes }, [bytes.buffer]);
+      worker.handle.postMessage({ type: 'decode', id: job.id, spec: job.spec, bytes, compact: !!job.options.compact }, [bytes.buffer]);
     }
   }
 
@@ -175,7 +178,7 @@ export class DecodePool {
       worker.current = null;
       if (job) {
         job.signal?.removeEventListener('abort', job.onAbort);
-        if (message.type === 'decoded') job.resolve(message.data);
+        if (message.type === 'decoded') job.resolve(message.data?.words ? restoreCompactUint16(message.data) : message.data);
         else job.reject(new Error(message.message));
       }
       this.#dispatch();
@@ -194,9 +197,9 @@ export class DecodePool {
     const fallback = this.#fallback;
     for (const job of this.#queue.splice(0)) {
       job.signal?.removeEventListener('abort', job.onAbort);
-      fallback.decode(job.bytes, job.handle, job.signal, job.spec).then(job.resolve, job.reject);
+      fallback.decode(job.bytes, job.handle, job.signal, job.spec, job.options).then(job.resolve, job.reject);
     }
-    this.decode = (bytes, priority, signal, spec) => fallback.decode(bytes, priority, signal, spec);
+    this.decode = (bytes, priority, signal, spec, options) => fallback.decode(bytes, priority, signal, spec, options);
   }
 
   #fail(error) {
@@ -242,7 +245,7 @@ export function leaseDecodePool({ key, size, spawn, init, fallback, idleMs = WOR
       return pool.size;
     },
     warm: (spec) => pool.warm(spec),
-    decode: (bytes, priority, signal, spec) => pool.decode(bytes, priority, signal, spec),
+    decode: (bytes, priority, signal, spec, options) => pool.decode(bytes, priority, signal, spec, options),
     reprioritize: () => pool.reprioritize(),
     close() {
       if (released) return;

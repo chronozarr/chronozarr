@@ -63,6 +63,73 @@ function setup({ count = 10, stepsPerSecond = 4, ready = () => true, display = f
 
 const times = (state) => state.steps.map((s) => s.at);
 
+test('a bounded rolling cache starts and completes multiple loops without requesting the entire series', () => {
+  const count = 26;
+  const resident = new Set([0]);
+  const pending = new Map();
+  let maxAhead = 15;
+  let frameCapacity = 19;
+  let ctx;
+  const flush = () => {
+    for (const [index, due] of pending) {
+      if (due > ctx.display.now()) continue;
+      pending.delete(index);
+      resident.add(index);
+    }
+    while (resident.size > frameCapacity) {
+      // Like the reader's forward-loop eviction order, retain the current and nearest future frames.
+      const worst = [...resident].sort((a, b) => ((b - ctx.state.index + count) % count) - ((a - ctx.state.index + count) % count))[0];
+      resident.delete(worst);
+    }
+  };
+  const prepared = [];
+  ctx = setup({
+    count,
+    stepsPerSecond: 60,
+    maxAhead: () => maxAhead,
+    ready: (index) => { flush(); return resident.has(index); },
+    prepare: (indices) => {
+      assert.ok(indices.length <= maxAhead);
+      prepared.push(indices);
+      for (const index of indices) if (!resident.has(index) && !pending.has(index)) pending.set(index, ctx.display.now() + 35);
+    },
+  });
+  ctx.playback.play();
+  assert.equal(ctx.playback.buffered.needed, 15);
+  ctx.display.runUntil(1800);
+  assert.ok(ctx.state.steps.length >= 100, 'crosses the wrap several times under a finite cache');
+  assert.equal(ctx.playback.stats.bufferingPauses, 0);
+  maxAhead = 5;
+  frameCapacity = 9;
+  flush();
+  assert.equal(ctx.playback.buffered.needed, 5, 'a resized view or budget is reflected immediately');
+  const stepsBefore = ctx.state.steps.length;
+  ctx.display.runUntil(3600);
+  assert.ok(ctx.state.steps.length >= stepsBefore + 100, 'continues under the smaller rolling budget');
+  assert.equal(ctx.playback.stats.bufferingPauses, 0);
+  for (let k = 0; k < ctx.state.steps.length; k++) assert.equal(ctx.state.steps[k].index, (k + 1) % count);
+  assert.ok(prepared.some((indices) => indices.includes(0)), 'the rolling horizon crosses the loop boundary');
+  ctx.playback.pause();
+  const requests = prepared.length;
+  ctx.display.runUntil(4000);
+  assert.equal(prepared.length, requests, 'pause stops requesting refills');
+});
+
+test('bounded startup reacts to capacity and speed while buffering, without wrapping past the last frame', () => {
+  let capacity = 8;
+  const { playback, state, display } = setup({ count: 26, stepsPerSecond: 60, maxAhead: () => capacity, ready: () => false });
+  playback.play();
+  assert.deepEqual(state.prepared[0], [1, 2, 3, 4, 5, 6, 7, 8]);
+  capacity = 3;
+  display.runUntil(300);
+  assert.equal(state.prepared.at(-1).length, 3);
+  playback.setSpeed(1);
+  assert.equal(playback.buffered.needed, 2);
+  const finite = setup({ count: 26, start: 24, stepsPerSecond: 60, wrap: false, maxAhead: () => 3, ready: () => false });
+  finite.playback.play();
+  assert.deepEqual(finite.state.prepared[0], [25]);
+});
+
 test('cadence: the first step happens at once, then each step on the frame nearest its due time', () => {
   const { playback, state, display } = setup({ stepsPerSecond: 4 });
   playback.play();

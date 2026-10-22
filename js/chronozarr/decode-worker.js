@@ -2,9 +2,11 @@
 // message carries the chunk spec, and the codec chain for a spec is built once and kept.
 //   -> {type:'init', zarritaUrl}            <- {type:'ready'} | {type:'error', message}
 //   -> {type:'warm', spec}                  (instantiate the spec's codecs early; no reply)
-//   -> {type:'decode', id, spec, bytes}     <- {type:'decoded', id, data} (typed array, transferred) | {type:'error', id, message}
+//   -> {type:'decode', id, spec, bytes, compact?} <- {type:'decoded', id, data} | {type:'error', id, message}
+// Replies transfer either the decoded typed array or just packed words and block metadata.
 
 import { createChunkDecoder } from './codec.js';
+import { packUint16 } from './compact.js';
 
 let zarrita = null;
 const decoders = new Map();
@@ -28,7 +30,13 @@ self.onmessage = async ({ data: message }) => {
       await (await decoderFor(message.spec)).warmup().catch(() => {});
     } else {
       const data = await (await decoderFor(message.spec))(message.bytes);
-      self.postMessage({ type: 'decoded', id: message.id, data }, [data.buffer]);
+      const packed = message.compact ? packUint16(data) : null;
+      if (packed) {
+        const { words, blocks, length, byteLength } = packed;
+        self.postMessage({ type: 'decoded', id: message.id, data: { words, blocks, length, byteLength } }, [words.buffer, blocks.buffer]);
+      } else {
+        self.postMessage({ type: 'decoded', id: message.id, data }, [data.buffer]);
+      }
     }
   } catch (error) {
     if (message.type !== 'warm') self.postMessage({ type: 'error', id: message.id, message: error.message });
