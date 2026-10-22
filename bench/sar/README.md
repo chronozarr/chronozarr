@@ -4,10 +4,13 @@ Measured locally on 2026-10-18, starting at `ca799a1`. These experiments use
 Sentinel-1 RTC monthly backscatter at Ucayali and NISAR GCOV at Yuma. Original
 stores and published objects are unchanged. Nothing was released or deployed.
 
-Latest: [faster NISAR Play startup](startup.md) measures decoder-worker packing
+After merging `origin/main` (2026-10-22): [the same claims on the merged code](merge-main.md),
+against main and against the branch before the merge, on the built viewer, and on a link that cannot carry the speed.
+
+Previous: [faster NISAR Play startup](startup.md) measures decoder-worker packing
 while preserving steady native 30 frames/s and the same default caches.
 
-Previous: [steady native NISAR playback at 30 frames/s](steady30.md) measures
+Earlier: [steady native NISAR playback at 30 frames/s](steady30.md) measures
 lossless in-memory packing within the unchanged default caches. The earlier
 14 frames/s results in [default-cache playback](default-cache.md) are historical.
 
