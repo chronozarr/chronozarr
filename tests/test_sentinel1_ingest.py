@@ -152,11 +152,13 @@ def test_multilook_means_power_and_drops_blocks_with_an_invalid_sample():
     assert np.isnan(looked[0, 1])
 
 
-def test_month_mean_averages_power_over_the_valid_acquisitions():
+@pytest.mark.parametrize("stream", [False, True])
+def test_month_mean_averages_power_over_the_valid_acquisitions(stream):
     nan = np.nan
     first = (np.array([[1.0, nan, nan]]), np.array([[0.1, nan, nan]]))
     second = (np.array([[3.0, 2.0, nan]]), np.array([[0.3, 0.2, nan]]))
-    vv, vh, valid = ingest.month_mean([first, second])
+    acquisitions = [first, second]
+    vv, vh, valid = ingest.month_mean(iter(acquisitions) if stream else acquisitions)
     assert valid.tolist() == [[True, True, False]]
     np.testing.assert_allclose(vv[valid], [2.0, 2.0])
     np.testing.assert_allclose(vh[valid], [0.2, 0.2])
@@ -190,3 +192,36 @@ def test_a_cached_acquisition_is_reused_only_for_the_same_slices(tmp_path):
     assert ingest.cached_record(acquisition, path)["npz"] == str(path)
     one_more = ingest.Acquisition("sentinel-1a", 100, (*acquisition.slices, make_slice(3)))
     assert ingest.cached_record(one_more, path) is None
+
+
+def test_composite_months_streams_cached_acquisitions_with_joint_validity(tmp_path):
+    records = []
+    acquisitions = [
+        (
+            np.array([[1.0, np.nan, 4.0]], dtype=np.float32),
+            np.array([[0.1, 0.2, np.nan]], dtype=np.float32),
+        ),
+        (
+            np.array([[3.0, 2.0, np.nan]], dtype=np.float32),
+            np.array([[0.3, 0.4, 0.5]], dtype=np.float32),
+        ),
+    ]
+    for index, (vv, vh) in enumerate(acquisitions):
+        path = tmp_path / f"acquisition-{index}.npz"
+        np.savez(path, vv=vv, vh=vh)
+        records.append(
+            {"start": f"2024-01-{index + 1:02d}", "valid_fraction": 1.0, "npz": str(path)}
+        )
+    summaries = ingest.composite_months(records, tmp_path / "months")
+    assert len(summaries) == 1
+    assert summaries[0]["acquisitions"] == [r["start"] for r in records]
+    assert summaries[0]["valid_fraction"] == pytest.approx(2 / 3)
+    with np.load(summaries[0]["npz"]) as month:
+        assert month["VV"].tolist() == [[6301, 6301, 0]]
+        assert month["VH"].tolist() == [[5301, 5602, 0]]
+        assert month["mask"].tolist() == [[True, True, False]]
+
+
+def test_month_mean_requires_an_acquisition():
+    with pytest.raises(ValueError, match="at least one acquisition"):
+        ingest.month_mean(iter(()))

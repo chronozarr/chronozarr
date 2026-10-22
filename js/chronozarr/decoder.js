@@ -26,6 +26,8 @@
 
 import { BandwidthEstimator } from './bandwidth.js';
 import { ChunkCache, SpeculativeBudget } from './cache.js';
+import { packAux, unpackAux } from './aux-cache.js';
+import { packUint16, compactUint16At } from './compact.js';
 import { FetchError, HttpStore, LimitedReadable, abortError, isAbort, sleep } from './http.js';
 import { RequestLimiter } from './limiter.js';
 import { DTYPES, decodeSpec, normalizeBands, parseSpatial, parseRoot, parseStorage, requireStore, sameCrs } from './metadata.js';
@@ -79,7 +81,8 @@ const DEFAULT_IDLE_MS = 3000;
  * times as long, and the frame a viewer is waiting for is one of them.
  */
 const PREFETCH_FLIGHT_SECONDS = 1;
-/** The mask and coverage cache: a tenth of the joint cap, at least 64 MiB. It is held on top of the cap. */
+/** Mask and coverage: a tenth of the joint cap, at least 64 MiB, on top of it. Half holds decoded arrays;
+ * half retains lossless compact arrays so decoded eviction does not cause another HTTP request. */
 const AUX_SHARE = 0.1;
 const AUX_MIN_BYTES = 64 * MIB;
 /** Compressed size over decoded size assumed until chunks have been seen (Sentinel-2 reflectance: 0.65 to 0.72). */
@@ -331,7 +334,11 @@ export class ChronoStore {
   #specs;
   #names;
   #cache;
+  #compact = false;
+  #compactRatio = 1;
   #auxCache;
+  // Binary masks need at most one bit/pixel; observed nonbinary masks raise this estimate.
+  #maskPackedRatio = 1 / 8;
   #clock;
   #now;
   #inflight = new Map();
@@ -395,7 +402,7 @@ export class ChronoStore {
     this.#shardBytes = cz.shard_bytes ?? null;
     this.#policy = policy;
     this.#cache = new ChunkCache({ totalBytes: budgets.totalBytes, decodedBytes: budgets.decodedBytes, compressedBytes: budgets.compressedBytes, score: (entry) => this.evictionScore(entry) });
-    this.#auxCache = new ChunkCache({ decodedBytes: auxBudget(budgets.totalBytes), compressedBytes: 0, score: (entry) => this.evictionScore(entry) });
+    this.#auxCache = new ChunkCache({ totalBytes: auxBudget(budgets.totalBytes), decodedBytes: auxBudget(budgets.totalBytes) / 2, compressedBytes: auxBudget(budgets.totalBytes) / 2, score: (entry) => this.evictionScore(entry) });
     this.#speculative = new SpeculativeBudget({ initial: budgets.speculativeBytesInitial, share: SPECULATIVE_SHARE_PENDING, clock });
 
     const { bands, bandNames } = normalizeBands(cz, url);
@@ -514,7 +521,7 @@ export class ChronoStore {
       totalBytes: this.#cache.maxTotal,
       decodedBytes: this.#cache.decodedLimit,
       compressedBytes: this.#cache.compressedLimit,
-      auxBytes: this.#auxCache.maxDecoded,
+      auxBytes: this.#auxCache.maxTotal,
       speculativeBytesInitial: this.#speculative.initial,
     };
   }
@@ -529,7 +536,7 @@ export class ChronoStore {
     }
     this.#cache.setBudgets({ totalBytes: jointCap({ totalBytes, decodedBytes, compressedBytes }, this.#cache.maxTotal), decodedBytes, compressedBytes });
     const aux = auxBudget(this.#cache.maxTotal);
-    this.#auxCache.setBudgets({ totalBytes: aux, decodedBytes: aux, compressedBytes: 0 });
+    this.#auxCache.setBudgets({ totalBytes: aux, decodedBytes: aux / 2, compressedBytes: aux / 2 });
     if (speculativeBytesInitial !== undefined) this.#speculative.setInitial(speculativeBytesInitial);
   }
 
@@ -592,6 +599,27 @@ export class ChronoStore {
     return this.#cache.info();
   }
 
+  /** Enable lossless RAM packing for oversized uint16 movies before prefetching.
+   * Existing entries are cleared once; all retained bytes remain in the imagery cap. */
+  enableCompactCache() {
+    if (this.#compact || this.#storage.data[0].dtype !== 'uint16') return this.#compact;
+    this.#compact = true;
+    this.#cache.clear();
+    return true;
+  }
+
+  get compactCacheEnabled() { return this.#compact; }
+  get compactCacheRatio() { return this.#compactRatio; }
+
+  /** Readiness without materializing a packed array. */
+  hasCachedRaw(lod, row, col, t) { return this.#cache.hasDecoded(chunkKey(lod, row, col, t)); }
+
+  /** GPU-readable packed uint16 data, or null for a normal decoded entry. */
+  peekCompact(lod, row, col, t) {
+    const data = this.#cache.get(chunkKey(lod, row, col, t))?.data;
+    return data?.words ? data : null;
+  }
+
   /** Decoded true-value chunk or undefined. Never fetches. */
   peekRaw(lod, row, col, t) {
     return this.#cache.decoded(chunkKey(lod, row, col, t));
@@ -605,7 +633,18 @@ export class ChronoStore {
    * With a `signal`, aborting rejects this call with an AbortError, and the network request is
    * cancelled once no caller wants it any more (a caller without a signal keeps it alive).
    */
-  async getRaw(lod, row, col, t, { signal } = {}) {
+  async getRaw(lod, row, col, t, options = {}) {
+    const data = await this.#readRaw(lod, row, col, t, options);
+    return data?.unpack ? data.unpack() : data;
+  }
+
+  /** Load a true-value chunk into the cache without materializing a CPU array.
+   * Uses the same demand priority, cancellation and shared fetches as getRaw(). */
+  async ensureRaw(lod, row, col, t, options = {}) {
+    await this.#readRaw(lod, row, col, t, options);
+  }
+
+  async #readRaw(lod, row, col, t, { signal } = {}) {
     if (this.#closeController.signal.aborted) throw new Error('ChronoStore is closed');
     const level = this.level(lod);
     this.#checkCell(level, row, col);
@@ -614,7 +653,7 @@ export class ChronoStore {
     }
     const key = chunkKey(lod, row, col, t);
     const counters = this.#counters.cache;
-    const decoded = this.#cache.decoded(key);
+    const decoded = this.#cache.resident(key);
     if (decoded) {
       counters.hits++;
       return decoded;
@@ -633,7 +672,7 @@ export class ChronoStore {
     }
     const data = await this.#subscribe(entry, signal);
     // A prefetch that joined above kept only compressed bytes: decode them now.
-    return data ?? this.getRaw(lod, row, col, t, { signal });
+    return data ?? this.#readRaw(lod, row, col, t, { signal });
   }
 
   /**
@@ -661,6 +700,14 @@ export class ChronoStore {
    */
   samplePixel(lod, row, col, t, x, y) {
     const level = this.level(lod);
+    const packed = this.peekCompact(lod, row, col, t);
+    if (packed) {
+      const values = new Uint16Array(level.nBand);
+      const offset = y * level.chunkWidth + x;
+      const plane = level.chunkHeight * level.chunkWidth;
+      for (let b = 0; b < level.nBand; b++) values[b] = compactUint16At(packed, b * plane + offset);
+      return values;
+    }
     const data = this.peekRaw(lod, row, col, t);
     return data ? samplePixelFrom(data, level, x, y) : null;
   }
@@ -709,13 +756,26 @@ export class ChronoStore {
     return this.hasMask ? this.#peekAux('mask', lod, row, col, t) : null;
   }
 
+  /** Whether a validity mask is available in either memory tier. Unlike peekMask,
+   * readiness scans neither materialize arrays nor change cache eviction order. */
+  hasCachedMask(lod, row, col, t) {
+    return this.#auxCache.has(this.#auxKey('mask', lod, row, col, t));
+  }
+
   peekCoverage(lod, row, col, t) {
     return this.hasCoverage ? this.#peekAux('coverage', lod, row, col, t) : null;
   }
 
-  /** Whether `timesteps` timesteps (default: the whole axis) of `cellCount` cells at `lod` fit the window budget of the decoded cache. */
+  /** Whether the data fits decoded memory and validity masks fit the compact backing window.
+   * Binary masks use their upper bound; observed nonbinary masks raise that bound to their exact raw size. */
   loopFits(lod, cellCount, timesteps = this.level(lod).nTime) {
-    return cellCount * timesteps * this.level(lod).chunkBytes <= this.maxCacheBytes * WINDOW_BUDGET_FRACTION;
+    const level = this.level(lod);
+    const dataFits = cellCount * timesteps * level.chunkBytes * this.#compactRatio <= this.maxCacheBytes * WINDOW_BUDGET_FRACTION;
+    return dataFits && (!this.hasMask || cellCount * timesteps * this.#maskPackedBytes(level) <= this.#auxCache.compressedLimit * WINDOW_BUDGET_FRACTION);
+  }
+
+  #maskPackedBytes(level) {
+    return 1 + Math.ceil(level.chunkHeight * level.chunkWidth * this.#maskPackedRatio);
   }
 
   /**
@@ -740,9 +800,9 @@ export class ChronoStore {
    * With `masks`, the validity mask of every chunk of the window is fetched alongside it (same priority, same
    * allowances; a mask is cached under its own budget and `peekMask` returns it once it is in). `onChunk` fires when
    * the chunk and its mask are both loaded.
-   *
    * `maxSteps` plans at most that many timesteps, nearest first, whatever the horizon or the cache would allow: a caller that
-   * knows how far ahead anything will be shown (a movie on a slow link) asks for no more. `ambient` marks a job that is not
+   * knows how far ahead anything will be shown (a movie on a slow link, or a movie whose rolling buffer holds fewer frames than
+   * the loop, where compressed-only lookahead would push the frames about to be shown out) asks for no more. `ambient` marks a job that is not
    * what the viewer is doing (the coarse loop that stays behind a frame): it does not count as a scrub or as playback, so it
    * neither ends the idle episode of the horizon prefetch nor gives it a new allowance. Without `concurrency` a job runs up
    * to 6 workers, but the speculative requests in flight over all jobs are held to what the measured link carries in about a
@@ -755,8 +815,9 @@ export class ChronoStore {
    * @param {{lod:number, cells:Array<[number, number]>, t:number, direction?:1|-1, behindFactor?:number, loop?:boolean, playing?:boolean,
    *   seek?:boolean, masks?:boolean, maxSteps?:number, ambient?:boolean, concurrency?:number, signal?:AbortSignal, onChunk?:(lod,row,col,t)=>void}} job
    */
-  async prefetch({ lod, cells, t, direction = 1, behindFactor = 2, loop = false, playing = false, seek = false, masks = false, maxSteps, ambient = false, concurrency, signal, onChunk }) {
+  async prefetch({ lod, cells, t, direction = 1, behindFactor = 2, loop = false, playing = false, seek = false, masks = false, maxSteps = Infinity, ambient = false, concurrency, signal, onChunk }) {
     if (this.#closeController.signal.aborted) throw new Error('ChronoStore is closed');
+    if (maxSteps !== Infinity && (!Number.isInteger(maxSteps) || maxSteps < 1)) throw new RangeError('maxSteps must be an integer >= 1');
     signal = signal ? AbortSignal.any([signal, this.#closeController.signal]) : this.#closeController.signal;
     const level = this.level(lod);
     const wholeAxis = playing || loop;
@@ -765,7 +826,7 @@ export class ChronoStore {
     if (seek) this.#cancelSpeculative();
     const targets = new Set([t]);
     const horizon = wholeAxis ? null : this.#policy.horizonSteps;
-    const queue = this.#windowPlan(level, cells, t, { direction, behindFactor, loop }, horizon, maxSteps).map(([row, col, ct]) => ({ row, col, t: ct, free: seek && targets.has(ct) }));
+    const queue = this.#windowPlan(level, cells, t, { direction, behindFactor, loop }, horizon, withMasks, maxSteps).map(([row, col, ct]) => ({ row, col, t: ct, free: seek && targets.has(ct) }));
     for (const { row, col, t: ct } of queue) {
       const running = this.#liveEntry(chunkKey(lod, row, col, ct));
       if (!running) continue;
@@ -923,7 +984,8 @@ export class ChronoStore {
     const key = this.#auxKey('mask', lod, row, col, t);
     const level = this.levels[lod];
     const meta = { kind: 'mask', lod, row, col, t };
-    if (this.#auxCache.has(key) || this.#inflight.has(key) || !this.#auxCache.canHoldDecoded(meta, level.chunkHeight * level.chunkWidth)) return null;
+    if (this.#auxCache.has(key) || this.#inflight.has(key)) return null;
+    if (!this.#auxCache.canHoldDecoded(meta, level.chunkHeight * level.chunkWidth) && !this.#auxCache.canHoldCompressed(meta, this.#maskPackedBytes(level))) return null;
     return this.#start(key, meta, { background: true, owner: owner ?? true });
   }
 
@@ -977,15 +1039,20 @@ export class ChronoStore {
     this.#activity.idleSpent = Math.max(0, this.#activity.idleSpent - bytes);
   }
 
-  /** Chunks [row, col, t] to prefetch, in fetch order; with a `horizon`, only timesteps within that many of t, and with `maxSteps`, only that many timesteps. */
-  #windowPlan(level, cells, t, order, horizon, maxSteps = Infinity) {
-    const decodedChunks = this.#cache.decodedLimit / level.chunkBytes;
+  /**
+   * Chunks [row, col, t] to prefetch, in fetch order; with a `horizon`, only timesteps within that many of t, and with `maxSteps`,
+   * only that many timesteps. Capacity is counted in what the cache holds: packed chunks (see enableCompactCache) hold no
+   * compressed copy, and with masks the plan stops where the packed mask tier would overflow.
+   */
+  #windowPlan(level, cells, t, order, horizon, withMasks, maxSteps = Infinity) {
+    const decodedChunks = this.#cache.decodedLimit / (level.chunkBytes * this.#compactRatio);
     const wireBytes = this.chunkWireBytes(level.lod);
     const compressedChunks = this.#cache.compressedLimit / wireBytes;
     // Decoded chunks plus chunks held only compressed (copies of decoded chunks give way when the cache fills), at most
     // as many as the joint cap holds when every one of them is compressed.
-    const capacity = this.#cache.compressedLimit > 0 ? Math.min(decodedChunks + compressedChunks, this.#cache.maxTotal / wireBytes) : decodedChunks;
-    const perCellLimit = Math.max(1, Math.floor((capacity * WINDOW_BUDGET_FRACTION) / Math.max(1, cells.length)));
+    const capacity = this.#compact ? decodedChunks : this.#cache.compressedLimit > 0 ? Math.min(decodedChunks + compressedChunks, this.#cache.maxTotal / wireBytes) : decodedChunks;
+    const retainedCapacity = withMasks ? Math.min(capacity, this.#auxCache.compressedLimit / this.#maskPackedBytes(level)) : capacity;
+    const perCellLimit = Math.max(1, Math.floor((retainedCapacity * WINDOW_BUDGET_FRACTION) / Math.max(1, cells.length)));
     const timesteps = windowOrder(level.nTime, t, order).filter((tt) => horizon === null || Math.abs(tt - t) <= horizon);
     const chosen = timesteps.slice(0, Math.min(perCellLimit, maxSteps));
     return chosen.flatMap((ct) => cells.map(([row, col]) => [row, col, ct]));
@@ -993,7 +1060,8 @@ export class ChronoStore {
 
   /** Whether a background chunk of this cell would be kept by either cache tier. */
   #canPlace(meta, decodedSize) {
-    return this.#cache.canHoldDecoded(meta, decodedSize) || this.#cache.canHoldCompressed(meta, decodedSize * this.#ratioOf(meta.lod));
+    const decodedFits = this.#cache.canHoldDecoded(meta, decodedSize * this.#compactRatio);
+    return decodedFits || (!this.#compact && this.#cache.canHoldCompressed(meta, decodedSize * this.#ratioOf(meta.lod)));
   }
 
   /** Wait until `bytes` of speculative traffic may start, then spend them. */
@@ -1027,7 +1095,15 @@ export class ChronoStore {
   }
 
   #peekAux(kind, lod, row, col, t) {
-    return this.#auxCache.decoded(this.#auxKey(kind, lod, row, col, t));
+    const key = this.#auxKey(kind, lod, row, col, t);
+    const data = this.#auxCache.decoded(key);
+    if (data) return data;
+    const entry = this.#auxCache.get(key);
+    if (!entry?.compressed) return undefined;
+    const level = this.level(lod);
+    const restored = unpackAux(entry.compressed, level.chunkHeight * level.chunkWidth);
+    this.#auxCache.insert(key, { kind, lod, row, col, t }, { data: restored });
+    return restored;
   }
 
   async #getAux(kind, lod, row, col, t, signal) {
@@ -1146,7 +1222,7 @@ export class ChronoStore {
     if (bytes === undefined) {
       data = new TypedArray(size / DTYPES[storage.dtype].bytes).fill(storage.fillValue);
     } else {
-      const keepCompressed = kind === 'data' && this.#cache.maxCompressed > 0;
+      const keepCompressed = kind === 'data' && !this.#compact && this.#cache.maxCompressed > 0;
       if (!held) {
         entry.fetchedBytes = bytes.length;
         if (kind === 'data') this.#noteCompression(lod, bytes.length / size);
@@ -1155,18 +1231,22 @@ export class ChronoStore {
       // The pool takes ownership of what it decodes, so a copy goes in when the bytes are also being kept.
       retained = held ?? (keepCompressed ? (bytes.byteOffset === 0 && bytes.buffer.byteLength === bytes.byteLength ? bytes : bytes.slice()) : null);
       const decodeNow = !entry.background || kind !== 'data' || !keepCompressed || this.#cache.canHoldDecoded(meta, size);
-      if (decodeNow) data = await this.#decoder.decode(retained ? retained.slice() : bytes, entry.priority, signal, spec);
+      if (decodeNow) data = await this.#decoder.decode(retained ? retained.slice() : bytes, entry.priority, signal, spec, { compact: kind === 'data' && this.#compact });
     }
     const decodedAt = performance.now();
     if (signal.aborted) throw abortError();
     this.#counters.loads.count++;
     if (!held) this.#counters.loads.fetchMs += fetchedAt - requestedAt;
     this.#counters.loads.decodeMs += decodedAt - fetchedAt;
-    this.probe?.({ type: 'chunk', key, t: meta.t, background: entry.background, requestedAt, fetchedAt, decodedAt, bytes: held ? 0 : (bytes?.length ?? 0), decoded: data !== null });
+    this.probe?.({ type: 'chunk', key, t: meta.t, background: entry.background, requestedAt, fetchedAt, decodedAt, bytes: held ? 0 : (entry.fetchedBytes ?? 0), decoded: data !== null });
     if (kind === 'data') {
-      this.#cache.insert(key, { kind, lod, row: meta.row, col: meta.col, t: meta.t }, { data, compressed: held ? null : retained }, { background: entry.background && entry.priority.value !== 0 });
+      const packed = data?.words ? data : this.#compact && bytes === undefined && data ? packUint16(data) : null;
+      if (this.#compact && data) this.#compactRatio = 0.95 * this.#compactRatio + 0.05 * ((packed?.byteLength ?? data.byteLength) / size);
+      this.#cache.insert(key, { kind, lod, row: meta.row, col: meta.col, t: meta.t }, { data: packed ?? data, compressed: this.#compact ? null : held ? null : retained }, { background: entry.background && entry.priority.value !== 0 });
     } else {
-      this.#auxCache.insert(key, { kind, lod, row: meta.row, col: meta.col, t: meta.t }, { data }, { background: entry.background && entry.priority.value !== 0 });
+      const packed = packAux(data);
+      if (kind === 'mask') this.#maskPackedRatio = Math.max(this.#maskPackedRatio, (packed.length - 1) / data.length);
+      this.#auxCache.insert(key, { kind, lod, row: meta.row, col: meta.col, t: meta.t }, { data, compressed: packed }, { background: entry.background && entry.priority.value !== 0 });
     }
     return data ?? undefined;
   }

@@ -1,0 +1,187 @@
+{
+  "at": "2026-10-19T01:30:20.301Z",
+  "sources": {
+    "js/chronozarr/decoder.js": "46ab9d88adb4444e354c092d4f9749c6409291cea2a1a37b2ec43c463639a4e9",
+    "js/chronozarr/aux-cache.js": "eda18bb75575d5dd2e6575bb7736b3e9c917320b0d02a01c43a64b198d827408",
+    "js/demo/viewer.js": "70124d5be6a905c852a938269e25d0db2cbabddb537899982675b52d84bb0980",
+    "js/demo/bench.js": "d0d704627361dbede0373fc7c63b3d5eeda38d2b64d9182d7b894f83cdbab4c8"
+  },
+  "sensors": {
+    "sentinel1": {
+      "store": "http://127.0.0.1:51948/data/stores/ucayali_santa_maria/s1-rtc-monthly-v1",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.0.0 Safari/537.36",
+      "coldOpenConsolidated": [
+        {
+          "run": 0,
+          "openMs": 1.6,
+          "firstPaintMs": 31.8,
+          "httpRequests": 19,
+          "wireBytes": 5798425,
+          "resourceEntries": 21
+        }
+      ],
+      "coldOpenPerArrayMetadata": [
+        {
+          "run": 0,
+          "openMs": 4,
+          "firstPaintMs": 27.2,
+          "httpRequests": 25,
+          "wireBytes": 5778172,
+          "resourceEntries": 25
+        }
+      ],
+      "prefetch": {
+        "fetched": 106,
+        "skipped": 9,
+        "budgetReached": true,
+        "errors": 0
+      },
+      "cache": {
+        "entries": 115,
+        "bytes": 120586240,
+        "compressedEntries": 115,
+        "compressedBytes": 71679721,
+        "gpuSlots": 307
+      },
+      "warmSwitchStepping": {
+        "n": 4,
+        "median": 3.9,
+        "p95": 4,
+        "max": 4,
+        "incomplete": 0,
+        "networkRequests": 0,
+        "wireBytes": 0,
+        "uploadsPerSwitch": 0,
+        "cacheMisses": 0
+      },
+      "warmSwitchJumping": {
+        "n": 4,
+        "median": 1.3,
+        "p95": 2.6,
+        "max": 2.6,
+        "incomplete": 0,
+        "networkRequests": 0,
+        "wireBytes": 0,
+        "uploadsPerSwitch": 0,
+        "cacheMisses": 0
+      },
+      "warmSwitchUploadFromCache": {
+        "n": 4,
+        "median": 4.4,
+        "p95": 6.5,
+        "max": 6.5,
+        "incomplete": 2,
+        "networkRequests": 12,
+        "wireBytes": 0,
+        "uploadsPerSwitch": 18,
+        "cacheMisses": 18
+      },
+      "productSwitch": {
+        "band": 3.8,
+        "dual_pol": 5.3
+      },
+      "decodePerChunk": {
+        "chunkRawBytes": 1048576,
+        "chunk": {
+          "n": 80,
+          "median": 2.4,
+          "p95": 2.6,
+          "max": 3.2
+        },
+        "parallel": {
+          "chunks": 8,
+          "mainThreadMs": 21.2,
+          "workerPoolMs": 3.7
+        }
+      }
+    },
+    "nisar": {
+      "store": "http://127.0.0.1:51948/data/stores/colorado_yuma/nisar-gcov-v2",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.0.0 Safari/537.36",
+      "coldOpenConsolidated": [
+        {
+          "run": 0,
+          "openMs": 1.6,
+          "firstPaintMs": 280.2,
+          "httpRequests": 145,
+          "wireBytes": 55005477,
+          "resourceEntries": 145
+        }
+      ],
+      "coldOpenPerArrayMetadata": [
+        {
+          "run": 0,
+          "openMs": 4.1,
+          "firstPaintMs": 276.6,
+          "httpRequests": 155,
+          "wireBytes": 54973106,
+          "resourceEntries": 157
+        }
+      ],
+      "prefetch": {
+        "fetched": 88,
+        "skipped": 72,
+        "budgetReached": true,
+        "errors": 0
+      },
+      "cache": {
+        "entries": 160,
+        "bytes": 117575568,
+        "compressedEntries": 0,
+        "compressedBytes": 0,
+        "gpuSlots": 299
+      },
+      "warmSwitchStepping": {
+        "n": 4,
+        "median": 4.6,
+        "p95": 5.6,
+        "max": 5.6,
+        "incomplete": 3,
+        "networkRequests": 7,
+        "wireBytes": 0,
+        "uploadsPerSwitch": 0,
+        "cacheMisses": 156
+      },
+      "warmSwitchJumping": {
+        "n": 4,
+        "median": 5.2,
+        "p95": 5.3,
+        "max": 5.3,
+        "incomplete": 4,
+        "networkRequests": 0,
+        "wireBytes": 0,
+        "uploadsPerSwitch": 0,
+        "cacheMisses": 288
+      },
+      "warmSwitchUploadFromCache": {
+        "n": 4,
+        "median": 17.1,
+        "p95": 17.7,
+        "max": 17.7,
+        "incomplete": 4,
+        "networkRequests": 0,
+        "wireBytes": 0,
+        "uploadsPerSwitch": 144,
+        "cacheMisses": 288
+      },
+      "productSwitch": {
+        "band": 13.1,
+        "dual_pol": 27.3
+      },
+      "decodePerChunk": {
+        "chunkRawBytes": 1048576,
+        "chunk": {
+          "n": 80,
+          "median": 2.5,
+          "p95": 2.7,
+          "max": 2.8
+        },
+        "parallel": {
+          "chunks": 8,
+          "mainThreadMs": 19.6,
+          "workerPoolMs": 8.4
+        }
+      }
+    }
+  }
+}

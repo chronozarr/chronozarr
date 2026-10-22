@@ -51,10 +51,11 @@ import re
 import sys
 import time
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime, timedelta
+from itertools import chain
 from pathlib import Path
 
 import numpy as np
@@ -436,13 +437,18 @@ def stored_db(power: np.ndarray, valid: np.ndarray) -> np.ndarray:
     return stored
 
 
-def month_mean(stacks: list[tuple[np.ndarray, np.ndarray]]) -> tuple[np.ndarray, ...]:
+def month_mean(stacks: Iterable[tuple[np.ndarray, np.ndarray]]) -> tuple[np.ndarray, ...]:
     """Mean VV and VH power over the acquisitions valid at each pixel, and the validity."""
-    shape = stacks[0][0].shape
+    stacks = iter(stacks)
+    first = next(stacks, None)
+    if first is None:
+        raise ValueError("monthly mean needs at least one acquisition")
+    shape = first[0].shape
     total_vv = np.zeros(shape, dtype=np.float64)
     total_vh = np.zeros(shape, dtype=np.float64)
     count = np.zeros(shape, dtype=np.int32)
-    for vv, vh in stacks:
+    # Consume one acquisition at a time; preserve float64 accumulation and input order.
+    for vv, vh in chain((first,), stacks):
         ok = np.isfinite(vv) & np.isfinite(vh)
         total_vv[ok] += vv[ok]
         total_vh[ok] += vh[ok]
@@ -470,13 +476,15 @@ def composite_months(records: list[dict], months_dir: Path) -> list[dict]:
         if record["valid_fraction"] > 0:
             by_month[record["start"][:7]].append(record)
     months_dir.mkdir(parents=True, exist_ok=True)
+
+    def stacks(month_records):
+        for record in month_records:
+            with np.load(record["npz"]) as z:
+                yield z["vv"], z["vh"]
+
     summaries = []
     for month in sorted(by_month):
-        stacks = []
-        for record in by_month[month]:
-            with np.load(record["npz"]) as z:
-                stacks.append((z["vv"], z["vh"]))
-        vv, vh, valid = month_mean(stacks)
+        vv, vh, valid = month_mean(stacks(by_month[month]))
         path = months_dir / f"{month}.npz"
         np.savez(path, VV=stored_db(vv, valid), VH=stored_db(vh, valid), mask=valid)
         summary = {

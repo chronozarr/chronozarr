@@ -78,11 +78,19 @@ export class ChunkCache {
 
   /** The decoded array for a key (counts as a use), or undefined. */
   decoded(key) {
+    const data = this.resident(key);
+    return data?.unpack ? data.unpack() : data;
+  }
+
+  /** Resident backing without expanding a packed chunk; counts as a use. */
+  resident(key) {
     const entry = this.#entries.get(key);
     if (!entry?.data) return undefined;
     entry.used = ++this.#clock;
     return entry.data;
   }
+
+  hasDecoded(key) { return !!this.#entries.get(key)?.data; }
 
   /** Keep these keys out of eviction until unpin(): a caller that needs them all resident at once. */
   pin(keys) {
