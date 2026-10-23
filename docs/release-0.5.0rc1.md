@@ -22,6 +22,8 @@ The JavaScript reader assembles supported declared time, band and spatial chunk 
 
 CRS identity follows WKT2, then PROJJSON, then an authority code. An equal lower-priority code cannot hide differing definitions. The MapLibre adapter can use supported non-EPSG projection definitions through its lazy proj4 build; unsupported projections and datum-grid requirements remain limits described in the [layer guide](../js/maplibre/README.md#projections).
 
+Python's `link --lonlat` uses pyproj from the `geo` extra to interpret a stored WKT2/PROJJSON definition or prove it equivalent to its code. This explicitly narrows the parser-free shortcut to code-only `EPSG:4326` stores: redundant WKT2 on a geographic store still needs pyproj, and a conflicting definition never inherits the shortcut from a lower-priority code. `--xy` and links without a centre continue to work without pyproj. Refusals name the CRS briefly and explain the missing extra.
+
 | Store | Candidate behavior | Released 0.4.1 behavior |
 |---|---|---|
 | EPSG CRS, spec `0.3.0` | Reads and writes this version | Reads the original supported layouts |
