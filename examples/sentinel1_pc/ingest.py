@@ -103,6 +103,16 @@ class Grid:
         size = PIXEL * LOOKS
         return [size, 0.0, self.left, 0.0, -size, self.top]
 
+    @property
+    def spatial_identity(self) -> dict:
+        """The cache's grid identity, with the same types before and after JSON storage."""
+        return {
+            "crs": f"EPSG:{self.epsg}",
+            "transform": self.transform,
+            "width": self.width,
+            "height": self.height,
+        }
+
 
 @dataclass(frozen=True)
 class Slice:
@@ -369,6 +379,7 @@ def extract(acquisition: Acquisition, grid: Grid, out: Path) -> dict:
         "platform": acquisition.platform,
         "absolute_orbit": acquisition.absolute_orbit,
         "slices": [s.id for s in acquisition.slices],
+        "grid": grid.spatial_identity,
         "valid_fraction": float(valid.mean()),
         "read_seconds": round(time.perf_counter() - t0, 1),
     }
@@ -385,11 +396,17 @@ def sidecar_of(npz: Path) -> Path:
     return npz.with_suffix(".json")
 
 
-def cached_record(acquisition: Acquisition, path: Path) -> dict | None:
-    """The record of a cached acquisition read from the same slices, or None."""
-    if not (path.is_file() and sidecar_of(path).is_file()):
+def cached_record(acquisition: Acquisition, grid: Grid, path: Path) -> dict | None:
+    """The record of an acquisition on this grid with the same slices, or None if uncached."""
+    if not path.is_file():
         return None
-    record = json.loads(sidecar_of(path).read_text())
+    sidecar = sidecar_of(path)
+    record = json.loads(sidecar.read_text()) if sidecar.is_file() else {}
+    if record.get("grid") != grid.spatial_identity:
+        raise SystemExit(
+            f"{path}: cached acquisition has missing or different spatial identity; "
+            "use another --name or --out-dir for a new cache"
+        )
     if record["slices"] != [s.id for s in acquisition.slices]:
         return None
     return {**record, "npz": str(path), "cached": True}
@@ -402,7 +419,7 @@ def extract_all(
     pending = []
     for acquisition in acquisitions:
         path = cache / f"{acquisition.key}.npz"
-        record = cached_record(acquisition, path)
+        record = cached_record(acquisition, grid, path)
         if record is None:
             pending.append((acquisition, path))
         else:

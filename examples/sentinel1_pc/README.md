@@ -20,6 +20,12 @@ Add `--dry-run` to list the acquisitions and the empty months and write nothing.
 | `data/stores/ucayali_santa_maria/s1-rtc-monthly-v1.scenes.json` | the manifest: the query, the orbit, the grid, every acquisition (slices, platform, valid fraction, dB percentiles) and every month (its acquisitions, valid fraction, dB percentiles). The public store's manifest is `examples/sentinel1_pc/ucayali_santa_maria.scenes.json` |
 | `data/cache/sentinel1/ucayali_santa_maria/<slice id>.npz` | the 20 m VV and VH power of each acquisition with its record beside it; a rerun reads these instead of the scenes |
 
+Each cache sidecar records the grid's CRS, transform and dimensions. A rerun reuses an
+acquisition only on exactly that grid and with the same slices. An existing cache without
+this spatial identity, or from another box, stops the run before any extraction or cache
+overwrite; use another `--name` or `--out-dir` for a new cache. Changing only `--store`
+keeps the same acquisition cache.
+
 Then check it, share it and look at it:
 
 ```sh
