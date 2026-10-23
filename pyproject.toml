@@ -113,7 +113,8 @@ build-backend = "hatchling.build"
 packages = ["src/chronozarr"]
 
 [tool.hatch.build.targets.sdist]
-include = [
+# Select exact root paths rather than matching dependency README, LICENSE and tests trees.
+only-include = [
     "src/chronozarr", "tests", "spec", "README.md", "LICENSE", "pyproject.toml",
     "scripts/check_architecture.py", "scripts/check_release.py", ".sentrux/rules.toml",
 ]

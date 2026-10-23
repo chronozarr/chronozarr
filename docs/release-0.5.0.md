@@ -72,7 +72,7 @@ The documentation site uses patched TOML, Vite, DOMPurify and KaTeX dependencies
 
 ## Validation and publication status
 
-Release preparation starts from merged commit `63610f8` (PR #141). The Python and JavaScript runtime source is the tested `0.5.0rc1` candidate promoted to version 0.5.0. Release metadata, current installation guides, site navigation and deployment tooling are updated for the stable version. Unmerged SAR playback-cache work in PR #140 is outside this release.
+Release preparation starts from merged commit `63610f8` (PR #141). The Python and JavaScript runtime source is the tested `0.5.0rc1` candidate promoted to version 0.5.0. Release metadata, current installation guides, site navigation and deployment tooling are updated for the stable version. Source archives select explicit project paths so local dependency folders cannot contribute their README, license or test files. Unmerged SAR playback-cache work in PR #140 is outside this release.
 
 Before promotion, the candidate passed Python 3.11 and 3.13 installed-wheel checks, JavaScript and browser checks, package installation and offline viewer checks, notebook checks and paired speed gates. The [candidate PR](https://github.com/chronozarr/chronozarr/pull/141) records the exact validation and its limits. Earlier results in the [measurement log](evidence.md) retain their dated sources and environments.
 
