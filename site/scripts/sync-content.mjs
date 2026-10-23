@@ -39,7 +39,8 @@ const sources = {
   'docs/how-it-works.md': { route: 'how-it-works', description: 'How a chronozarr store is laid out, how the browser reads it, and how to read it without chronozarr.' },
   'docs/performance.md': { route: 'performance', description: 'Measured viewer speed, value correctness, Sentinel-2 ingest speed and memory, with methods, hardware and limits.' },
   'docs/evidence.md': { route: 'reference/evidence', title: 'Measurement log', description: 'Dated measurements, tested reader versions and observations behind the chronozarr documentation.' },
-  'docs/release-0.5.0.md': { route: 'reference/release-0.5.0', description: 'chronozarr 0.5.0: conversion, coordinate systems, viewer distribution, sixteen review repairs and store compatibility.' },
+  'docs/release-0.5.1.md': { route: 'reference/release-0.5.1', description: 'chronozarr 0.5.1: conversion, coordinate systems, viewer distribution, sixteen review repairs and store compatibility.' },
+  'docs/release-0.5.1-review.md': { route: 'reference/release-0.5.1-review', description: 'The 0.5.1 documentation and examples review: coverage, corrected findings, validation and limits.' },
   'docs/release-0.5.0rc1.md': { route: 'reference/release-0.5.0rc1', description: 'The unpublished local 0.5.0rc1 candidate: changes since 0.4.1, sixteen review repairs and store compatibility.' },
   'docs/troubleshooting.md': { route: 'troubleshooting', description: 'Fixes for common chronozarr problems: installation, conversion, the viewer, preview, share and publish.' },
   'docs/format-comparison.md': { route: 'guides/format-comparison', description: 'chronozarr compared with PMTiles, Mapbox raster-array, zarr-layer, COG with TiTiler, titiler-multidim and the GeoZarr readers.' },
@@ -66,9 +67,9 @@ const llmsSections = [
   ]],
   ['Reference', [
     'docs/cli.md', 'docs/python.md', 'js/README.md', 'js/maplibre/README.md', 'spec/CHRONOZARR.md', 'docs/how-it-works.md',
-    'docs/performance.md', 'docs/troubleshooting.md', 'docs/release-0.5.0.md',
+    'docs/performance.md', 'docs/troubleshooting.md', 'docs/release-0.5.1.md',
   ]],
-  ['Optional', ['docs/evidence.md', 'docs/format-comparison.md', 'docs/release-0.5.0rc1.md']],
+  ['Optional', ['docs/evidence.md', 'docs/format-comparison.md', 'docs/release-0.5.1-review.md', 'docs/release-0.5.0rc1.md']],
 ];
 const listed = llmsSections.flatMap(([, entries]) => entries);
 const unlisted = Object.keys(sources).filter((source) => !listed.includes(source));

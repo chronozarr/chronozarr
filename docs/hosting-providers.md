@@ -197,7 +197,7 @@ Create the rule in the dashboard under Caching, then Cache Rules:
 
 The upload script sets `Cache-Control` on every object (the [cache classes](append.md#cache-classes)). The rule follows those headers. Chunks stay cached for a year, and `zarr.json` expires after 300 seconds, so an append shows up within five minutes.
 
-Step 3 also keeps `404` responses out of the cache, so a key that an append creates later is not remembered as absent. chronozarr writes every chunk, so a store it wrote has no absent chunk. In a store written by another tool or by chronozarr before 0.5.0, an absent chunk means fill, and every read of it reaches the bucket.
+Step 3 also keeps `404` responses out of the cache, so a key that an append creates later is not remembered as absent. chronozarr writes every chunk, so a store it wrote has no absent chunk. In a store written by another tool or by chronozarr releases up to 0.4.1, an absent chunk means fill, and every read of it reaches the bucket.
 
 Step 4 matters. The zone default raises any shorter browser lifetime to four hours, so `zarr.json` would reach browsers with `max-age=14400`.
 

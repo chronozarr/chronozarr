@@ -1,6 +1,6 @@
 # Explore the viewer
 
-**Package version — 0.5.0.** This guide describes the viewer included in the npm package and built from the same source for chronozarr.org. See [self-host the viewer](viewer-distribution.md) to copy it to your own host.
+**Package version — 0.5.1.** This guide describes the viewer included in the npm package and built from the same source for chronozarr.org. See [self-host the viewer](viewer-distribution.md) to copy it to your own host.
 
 [The live demo](https://chronozarr.org/demo/) loads 117 monthly Sentinel-2 composites of the Ucayali River in Peru, November 2015 to February 2026, from a public storage bucket. Package publication and deployment of the hosted viewer are separate steps. Installing the Python package does not update the hosted demo.
 
@@ -25,13 +25,15 @@ Any other address starts where it says. A link with a timestep (`t`) opens at th
 | Change the product | Choose it in the product list, or press 1 to 9 |
 | Change the display range of one band | Choose Single band, then set the minimum and maximum. Auto fits the range to the pixels on the screen |
 | Color one band | Choose Single band, then pick Viridis, Magma or Turbo in the colormap list. The bar between the minimum and maximum shows the colors |
-| Show where no scene was observed | Click Gaps. It hatches the pixels whose value was carried over from an earlier month. It needs a store with a coverage plane |
+| Show zero coverage | Click Gaps. It hatches pixels whose coverage is 0. It needs a store with a coverage plane |
 | Copy a link to this view | Click Copy link |
 | Open another store | Paste its URL in the store field and click Open |
 | Save the loop as a video | Click Export, choose MP4, WebM or GIF and the range, click Export, then click the Download link. Firefox records WebM and GIF only. Embedded viewers have Export too |
 | Show load and decode statistics | Press D |
 
 Playback buffers two seconds of frames before it starts. On a link that cannot carry the speed you chose, it plays at the speed the link can feed instead of pausing again and again. It measures the link as the store loads, and counts only the frames ahead that are not in memory yet. The speed label then shows both speeds (`4 /s → 0.7`) and a hint says why (`0.7 step/s: link too slow for 4`). Playback speeds up over frames that are already loaded, and returns to your speed once the loop is in memory.
+
+At level 0, zero coverage means that no observation was recorded for that pixel. Overview coverage is a rounded mean and can become zero even when part of the block was observed. Zoom to native resolution before interpreting a hatch as an observation gap.
 
 ## Products
 

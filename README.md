@@ -10,18 +10,18 @@ chronozarr turns a georeferenced raster time series into an interactive dataset 
 
 ## Quickstart
 
-This quickstart targets Python and npm **0.5.0**. The [release notes](https://chronozarr.org/reference/release-0.5.0) cover the new conversion options, custom coordinate systems, viewer bundle and compatibility with existing stores.
+This quickstart targets Python and npm **0.5.1**. The [release notes](https://chronozarr.org/reference/release-0.5.1) cover the new conversion options, custom coordinate systems, viewer bundle and compatibility with existing stores.
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then the `chronozarr` command:
 
 ```bash
-uv tool install --python 3.13 'chronozarr[geo]==0.5.0'
+uv tool install --python 3.13 'chronozarr[geo]==0.5.1'
 ```
 
 chronozarr supports Python 3.11 and newer. `--python 3.13` makes uv use 3.13 even when an older Python comes first on your computer. With pip, in an environment with Python 3.11 or newer:
 
 ```bash
-python -m pip install 'chronozarr[geo]==0.5.0'
+python -m pip install 'chronozarr[geo]==0.5.1'
 ```
 
 Use a folder with one GeoTIFF per date, with the date in each file name, such as `ndvi_2024-01.tif`. All files share one grid. To try it without your own files, export twelve months of the public demo as GeoTIFFs:
@@ -65,14 +65,14 @@ A store is a Zarr v3 group, so xarray, zarr-python and GDAL 3.13 also read it wi
 ## JavaScript
 
 ```bash
-npm install chronozarr@0.5.0
+npm install chronozarr@0.5.1
 ```
 
 The npm package has a DOM-free reader, a MapLibre layer, a GeoLibre plugin and the production viewer for [self-hosting](https://chronozarr.org/guides/viewer-distribution). See the [JavaScript reader](https://chronozarr.org/reference/javascript).
 
 ## Versions
 
-Python and npm package **0.5.0** read both draft store formats: **v0.3.0** for CRSs with an EPSG code and **v0.4.0** for other CRSs. Package versions and store specification versions are independent. Existing v0.3 stores need no conversion. Readers from package 0.4.1 and earlier cannot open v0.4 stores; upgrade the reader to 0.5.0. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. See the [0.5.0 release notes](https://chronozarr.org/reference/release-0.5.0).
+Python and npm package **0.5.1** read both draft store formats: **v0.3.0** for CRSs with an EPSG code and **v0.4.0** for other CRSs. Package versions and store specification versions are independent. Existing v0.3 stores need no conversion. Readers from package 0.4.1 and earlier cannot open v0.4 stores; upgrade the reader to 0.5.1. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. See the [0.5.1 release notes](https://chronozarr.org/reference/release-0.5.1).
 
 ## Documentation
 

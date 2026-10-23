@@ -1,6 +1,6 @@
 # Self-host the viewer
 
-**Package version — 0.5.0.** The npm package contains the production viewer bundle. You can copy that bundle with `chronozarr-viewer`, or build the same viewer from a [source checkout](development.md).
+**Package version — 0.5.1.** The npm package contains the production viewer bundle. You can copy that bundle with `chronozarr-viewer`, or build the same viewer from a [source checkout](development.md).
 
 The viewer folder contains the page, one script for the viewer and reader, one for the decode worker, the codecs and their licenses. The viewer runs in the browser. The host only serves files. Node.js copies the files once and is not needed on the host.
 
@@ -9,7 +9,7 @@ The viewer folder contains the page, one script for the viewer and reader, one f
 1. Install the npm package in a JavaScript project:
 
    ```sh
-   npm install chronozarr@0.5.0
+   npm install chronozarr@0.5.1
    ```
 
 2. Copy the viewer into a new folder, `published/`.
@@ -28,11 +28,10 @@ The viewer folder contains the page, one script for the viewer and reader, one f
 
 The folder works at a domain root or under a subpath. Sharded stores need a host that answers byte-range requests.
 
-To preview the folder on your machine, use a server that answers byte-range requests. Start it inside the folder:
+To preview the copied store and viewer on your machine, use chronozarr's local server. It handles bounded and suffix byte ranges:
 
 ```sh
-cd published
-uv run --with rangehttpserver python -m RangeHTTPServer 8000
+chronozarr preview published/store --viewer-dir published
 ```
 
 ## Preview a local store with the copied viewer

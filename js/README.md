@@ -1,6 +1,6 @@
 # chronozarr
 
-This page documents npm **0.5.0**, paired with Python **0.5.0**. It includes spec 0.4 CRS support, the relaxed reader contract, bandwidth-aware prefetching and the production viewer bundle. See the [release notes](../docs/release-0.5.0.md) and [source installation](../docs/development.md). Package installation and deployment of the hosted viewer are separate.
+This page documents npm **0.5.1**, paired with Python **0.5.1**. It includes spec 0.4 CRS support, the relaxed reader contract, bandwidth-aware prefetching and the production viewer bundle. See the [release notes](https://chronozarr.org/reference/release-0.5.1) and [source installation](https://chronozarr.org/guides/development). Package installation and deployment of the hosted viewer are separate.
 
 Browser and Node reader for [chronozarr](https://github.com/chronozarr/chronozarr) stores. The package also has a MapLibre GL JS custom layer that draws a store.
 
@@ -15,7 +15,7 @@ The viewer loads nothing from a third-party host at runtime and uses no web font
 ## Install
 
 ```bash
-npm install chronozarr@0.5.0
+npm install chronozarr@0.5.1
 ```
 
 ```js
@@ -45,13 +45,13 @@ Without a bundler, map the names in an import map. For a released installation, 
 </script>
 ```
 
-or use the pinned 0.5.0 reader from a CDN:
+or use the pinned 0.5.1 reader from a CDN:
 
 ```html
 <script type="importmap">
 { "imports": {
-  "chronozarr": "https://cdn.jsdelivr.net/npm/chronozarr@0.5.0/chronozarr/decoder.js",
-  "chronozarr/maplibre": "https://cdn.jsdelivr.net/npm/chronozarr@0.5.0/maplibre/layer.js"
+  "chronozarr": "https://cdn.jsdelivr.net/npm/chronozarr@0.5.1/chronozarr/decoder.js",
+  "chronozarr/maplibre": "https://cdn.jsdelivr.net/npm/chronozarr@0.5.1/maplibre/layer.js"
 } }
 </script>
 ```

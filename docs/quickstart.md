@@ -1,25 +1,25 @@
 # Quickstart
 
-**Package version — 0.5.0.** These commands use the same version as the converter, Python API and viewer guides. See the [release notes](release-0.5.0.md), or [install from source](development.md) for local development.
+**Package version — 0.5.1.** These commands use the same version as the converter, Python API and viewer guides. See the [release notes](release-0.5.1.md), or [install from source](development.md) for local development.
 
 This page takes a folder of dated GeoTIFFs to a link that a colleague can open, and to an interactive viewer on your computer. You need [uv](https://docs.astral.sh/uv/getting-started/installation/) and a web browser. You need no account, no cloud storage and no server.
 
 ## 1. Install
 
 ```bash
-uv tool install --python 3.13 'chronozarr[geo]==0.5.0'
+uv tool install --python 3.13 'chronozarr[geo]==0.5.1'
 chronozarr --version
 ```
 
-The first command puts the `chronozarr` command on your `PATH`. `--python 3.13` makes uv use Python 3.13 even when an older Python comes first on your computer. uv downloads Python 3.13 if it is not installed. The second command prints `chronozarr, version 0.5.0`. On macOS the first command after an install can take 10 to 25 seconds while the system checks the new files; later commands start in about a second.
+The first command puts the `chronozarr` command on your `PATH`. `--python 3.13` makes uv use Python 3.13 even when an older Python comes first on your computer. uv downloads Python 3.13 if it is not installed. The second command prints `chronozarr, version 0.5.1`. On macOS the first command after an install can take 10 to 25 seconds while the system checks the new files; later commands start in about a second.
 
 chronozarr supports Python 3.11 and newer; this page uses 3.13. The `geo` extra adds GeoTIFF support. NetCDF files need the `netcdf` extra as well; see the [NetCDF guide](convert.md#from-netcdf-or-zarr). To install with pip instead, use an environment with Python 3.11 or newer, such as a virtual environment or a conda environment:
 
 ```bash
-python -m pip install 'chronozarr[geo]==0.5.0'
+python -m pip install 'chronozarr[geo]==0.5.1'
 ```
 
-To use chronozarr from Python in a uv project, run `uv add 'chronozarr[geo]==0.5.0'` in the project. Then put `uv run` in front of each command on this page.
+To use chronozarr from Python in a uv project, run `uv add 'chronozarr[geo]==0.5.1'` in the project. Then put `uv run` in front of each command on this page.
 
 ## 2. Get a dated raster series
 
@@ -142,7 +142,7 @@ ds = xr.open_dataset("my_store", engine="chronozarr")
 ds["data"].sel(band="B08").isel(time=0, x=100, y=80).item()
 ```
 
-The dataset holds the values that you converted, with the scale applied. The `chronozarr` command from step 1 lives in its own environment, so install the same version where your notebook runs: `pip install chronozarr==0.5.0` or `uv add chronozarr==0.5.0`. See [Analyze a store in Python](analyze.md).
+The dataset holds the values that you converted, with the scale applied. The `chronozarr` command from step 1 lives in its own environment, so install the same version where your notebook runs: `pip install chronozarr==0.5.1` or `uv add chronozarr==0.5.1`. See [Analyze a store in Python](analyze.md).
 
 ## Next steps
 

@@ -237,7 +237,7 @@ For a private store, read [private.md](private.md) first. The host page can put 
 
 A signature for one object does not work, because a store is many files. S3 and GCS presigned URLs sign one object.
 
-The token is part of the iframe URL, so anyone who can see the page can read it. Give it a short lifetime. The wordmark link carries the same `store` value to the full viewer.
+The token is part of the iframe URL, so anyone who can see the page can read it. Give it a short lifetime. The wordmark link carries the store's origin and path to the full viewer and removes its query string. A signed store therefore needs fresh authorization in that tab. See [where tokens appear](private.md#4-keeping-credentials-out-of-links-notebooks-and-logs).
 
 Any page can embed the viewer, because `chronozarr.org` sends no `X-Frame-Options` header and no `frame-ancestors` policy. If your page sets a Content-Security-Policy, allow `frame-src https://chronozarr.org`. A `sandbox` attribute on the iframe needs `allow-scripts allow-same-origin`. Without `allow-same-origin` the viewer's origin is `null`, and your `event.origin` check fails. The dates of these checks are in [evidence.md](evidence.md#embedding).
 

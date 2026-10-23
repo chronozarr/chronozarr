@@ -1,6 +1,6 @@
 # Convert your data
 
-**Package version — 0.5.0.** Follow the [installation guide](quickstart.md#1-install) before using this reference. The [release notes](release-0.5.0.md) describe compatibility and changes since 0.4.1.
+**Package version — 0.5.1.** Follow the [installation guide](quickstart.md#1-install) before using this reference. The [release notes](release-0.5.1.md) describe compatibility and changes since 0.4.1.
 
 `chronozarr convert SOURCE OUT` writes a store from rasters that you already have. It reads one timestep at a time and encodes a few 512 by 512 cells at a time, so the files never have to fit in memory together. Since 0.4.1 the memory of the encode step stays nearly flat as the number of timesteps grows ([memory](performance.md#encoder-time-slabs)); in 0.4.0 it grew with them.
 
@@ -250,7 +250,7 @@ chronozarr convert model.nc my_store --variable tas
 chronozarr convert data.zarr my_store --variable ndvi --crs EPSG:32618
 ```
 
-Reading a NetCDF4 file needs the `netcdf` extra, which adds h5netcdf, h5py and cftime. Install it in the environment that runs the command: `uv tool install --python 3.13 --force 'chronozarr[geo,netcdf]==0.5.0'` for the standalone tool, or `uv add 'chronozarr[geo,netcdf]==0.5.0'` for a Python project. Without it, `convert` stops with `reading a NetCDF4 file needs h5netcdf and h5py`. A Zarr store needs no NetCDF reader. A classic NetCDF3 file, which starts with the bytes `CDF`, needs `scipy` instead: add `--with scipy` to the checkout's tool install, or add scipy to your analysis environment.
+Reading a NetCDF4 file needs the `netcdf` extra, which adds h5netcdf, h5py and cftime. Install it in the environment that runs the command: `uv tool install --python 3.13 --force 'chronozarr[geo,netcdf]==0.5.1'` for the standalone tool, or `uv add 'chronozarr[geo,netcdf]==0.5.1'` for a Python project. Without it, `convert` stops with `reading a NetCDF4 file needs h5netcdf and h5py`. A Zarr store needs no NetCDF reader. A classic NetCDF3 file, which starts with the bytes `CDF`, needs `scipy` instead: add `--with scipy` to the checkout's tool install, or add scipy to your analysis environment.
 
 `--variable` names the array to convert. Its dimensions must be time, y and x, with an optional band dimension. `--dims time=NAME,y=NAME,x=NAME[,band=NAME]` names them when they are not `time`, `y`, `x` or common aliases such as `lat` and `lon`. The coordinate system comes from a `crs`, `crs_wkt` or `spatial_ref` attribute, or from the CF grid mapping variable that the variable names in `grid_mapping`; reading a grid mapping needs pyproj. `--crs` gives it, as an EPSG code or WKT2 text, when the file does not declare it. A CRS with no EPSG code, such as Daymet's Lambert conformal conic, is stored as it is and is never reprojected. The CF `scale_factor`, `add_offset` and `units` of the variable apply to every band. `--mask-var` names a variable whose nonzero values mark valid pixels.
 
@@ -319,7 +319,7 @@ A date that Gregorian does not have, such as 30 February on a `360_day` calendar
 
 The store records what was done in its provenance: the source calendar, the option, the change in spacing and the dates that moved. `chronozarr info STORE` prints it as `notes:`, and `chronozarr stac` copies it into the STAC item. In Python it is `chronozarr.open_store("STORE").attrs.provenance["notes"]`. A `provenance=` that you pass to `chronozarr.convert` keeps its fields and gets the note added to its `notes`.
 
-These calendars need cftime. The `netcdf` extra installs it with the NetCDF reader; `cftime` is also an extra of its own for Zarr inputs. Install `chronozarr[geo,cftime]==0.5.0` in the environment that runs the conversion. Without cftime, `convert` stops with `the time coordinate 'time' uses the 360_day calendar, which needs cftime`. This workflow requires package 0.5.0 or newer; package 0.4.1 has no `cftime` extra or calendar-mapping option.
+These calendars need cftime. The `netcdf` extra installs it with the NetCDF reader; `cftime` is also an extra of its own for Zarr inputs. Install `chronozarr[geo,cftime]==0.5.1` in the environment that runs the conversion. Without cftime, `convert` stops with `the time coordinate 'time' uses the 360_day calendar, which needs cftime`. This workflow requires package 0.5.1 or newer; package 0.4.1 has no `cftime` extra or calendar-mapping option.
 
 `chronozarr encode` takes the same option for a file with dimensions `(time, band, y, x)`. `chronozarr append` does not convert calendars, because it cannot record the conversion in the store you append to; convert the whole series instead. The option has no effect on a Gregorian time axis. In Python, `convert` has `calendar_to_gregorian="date"`. `chronozarr.encode` of a `DataArray` whose time coordinate holds cftime dates stops and says so; map the dates yourself, for example with `da.convert_calendar("proleptic_gregorian", align_on="date")`, which drops a date that Gregorian lacks, and describe that in `provenance=`.
 

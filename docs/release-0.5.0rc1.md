@@ -1,6 +1,6 @@
 # chronozarr 0.5.0rc1: local release candidate
 
-This is the preparation record for the unpublished candidate. See the [0.5.0 release notes](release-0.5.0.md) for the final release, and the [frozen candidate installation guide](https://github.com/chronozarr/chronozarr/blob/ef3dbfcbb514971603c1cfd3ae06cd894a68f489/docs/development.md) to reproduce the local candidate.
+This is the preparation record for the unpublished candidate. See the [0.5.1 release notes](release-0.5.1.md) for the final release, and the [frozen candidate installation guide](https://github.com/chronozarr/chronozarr/blob/ef3dbfcbb514971603c1cfd3ae06cd894a68f489/docs/development.md) to reproduce the local candidate.
 
 **Local candidate only, unpublished.** Python `0.5.0rc1` and npm `0.5.0-rc.1` name the same release candidate. It combines the changes merged since 0.4.1 through `04395f4` with the sixteen repairs from the merged-batch review. No candidate package, tag, site deployment or hosted-viewer update has been published. The stable install examples remain pinned to 0.4.1.
 

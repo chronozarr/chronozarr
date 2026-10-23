@@ -104,7 +104,7 @@ What was checked: Whether the numbers a reader returns equal the numbers that we
 
 Method: Unit tests run on every change (`uv run pytest -q -m unit`, `cd js && node --test`). Real-data checks compare SHA-256 hashes or every value with an independent read (zarr-python, rasterio, pyproj).
 
-What this does not show: Pixel comparisons between the JavaScript reader and Python cover a sample of pixels, not every value. The real-data conversion checks predate the v0.3 writer. The published store's `coverage` is a 0/1 flag until it is re-encoded with the count writer. "True values" means unquantized stored numbers: level 0 is the source data, and coarser levels are means. When this page was drafted, `tests/test_roundtrip.py`, `tests/test_encode_slabs.py` and `tests/test_xarray_compat.py` were run (128 passed, 2026-10-12). The other tests listed were read, not run.
+What this does not show: Pixel comparisons between the JavaScript reader and Python cover a sample of pixels, not every value. The real-data conversion checks predate the v0.3 writer. The current public Ucayali imagery store has neither a mask nor a coverage plane (root metadata checked 2026-10-23); observation counts in local ingest outputs do not describe that published store. "True values" means unquantized stored numbers: level 0 is the source data, and coarser levels are means. When this page was drafted, `tests/test_roundtrip.py`, `tests/test_encode_slabs.py` and `tests/test_xarray_compat.py` were run (128 passed, 2026-10-12). The other tests listed were read, not run.
 
 ## 3. Ingestion throughput (Sentinel-2 example in the repository)
 

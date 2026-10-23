@@ -1,6 +1,6 @@
 # Command line
 
-**Package version — 0.5.0.** Follow the [installation guide](quickstart.md#1-install) before using this reference. The [release notes](release-0.5.0.md) describe compatibility and changes since 0.4.1.
+**Package version — 0.5.1.** Follow the [installation guide](quickstart.md#1-install) before using this reference. The [release notes](release-0.5.1.md) describe compatibility and changes since 0.4.1.
 
 Run `chronozarr <command> --help` for every option. In a uv project, run `uv run chronozarr <command> --help`. A standalone tool or pip installation runs `chronozarr` directly.
 

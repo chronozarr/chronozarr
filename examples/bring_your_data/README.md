@@ -10,7 +10,7 @@ Run this command from the repository root.
 uv sync --extra geo
 ```
 
-This checkout uses the 0.5.0 source version from the repository. For a standalone install, use `python -m pip install --upgrade "chronozarr[geo]==0.5.0"` instead. Python 3.11 or newer is required.
+This checkout uses the 0.5.1 source version from the repository. For a standalone install, use `python -m pip install --upgrade "chronozarr[geo]==0.5.1"` instead. Python 3.11 or newer is required.
 
 The bundle script below needs this checkout because it copies the viewer from `js/`; it needs no npm install or build. To copy the viewer from the npm package instead, see [self-host the packaged viewer](../../docs/viewer-distribution.md).
 
@@ -83,7 +83,9 @@ The script opens the store with the lazy xarray backend and selects one pixel be
 
 To convert an existing Zarr or NetCDF time series, use its path as the source and add `--variable NAME` where needed. NetCDF input needs `uv sync --extra geo --extra netcdf`. For rendered PNG frames, follow the [PNG georeferencing guide](../../docs/png-frames.md). A PNG holds display colors, and the converter stores them unchanged.
 
-For a source audit, a manifest can name each COG and its date. Save this optional advanced manifest as `observations.csv`; the directory/glob flow above is the main onboarding route.
+The source-audit and timing helpers below reproduce the masked Sentinel-2 sample. They require an explicit, shared validity mask in the source COGs and both converted stores. For all-valid or nodata-only inputs, use `chronozarr validate STORE` and the Python API to check values and validity against your source instead.
+
+For the masked sample, a manifest can name each COG and its date. Save this optional advanced manifest as `observations.csv`; the directory/glob flow above is the main onboarding route.
 
 ```csv
 uri,datetime
@@ -91,26 +93,27 @@ January.tif,2024-01-01
 February.tif,2024-02-01
 ```
 
-The checks read one copy of the store with chronozarr and another with plain xarray and Zarr code, so convert the manifest a second time.
+The checks read one copy with chronozarr and another with plain xarray and Zarr code. Create both copies from this manifest in new directories.
 
-1. Convert the second copy.
+1. Convert the two copies.
 
    ```sh
-   uv run chronozarr convert observations.csv /tmp/my-plain
+   uv run chronozarr convert observations.csv /tmp/audit-series
+   uv run chronozarr convert observations.csv /tmp/audit-plain
    ```
 
 2. Compare every value with the source COGs.
 
    ```sh
    uv run python examples/bring_your_data/verify.py observations.csv \
-     /tmp/my-series /tmp/my-plain /tmp/my-verification.json
+     /tmp/audit-series /tmp/audit-plain /tmp/my-verification.json
    ```
 
 3. Time full reads of all dates.
 
    ```sh
    uv run python examples/bring_your_data/compare_local.py observations.csv \
-     /tmp/my-series /tmp/my-plain /tmp/my-comparison.json
+     /tmp/audit-series /tmp/audit-plain /tmp/my-comparison.json
    ```
 
 `verify.py` compares every level-0 value and mask with the COGs and checks the physical scaling. It leaves the COG overviews out. The Sentinel-2 sample COGs are resampled to 10 m, so they differ from the original scenes. `compare_local.py` times level-0 reads with the COG, chronozarr and plain Zarr readers on local disk. It uses fresh file handles on warm caches and rotates the reader order. The `--repeats` option sets the number of repeats, which is 5 by default.
