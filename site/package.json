@@ -8,8 +8,11 @@
     "build": "vocs build",
     "preview": "vocs preview",
     "sync-content": "node scripts/sync-content.mjs",
-    "predev": "npm run sync-content",
-    "prebuild": "npm run sync-content",
+    "prepare-mermaid": "node scripts/prepare-mermaid.mjs",
+    "postinstall": "npm run prepare-mermaid",
+    "predev": "npm run prepare-mermaid && npm run sync-content",
+    "prebuild": "npm run prepare-mermaid && npm run sync-content",
+    "test:dependencies": "npm run prepare-mermaid && node --test test/dependency-compat.test.mjs",
     "deploy": "npm run build && ../node_modules/.bin/wrangler deploy --config wrangler.toml",
     "postbuild": "node scripts/check-vocs-classes.mjs && node scripts/copy-demo.mjs && node scripts/check-links.mjs && node scripts/check-worker.mjs && node scripts/make-sitemap.mjs"
   },
@@ -20,9 +23,15 @@
   },
   "devDependencies": {
     "@types/react": "19.2.14",
+    "esbuild": "0.28.2",
+    "mermaid": "11.17.2",
     "typescript": "5.9.3"
   },
   "overrides": {
-    "toml": "4.2.0"
+    "dompurify": "3.4.17",
+    "katex": "0.18.2",
+    "toml": "5.0.1",
+    "vite@^7": "7.3.7",
+    "vite@^8": "8.3.4"
   }
 }

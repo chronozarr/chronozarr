@@ -1,14 +1,28 @@
 # chronozarr.org
 
-Vocs 1.4.1 + React + MDX, matching the dgov docs framework. The `toml` override
-pins the patched parser at 4.2.0; `npm audit` reports zero vulnerabilities.
+Vocs 1.4.1 + React + MDX, matching the dgov docs framework. Targeted overrides
+pin patched DOMPurify 3.4.17, KaTeX 0.18.2 and TOML 5.0.1, and keep Vite on the
+patched 7.3.7 and 8.3.4 branches used by the framework. These versions passed
+the seven-day release-age limit and a full `npm audit` on 2026-10-23.
+
+`mermaid-isomorphic` renders Mermaid's classic browser bundle, which embeds
+old DOMPurify and KaTeX independently of the installed packages. The
+`prepare-mermaid` script rebuilds Mermaid 11's public core module with the
+patched dependencies before install completes and before dev/build. It checks
+every installed renderer's entry paths, the actual bundled dependency inputs
+and versions, and fails if that contract changes. The generated file is inside
+`node_modules`; the lockfile and preparation script reproduce it. No runtime
+viewer dependencies or rendering features are removed.
 
 ## Develop and deploy
 
 ```sh
-(cd js && npm ci)   # esbuild, for the viewer that the build bundles
+(cd js && npm ci --min-release-age=7)   # esbuild, for the viewer that the build bundles
 cd site
-npm ci
+npm ci --min-release-age=7
+npm audit
+npx --no-install playwright install chromium
+npm run test:dependencies
 npm run dev
 npm run build
 npm run preview
@@ -16,7 +30,7 @@ npm run deploy
 ```
 
 Deployment uses the repository's pinned Wrangler binary. Install root tooling
-with `npm ci` from the repository root if it is absent. The site has its own
+with `npm ci --min-release-age=7` from the repository root if it is absent. The site has its own
 Worker, `chronozarr-docs`; the browser demo is built (`js/support/build-viewer.mjs`, esbuild, so `npm ci` in `js/` first) and the shared modules are copied into this same deployment by `scripts/copy-demo.mjs`.
 Build output is `docs/dist`. `worker.js` redirects www to the apex, redirects
 the paths of removed pages to their replacements, and forwards other requests to

@@ -47,6 +47,8 @@ The Python package, npm package, dataset host and viewer served at chronozarr.or
 
 Repository examples add NISAR GCOV time-series and Sentinel-1 RTC monthly ingest. The corpus runner accepts a separate results directory and records its evaluation policy; longitude spelling outside −180 to 180 is a diagnostic rather than a correctness failure by itself. Quickstart and newcomer harnesses exercise printed instructions, and raw Markdown/llms pages and the repository skill make the guides available to coding agents. These source examples and harnesses have their own dependencies and operating limits.
 
+The documentation site uses patched TOML, Vite, DOMPurify and KaTeX dependencies. Its build prepares Mermaid's browser bundle from the installed modules so diagrams receive those patches too; updating the dependency graph alone does not replace libraries embedded in an upstream bundle. Compatibility checks cover frontmatter, math and rendered diagrams. The [site maintenance guide](../site/README.md) describes the preparation step and pinned versions.
+
 ## Repairs from the merged-batch review
 
 | Finding | Corrected behavior |
