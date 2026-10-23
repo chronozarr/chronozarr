@@ -80,7 +80,8 @@ chronozarr convert sample my_store
 ```text
 wrote my_store: 2 levels, 81 files, 40.2 MB, zstd level 5
 read 12 timesteps (0 reused) in 0.2 s, encoded in 0.3 s, total 0.5 s
-preview it: chronozarr preview my_store
+share it: chronozarr share my_store  (temporary public link via a Cloudflare quick tunnel; needs cloudflared)
+preview it here: chronozarr preview my_store  (this computer only)
 ```
 
 `my_store` is a folder of static files. It holds your values unchanged, plus a coarser copy for zoomed-out views.

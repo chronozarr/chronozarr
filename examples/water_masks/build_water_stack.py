@@ -15,7 +15,10 @@ Masked pixels hold 0 in both bands. Gaps are not filled.
 Why `water` is a fraction and not a 0/1 flag: pyramid levels are block means. The mean of an
 integer band is a floor division, so a 0/1 band floors to 0 unless every pixel of the block is
 water and coarse levels undercount (Ucayali 2019-03: 12.1 % of valid pixels at level 0, 8.5 % at
-level 3). Stored as 0 or 10000, the block mean is the water fraction of the block.
+level 3). Stored as 0 or 10000, level 1 approximates its valid source pixels' water fraction.
+Higher levels recursively average valid child blocks with equal weight and round down; they
+do not preserve the original water fraction when those blocks have unequal valid support.
+Compute water-area statistics from level 0.
 
 The threshold of a month is max(Otsu, floor). Otsu is computed in numpy on the histogram of the
 month's valid ndwi values (exactly one bin per stored integer, so the threshold is a stored value).
@@ -442,7 +445,8 @@ def main() -> None:
         "ndwi = (B03 - B08) / (B03 + B08) stored x10000 (int16, scale 1e-4); water = ndwi > "
         f"max(per-month Otsu threshold, {args.floor}), or 1 where B03 and B08 are both <= "
         f"{DARK_DN} DN (L2A floor, ndwi undefined), stored as a fraction (0 or 10000, scale 1e-4) "
-        "so pyramid block means are water fractions. mask = 0 where no scene was valid "
+        "with recursively averaged overviews (equal weight per valid child block, rounded "
+        "down; use level 0 for water-area statistics). mask = 0 where no scene was valid "
         "(carry-forward or never observed), values there are 0. "
         "coverage = 1 where at least one scene was valid. "
         "Derived from monthly median mosaics (SCL classes 4, 5, 6, 7, 11 kept)."

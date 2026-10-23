@@ -8,6 +8,7 @@ import re
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 pytest.importorskip("rasterio")
@@ -248,6 +249,28 @@ def test_a_search_without_scenes_says_so(tmp_path, monkeypatch):
             *settings_args(),
         )
     assert not (tmp_path / "stores").exists()
+
+
+@pytest.mark.parametrize("changed", ["crs", "origin", "shape", None])
+def test_legacy_npz_months_check_the_requested_aoi_grid(tmp_path, changed):
+    transform, height, width = mosaic.compute_target_grid(BBOX, EPSG)
+    aoi = {"name": "synth", "bbox": BBOX, "epsg": EPSG}
+    coeffs = list(transform)[:6]
+    if changed == "origin":
+        coeffs[2] += 10
+    np.savez(
+        tmp_path / "2024-01.npz",
+        bands=np.ones((4, height + (changed == "shape"), width), dtype=np.uint16),
+        coverage=np.ones((height + (changed == "shape"), width), dtype=np.float32),
+        transform=coeffs,
+        epsg=EPSG + (changed == "crs"),
+        band_names=["B02", "B03", "B04", "B08"],
+    )
+    if changed:
+        with pytest.raises(SystemExit, match=r"2024-01.npz is on a different grid"):
+            ingest.check_existing_grid(tmp_path, aoi)
+    else:
+        ingest.check_existing_grid(tmp_path, aoi)
 
 
 # --- dates -------------------------------------------------------------------------------------

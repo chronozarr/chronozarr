@@ -7,8 +7,9 @@
 3. Three pixels of one month (a water pixel, a land pixel, a masked pixel) and then the whole
    month are recomputed in numpy from the npz and the month's threshold in the CSV, without
    importing the build script.
-4. `water` is a fraction (0 or 10000 at level 0, scale 1e-4): level 1 equals the floor mean of
-   level 0 over valid pixels, and the water share of valid pixels is printed for levels 0 to 3.
+4. `water` is 0 or 10000 at level 0 (scale 1e-4). Each overview is checked against recursively
+   averaged valid child pixels, rounded down, with the same edge replication as the writer.
+   Printed coarse means are display summaries, not conserved level-0 water-area statistics.
 
 Usage:
     uv run python examples/water_masks/check_water_stack.py \
@@ -63,6 +64,20 @@ def recompute(
     dark = valid & (green <= DARK_DN) & (nir <= DARK_DN)
     water = valid & (dark | (ndwi > threshold))
     return ndwi, water.astype(np.int16) * np.int16(10_000), valid
+
+
+def next_overview(values: np.ndarray, valid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Independent reference for one 2x reduction: floor mean of valid children, any-valid mask."""
+    padded_values, padded_valid = (
+        np.pad(a, ((0, a.shape[0] % 2), (0, a.shape[1] % 2)), mode="edge")
+        for a in (values.astype(np.int64), valid.astype(bool))
+    )
+    height, width = padded_values.shape
+    blocks = padded_values.reshape(height // 2, 2, width // 2, 2)
+    masks = padded_valid.reshape(height // 2, 2, width // 2, 2)
+    count = masks.sum(axis=(1, 3))
+    total = (blocks * masks).sum(axis=(1, 3))
+    return np.where(count > 0, total // np.maximum(count, 1), 0), count > 0
 
 
 def main() -> None:
@@ -154,49 +169,26 @@ def main() -> None:
         "masked pixels hold 0",
     )
 
-    water_plane = stored["data"].isel(time=t).sel(band="water").values.astype(np.int64)
-    padded = [
-        np.pad(a, ((0, a.shape[0] % 2), (0, a.shape[1] % 2)), mode="edge")
-        for a in (water_plane, mask.astype(np.int64))
-    ]
-    blocks = [a.reshape(a.shape[0] // 2, 2, a.shape[1] // 2, 2) for a in padded]
-    count = blocks[1].sum(axis=(1, 3))
-    total = (blocks[0] * blocks[1]).sum(axis=(1, 3))
-    expected = np.where(count > 0, total // np.maximum(count, 1), 0)
-    one = xr.open_dataset(store, engine="chronozarr", physical=False, lod=1)
-    got = one["data"].isel(time=t).sel(band="water").values
-    check(
-        np.array_equal(got, expected),
-        f"level 1 water equals the floor mean of level 0 over valid pixels ({got.size} blocks)",
-    )
-
-    # Share of water per level, two ways: the mean over the valid blocks of the level (what a click
-    # on the overview sees), and the mean weighted by the valid level-0 pixels in each block, which
-    # is the level-0 share up to the floor division. They differ where blocks are partly valid.
-    mask0 = mask.astype(np.int64)
-    share0 = float((water_plane * mask0).sum() / 1e4 / mask0.sum())
-    print(f"\nwater share of valid pixels in {month} by pyramid level (mean of water / 10000):")
-    print(f"  lod 0: {share0:.5f}")
-    for lod in range(1, 4):
-        factor = 2**lod
-        level = xr.open_dataset(store, engine="chronozarr", physical=False, lod=lod)
-        h, w = (n // factor * factor for n in mask0.shape)
-        rows, cols = h // factor, w // factor
-        weights = mask0[:h, :w].reshape(rows, factor, cols, factor).sum(axis=(1, 3))
-        fractions = (
-            level["data"].isel(time=t).sel(band="water").values[:rows, :cols].astype(np.int64)
+    expected = store_water.astype(np.int64)
+    expected_mask = mask.astype(bool)
+    share0 = float(expected[expected_mask].mean() / 1e4)
+    print(f"\nlevel-0 water share of valid pixels in {month}: {share0:.5f}")
+    print("overview means are recursive display summaries, not water-area estimates:")
+    for lod in range(1, min(4, len(info.levels))):
+        expected, expected_mask = next_overview(expected, expected_mask)
+        with xr.open_dataset(store, engine="chronozarr", physical=False, lod=lod) as level:
+            fractions = level["data"].isel(time=t).sel(band="water").values
+            valid_blocks = level["mask"].isel(time=t).values.astype(bool)
+        check(np.array_equal(valid_blocks, expected_mask), f"level {lod} any-valid child mask")
+        check(
+            np.array_equal(fractions, expected),
+            f"level {lod} water equals the recursive floor mean of valid child blocks",
         )
-        valid_blocks = level["mask"].isel(time=t).values[:rows, :cols].astype(bool)
-        weighted = float((fractions * weights).sum() / 1e4 / weights.sum())
         partial = int((fractions[valid_blocks] % 10_000 != 0).sum())
         print(
             f"  lod {lod}: {fractions[valid_blocks].mean() / 1e4:.5f} over valid blocks, "
-            f"{weighted:.5f} weighted by valid level-0 pixels; {partial} blocks hold a fraction "
+            f"{partial} blocks hold a fraction "
             f"strictly between 0 and 1"
-        )
-        check(
-            abs(weighted - share0) < 1e-3,
-            f"level {lod} weighted water share within 0.1 point of level 0",
         )
     if failures:
         raise SystemExit(f"{len(failures)} check(s) failed: {failures}")

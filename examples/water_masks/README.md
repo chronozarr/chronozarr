@@ -1,6 +1,6 @@
 # Water mask stacks
 
-This example derives a water store from the monthly Sentinel-2 mosaics of one area of interest (AOI). The store has two int16 bands, `ndwi` and `water`, a mask and a coverage plane. `water` is 0 or 1 at level 0. A coarse pyramid level holds the water fraction of each block. Each month uses its Otsu threshold on NDWI, or the `--floor` value when that is higher.
+This example derives a water store from the monthly Sentinel-2 mosaics of one area of interest (AOI). The store has two int16 bands, `ndwi` and `water`, a mask and a coverage plane. Physical `water` values are 0 or 1 at level 0. Each overview recursively averages valid pixels of the preceding level, with integer rounding down. Level 1 approximates the water fraction of its valid source pixels; higher levels weight valid child blocks equally, even when those blocks contain different numbers of original observations. Use level 0 for water-area statistics. Each month uses its Otsu threshold on NDWI, or the `--floor` value when that is higher.
 
 ## Run it
 
