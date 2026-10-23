@@ -82,6 +82,9 @@ map.on('click', async (e) => console.log(await layer.getValueAt(e.lngLat))); // 
 - `bands` has one entry per band with `name`, `units`, `reflectance`, `stored` and `value`. `stored` is the stored number. `value` is the stored number times `scale`, plus `offset`.
 - `ndvi`, `ndwi` and `isWater` are the products that the bands allow.
 
+For a masked pixel, `stored`, `value`, `ndvi` and `ndwi` are `null`, and `isWater` is false.
+When the mask marks a pixel valid, values equal to the nodata marker remain valid too.
+
 A removed layer cannot be added again. The reader ends an idle worker pool after 30 s.
 
 ### Events
@@ -113,6 +116,11 @@ The product colors are `PRODUCT_GLSL` from `js/shared/products-glsl.js`, the sam
 - A single band gets a linear stretch unless it looks like reflectance. A band looks like reflectance when the largest value of its dtype is 10 or less after scale and offset. The stretch runs from the 2nd to the 98th percentile of the valid values on screen, or over `range` in physical units. `colormap` then maps the gray level to colors (`js/shared/colormaps.js`).
 - The `dual_pol` product draws the co-pol band in red, the cross-pol band in green and their difference in dB in blue. Each channel is stretched from its 2nd to its 98th percentile, measured once from the first complete view.
 - Every other product keeps the tone-mapped reflectance look.
+
+Automatic display samples at most 300 pixels per visible cell. It waits for a complete view
+with valid samples before fixing a range or stretch. If CPU copies were evicted while the GPU
+still holds the view, it recovers samples one cell at a time; a cell can be fetched again if the
+reader no longer holds its bytes. Empty views keep the default display until valid samples arrive.
 
 ## Limits
 
