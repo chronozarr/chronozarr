@@ -50,6 +50,11 @@ power = 10 ** (vh / 10)                              # gamma0 power, for means a
 
 Some items' `proj:transform` does not describe the file (six 2024 S1A items over the Ucayali box carry a fractional, south-up transform; their files are north-up on whole 10 m). The ingest takes the window from each file's own header and checks the alignment there.
 
+For whole-month composites, start on the first day and end on the last day of a month.
+Explicit dates inside a month use only acquisitions within that interval. The run warns about
+partial boundary months, including in a dry run, and records the query interval and partial
+months in the store's provenance. Their time labels still use the month's first day.
+
 ### What is stored
 
 - `VV` and `VH` are gamma0 backscatter power as delivered, as `10 * log10(power)` in dB, quantized to 0.01 dB in uint16: stored = (dB + 60) * 100, with scale 0.01 and offset -60 in the band metadata, the same encoding as the NISAR store. Values below -60 dB are clipped to -60 dB.

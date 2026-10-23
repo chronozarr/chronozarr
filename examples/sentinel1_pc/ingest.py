@@ -22,8 +22,9 @@ one is. VV and VH are stored as 10 * log10(power) in dB at 0.01 dB as uint16: st
 (dB + 60) * 100, so the band metadata (scale 0.01, offset -60) gives dB back; values below
 -60 dB are clipped to -60 dB. Invalid pixels store 0 and the store's mask is 0 there. Coarser
 levels average dB (the spec's mean pyramid), the geometric mean of power. A month without an
-acquisition is left out of the time axis and named in the manifest; only complete months are
-composited, so --end defaults to the last day of the previous month.
+acquisition is left out of the time axis and named in the manifest. The default date range covers
+complete months. Explicit dates can cover a boundary month only in part; the run warns and
+records that interval in the store's provenance. --end defaults to the previous month's last day.
 
 Usage:
     uv run --extra ingest python examples/sentinel1_pc/ingest.py \
@@ -50,6 +51,7 @@ import math
 import re
 import sys
 import time
+from calendar import monthrange
 from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -480,6 +482,17 @@ def month_range(start: str, end: str) -> list[str]:
     return months
 
 
+def partial_months(start: str, end: str) -> list[str]:
+    """Boundary months for which the query omits some days."""
+    first, last = date.fromisoformat(start), date.fromisoformat(end)
+    partial = []
+    if first.day != 1:
+        partial.append(f"{first:%Y-%m} (from {first})")
+    if last.day != monthrange(last.year, last.month)[1]:
+        partial.append(f"{last:%Y-%m} (until {last})")
+    return partial
+
+
 def composite_months(records: list[dict], months_dir: Path) -> list[dict]:
     """Write each month's stored VV, VH and mask to `months_dir`; one summary per month."""
     by_month: dict[str, list[dict]] = defaultdict(list)
@@ -537,6 +550,13 @@ def encode_store(months: list[dict], grid: Grid, store: Path, manifest: dict) ->
     )
     if empty:
         notes += f" Months without an acquisition, left out: {', '.join(empty)}."
+    query = manifest["query"]
+    notes += f" Query interval: {query['start']}..{query['end']}."
+    if partial := partial_months(query["start"], query["end"]):
+        notes += (
+            f" Partial boundary months: {', '.join(partial)}. Composites use only acquisitions "
+            "inside the query interval; time labels remain the first day of each month."
+        )
     report = chronozarr.encode(
         frames(),
         store,
@@ -616,6 +636,15 @@ def main(argv: list[str] | None = None) -> None:
     )
     logger.setLevel(logging.INFO)
     args = parse_args(argv)
+    if partial := partial_months(args.start, args.end):
+        logger.warning(
+            "The date range covers %s only in part. Boundary composites use acquisitions "
+            "inside %s..%s and are stamped on the month's first day. Start on the 1st and end "
+            "on the last day for whole-month composites.",
+            " and ".join(partial),
+            args.start,
+            args.end,
+        )
     bbox: BBox = (args.bbox[0], args.bbox[1], args.bbox[2], args.bbox[3])
     store = args.out_dir / "stores" / args.name / args.store
     manifest_path = store.with_name(f"{args.store}.scenes.json")

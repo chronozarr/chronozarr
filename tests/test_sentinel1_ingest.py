@@ -298,3 +298,68 @@ def test_extract_all_still_extracts_misses_and_changed_slices(extracted_cache):
     sidecar = json.loads(ingest.sidecar_of(path).read_text())
     assert sidecar["slices"] == ["S1", "S2", "S3"]
     assert sidecar["grid"] == records[0]["grid"]
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "expected"),
+    [
+        ("2024-02-01", "2024-02-29", []),
+        ("2023-02-01", "2023-02-28", []),
+        ("2024-01-15", "2024-02-29", ["2024-01 (from 2024-01-15)"]),
+        ("2024-01-01", "2024-02-28", ["2024-02 (until 2024-02-28)"]),
+    ],
+)
+def test_partial_months_respects_calendar_boundaries(start, end, expected):
+    assert ingest.partial_months(start, end) == expected
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_partial_month_run_warns_and_records_the_actual_interval(
+    tmp_path, monkeypatch, caplog, dry_run
+):
+    scene = make_slice(1, start="2024-01-15T10:37:09Z")
+    monkeypatch.setattr(ingest, "grid_for", lambda _: GRID)
+    monkeypatch.setattr(ingest, "discover", lambda *_: [scene])
+    source = tmp_path / "acquisition.npz"
+    np.savez(source, vv=np.full((3, 4), 0.01), vh=np.full((3, 4), 0.001))
+
+    def extract(*_args, **_kwargs):
+        assert not dry_run, "a dry run must not extract acquisitions"
+        return [{"start": scene.start, "valid_fraction": 1.0, "npz": str(source)}]
+
+    monkeypatch.setattr(ingest, "extract_all", extract)
+    output = tmp_path / "output"
+    args = [
+        "--bbox",
+        "-75.13",
+        "-7.76",
+        "-74.88",
+        "-7.51",
+        "--name",
+        "partial",
+        "--start",
+        "2024-01-15",
+        "--end",
+        "2024-01-15",
+        "--out-dir",
+        str(output),
+    ]
+    if dry_run:
+        args.append("--dry-run")
+    ingest.main(args)
+    assert "only in part" in caplog.text
+    assert "2024-01-15..2024-01-15" in caplog.text
+    if dry_run:
+        assert not output.exists()
+        return
+    store = output / "stores" / "partial" / ingest.STORE_NAME
+    decoded = ingest.chronozarr.open_store(store)
+    notes = decoded.attrs.provenance["notes"]
+    assert "Query interval: 2024-01-15..2024-01-15" in notes
+    assert "Partial boundary months: 2024-01 (from 2024-01-15)" in notes
+    assert "2024-01 (until 2024-01-15)" in notes
+    np.testing.assert_array_equal(
+        decoded.to_xarray().time.values, np.array(["2024-01-01"], dtype="datetime64[ns]")
+    )
+    manifest = json.loads(store.with_suffix(".scenes.json").read_text())
+    assert manifest["query"]["start"] == manifest["query"]["end"] == "2024-01-15"

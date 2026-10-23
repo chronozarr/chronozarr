@@ -14,7 +14,10 @@ Usage:
     uv run python examples/water_masks/check_water_stack.py \
         --aoi ucayali_santa_maria --month 2019-03
     uv run python examples/water_masks/check_water_stack.py --aoi lake_mead \
-        --boa-offset-from 2022-02 --month 2021-11
+        --month 2021-11
+
+Use --boa-offset-from only when the store was built with that option from verified uncorrected
+legacy mosaics. Current Sentinel-2 ingest already corrects the offset.
 """
 
 from __future__ import annotations
@@ -66,7 +69,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--aoi", required=True)
     parser.add_argument("--store-name", default="water-1")
-    parser.add_argument("--boa-offset-from", metavar="YYYY-MM")
+    parser.add_argument(
+        "--boa-offset-from",
+        metavar="YYYY-MM",
+        help="match a legacy store's correction only for verified uncorrected mosaics; "
+        "current ingest already corrects it",
+    )
     parser.add_argument(
         "--month", help="month to recompute (default: wettest with 90 %% valid pixels)"
     )

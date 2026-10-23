@@ -40,15 +40,15 @@ screen: clear months sit near 250-500 over forest, 800-1400 over desert).
 
 Months with no valid pixel at all are not written (listed in the CSV as skipped).
 
-Mosaics made before the Sentinel-2 processing baseline 04.00 fix (25 Jan 2022 adds +1000 to every
-L2A digital number) still carry the offset. `--boa-offset-from YYYY-MM` subtracts 1000 from every
-valid DN of the months from YYYY-MM on (clipped to >= 1, as the ingest does); a per-pixel median
-commutes with that shift. Lake Mead needs it from 2022-02, Ucayali was corrected at ingest.
+Current Sentinel-2 ingest corrects each scene's processing-baseline offset before compositing.
+Use `--boa-offset-from YYYY-MM` only for a separately verified legacy mosaic series that still
+contains the +1000 DN offset. It subtracts 1000 from each positive DN from that month on,
+clipped to >= 1. Applying it to current mosaics subtracts the offset twice and changes the water
+classification. The acquisition month alone does not establish a scene's processing baseline.
 
 Usage:
     uv run python examples/water_masks/build_water_stack.py --aoi ucayali_santa_maria
-    uv run python examples/water_masks/build_water_stack.py --aoi lake_mead \
-        --boa-offset-from 2022-02
+    uv run python examples/water_masks/build_water_stack.py --aoi lake_mead
 """
 
 from __future__ import annotations
@@ -377,7 +377,8 @@ def main() -> None:
     parser.add_argument(
         "--boa-offset-from",
         metavar="YYYY-MM",
-        help="subtract the +1000 DN baseline offset from here on",
+        help="subtract +1000 DN from this month on only for verified uncorrected legacy mosaics; "
+        "current ingest already corrects it",
     )
     parser.add_argument(
         "--quicklook",
