@@ -238,6 +238,19 @@ def test_a_common_fill_inside_the_range_is_refused_as_a_common_fill(tmp_path):
     assert "If it marks missing pixels, pass --nodata -3000." in message
 
 
+def test_a_strong_fill_in_one_band_is_not_hidden_by_a_weaker_isolated_finding(tmp_path):
+    size = HEIGHT * WIDTH
+    common = np.linspace(-10000, 10000, size, dtype=np.int16).reshape(HEIGHT, WIDTH)
+    isolated = (np.arange(size, dtype=np.int16) % 1000).reshape(HEIGHT, WIDTH)
+    put(common[np.newaxis], -3000, 0.2)
+    put(isolated[np.newaxis], -3000, 0.002)
+    steps = [np.stack([common, isolated])] * N_TIME
+    message = refusal(tmp_path, steps, descriptions=["NDVI", "EVI"])
+    assert "-3000 in all bands (20 % of the valid pixels in the 3 sampled timesteps)" in message
+    assert "is a common fill value" in message
+    assert "pass --nodata -3000" in message
+
+
 def test_two_flag_values_are_refused_and_the_message_says_nodata_takes_one(tmp_path):
     message = refusal(tmp_path, flags())
     assert (

@@ -1,8 +1,8 @@
-// chronozarr reader (spec 0.3.x). No DOM. Runs in browsers (decode workers) and Node.
+// chronozarr reader (spec 0.3.x and 0.4.x). No DOM. Runs in browsers (decode workers) and Node.
 //
-// Coordinates: (lod, row, col, t). One cell is one spatial chunk of one level; its stored bytes for a
-// timestep are one zarr inner chunk of shape (1, n_band, chunkH, chunkW), typed by the store's dtype
-// (uint8, uint16, int16 or float32). Every timestep stores true values and needs one data chunk.
+// Coordinates: (lod, row, col, t). Logical cells use level 0's inner spatial shape at every level,
+// typed by the store's dtype (uint8, uint16, int16 or float32). The native profile stores one timestep
+// as one inner chunk (1, n_band, chunkH, chunkW); other declared layouts are assembled by array-reader.js.
 //
 // Reading is done here rather than through zarrita's Array so that fetching and decoding are separate
 // steps: chunk bytes are fetched with one range request (shard index cached per shard, cancellable), then
@@ -25,10 +25,11 @@
 // offsets, so indexes already cached stay valid and what a chunk decodes to never changes. `stats.recoveries` counts it.
 
 import { BandwidthEstimator } from './bandwidth.js';
+import { createArrayReader } from './array-reader.js';
 import { ChunkCache, SpeculativeBudget } from './cache.js';
 import { FetchError, HttpStore, LimitedReadable, abortError, isAbort, sleep } from './http.js';
 import { RequestLimiter } from './limiter.js';
-import { DTYPES, decodeSpec, normalizeBands, parseSpatial, parseRoot, parseStorage, requireStore, sameCrs } from './metadata.js';
+import { DTYPES, decodeSpec, isCellStorage, normalizeBands, parseSpatial, parseRoot, parseStorage, requireStore, sameCrs } from './metadata.js';
 import { DecodePool, MainThreadDecoder, leaseDecodePool } from './pool.js';
 import { ShardIndexError, parseShardIndex, shardIndexRange } from './shard.js';
 import { registry } from '../vendor/zarrita/codecs.js';
@@ -218,7 +219,7 @@ export async function openStore(baseUrl, options = {}) {
   const rootBytes = await readable.get('/zarr.json', { signal: options.signal });
   requireStore(rootBytes, baseUrl, 'root zarr.json not found');
   const root = JSON.parse(new TextDecoder().decode(rootBytes));
-  const { cz, datasets } = parseRoot(root, baseUrl);
+  const { cz, datasets, notes } = parseRoot(root, baseUrl);
   normalizeBands(cz, baseUrl);
   const variable = cz.variable ?? 'data';
 
@@ -230,8 +231,7 @@ export async function openStore(baseUrl, options = {}) {
     requireStore(bytes || !required, baseUrl, `${path}/zarr.json not found`);
     return bytes ? JSON.parse(new TextDecoder().decode(bytes)) : null;
   };
-  const auxName = (declared, fallback) => declared ?? (consolidated[`${datasets[0].path}/${fallback}`] ? fallback : null);
-  const names = { data: variable, mask: auxName(cz.mask_variable, 'mask'), coverage: auxName(cz.coverage_variable, 'coverage') };
+  const names = { data: variable, mask: cz.mask_variable ?? null, coverage: cz.coverage_variable ?? null };
   const readArrays = (name) => Promise.all(datasets.map((ds) => readMeta(`${ds.path}/${name}`, { required: true })));
   const [dataMetas, maskMetas, coverageMetas] = await Promise.all([
     readArrays(names.data),
@@ -241,15 +241,16 @@ export async function openStore(baseUrl, options = {}) {
   if (options.signal?.aborted) throw abortError();
 
   const storage = {
-    data: dataMetas.map((meta, lod) => parseStorage(meta, { path: `${datasets[lod].path}/${names.data}`, rank: 4, baseUrl })),
-    mask: maskMetas?.map((meta, lod) => parseStorage(meta, { path: `${datasets[lod].path}/${names.mask}`, rank: 3, baseUrl })) ?? null,
-    coverage: coverageMetas?.map((meta, lod) => parseStorage(meta, { path: `${datasets[lod].path}/${names.coverage}`, rank: 3, baseUrl })) ?? null,
+    data: dataMetas.map((meta, lod) => parseStorage(meta, { path: `${datasets[lod].path}/${names.data}`, rank: 4, baseUrl, notes })),
+    mask: maskMetas?.map((meta, lod) => parseStorage(meta, { path: `${datasets[lod].path}/${names.mask}`, rank: 3, baseUrl, notes })) ?? null,
+    coverage: coverageMetas?.map((meta, lod) => parseStorage(meta, { path: `${datasets[lod].path}/${names.coverage}`, rank: 3, baseUrl, notes })) ?? null,
   };
   const specs = {};
   for (const kind of ['data', 'mask', 'coverage']) {
     if (!storage[kind]) continue;
-    specs[kind] = decodeSpec(storage[kind][0]);
-    requireStore(storage[kind].every((s) => decodeSpec(s).key === specs[kind].key), baseUrl, `levels use different chunk codecs or shapes in ${names[kind]}`);
+    specs[kind] = storage[kind].map(decodeSpec);
+    requireStore(storage[kind].every((s) => s.dtype === storage[kind][0].dtype), baseUrl, `levels use different data types in ${names[kind]}`);
+    for (const s of storage[kind]) for (const codec of s.innerCodecs) requireStore(registry.has(codec.name), baseUrl, `unsupported codec ${codec.name}`);
   }
   for (const kind of ['mask', 'coverage']) {
     requireStore(!storage[kind] || storage[kind][0].dtype === 'uint8', baseUrl, `${names[kind]} must be uint8, got ${storage[kind]?.[0].dtype}`);
@@ -270,25 +271,26 @@ export async function openStore(baseUrl, options = {}) {
     idleMs: options.idleMs ?? DEFAULT_IDLE_MS,
   };
 
-  const geometry = dataMetas.map((meta, lod) => parseSpatial(meta, cz, lod, baseUrl));
+  const geometry = dataMetas.map((meta, lod) => parseSpatial(meta, cz, lod, baseUrl, notes));
   const transform = geometry[0].transform;
   for (let lod = 0; lod < geometry.length; lod++) {
     const expected = [transform[0] * 2 ** lod, 0, transform[2], 0, transform[4] * 2 ** lod, transform[5]];
     requireStore(JSON.stringify(geometry[lod].transform) === JSON.stringify(expected), baseUrl, `level ${lod} is not a factor-two north-up overview`);
-    requireStore(sameCrs(geometry[lod], geometry[0]), baseUrl, `level ${lod} CRS differs from level 0`);
+    requireStore(await sameCrs(geometry[lod], geometry[0]), baseUrl, `level ${lod} CRS differs from level 0`);
     const shape = dataMetas[lod].shape;
     requireStore(shape[2] === Math.ceil(dataMetas[0].shape[2] / 2 ** lod) && shape[3] === Math.ceil(dataMetas[0].shape[3] / 2 ** lod), baseUrl, `level ${lod} shape does not match factor-two pyramid`);
     for (const metas of [maskMetas, coverageMetas]) if (metas) {
-      const aux = parseSpatial(metas[lod], { ...cz, levels: undefined }, lod, baseUrl);
-      requireStore(JSON.stringify(aux.transform) === JSON.stringify(expected) && sameCrs(aux, geometry[0]) && JSON.stringify(metas[lod].shape) === JSON.stringify([shape[0], shape[2], shape[3]]), baseUrl, `level ${lod} auxiliary geometry, CRS or shape disagrees with data`);
+      const aux = parseSpatial(metas[lod], { ...cz, levels: undefined }, lod, baseUrl, notes);
+      requireStore(JSON.stringify(aux.transform) === JSON.stringify(expected) && await sameCrs(aux, geometry[0]) && JSON.stringify(metas[lod].shape) === JSON.stringify([shape[0], shape[2], shape[3]]), baseUrl, `level ${lod} auxiliary geometry, CRS or shape disagrees with data`);
     }
   }
 
   const workers = options.workers ?? defaultWorkerCount();
+  const chunkSpecs = [...new Map(Object.values(specs).flat().map((spec) => [spec.key, spec])).values()];
   let decoder;
   if (workers > 0) {
     const fallback = new MainThreadDecoder(ZARRITA_CODECS);
-    const init = { type: 'init', zarritaUrl: ZARRITA_CODECS_URL, warm: Object.values(specs) };
+    const init = { type: 'init', zarritaUrl: ZARRITA_CODECS_URL, warm: chunkSpecs };
     try {
       decoder = options.spawnWorker
         ? new DecodePool({ size: workers, spawn: options.spawnWorker, init, fallback })
@@ -300,11 +302,12 @@ export async function openStore(baseUrl, options = {}) {
   } else {
     decoder = new MainThreadDecoder(ZARRITA_CODECS);
   }
-  for (const spec of Object.values(specs)) decoder.warm?.(spec);
+  for (const spec of chunkSpecs) decoder.warm?.(spec);
 
   return new ChronoStore({
     url: baseUrl,
     cz,
+    notes,
     datasets,
     names,
     levelMirror: cz.levels ?? null,
@@ -329,6 +332,7 @@ export class ChronoStore {
   #decoder;
   #storage;
   #specs;
+  #arrayReaders;
   #names;
   #cache;
   #auxCache;
@@ -371,9 +375,10 @@ export class ChronoStore {
   /** Called with {type:'chunk', key, background, requestedAt, fetchedAt, decodedAt, bytes} per loaded chunk. */
   probe = null;
 
-  constructor({ url, cz, datasets, names, levelMirror, transform, crs, dataMetas, storage, specs, readable, decoder, network, bandwidth, limiter, clock, budgets, policy }) {
+  constructor({ url, cz, notes, datasets, names, levelMirror, transform, crs, dataMetas, storage, specs, readable, decoder, network, bandwidth, limiter, clock, budgets, policy }) {
     this.url = url;
     this.variable = names.data;
+    this.notes = notes;
     this.times = cz.times;
     /** The authority code of the CRS (`proj:code`, "EPSG:32631"), or null when the store declares none. */
     this.crs = crs.crs;
@@ -406,18 +411,16 @@ export class ChronoStore {
 
     this.levels = dataMetas.map((meta, lod) => {
       const [levelTime, nBand, height, width] = meta.shape;
-      const [, chunkB, chunkHeight, chunkWidth] = storage.data[lod].innerShape;
+      const [, chunkB, storedHeight, storedWidth] = storage.data[lod].innerShape;
+      // Consumers keep one texture shape across the pyramid. The array adapter assembles every level
+      // into the level-0 cell shape when its on-disk chunks differ.
+      const [chunkHeight, chunkWidth] = storage.data[0].innerShape.slice(-2);
       requireStore(levelTime === nTime, url, `level ${lod} has ${levelTime} timesteps, times attr has ${nTime}`);
       requireStore(nBand === bands.length, url, `level ${lod} has ${nBand} bands, bands attr has ${bands.length}`);
-      requireStore(chunkB === nBand, url, `level ${lod} chunks must hold all ${nBand} bands, got ${chunkB}`);
-      requireStore(chunkHeight === chunkWidth && chunkHeight > 0 && chunkHeight % 2 === 0, url, `level ${lod} chunks must be square with a positive even size`);
-      requireStore(lod === 0 || chunkWidth === storage.data[0].innerShape[3], url, 'chunk size must be identical at every level');
+      if (storage.data[lod].innerShape[0] !== 1 || chunkB !== nBand || chunkHeight !== chunkWidth || chunkHeight % 2 !== 0) notes.push(`level ${lod} chunk layout differs from the one-cell profile; cells are assembled from the declared chunks`);
+      if (storedHeight !== chunkHeight || storedWidth !== chunkWidth) notes.push(`level ${lod} stored chunks are ${storedHeight}x${storedWidth}; reader cells use ${chunkHeight}x${chunkWidth} at every level`);
       const declaredGrid = levelMirror?.[lod]?.grid;
-      requireStore(!declaredGrid || JSON.stringify(declaredGrid) === JSON.stringify([Math.ceil(height / chunkHeight), Math.ceil(width / chunkWidth)]), url, `level ${lod} grid mirror disagrees with array`);
-      for (const kind of ['mask', 'coverage']) {
-        const aux = storage[kind]?.[lod];
-        if (aux) requireStore(aux.innerShape[1] === chunkHeight && aux.innerShape[2] === chunkWidth, url, `level ${lod} ${names[kind]} chunks are ${aux.innerShape.slice(1)}, data chunks are ${chunkHeight}x${chunkWidth}`);
-      }
+      if (declaredGrid && JSON.stringify(declaredGrid) !== JSON.stringify([Math.ceil(height / storedHeight), Math.ceil(width / storedWidth)])) notes.push(`level ${lod} grid mirror disagrees with stored chunks; chunks define storage and reader cells define the logical grid`);
       const mirror = levelMirror?.[lod];
       return {
         lod,
@@ -435,6 +438,13 @@ export class ChronoStore {
         transform: mirror?.transform ?? [transform[0] * 2 ** lod, transform[1], transform[2], transform[3], transform[4] * 2 ** lod, transform[5]],
       };
     });
+
+    this.#arrayReaders = Object.fromEntries(['data', 'mask', 'coverage'].map((kind) => [kind, storage[kind]?.map((s, lod) => {
+      const level = this.levels[lod];
+      const shape = kind === 'data' ? [1, level.nBand, level.chunkHeight, level.chunkWidth] : [1, level.chunkHeight, level.chunkWidth];
+      return isCellStorage(s, shape) ? null : createArrayReader(s, `/${datasets[lod].path}/${names[kind]}`, readable, this.#closeController.signal);
+    }) ?? null]));
+    this.notes = Object.freeze([...new Set(notes)]);
 
     this.hasMask = storage.mask !== null;
     this.hasCoverage = storage.coverage !== null;
@@ -766,17 +776,14 @@ export class ChronoStore {
     const targets = new Set([t]);
     const horizon = wholeAxis ? null : this.#policy.horizonSteps;
     const queue = this.#windowPlan(level, cells, t, { direction, behindFactor, loop }, horizon, maxSteps).map(([row, col, ct]) => ({ row, col, t: ct, free: seek && targets.has(ct) }));
+    const inherited = new Set();
     for (const { row, col, t: ct } of queue) {
       const running = this.#liveEntry(chunkKey(lod, row, col, ct));
-      if (!running) continue;
-      // Taken over: this job's workers skip it, so this job hears of it landing here (as the job that started it would have).
-      this.#own(running, signal);
-      running.promise.then(
-        (data) => {
-          if (data && !signal.aborted) onChunk?.(lod, row, col, ct);
-        },
-        () => {},
-      );
+      const mask = withMasks ? this.#liveEntry(this.#auxKey('mask', lod, row, col, ct)) : null;
+      if (running || mask) inherited.add(chunkKey(lod, row, col, ct));
+      // Claim both parts synchronously, before the caller aborts its previous plan.
+      if (running) this.#own(running, signal);
+      if (mask) this.#own(mask, signal);
     }
     const result = { planned: queue.length, fetched: 0, skipped: 0, compressedOnly: 0, masks: 0, budgetReached: false, errors: [] };
     let next = 0;
@@ -790,16 +797,21 @@ export class ChronoStore {
         const failed = failedAt !== undefined && this.#now() - failedAt < PREFETCH_COOLDOWN_MS;
         let idleCharge = 0;
         try {
-          if (this.#cache.has(key) || this.#liveEntry(key) || failed) {
+          const running = this.#liveEntry(key);
+          if (this.#cache.has(key) || running || failed) {
             result.skipped++;
-            // A chunk that is already here may have lost its mask to eviction; a failed cell is left alone.
-            if (withMasks && !failed && this.#maskAllowed(wholeAxis)) {
-              const maskEntry = this.#prefetchMask(lod, row, col, tt, signal);
-              if (maskEntry) {
-                await this.#settle([maskEntry.promise]);
-                this.#chargeMask(maskEntry, wholeAxis);
+            if (failed) continue;
+            if (running) this.#own(running, signal);
+            const maskRunning = withMasks ? this.#liveEntry(this.#auxKey('mask', lod, row, col, tt)) : null;
+            if (maskRunning) this.#own(maskRunning, signal);
+            const maskStarted = withMasks && !maskRunning && this.#maskAllowed(wholeAxis) ? this.#prefetchMask(lod, row, col, tt, signal) : null;
+            if (running || maskRunning || maskStarted || inherited.has(key)) {
+              const [data] = await this.#settle([running?.promise ?? this.#cache.decoded(key), (maskRunning ?? maskStarted)?.promise]);
+              if (maskStarted) {
+                this.#chargeMask(maskStarted, wholeAxis);
                 result.masks++;
               }
+              if (data && !signal.aborted && (!withMasks || this.peekMask(lod, row, col, tt))) onChunk?.(lod, row, col, tt);
             }
             continue;
           }
@@ -851,16 +863,19 @@ export class ChronoStore {
             }
           }
           // The mask of the chunk is fetched alongside it, charged to the same allowances once its size is known.
-          const maskEntry = withMasks ? this.#prefetchMask(lod, row, col, tt, signal) : null;
+          const maskRunning = withMasks ? this.#liveEntry(this.#auxKey('mask', lod, row, col, tt)) : null;
+          if (maskRunning) this.#own(maskRunning, signal);
+          const maskStarted = withMasks && !maskRunning ? this.#prefetchMask(lod, row, col, tt, signal) : null;
+          const maskEntry = maskRunning ?? maskStarted;
           const dataEntry = this.#start(key, meta, { background: !free, owner: signal ?? true });
           const [data] = await this.#settle([dataEntry.promise, maskEntry?.promise]);
-          if (maskEntry) {
-            this.#chargeMask(maskEntry, wholeAxis);
+          if (maskStarted) {
+            this.#chargeMask(maskStarted, wholeAxis);
             result.masks++;
           }
           result.fetched++;
-          if (data) onChunk?.(lod, row, col, tt);
-          else result.compressedOnly++;
+          if (data && !signal.aborted && (!withMasks || this.peekMask(lod, row, col, tt))) onChunk?.(lod, row, col, tt);
+          if (!data) result.compressedOnly++;
         } catch (error) {
           this.#refundIdle(idleCharge);
           if (isAbort(error)) continue;
@@ -923,7 +938,7 @@ export class ChronoStore {
     const key = this.#auxKey('mask', lod, row, col, t);
     const level = this.levels[lod];
     const meta = { kind: 'mask', lod, row, col, t };
-    if (this.#auxCache.has(key) || this.#inflight.has(key) || !this.#auxCache.canHoldDecoded(meta, level.chunkHeight * level.chunkWidth)) return null;
+    if (this.#auxCache.has(key) || this.#liveEntry(key) || !this.#auxCache.canHoldDecoded(meta, level.chunkHeight * level.chunkWidth)) return null;
     return this.#start(key, meta, { background: true, owner: owner ?? true });
   }
 
@@ -993,7 +1008,7 @@ export class ChronoStore {
 
   /** Whether a background chunk of this cell would be kept by either cache tier. */
   #canPlace(meta, decodedSize) {
-    return this.#cache.canHoldDecoded(meta, decodedSize) || this.#cache.canHoldCompressed(meta, decodedSize * this.#ratioOf(meta.lod));
+    return this.#cache.canHoldDecoded(meta, decodedSize) || (!this.#arrayReaders[meta.kind]?.[meta.lod] && this.#cache.canHoldCompressed(meta, decodedSize * this.#ratioOf(meta.lod)));
   }
 
   /** Wait until `bytes` of speculative traffic may start, then spend them. */
@@ -1132,10 +1147,11 @@ export class ChronoStore {
   async #load(key, meta, entry) {
     const { kind, lod } = meta;
     const signal = entry.controller.signal;
-    const spec = this.#specs[kind];
+    const spec = this.#specs[kind][lod];
     const requestedAt = performance.now();
     const held = kind === 'data' ? this.#cache.get(key)?.compressed : null;
-    const bytes = held ?? (await this.#fetchBytes(meta, signal, entry));
+    const assembled = this.#arrayReaders[kind]?.[lod] ? await this.#arrayReaders[kind][lod]({ ...meta, ...this.levels[lod] }, signal, entry.priority) : null;
+    const bytes = assembled ? undefined : held ?? (await this.#fetchBytes(meta, signal, entry));
     const fetchedAt = performance.now();
     const level = this.levels[lod];
     const storage = this.#storage[kind][lod];
@@ -1143,7 +1159,12 @@ export class ChronoStore {
     const size = kind === 'data' ? level.chunkBytes : level.chunkHeight * level.chunkWidth;
     let data = null;
     let retained = null;
-    if (bytes === undefined) {
+    if (assembled) {
+      data = assembled.data;
+      entry.fetchedBytes = assembled.wireBytes;
+      if (kind === 'data') this.#noteCompression(lod, assembled.wireBytes / size);
+      if (entry.background) this.#counters.cache.speculativeBytes += assembled.wireBytes;
+    } else if (bytes === undefined) {
       data = new TypedArray(size / DTYPES[storage.dtype].bytes).fill(storage.fillValue);
     } else {
       const keepCompressed = kind === 'data' && this.#cache.maxCompressed > 0;
@@ -1162,7 +1183,7 @@ export class ChronoStore {
     this.#counters.loads.count++;
     if (!held) this.#counters.loads.fetchMs += fetchedAt - requestedAt;
     this.#counters.loads.decodeMs += decodedAt - fetchedAt;
-    this.probe?.({ type: 'chunk', key, t: meta.t, background: entry.background, requestedAt, fetchedAt, decodedAt, bytes: held ? 0 : (bytes?.length ?? 0), decoded: data !== null });
+    this.probe?.({ type: 'chunk', key, t: meta.t, background: entry.background, requestedAt, fetchedAt, decodedAt, bytes: held ? 0 : (entry.fetchedBytes ?? 0), decoded: data !== null });
     if (kind === 'data') {
       this.#cache.insert(key, { kind, lod, row: meta.row, col: meta.col, t: meta.t }, { data, compressed: held ? null : retained }, { background: entry.background && entry.priority.value !== 0 });
     } else {

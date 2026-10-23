@@ -192,12 +192,17 @@ class HttpStore(Store):
         return await self._request(key, "HEAD") is not None
 
     async def getsize(self, key: str) -> int:
+        size, _ = await self._object_info(key)
+        return size
+
+    async def _object_info(self, key: str) -> tuple[int, str | None]:
+        """Object length and version from one probe, with GET fallback for HEAD refusal."""
         try:
             fetched = await self._request(key, "HEAD")
         except HttpStatusError as error:
             if error.status not in (403, 405):
                 raise
-            return await self._getsize_by_get(key)
+            return await self._object_info_by_get(key)
         if fetched is None:
             raise FileNotFoundError(key)
         length = fetched[1].get("Content-Length")
@@ -205,10 +210,10 @@ class HttpStore(Store):
             raise OSError(
                 f"HEAD {redact_url(object_url(self.url, key))}: no Content-Length header"
             )
-        return int(length)
+        return int(length), fetched[1].get("ETag") or fetched[1].get("Last-Modified")
 
-    async def _getsize_by_get(self, key: str) -> int:
-        """The size from a one-byte GET, for a host that refuses HEAD (URLs presigned for GET).
+    async def _object_info_by_get(self, key: str) -> tuple[int, str | None]:
+        """Length and version from a one-byte GET, for a host that refuses HEAD.
 
         A 206 answer names the size in Content-Range (`bytes 0-0/12345`); a server that ignores
         Range answers 200 with the whole object, and its Content-Length is the size.
@@ -223,7 +228,7 @@ class HttpStore(Store):
                 f"GET {redact_url(object_url(self.url, key))}: no size in Content-Range or "
                 "Content-Length"
             )
-        return int(size)
+        return int(size), headers.get("ETag") or headers.get("Last-Modified")
 
     async def set(self, key: str, value: Buffer) -> None:
         raise PermissionError("HttpStore is read-only")
@@ -316,13 +321,11 @@ class IndexStore(WrapperStore):
             token: object = None
             if time_shard == mutable:
                 if isinstance(underlying, HttpStore):
-                    head = await underlying._request(key, "HEAD")
-                    if head is None:
+                    try:
+                        length, version = await underlying._object_info(key)
+                    except FileNotFoundError:
                         self.cache.pop(key, None)
                         return None
-                    headers = head[1]
-                    length = int(headers["Content-Length"])
-                    version = headers.get("ETag") or headers.get("Last-Modified")
                     token = (length, version) if version else object()
                 elif isinstance(underlying, LocalStore):
                     try:

@@ -52,7 +52,8 @@ dimensions, x/y coordinates, dtype, scale, offset, units, declared nodata, calen
 that differs is reported per file in one `PreflightError`, as for rasters; so are files whose
 times overlap or repeat. A dimension of length 1 besides time, y and x (OISST's `zlev`, a `height`)
 is squeezed, with a `squeezed:` plan line naming it and its value, for a single file as well; a
-longer one needs `--dims band=NAME` or a selection first.
+longer one needs `--dims band=NAME` or a selection first. A squeezed dimension must have the same
+coordinate value and units in every file: different depths, levels or realizations are refused.
 
 Tiles. Earth Engine writes an image larger than its file limit as several files, named `<name>-<row
 offset>-<column offset>.tif`, each a part of one grid, so a series of such exports has several
@@ -628,9 +629,11 @@ def plan_conversion(
                 mask_var,
                 calendar_to_gregorian,
                 files=netcdf_files,
+                scale=scale,
+                offset=offset,
             )
 
-    if scale is not None or offset is not None:
+    if not isinstance(source, XarraySource) and (scale is not None or offset is not None):
         bands, said = override_scaling(source.info.bands, scale, offset)
         source.info = replace(source.info, bands=bands)
         source.notes = (*source.notes, f"override:   {said}")

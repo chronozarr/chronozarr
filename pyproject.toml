@@ -1,6 +1,6 @@
 [project]
 name = "chronozarr"
-version = "0.5.0.dev0"
+version = "0.5.0rc1"
 description = "Turn a raster time series into static files that a browser plays and Python reads with the stored values"
 readme = "README.md"
 license = "Apache-2.0"
@@ -115,7 +115,7 @@ packages = ["src/chronozarr"]
 [tool.hatch.build.targets.sdist]
 include = [
     "src/chronozarr", "tests", "spec", "README.md", "LICENSE", "pyproject.toml",
-    "scripts/check_architecture.py", ".sentrux/rules.toml",
+    "scripts/check_architecture.py", "scripts/check_release.py", ".sentrux/rules.toml",
 ]
 
 [tool.ruff]

@@ -1,5 +1,7 @@
 # Quickstart
 
+**Released package — 0.4.1.** This page uses the released commands and their [0.4.1 documentation](https://github.com/chronozarr/chronozarr/tree/v0.4.1/docs). For the unpublished candidate's converter options, custom CRSs or production viewer bundle, use the [local candidate installation](development.md).
+
 This page takes a folder of dated GeoTIFFs to a link that a colleague can open, and to an interactive viewer on your computer. You need [uv](https://docs.astral.sh/uv/getting-started/installation/) and a web browser. You need no account, no cloud storage and no server.
 
 ## 1. Install
@@ -11,7 +13,7 @@ chronozarr --version
 
 The first command puts the `chronozarr` command on your `PATH`. `--python 3.13` makes uv use Python 3.13 even when an older Python comes first on your computer. uv downloads Python 3.13 if it is not installed. The second command prints `chronozarr, version 0.4.1`. On macOS the first command after an install can take 10 to 25 seconds while the system checks the new files; later commands start in about a second.
 
-chronozarr supports Python 3.11 and newer; this page uses 3.13. The `geo` extra adds GeoTIFF support. NetCDF files need the `netcdf` extra as well; see [From NetCDF or Zarr](convert.md#from-netcdf-or-zarr). To install with pip instead, use an environment with Python 3.11 or newer, such as a virtual environment or a conda environment:
+chronozarr supports Python 3.11 and newer; this page uses 3.13. The `geo` extra adds GeoTIFF support. NetCDF files need the `netcdf` extra as well; see the [released NetCDF guide](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/convert.md#from-netcdf-or-zarr). To install with pip instead, use an environment with Python 3.11 or newer, such as a virtual environment or a conda environment:
 
 ```bash
 python -m pip install 'chronozarr[geo]==0.4.1'
@@ -67,7 +69,7 @@ dry run: nothing was written
 
 Check the dates, the grid, the bands and the scaling. They become the store.
 
-If a file has no date, another grid or other band metadata, the dry run lists every problem by file, with a fix for each. See [Convert your data](convert.md) and [Troubleshooting](troubleshooting.md#conversion).
+If a file has no date, another grid or other band metadata, the dry run lists every problem by file, with a fix for each. See the released [conversion guide](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/convert.md) and [troubleshooting guide](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/troubleshooting.md#conversion).
 
 Then convert:
 
@@ -78,8 +80,7 @@ chronozarr convert sample my_store
 ```text
 wrote my_store: 2 levels, 81 files, 40.2 MB, zstd level 5
 read 12 timesteps (0 reused) in 0.2 s, encoded in 0.3 s, total 0.5 s
-share it: chronozarr share my_store  (temporary public link via a Cloudflare quick tunnel; needs cloudflared)
-preview it here: chronozarr preview my_store  (this computer only)
+preview it: chronozarr preview my_store
 ```
 
 `my_store` is a folder of static files. It holds your values unchanged, plus a coarser copy for zoomed-out views.
@@ -100,7 +101,7 @@ Try these in the viewer:
 - Choose a product, such as NDVI or False color.
 - Click a pixel to see its values over time.
 
-Choose the date, product and view that you want to show. Click Copy link and send the link. The recipient needs only a web browser. The [viewer guide](viewer.md) lists every control.
+Choose the date, product and view that you want to show. Click Copy link and send the link. The recipient needs only a web browser. The [released viewer guide](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/viewer.md) lists its controls; the hosted viewer can change independently when the site is deployed.
 
 Before you send the link, know these limits:
 
@@ -141,15 +142,16 @@ ds = xr.open_dataset("my_store", engine="chronozarr")
 ds["data"].sel(band="B08").isel(time=0, x=100, y=80).item()
 ```
 
-The dataset holds the values that you converted, with the scale applied. The `chronozarr` command from step 1 lives in its own environment, so install the package where your notebook runs: `pip install chronozarr` or `uv add chronozarr`. See [Analyze a store in Python](analyze.md).
+The dataset holds the values that you converted, with the scale applied. The `chronozarr` command from step 1 lives in its own environment, so install the same version where your notebook runs: `pip install chronozarr==0.4.1` or `uv add chronozarr==0.4.1`. See [Analyze a store in Python](analyze.md).
 
 ## Next steps
 
 | I want to | Page |
 |---|---|
-| Convert Zarr, NetCDF, COGs on S3 or PNG frames | [Convert your data](convert.md) |
+| Convert Zarr, NetCDF, COGs on S3 or PNG frames with 0.4.1 | [Released conversion guide](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/convert.md) |
+| Try the unpublished candidate's converter and viewer features | [Local release candidate](development.md) |
 | Build a Sentinel-2 series for my own area | [Sentinel-2 time series](sentinel2.md) |
 | Add new timesteps later | [Append timesteps](append.md) |
 | Show the viewer in my own web page | [Embed the viewer](embedding.md) |
 | Work in Jupyter, on HPC or over SSH | [Notebooks and remote machines](notebooks.md) |
-| Fix a problem | [Troubleshooting](troubleshooting.md) |
+| Fix a problem in 0.4.1 | [Released troubleshooting guide](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/troubleshooting.md) |

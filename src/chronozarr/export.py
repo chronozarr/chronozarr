@@ -174,7 +174,7 @@ def export_cog(
             tag = float("nan")
         else:
             values = np.asarray(opened.read(t, level))
-            tag = _nodata_tag(opened.attrs.nodata, values, plane)
+            tag = _nodata_tag(lod.nodata, values, plane)
         n_band, height, width = values.shape
         with MemoryFile() as memory:
             with memory.open(

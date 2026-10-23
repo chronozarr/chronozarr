@@ -1,12 +1,12 @@
-# Explore the live demo
+# Candidate viewer
 
-[Open the live demo](https://chronozarr.org/demo/). It loads 117 monthly Sentinel-2 composites of the Ucayali River in Peru, November 2015 to February 2026. The store is in a public storage bucket. The viewer reads it directly, with no server in between.
+**Local release candidate — 0.5.0rc1, unpublished.** This guide describes the npm `0.5.0-rc.1` viewer built from the [candidate checkout or artifact](development.md#build-the-candidate-viewer). For the released viewer, use the [0.4.1 viewer guide](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/viewer.md).
 
-This page describes the viewer. Every store that you preview, share or publish opens in the same viewer. It describes the viewer at chronozarr.org/demo/. A viewer folder copied from npm package 0.4.0 (see [Self-host the viewer](viewer-distribution.md)) lacks the start rule below and the messages for a stopped share or a blocked local store; copy it again from 0.4.1.
+[The live demo](https://chronozarr.org/demo/) loads 117 monthly Sentinel-2 composites of the Ucayali River in Peru, November 2015 to February 2026, from a public storage bucket. Its deployed build can differ from this checkout. Installing the candidate Python package does not change the hosted viewer; build a [self-hosted viewer](viewer-distribution.md) to use every feature below.
 
 ## Where it starts
 
-The demo opened from its plain address, `https://chronozarr.org/demo/`, starts at the latest well-covered timestep. Among the newest 24 timesteps, that is the latest in which at least half of the pixels are observed, according to the store's coverage plane, or valid, according to its mask. A store with neither plane starts at its last timestep. The public Ucayali store has neither, so it starts at its last month.
+The candidate viewer opened without a selected store or view starts its catalog's default store at the latest well-covered timestep. Among the newest 24 timesteps, that is the latest in which at least half of the pixels are observed, according to the store's coverage plane, or valid, according to its mask. A store with neither plane starts at its last timestep. The public Ucayali store has neither, so it starts at its last month. A copied viewer has an empty catalog until you supply a store.
 
 Any other address starts where it says. A link with a timestep (`t`) opens at that timestep. A link with a store, a product, a zoom or a centre but no `t` opens at the first timestep, as such links always have. A store that you preview, share or publish opens at its first timestep unless its link says otherwise.
 
@@ -68,7 +68,7 @@ The address uses these parameters:
 | `z` | Zoom, in screen pixels per stored pixel | `z=2.5` |
 | `c` | Map centre x,y in the store's coordinate system | `c=684500,9123350` |
 
-`chronozarr link STORE_URL` prints the same kind of link from the command line and checks it against the store. It sets `t`, `p`, `b`, `r`, `cm`, `z` and `c` with `--time`, `--product`, `--band`, `--range`, `--colormap`, `--zoom` and `--lonlat` or `--xy`. To show the viewer inside your own page, see [Embed the viewer](embedding.md).
+The candidate `chronozarr link STORE_URL` prints the same kind of link from the command line and checks it against the store. It sets `t`, `p`, `b`, `r`, `cm`, `z` and `c` with `--time`, `--product`, `--band`, `--range`, `--colormap`, `--zoom` and `--lonlat` or `--xy`. Use `--viewer` to point the link at your hosted candidate viewer. To show the viewer inside your own page, see [Embed the viewer](embedding.md).
 
 ### Choose a date and a place
 

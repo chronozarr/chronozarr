@@ -102,21 +102,22 @@ const TOLERANCE = 2;
 
 /**
  * Compare the GPU pixels of a capture with the CPU render of the values the store holds (the `values` function that
- * built it), and check the frame is complete, drawn at level 0 and free of GL errors. A texel outside the store, or
+ * built it), and check the frame is complete, drawn at the requested level and free of GL errors. A texel outside the store, or
  * one the store's mask marks invalid, is background.
  */
-export function expectFrameMatchesStore(capture, storeName, t) {
+export function expectFrameMatchesStore(capture, storeName, t, lod = 0) {
   expect(capture.frame, 'the viewer painted a frame').not.toBeNull();
   expect(capture.complete, 'the frame is complete').toBe(true);
-  expect(capture.lod, 'the stores are small enough to be drawn at level 0').toBe(0);
+  expect(capture.lod, 'the viewer drew the expected level').toBe(lod);
   expect(capture.glError, 'gl.getError() after the frame (0 = NO_ERROR)').toBe(0);
   expect(capture.nonBackground, 'share of the canvas that is not background').toBeGreaterThan(0.05);
   const { spec } = STORES[storeName];
   const mismatches = [];
   for (const { X, Y, canvas, rgb } of capture.samples) {
     const inside = X < spec.width && Y < spec.height;
-    const stored = Array.from({ length: spec.nBand }, (_, band) => storedValue(storeName, t, band, Y, X));
-    const masked = spec.mask && maskValue(t, Y, X, 0) === 0;
+    const y = Math.floor(Y / 2 ** lod), x = Math.floor(X / 2 ** lod);
+    const stored = Array.from({ length: spec.nBand }, (_, band) => storedValue(storeName, t, band, y, x, lod));
+    const masked = spec.mask && maskValue(t, y, x, lod) === 0;
     const expected = inside && !masked ? shadeTexel(capture.frame, stored) : [...BACKGROUND];
     if (rgb === null || rgb.some((c, i) => Math.abs(c - expected[i]) > TOLERANCE)) {
       mismatches.push(`pixel (${X}, ${Y}) at canvas (${canvas.x}, ${canvas.y}), t=${t}, stored [${stored}]${masked ? ', masked' : ''}: GPU ${JSON.stringify(rgb)}, CPU ${JSON.stringify(expected.map((c) => Math.round(c)))}`);

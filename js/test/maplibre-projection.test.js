@@ -1,7 +1,7 @@
 import { registerHooks } from 'node:module';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DAYMET_LCC, MODIS_SINUSOIDAL, NSIDC_POLAR_STEREOGRAPHIC_NORTH, WGS84_UTM_31N } from '../support/crs-fixtures.js';
+import { DAYMET_LCC, MODIS_SINUSOIDAL, NSIDC_POLAR_STEREOGRAPHIC_NORTH, WGS84_PSEUDO_MERCATOR, WGS84_UTM_31N } from '../support/crs-fixtures.js';
 import {
   SUPPORTED_CRS,
   createProjection,
@@ -193,16 +193,16 @@ test('the WKT2 wins when the code names another CRS', async () => {
   assert.ok(Math.abs(fx - x) < 1e-3 && Math.abs(fy - y) < 1e-3, `got ${fx}, ${fy}`);
 });
 
-test('a code the built-ins know stays on them when the WKT2 ends in the same ID, and a store object works as the source', async () => {
+test('a verified WKT2 definition stays on the matching builtin; an authority ID alone is not a definition', async () => {
   const store = { crs: 'EPSG:32631', wkt2: WGS84_UTM_31N.wkt2, projjson: null };
   const projection = await createProjection(store);
   assert.equal(projection.kind, 'utm');
   assert.deepEqual(projection.fromLonLat(3, 0), [500000, 0]);
-  assert.equal((await createProjection({ crs: null, wkt2: WGS84_UTM_31N.wkt2 })).kind, 'utm', 'the ID of the WKT2 is enough without the code');
-  assert.equal((await createProjection({ projjson: { type: 'ProjectedCRS', id: { authority: 'EPSG', code: 3857 } } })).kind, 'web-mercator');
+  assert.equal((await createProjection({ crs: null, wkt2: WGS84_UTM_31N.wkt2 })).kind, 'utm', 'the WKT2 and its ID are verified without a separate code');
+  await assert.rejects(createProjection({ projjson: { type: 'ProjectedCRS', id: { authority: 'EPSG', code: 3857 } } }), /cannot place a store/);
 });
 
-test('proj4 is imported when no built-in projection matches, and never for an EPSG store', async () => {
+test('code-only builtins import no parser; WKT definitions are verified before choosing a builtin', async () => {
   const requested = [];
   const hooks = registerHooks({
     resolve(specifier, context, nextResolve) {
@@ -211,12 +211,48 @@ test('proj4 is imported when no built-in projection matches, and never for an EP
     },
   });
   try {
-    for (const source of ['EPSG:32631', 'EPSG:32718', 'EPSG:3857', 'EPSG:4326', { crs: 'EPSG:32631', wkt2: WGS84_UTM_31N.wkt2 }]) await createProjection(source);
+    for (const source of ['EPSG:32631', 'EPSG:32718', 'EPSG:3857', 'EPSG:4326']) await createProjection(source);
     assert.deepEqual(requested.filter((specifier) => /proj4|vendor/.test(specifier)), [], 'EPSG stores import nothing');
+    await createProjection({ crs: 'EPSG:32631', wkt2: WGS84_UTM_31N.wkt2 });
     await createProjection({ wkt2: DAYMET_LCC.wkt2 });
-    assert.deepEqual(requested.filter((specifier) => /proj4/.test(specifier)), ['../vendor/proj4/proj4.js']);
+    assert.ok(requested.some((specifier) => /proj4/.test(specifier)));
   } finally {
     hooks.deregister();
+  }
+});
+
+test('a stale EPSG code and WKT root ID do not override changed projection parameters', async () => {
+  const wkt2 = WGS84_UTM_31N.wkt2.replace('PARAMETER["False easting",500000', 'PARAMETER["False easting",600000');
+  const projection = await createProjection({ crs: WGS84_UTM_31N.code, wkt2 });
+  assert.equal(projection.kind, 'proj4');
+  assert.ok(Math.abs(projection.fromLonLat(3, 0)[0] - 600000) < 1e-6);
+});
+
+for (const field of ['wkt2', 'projjson']) test(`official EPSG:3857 ${field} retains the pseudo-Mercator sphere and matches pyproj`, async () => {
+  const projection = await createProjection({ crs: WGS84_PSEUDO_MERCATOR.code, [field]: WGS84_PSEUDO_MERCATOR[field] });
+  assert.equal(projection.kind, 'web-mercator');
+  for (const [lon, lat, x, y] of WGS84_PSEUDO_MERCATOR.points) {
+    const [fx, fy] = projection.fromLonLat(lon, lat);
+    assert.ok(Math.abs(fx - x) < 1e-6 && Math.abs(fy - y) < 1e-6, `${fx}, ${fy}; expected ${x}, ${y}`);
+  }
+});
+
+test('stale EPSG:3857 IDs do not hide changed offsets or a genuinely ellipsoidal Mercator method', async () => {
+  const changedOffset = structuredClone(WGS84_PSEUDO_MERCATOR.projjson);
+  changedOffset.conversion.parameters.find(({ name }) => name === 'False easting').value = 100000;
+  const shifted = await createProjection({ crs: 'EPSG:3857', projjson: changedOffset });
+  assert.equal(shifted.kind, 'proj4');
+  const [x, y] = shifted.fromLonLat(30, 60);
+  assert.ok(Math.abs(x - 3439584.723798207) < 1e-6 && Math.abs(y - 8399737.889818357) < 1e-6);
+  const changedMethod = WGS84_PSEUDO_MERCATOR.wkt2.replace('Popular Visualisation Pseudo Mercator', 'Mercator (variant A)').replace('ID["EPSG",1024]', 'ID["EPSG",9804]');
+  for (const wkt2 of [changedMethod, `${changedMethod}\n`,
+    changedMethod.replace(/ID\["EPSG",3857\]\]$/, 'ID["EPSG",3857,URI["https://epsg.io/3857"]]]'),
+    changedMethod.replace(/\]$/, ',REMARK["root authority precedes this remark"]]'),
+    changedMethod.replace(/\]$/, ',ID["EPSG",3857,URI["https://epsg.io/3857"]]]'),
+  ]) {
+    const ellipsoidal = await createProjection({ crs: 'EPSG:3857', wkt2 });
+    assert.equal(ellipsoidal.kind, 'proj4');
+    assert.ok(Math.abs(ellipsoidal.fromLonLat(30, 60)[1] - 8362698.548500747) < 1e-6);
   }
 });
 

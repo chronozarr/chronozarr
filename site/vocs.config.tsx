@@ -102,7 +102,8 @@ export default defineConfig({
     { text: 'Start here', items: [
       { text: 'What is chronozarr?', link: '/what-is-chronozarr' },
       { text: 'Quickstart', link: '/quickstart' },
-      { text: 'Explore the live demo', link: '/viewer' },
+      { text: 'Local release candidate', link: '/guides/development' },
+      { text: 'Candidate viewer', link: '/viewer' },
     ] },
     { text: 'Create and share', items: [
       { text: 'Convert your data', link: '/guides/convert' },
@@ -136,6 +137,7 @@ export default defineConfig({
       { text: 'How it works', link: '/how-it-works' },
       { text: 'Performance and evidence', link: '/performance' },
       { text: 'Measurement log', link: '/reference/evidence' },
+      { text: '0.5.0rc1 candidate notes', link: '/reference/release-0.5.0rc1' },
       { text: 'Troubleshooting', link: '/troubleshooting' },
       { text: 'Format comparison', link: '/guides/format-comparison' },
     ] },
