@@ -123,6 +123,90 @@ def test_viewer_dir_is_served_next_to_the_store_with_module_types(store, viewer_
     assert get(f"{base}/demo/missing.js")[0] == 404
 
 
+@pytest.mark.parametrize("mount", ["store", "viewer"])
+@pytest.mark.parametrize("link_kind", ["file", "directory"])
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+@pytest.mark.parametrize("range_header", [None, "bytes=0-5"])
+def test_server_refuses_symlinks_outside_each_mount(
+    store, viewer_dir, tmp_path, mount, link_kind, method, range_header
+):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "private.txt"
+    marker.write_bytes(b"outside-store-marker")
+    root = store if mount == "store" else viewer_dir
+    link = root / "escape"
+    if link_kind == "file":
+        link.symlink_to(marker)
+        suffix = "escape"
+    else:
+        link.symlink_to(outside, target_is_directory=True)
+        suffix = "escape/private.txt"
+    server = serve_store(store, viewer_dir=viewer_dir)
+    base = server.url if mount == "store" else f"{server.root_url}/{VIEWER_MOUNT}"
+    headers = {"Range": range_header} if range_header else {}
+    request = urllib.request.Request(f"{base}/{suffix}", headers=headers, method=method)
+    with pytest.raises(urllib.error.HTTPError) as error:
+        urllib.request.urlopen(request)
+    with error.value as response:
+        assert response.code == 404
+        assert b"outside-store-marker" not in response.read()
+
+
+@pytest.mark.parametrize("mount", ["store", "viewer"])
+@pytest.mark.parametrize("link_kind", ["file", "directory"])
+def test_server_keeps_symlinks_within_their_mount_readable(store, viewer_dir, mount, link_kind):
+    root = store if mount == "store" else viewer_dir
+    inside = root / "inside"
+    inside.mkdir()
+    marker = inside / "public.txt"
+    marker.write_bytes(b"public-marker")
+    link = root / "alias"
+    if link_kind == "file":
+        link.symlink_to(marker)
+        suffix = "alias"
+    else:
+        link.symlink_to(inside, target_is_directory=True)
+        suffix = "alias/public.txt"
+    server = serve_store(store, viewer_dir=viewer_dir)
+    base = server.url if mount == "store" else f"{server.root_url}/{VIEWER_MOUNT}"
+    assert get(f"{base}/{suffix}")[::2] == (200, b"public-marker")
+    request = urllib.request.Request(f"{base}/{suffix}", headers={"Range": "bytes=0-5"})
+    with urllib.request.urlopen(request) as response:
+        assert (response.status, response.read()) == (206, b"public")
+
+
+@pytest.mark.parametrize("mount", ["store", "viewer"])
+def test_server_returns_not_found_for_a_symlink_loop(store, viewer_dir, mount):
+    root = store if mount == "store" else viewer_dir
+    (root / "loop").symlink_to("loop")
+    server = serve_store(store, viewer_dir=viewer_dir)
+    base = server.url if mount == "store" else f"{server.root_url}/{VIEWER_MOUNT}"
+    assert get(f"{base}/loop")[0] == 404
+
+
+@pytest.mark.parametrize("mount", ["store", "viewer"])
+@pytest.mark.parametrize(
+    ("extension", "mime"),
+    [("js", "text/javascript"), ("mjs", "text/javascript"), ("wasm", "application/wasm")],
+)
+def test_internal_symlink_keeps_the_requested_module_type(
+    store, viewer_dir, mount, extension, mime
+):
+    root = store if mount == "store" else viewer_dir
+    target = root / "module.txt"
+    target.write_bytes(b"module-bytes")
+    (root / f"entry.{extension}").symlink_to(target)
+    server = serve_store(store, viewer_dir=viewer_dir)
+    base = server.url if mount == "store" else f"{server.root_url}/{VIEWER_MOUNT}"
+    for method in ("GET", "HEAD"):
+        request = urllib.request.Request(f"{base}/entry%2e{extension}?v=1", method=method)
+        with urllib.request.urlopen(request) as response:
+            assert response.status == 200
+            assert response.headers["Content-Type"] == mime
+            assert response.read() == (b"module-bytes" if method == "GET" else b"")
+
+
 def test_viewer_is_not_served_unless_asked_for(store):
     server = serve_store(store)
     assert get(f"{server.root_url}/{VIEWER_MOUNT}/demo/index.html")[0] == 404
