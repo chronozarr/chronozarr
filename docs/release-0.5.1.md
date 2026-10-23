@@ -66,6 +66,13 @@ shared dependencies, verified through Wrangler and Chromium. Sentinel-1 warns an
 partial query months, and all water-mask instructions restrict offset correction to verified
 legacy inputs. Source archives include the shipped tests' inputs and collect without Git.
 
+A third independent review repairs MapLibre mask handling in pixel queries and automatic display,
+recovers complete samples when the CPU cache is smaller than the GPU view, and preserves the shared
+GL context's unpack alignment for narrow chunks. The sample fetchers again use a working bounded
+scene loader, legacy NPZ caches receive the AOI grid guard, and source audits follow conversion's
+chronological UTC ordering. Sentinel-2 guidance records clipping before the median; water overviews
+are described and checked as recursive means, with level 0 used for water-area statistics.
+
 ## Repairs from the merged-batch review
 
 | Finding | Corrected behavior |
@@ -89,7 +96,7 @@ legacy inputs. Source archives include the shipped tests' inputs and collect wit
 
 ## Validation and publication status
 
-Release preparation starts from merged commit `63610f8` (PR #141). The JavaScript runtime is the tested `0.5.0rc1` candidate promoted to version 0.5.1; Python additionally fixes local-server path containment and preserves module-alias MIME types. Release metadata, current installation guides, site navigation and deployment tooling are updated for the stable version. Source archives select explicit project paths and the shipped tests' inputs, with dependency and generated trees excluded. Unmerged SAR playback-cache work in PR #140 is outside this release.
+Release preparation starts from merged commit `63610f8` (PR #141). The core JavaScript reader and standalone viewer retain the tested `0.5.0rc1` runtime, with additional MapLibre adapter repairs from release review. Python additionally fixes local-server path containment and preserves module-alias MIME types. Release metadata, current installation guides, site navigation and deployment tooling are updated for the stable version. Source archives select explicit project paths and the shipped tests' inputs, with dependency and generated trees excluded. Unmerged SAR playback-cache work in PR #140 is outside this release.
 
 Before promotion, the candidate passed Python 3.11 and 3.13 installed-wheel checks, JavaScript and browser checks, package installation and offline viewer checks, notebook checks and paired speed gates. The [candidate PR](https://github.com/chronozarr/chronozarr/pull/141) records the exact validation and its limits. Earlier results in the [measurement log](evidence.md) retain their dated sources and environments.
 

@@ -32,10 +32,10 @@ The combined documentation, release-version and example checks passed 120 tests.
 
 The reviews did not rerun full remote ingests, upload datasets, validate new cloud-account integrations or reproduce every historical performance measurement. Legacy SAR caches without spatial identity now require a fresh cache name or directory; no existing cache was rewritten during this work. NISAR discovers scenes and reads the first granule's grid metadata before it can compare the requested window with cached metadata.
 
-The first pass retained the candidate's packaged runtime. The second pass below adds a Python
-server containment fix; the JavaScript reader and renderer remain unchanged. The SAR fixes are
-repository examples. The dataset host, package registries and hosted site remain separate
-publication steps.
+The first pass retained the candidate's packaged runtime. The second pass below added a Python
+server containment fix; the third also repairs the MapLibre adapter. The core JavaScript reader
+and standalone viewer retain the candidate's runtime. The SAR fixes are repository examples.
+The dataset host, package registries and hosted site remain separate publication steps.
 
 ## Second independent review
 
@@ -69,3 +69,41 @@ The release artifacts retain the detailed check results and source identity.
 The second pass did not run full remote ingests, public tunnels or production deployments, and
 did not qualify minimum-dependency combinations. Archive collection checks imports and inputs;
 focused tests and installed-wheel checks provide separate execution coverage.
+
+## Third independent review
+
+Three fresh read-only reviewers examined commit `55fccd8` independently: one followed the README
+and newcomer workflows, one traced the active documentation and APIs, and one reviewed all active
+examples and their scientific interpretation. They formed their findings before reading earlier
+review records or the pull request description. The README review found no blocking issue and
+suggested refreshing the quickstart's printed next-step transcript, which is now updated.
+
+Seven P2 findings and one P3 finding were resolved, including an upload defect discovered during
+the independent GPU follow-up. The small-cache cases below extend the automatic-range finding.
+
+| Severity | Finding | Resolution |
+|---|---|---|
+| P2 | MapLibre pixel queries returned masked values and computed indices without the mask; valid zeros could lose their indices | Pass sampled validity to the shared pixel description, which controls values and products consistently |
+| P2 | MapLibre automatic ranges and reflectance stretch included masked pixels, rejected valid sentinel-valued samples, and could lack samples after CPU eviction | Sample valid pixels with padded chunk strides and mask precedence. Recover missing CPU samples one cell at a time and retain only one view's compact samples, capped at 300 per cell. Empty views wait for valid data without repeated reads; stale time/view results cannot commit |
+| P2 | Narrow data and mask rows were uploaded using the shared GL context's unpack alignment, causing GL errors | Use tightly packed row alignment for both uploads, restoring the caller's alignment even if an upload throws |
+| P2 | Sentinel-2's offset explanation omitted clipping and put correction after the median | Explain per-scene correction and clipping before compositing, including loss of zero/negative reflectance; align new provenance text without changing ingest values |
+| P2 | Legacy NPZ monthly caches bypassed the requested AOI grid check | Discover both supported monthly formats through the existing common helper and compare the cached grid before reuse |
+| P2 | Three sample fetchers imported a removed scene loader and failed before catalog access | Restore a bounded loader using the current SCL, band-read, offset and clipping primitives; all three fetchers execute against local synthetic assets |
+| P2 | Water overviews were described and checked as conserved whole-block fractions despite recursive averaging of differently supported child blocks | Explain recursive floor means and use level 0 for water-area statistics. Independently check every available overview against the recursive rule, including odd edges; core resampling is unchanged |
+| P3 | Source audits compared CSV row order with the converter's chronological order | Use the converter's manifest parser for sorting, URI resolution and UTC timestamps, including reversed rows and timezone offsets |
+
+The initial examples review passed 187 focused tests with no skips. After repairs, 197 focused
+Python checks and 74 focused Node checks passed with no skips. The new browser regression
+executes 13 actual WebGL2 cases under SwiftShader, covering pixel queries, automatic single-band,
+reflectance and SAR display, partial cells, empty initial frames and packed uploads. It uses no
+remote basemap or external requests. Independent follow-up also passed 24 GPU cases on ANGLE
+Metal with initial unpack alignments of 4 and 8, plus six actual-GPU sampling-job probes covering
+tiny caches, empty views, stale time/view results, errors, cooldown recovery and disposal.
+
+All three focused follow-up reviews reported no remaining actionable findings in these repairs.
+Ruff lint/format, type checks, architecture checks and the site build passed. Artifact and CI
+receipts identify the final source and packages; local CPU adapter microbenchmarks are separate
+from the standalone viewer speed gates and do not establish network, decode or GPU timings.
+
+This round did not run full remote ingests, provider-account checks, public tunnels, deployment
+or package publication. The full unit suite remains a hosted-CI check, not a local run.
