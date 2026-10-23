@@ -1,6 +1,6 @@
 # Command line
 
-**Local release candidate — 0.5.0rc1, unpublished.** Follow the [candidate installation](development.md) before using this reference. For the released package, use the [0.4.1 command line reference](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/cli.md).
+**Package version — 0.5.0.** Follow the [installation guide](quickstart.md#1-install) before using this reference. The [release notes](release-0.5.0.md) describe compatibility and changes since 0.4.1.
 
 Run `chronozarr <command> --help` for every option. In a uv project, run `uv run chronozarr <command> --help`. A standalone tool or pip installation runs `chronozarr` directly.
 

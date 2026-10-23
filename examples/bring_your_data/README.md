@@ -10,7 +10,7 @@ Run this command from the repository root.
 uv sync --extra geo
 ```
 
-This checkout uses the 0.4.1 source version from the repository. For a standalone install, use `python -m pip install --upgrade "chronozarr[geo]==0.4.1"` instead. Python 3.11 or newer is required.
+This checkout uses the 0.5.0 source version from the repository. For a standalone install, use `python -m pip install --upgrade "chronozarr[geo]==0.5.0"` instead. Python 3.11 or newer is required.
 
 The bundle script below needs this checkout because it copies the viewer from `js/`; it needs no npm install or build. To copy the viewer from the npm package instead, see [self-host the packaged viewer](../../docs/viewer-distribution.md).
 

@@ -1,21 +1,21 @@
 # Self-host the viewer
 
-**Local release candidate — 0.5.0rc1, unpublished.** This guide builds the npm `0.5.0-rc.1` viewer from the [candidate checkout](development.md). The same build is copied by the [local npm artifact](development.md#install-local-candidate-artifacts). For the released npm package, use the [0.4.1 distribution guide](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/viewer-distribution.md).
+**Package version — 0.5.0.** The npm package contains the production viewer bundle. You can copy that bundle with `chronozarr-viewer`, or build the same viewer from a [source checkout](development.md).
 
-The checkout builds the page, one script for the viewer and reader, one for the decode worker, the codecs and their licenses. The viewer runs in the browser. The host only serves files. Node.js builds and copies the files once and is not needed on the host. The npm 0.4.1 package copies a module-based viewer and does not contain this production bundle.
+The viewer folder contains the page, one script for the viewer and reader, one for the decode worker, the codecs and their licenses. The viewer runs in the browser. The host only serves files. Node.js copies the files once and is not needed on the host.
 
 ## Copy the viewer
 
-1. Use the prepared [candidate checkout](development.md#install-the-command-line-tool). From its root, install the JavaScript build dependencies:
+1. Install the npm package in a JavaScript project:
 
    ```sh
-   npm ci --prefix js --min-release-age=7
+   npm install chronozarr@0.5.0
    ```
 
 2. Copy the viewer into a new folder, `published/`.
 
    ```sh
-   node js/support/viewer-bundle.mjs published --store ./store
+   npm exec -- chronozarr-viewer published --store ./store
    ```
 
 3. Copy your store into that folder.
@@ -52,7 +52,7 @@ In a notebook, pass `viewer_dir="published"` to `chronozarr.view` or `chronozarr
 Give an absolute URL instead of a path:
 
 ```sh
-node js/support/viewer-bundle.mjs published --store https://example.org/my-store
+npm exec -- chronozarr-viewer published --store https://example.org/my-store
 ```
 
 The host of the store must send CORS headers. See [hosting requirements](hosting-requirements.md).
@@ -60,11 +60,22 @@ The host of the store must send CORS headers. See [hosting requirements](hosting
 ## What the copy command does
 
 - It refuses to overwrite a folder that exists.
-- It builds and copies this checkout's viewer. A browser reads `demo/viewer.js` in one request instead of fetching the source module graph. The WebAssembly codecs (`demo/codecs/`) and proj4 (`demo/chunks/`) load only when a store needs them. The copy command builds the viewer first using the dependencies installed above.
+- It copies the installed package's viewer. A browser reads `demo/viewer.js` in one request instead of fetching the source module graph. The WebAssembly codecs (`demo/codecs/`) and proj4 (`demo/chunks/`) load only when a store needs them.
 - It does not check or copy data.
 - It writes an empty catalog. A store that fails to load never falls back to the public sample data.
 
 Without `--store`, the landing page shows "No store selected". To choose a store, open `demo/index.html?store=<URL>` in the copied folder. For an iframe, add `&embed=1`. See [embedding](embedding.md) for the controls and the origin restriction.
+
+## Build from source
+
+From the root of a [source checkout](development.md), install the locked build dependencies and copy the viewer:
+
+```sh
+npm ci --prefix js --min-release-age=7
+node js/support/viewer-bundle.mjs published --store ./store
+```
+
+This builds the viewer before copying it. Use a new output folder for each build.
 
 ## Test the package
 

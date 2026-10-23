@@ -1,8 +1,10 @@
 # chronozarr 0.5.0rc1: local release candidate
 
+This is the preparation record for the unpublished candidate. See the [0.5.0 release notes](release-0.5.0.md) for the final release, and the [frozen candidate installation guide](https://github.com/chronozarr/chronozarr/blob/ef3dbfcbb514971603c1cfd3ae06cd894a68f489/docs/development.md) to reproduce the local candidate.
+
 **Local candidate only, unpublished.** Python `0.5.0rc1` and npm `0.5.0-rc.1` name the same release candidate. It combines the changes merged since 0.4.1 through `04395f4` with the sixteen repairs from the merged-batch review. No candidate package, tag, site deployment or hosted-viewer update has been published. The stable install examples remain pinned to 0.4.1.
 
-Use the [prepared checkout or local artifacts](development.md) to try the candidate. The [0.4.1 documentation](https://github.com/chronozarr/chronozarr/tree/v0.4.1/docs) continues to describe that release.
+Use the [prepared checkout or local artifacts](https://github.com/chronozarr/chronozarr/blob/ef3dbfcbb514971603c1cfd3ae06cd894a68f489/docs/development.md) to try the candidate. The [0.4.1 documentation](https://github.com/chronozarr/chronozarr/tree/v0.4.1/docs) continues to describe that release.
 
 ## Conversion and source metadata
 
@@ -39,7 +41,7 @@ The viewer adds a dual-polarization SAR composite, single-band Viridis/Magma/Tur
 
 The npm tarball contains a production viewer bundle with a viewer script, decode worker and lazy codecs/projection parser. Catalog and root metadata requests start early. Bandwidth-aware playback and shared speculative request budgets adapt to slow links. Benchmark warm loops count their actual requests and bytes; the repository has paired speed-gate checks rather than treating a warm loop with traffic as a cache hit.
 
-The Python package, npm package, dataset host and viewer served at chronozarr.org are separate. Installing either local package does not update the hosted demo. Use the [local npm artifact](development.md#install-local-candidate-artifacts) or [build this checkout's viewer](viewer-distribution.md) for candidate behavior.
+The Python package, npm package, dataset host and viewer served at chronozarr.org are separate. Installing either local package does not update the hosted demo. Use the [local npm artifact](https://github.com/chronozarr/chronozarr/blob/ef3dbfcbb514971603c1cfd3ae06cd894a68f489/docs/development.md#install-local-candidate-artifacts) or build that candidate checkout's viewer for candidate behavior.
 
 ## Sharing, publication and development tools
 

@@ -1,4 +1,4 @@
-"""Local candidate guides select local inputs; stable installation instructions stay released."""
+"""Release guides, install commands and local artifacts agree on the current version."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from tests.test_docs import REPO, SITE_SOURCES, USER_DOCS, _commands
 
 pytestmark = pytest.mark.unit
 
-DEVELOPMENT_GUIDES = (
+RELEASE_GUIDES = (
     "convert.md",
     "python.md",
     "cli.md",
@@ -24,14 +24,20 @@ DEVELOPMENT_GUIDES = (
 )
 
 
-@pytest.mark.parametrize("guide", DEVELOPMENT_GUIDES)
-def test_development_guides_select_a_source_install_and_link_the_stable_version(guide):
+@pytest.mark.parametrize("guide", RELEASE_GUIDES)
+def test_release_guides_select_the_matching_installation_and_release_notes(guide):
     version = tomllib.loads((REPO / "pyproject.toml").read_text())["project"]["version"]
     text = (REPO / "docs" / guide).read_text()
     introduction = text.split("\n## ", 1)[0]
-    assert f"Local release candidate — {version}, unpublished" in introduction
-    assert re.search(r"\]\(development\.md(?:#[^)]+)?\)", introduction)
-    assert f"https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/{guide}" in introduction
+    assert f"Package version — {version}." in introduction
+    assert "Local release candidate" not in introduction
+    assert re.search(
+        r"\]\((?:quickstart|viewer-distribution|development)\.md(?:#[^)]+)?\)", introduction
+    )
+    assert f"release-{version}.md" in introduction or guide in (
+        "viewer.md",
+        "viewer-distribution.md",
+    )
 
 
 def test_shared_development_install_uses_local_source_for_the_tool_and_python_project():
@@ -66,30 +72,29 @@ def test_shared_development_install_uses_local_source_for_the_tool_and_python_pr
     assert not any(words[:2] == ["git", "clone"] for words in commands)
 
 
-def test_development_guides_cannot_silently_install_the_registry_release():
-    for guide in (*DEVELOPMENT_GUIDES, "development.md"):
-        for command in _commands((REPO / "docs" / guide).read_text()):
-            words = shlex.split(command)
-            installing = words[:3] == ["uv", "tool", "install"] or words[:2] == ["uv", "add"]
-            installing |= words[:2] == ["npm", "install"]
-            installing |= any(words[i : i + 2] == ["pip", "install"] for i in range(len(words)))
-            if installing:
-                assert not any(
-                    re.fullmatch(r"chronozarr(?:\[[^\]]+\])?(?:(?:==|@)[^ ]+)?", word)
-                    for word in words
-                ), f"{guide} installs the registry package: {command}"
+def test_local_source_installation_uses_local_inputs():
+    for command in _commands((REPO / "docs/development.md").read_text()):
+        words = shlex.split(command)
+        installing = words[:3] == ["uv", "tool", "install"] or words[:2] == ["uv", "add"]
+        installing |= words[:2] == ["npm", "install"]
+        installing |= any(words[i : i + 2] == ["pip", "install"] for i in range(len(words)))
+        if installing:
+            assert not any(
+                re.fullmatch(r"chronozarr(?:\[[^\]]+\])?(?:(?:==|@)[^ ]+)?", word)
+                for word in words
+            ), f"development.md installs the registry package: {command}"
 
 
-def test_candidate_artifact_instructions_install_exact_local_versions():
+def test_artifact_instructions_install_exact_local_versions():
     version = tomllib.loads((REPO / "pyproject.toml").read_text())["project"]["version"]
     npm = json.loads((REPO / "js/package.json").read_text())["version"]
     text = (REPO / "docs/development.md").read_text()
     commands = [shlex.split(command) for command in _commands(text)]
-    wheel = f"/absolute/path/to/rc-artifacts/chronozarr-{version}-py3-none-any.whl"
+    wheel = f"/absolute/path/to/release-artifacts/chronozarr-{version}-py3-none-any.whl"
     selector = f"{wheel}[geo,netcdf,cftime]"
     assert ["uv", "tool", "install", "--python", "3.13", "--force", selector] in commands
     assert ["uv", "add", selector] in commands
-    tarball = f"/absolute/path/to/rc-artifacts/chronozarr-{npm}.tgz"
+    tarball = f"/absolute/path/to/release-artifacts/chronozarr-{npm}.tgz"
     assert ["npm", "install", tarball, "--min-release-age=7"] in commands
     assert ["npm", "ls", "chronozarr"] in commands
     assert [
@@ -102,18 +107,18 @@ def test_candidate_artifact_instructions_install_exact_local_versions():
         "./store",
     ] in commands
     assert f"chronozarr-{version}.tar.gz" in text
-    assert "has not been published, tagged or deployed" in text
-    assert f"Python version is `{version}`" in text
-    assert f"npm version is `{npm}`" in text
+    assert "Installing a local artifact does not publish it" in text
+    assert f"Python and npm **{version}**" in text
+    assert f"`npm ls` must show version `{npm}`" in text
 
 
-def test_candidate_notes_record_the_scope_and_all_sixteen_repairs():
+def test_release_notes_record_the_scope_and_all_sixteen_repairs():
     version = tomllib.loads((REPO / "pyproject.toml").read_text())["project"]["version"]
     npm = json.loads((REPO / "js/package.json").read_text())["version"]
     text = (REPO / f"docs/release-{version}.md").read_text()
-    assert "**Local candidate only, unpublished.**" in text
-    assert f"Python `{version}` and npm `{npm}`" in text
-    assert "04395f4" in text
+    assert version == npm
+    assert f"Python and npm **{version}**" in text
+    assert "63610f8" in text
     assert set(re.findall(r"^\| (\d+) \|", text, re.MULTILINE)) == {str(n) for n in range(1, 17)}
     for feature in (
         "--bands-are-dates",
@@ -129,48 +134,49 @@ def test_candidate_notes_record_the_scope_and_all_sixteen_repairs():
     assert all(name in text for name in ("release-checks.md", "manifest.json", "SHA256SUMS"))
 
 
+def test_candidate_record_keeps_its_unpublished_scope_and_frozen_installation():
+    text = (REPO / "docs/release-0.5.0rc1.md").read_text()
+    assert "**Local candidate only, unpublished.**" in text
+    assert "Python `0.5.0rc1` and npm `0.5.0-rc.1`" in text
+    assert "ef3dbfcbb514971603c1cfd3ae06cd894a68f489/docs/development.md" in text
+
+
 def test_user_docs_never_install_the_absent_cftime_extra_from_041():
     absent_extra = re.compile(r"chronozarr\[[^\]]*\bcftime\b[^\]]*\]==0\.4\.1")
     for path in USER_DOCS:
         assert not absent_extra.search(path.read_text()), f"{path.name}: 0.4.1 has no cftime extra"
 
 
-def test_stable_quickstart_still_builds_the_released_clean_room_plan():
+def test_quickstart_builds_the_matching_clean_room_plan():
     text = (REPO / "docs/quickstart.md").read_text()
     plan = build_plan(text, "docs/quickstart.md")
-    assert plan["chronozarr_version"] == "0.4.1"
-    assert "Released package — 0.4.1" in text
-    assert "https://github.com/chronozarr/chronozarr/tree/v0.4.1/docs" in text
-    unavailable = {
-        "--bands-are-dates",
-        "--calendar-to-gregorian",
-        "--colormap",
-        "--lonlat",
-        "--mosaic-tiles",
-        "--offset",
-        "--scale",
-        "--xy",
-        "--zoom",
-    }
-    for step in plan["steps"]:
-        flags = {
-            word.split("=", 1)[0] for word in shlex.split(step["text"]) if word.startswith("--")
-        }
-        assert not flags & unavailable
+    version = tomllib.loads((REPO / "pyproject.toml").read_text())["project"]["version"]
+    assert plan["chronozarr_version"] == version
+    assert f"Package version — {version}." in text
     assert len(plan["steps"]) == 6
     assert [step["long_running"] for step in plan["steps"]] == [False] * 4 + [True] * 2
 
 
-def test_development_viewer_instructions_build_this_checkout_with_the_quarantine():
+def test_viewer_instructions_copy_the_package_and_preserve_the_source_build_route():
     text = (REPO / "docs/viewer-distribution.md").read_text()
     commands = [shlex.split(command) for command in _commands(text)]
     assert ["npm", "ci", "--prefix", "js", "--min-release-age=7"] in commands
     copies = [words for words in commands if words[:2] == ["node", "js/support/viewer-bundle.mjs"]]
     assert copies and all("--store" in words for words in copies)
     assert (REPO / copies[0][1]).is_file()
-    assert not any(words[:2] == ["npm", "install"] for words in commands)
+    version = json.loads((REPO / "js/package.json").read_text())["version"]
+    assert ["npm", "install", f"chronozarr@{version}"] in commands
+    assert [
+        "npm",
+        "exec",
+        "--",
+        "chronozarr-viewer",
+        "published",
+        "--store",
+        "./store",
+    ] in commands
     viewer = (REPO / "docs/viewer.md").read_text()
-    assert "Its deployed build can differ from this checkout" in viewer
+    assert "Installing the Python package does not update the hosted demo" in viewer
 
 
 def test_the_shared_development_route_is_published_and_in_navigation():

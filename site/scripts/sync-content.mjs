@@ -9,8 +9,8 @@ const sources = {
   // Start here
   'docs/what-is.md': { route: 'what-is-chronozarr', description: 'What chronozarr does, how it compares with GIFs, folders of GeoTIFFs, plain Zarr and tile servers, and what it does not do.' },
   'docs/quickstart.md': { route: 'quickstart', description: 'Install chronozarr, convert dated GeoTIFFs, open the series in your browser and share a link, with a sample dataset.' },
-  'docs/development.md': { route: 'guides/development', description: 'Try the unpublished local release candidate from its prepared checkout or local artifacts, separately from the released 0.4.1 quickstart.' },
-  'docs/viewer.md': { route: 'viewer', description: 'The local candidate viewer: use its source build or npm artifact for playback, products, pixel time series and links to a view.' },
+  'docs/development.md': { route: 'guides/development', description: 'Install chronozarr from a source checkout or local release artifacts for development and offline qualification.' },
+  'docs/viewer.md': { route: 'viewer', description: 'The chronozarr viewer: playback, products, pixel time series, video export and links to a view.' },
   // Create and share
   'docs/convert.md': { route: 'guides/convert', description: 'Convert dated GeoTIFFs, COG manifests, NetCDF, Zarr or an xarray DataArray into a chronozarr store.' },
   'docs/preview.md': { route: 'guides/preview', description: 'Open a local chronozarr store in the viewer with chronozarr preview. The data stays on your computer.' },
@@ -29,16 +29,17 @@ const sources = {
   'docs/hosting.md': { route: 'guides/hosting', description: 'Advanced hosting: manual host setup, hosts that chronozarr publish does not cover, and what a host must do.' },
   'docs/hosting-providers.md': { route: 'guides/hosting-providers', description: 'Host setup for chronozarr stores: Amazon S3, CloudFront, Cloudflare R2, Google Cloud Storage, Azure and Source Cooperative.' },
   'docs/hosting-requirements.md': { route: 'guides/hosting-requirements', description: 'What a static host must do to serve a chronozarr store, the chronozarr doctor checks, and how to verify by hand.' },
-  'docs/viewer-distribution.md': { route: 'guides/viewer-distribution', description: 'Build this candidate checkout\'s viewer and host it next to your stores, with no request to chronozarr.org.' },
+  'docs/viewer-distribution.md': { route: 'guides/viewer-distribution', description: 'Copy the npm viewer bundle or build from source, and host it next to your stores with no request to chronozarr.org.' },
   // Reference
   'docs/cli.md': { route: 'reference/cli', description: 'Every chronozarr command: convert, preview, share, publish, doctor, link, append, export-cog and more.' },
   'docs/python.md': { route: 'reference/python', description: 'The chronozarr Python API: encode, open_store, the xarray backend, band roles and the notebook viewer.' },
   'js/README.md': { route: 'reference/javascript', title: 'JavaScript reader', description: 'The chronozarr npm package: a DOM-free reader, a MapLibre layer, a GeoLibre plugin and the packaged viewer.' },
   'js/maplibre/README.md': { route: 'reference/maplibre', description: 'Draw a chronozarr store on a MapLibre GL JS map with the chronozarr custom layer.' },
-  'spec/CHRONOZARR.md': { route: 'specification', description: 'The chronozarr store format specification, v0.3 draft: Zarr v3 layout, metadata, pyramid, codecs and hosting rules.' },
+  'spec/CHRONOZARR.md': { route: 'specification', description: 'The chronozarr store format specifications, v0.3 and v0.4 drafts: Zarr v3 layout, metadata, pyramid, codecs and hosting rules.' },
   'docs/how-it-works.md': { route: 'how-it-works', description: 'How a chronozarr store is laid out, how the browser reads it, and how to read it without chronozarr.' },
   'docs/performance.md': { route: 'performance', description: 'Measured viewer speed, value correctness, Sentinel-2 ingest speed and memory, with methods, hardware and limits.' },
   'docs/evidence.md': { route: 'reference/evidence', title: 'Measurement log', description: 'Dated measurements, tested reader versions and observations behind the chronozarr documentation.' },
+  'docs/release-0.5.0.md': { route: 'reference/release-0.5.0', description: 'chronozarr 0.5.0: conversion, coordinate systems, viewer distribution, sixteen review repairs and store compatibility.' },
   'docs/release-0.5.0rc1.md': { route: 'reference/release-0.5.0rc1', description: 'The unpublished local 0.5.0rc1 candidate: changes since 0.4.1, sixteen review repairs and store compatibility.' },
   'docs/troubleshooting.md': { route: 'troubleshooting', description: 'Fixes for common chronozarr problems: installation, conversion, the viewer, preview, share and publish.' },
   'docs/format-comparison.md': { route: 'guides/format-comparison', description: 'chronozarr compared with PMTiles, Mapbox raster-array, zarr-layer, COG with TiTiler, titiler-multidim and the GeoZarr readers.' },
@@ -65,9 +66,9 @@ const llmsSections = [
   ]],
   ['Reference', [
     'docs/cli.md', 'docs/python.md', 'js/README.md', 'js/maplibre/README.md', 'spec/CHRONOZARR.md', 'docs/how-it-works.md',
-    'docs/performance.md', 'docs/troubleshooting.md', 'docs/release-0.5.0rc1.md',
+    'docs/performance.md', 'docs/troubleshooting.md', 'docs/release-0.5.0.md',
   ]],
-  ['Optional', ['docs/evidence.md', 'docs/format-comparison.md']],
+  ['Optional', ['docs/evidence.md', 'docs/format-comparison.md', 'docs/release-0.5.0rc1.md']],
 ];
 const listed = llmsSections.flatMap(([, entries]) => entries);
 const unlisted = Object.keys(sources).filter((source) => !listed.includes(source));

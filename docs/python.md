@@ -1,6 +1,6 @@
 # Python API
 
-**Local release candidate — 0.5.0rc1, unpublished.** Follow the [candidate installation](development.md) before using this guide. For the released package, use the [0.4.1 Python API](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/python.md).
+**Package version — 0.5.0.** Follow the [installation guide](quickstart.md#1-install) before using this reference. The [release notes](release-0.5.0.md) describe compatibility and changes since 0.4.1.
 
 The `chronozarr` package writes a store, reads it and opens it in xarray. The [quickstart](quickstart.md) has a first run, and [Analyze a store in Python](analyze.md) has common tasks. This page lists the functions. The docstring of `chronozarr.encode` lists every option of `encode`.
 
