@@ -105,7 +105,10 @@ Verified 2026-10-02 (America/New_York):
 Release materials target Python and npm package 0.5.1; see
 [`docs/release-0.5.1.md`](../docs/release-0.5.1.md) for changes and publication status.
 The deployment tooling is pinned to Wrangler 4.151.1; the site workflow audits its
-dependencies as well as the site dependencies.
+dependencies as well as the site dependencies. The root package overrides Miniflare's Undici
+dependency to 7.30.1 for [GHSA-4qv8-2p9j-2685](https://github.com/advisories/GHSA-4qv8-2p9j-2685)
+and [GHSA-f72v-6w45-q472](https://github.com/advisories/GHSA-f72v-6w45-q472). That patch was
+published on 2026-10-15, passes the seven-day policy and is exercised by `test:hosting`.
 
 Live: https://chronozarr.org
 Fallback: https://chronozarr-docs.jake-gearon.workers.dev

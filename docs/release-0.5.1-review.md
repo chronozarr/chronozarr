@@ -105,5 +105,11 @@ Ruff lint/format, type checks, architecture checks and the site build passed. Ar
 receipts identify the final source and packages; local CPU adapter microbenchmarks are separate
 from the standalone viewer speed gates and do not establish network, decode or GPU timings.
 
+The final CI audit also identified two Undici advisories newly indexed on 2026-10-23:
+[GHSA-4qv8-2p9j-2685](https://github.com/advisories/GHSA-4qv8-2p9j-2685) and
+[GHSA-f72v-6w45-q472](https://github.com/advisories/GHSA-f72v-6w45-q472). Miniflare's dependency
+is overridden to patched Undici 7.30.1, published 2026-10-15 and eligible under the seven-day
+policy. Root audit and the real local hosting check qualify this tooling-only change.
+
 This round did not run full remote ingests, provider-account checks, public tunnels, deployment
 or package publication. The full unit suite remains a hosted-CI check, not a local run.
