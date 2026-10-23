@@ -36,6 +36,12 @@ Build output is `docs/dist`. `worker.js` redirects www to the apex, redirects
 the paths of removed pages to their replacements, and forwards other requests to
 static assets. Unknown paths return 404.
 
+After building, `npm run test:hosting` uses the pinned root Wrangler and Chromium from the
+JavaScript project's Playwright installation to import the reader, MapLibre and GeoLibre from
+another local origin. It checks the real asset handler's CORS behavior, including shared module
+dependencies. Install Chromium once with `(cd ../js && npx --no-install playwright install chromium)`
+when running it locally. CI runs this check after every site build; it does not deploy.
+
 ## Content and visual direction
 
 The look is a 1960s to 70s corporate annual report: Archivo (a Univers-like grotesk)

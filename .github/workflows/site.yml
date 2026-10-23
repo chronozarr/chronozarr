@@ -36,3 +36,4 @@ jobs:
       - run: npm ci --min-release-age=7
         working-directory: js
       - run: npm run build
+      - run: npm run test:hosting

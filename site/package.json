@@ -13,6 +13,7 @@
     "predev": "npm run prepare-mermaid && npm run sync-content",
     "prebuild": "npm run prepare-mermaid && npm run sync-content",
     "test:dependencies": "npm run prepare-mermaid && node --test test/dependency-compat.test.mjs",
+    "test:hosting": "node scripts/check-module-cors.mjs",
     "deploy": "npm run build && ../node_modules/.bin/wrangler deploy --config wrangler.toml",
     "postbuild": "node scripts/check-vocs-classes.mjs && node scripts/copy-demo.mjs && node scripts/check-links.mjs && node scripts/check-worker.mjs && node scripts/make-sitemap.mjs"
   },
