@@ -1,6 +1,6 @@
 # chronozarr 0.5.1
 
-Python and npm **0.5.1** bring the changes since 0.4.1 together with sixteen review repairs. They add more raster inputs, custom coordinate systems and a bundled viewer, while retaining support for existing v0.3 stores.
+Python and npm **0.5.1** bring the changes since 0.4.1 together with sixteen merged-batch repairs and further release-review fixes. They add more raster inputs, custom coordinate systems and a bundled viewer, while retaining support for existing v0.3 stores.
 
 Install 0.5.1 with the [quickstart](quickstart.md), or use the [source and local artifact routes](development.md). The [0.4.1 documentation](https://github.com/chronozarr/chronozarr/tree/v0.4.1/docs) remains available for that older release.
 
@@ -59,6 +59,13 @@ The example guides explain credentials, pin the recorded NISAR query, scope the 
 
 Documentation distinguishes native observation counts from rounded overview coverage, preserves finite values under a validity mask, and explains that signed store queries are removed from the embedded wordmark link. `serve_store` is documented as local-only. The current public Ucayali imagery store has no mask or coverage plane; dated historical measurements retain their original scope.
 
+A second independent review added containment checks for the local preview/share server:
+symlinks can expose only targets inside their own served folder. Internal module aliases retain
+their requested MIME type. The hosted module policy now also permits cross-origin imports of
+shared dependencies, verified through Wrangler and Chromium. Sentinel-1 warns and records
+partial query months, and all water-mask instructions restrict offset correction to verified
+legacy inputs. Source archives include the shipped tests' inputs and collect without Git.
+
 ## Repairs from the merged-batch review
 
 | Finding | Corrected behavior |
@@ -82,7 +89,7 @@ Documentation distinguishes native observation counts from rounded overview cove
 
 ## Validation and publication status
 
-Release preparation starts from merged commit `63610f8` (PR #141). The Python and JavaScript runtime source is the tested `0.5.0rc1` candidate promoted to version 0.5.1. Release metadata, current installation guides, site navigation and deployment tooling are updated for the stable version. Source archives select explicit project paths so local dependency folders cannot contribute their README, license or test files. Unmerged SAR playback-cache work in PR #140 is outside this release.
+Release preparation starts from merged commit `63610f8` (PR #141). The JavaScript runtime is the tested `0.5.0rc1` candidate promoted to version 0.5.1; Python additionally fixes local-server path containment and preserves module-alias MIME types. Release metadata, current installation guides, site navigation and deployment tooling are updated for the stable version. Source archives select explicit project paths and the shipped tests' inputs, with dependency and generated trees excluded. Unmerged SAR playback-cache work in PR #140 is outside this release.
 
 Before promotion, the candidate passed Python 3.11 and 3.13 installed-wheel checks, JavaScript and browser checks, package installation and offline viewer checks, notebook checks and paired speed gates. The [candidate PR](https://github.com/chronozarr/chronozarr/pull/141) records the exact validation and its limits. Earlier results in the [measurement log](evidence.md) retain their dated sources and environments.
 
