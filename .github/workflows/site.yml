@@ -21,8 +21,11 @@ jobs:
           cache-dependency-path: |
             site/package-lock.json
             js/package-lock.json
-      - run: npm ci
+      - run: npm ci --min-release-age=7
+      - run: npm audit
+      - run: npx --no-install playwright install --with-deps chromium
+      - run: npm run test:dependencies
       # The site build bundles the viewer (js/support/build-viewer.mjs), which needs esbuild from js/.
-      - run: npm ci
+      - run: npm ci --min-release-age=7
         working-directory: js
       - run: npm run build

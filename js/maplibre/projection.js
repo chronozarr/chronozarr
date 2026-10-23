@@ -7,8 +7,10 @@
 //
 // UTM uses Karney's (2011) Kruger n-series to 6th order, the same series PROJ's `etmerc` evaluates:
 // accurate to nanometres within several thousand km of the central meridian. EPSG:3857 and EPSG:4326 are
-// closed forms. Any other CRS goes through the proj4 build in js/vendor/proj4, loaded by `import()` only when a
-// store needs it, so a UTM or Web Mercator store fetches nothing extra.
+// closed forms. CRS definitions are verified through the proj4 build in js/vendor/proj4, loaded by `import()`;
+// a store declaring only a built-in EPSG code fetches nothing extra.
+
+import { identifyCrs, loadProj4, projectionDefinition, sameCrs } from '../chronozarr/crs.js';
 
 const DEG = Math.PI / 180;
 const WGS84_A = 6378137;
@@ -132,23 +134,6 @@ function builtinProjection(code) {
 }
 
 /** The authority code the CRS definition gives itself: the ID that ends a WKT2 root node, or a PROJJSON id; else the declared code. */
-function identify({ crs, wkt2, projjson }) {
-  if (wkt2 !== null) {
-    const root = /(?:ID|AUTHORITY)\[\s*"([^"]+)"\s*,\s*"?([^"\],\s]+)"?\s*\]\s*\]$/.exec(wkt2.trim());
-    return root ? `${root[1]}:${root[2]}` : null;
-  }
-  if (projjson !== null) return projjson.id ? `${projjson.id.authority}:${projjson.id.code}` : null;
-  return crs;
-}
-
-async function loadProj4() {
-  try {
-    return (await import('../vendor/proj4/proj4.js')).default;
-  } catch (error) {
-    throw new Error(`chronozarr maplibre: could not load js/vendor/proj4/proj4.js, which this store's CRS needs (${error.message})`);
-  }
-}
-
 /** WGS84 lon/lat <-> the CRS that `definition` (WKT2 text or a PROJJSON object) describes, through the vendored proj4 build. */
 async function proj4Projection(definition, crs) {
   const proj4 = await loadProj4();
@@ -170,9 +155,9 @@ async function proj4Projection(definition, crs) {
 /**
  * The store CRS <-> lon/lat (degrees, WGS84), from what the store declares: `source` is a code string, or an object
  * with any of `crs` (the `proj:code`), `wkt2` and `projjson` (a ChronoStore has all three). WGS84 UTM
- * (EPSG:326zz north, 327zz south), EPSG:3857 and EPSG:4326 are built in, matched by the code, or by the ID that
- * ends the WKT2 or PROJJSON when there is one; no other code is a definition. A WKT2 or PROJJSON that names none of
- * them is read by proj4, fetched by `import()` the first time it is needed, so EPSG stores load nothing extra. When
+ * (EPSG:326zz north, 327zz south), EPSG:3857 and EPSG:4326 are built in. A definition's authority ID is a hint:
+ * its actual parameters must match the authority definition before using a built-in. WKT2 and PROJJSON are
+ * read by proj4, fetched by `import()` the first time one is needed. Code-only builtins load nothing extra. When
  * the WKT2 and the code disagree, the WKT2 wins, and PROJJSON outranks the code.
  *
  * @param {string | {crs?: string|null, wkt2?: string|null, projjson?: object|null}} source
@@ -180,10 +165,10 @@ async function proj4Projection(definition, crs) {
  */
 export async function createProjection(source) {
   const { crs = null, wkt2 = null, projjson = null } = typeof source === 'string' ? { crs: source } : source;
-  const code = identify({ crs, wkt2, projjson });
+  const code = identifyCrs({ crs, wkt2, projjson });
   const builtin = code === null ? null : builtinProjection(code);
-  if (builtin) return builtin;
-  if (wkt2 !== null || projjson !== null) return proj4Projection(wkt2 ?? projjson, code);
+  if (builtin && (wkt2 === null && projjson === null || await sameCrs({ crs, wkt2, projjson }, { crs: code }))) return builtin;
+  if (wkt2 !== null || projjson !== null) return proj4Projection(projectionDefinition({ crs, wkt2, projjson }), code);
   if (crs === null) throw new Error('chronozarr maplibre: the store declares no CRS (proj:code, proj:wkt2 and proj:projjson are all absent).');
   throw new Error(`chronozarr maplibre: unsupported store CRS "${crs}" and no proj:wkt2 or proj:projjson to read it from. Supported: ${SUPPORTED_CRS}. Re-encode the store with its CRS as proj:wkt2, as the chronozarr writer does.`);
 }

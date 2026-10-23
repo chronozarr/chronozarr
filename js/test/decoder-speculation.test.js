@@ -132,6 +132,78 @@ test('a request nobody wants any more is still cancelled: aborting a job that no
   assert.equal(store.peekRaw(0, 0, 0, 30), undefined, 'and the cancelled requests did not land');
 });
 
+for (const firstPart of ['data', 'mask']) {
+  test(`masked takeover awaits both owned requests when ${firstPart} arrives first`, async () => {
+    const readable = buildSyntheticStore({ nTime: 2, nBand: 1, height: 8, width: 8, chunk: 8, sharded: false, mask: true });
+    const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
+    const gates = { data: deferred(), mask: deferred() };
+    const started = { data: deferred(), mask: deferred() };
+    const fetching = {
+      async get(key, options) {
+        const bytes = await readable.get(key, options);
+        const kind = /\/0\/(data|mask)\/c\//.exec(key)?.[1];
+        if (kind) {
+          started[kind].resolve();
+          await gates[kind].promise;
+          options.signal.throwIfAborted();
+        }
+        return bytes;
+      },
+    };
+    const store = await openStore('memory://masked-takeover', { store: fetching, workers: 0, speculativeBytesInitial: 1e12, idleBytes: 1e12 });
+    const old = new AbortController(), next = new AbortController();
+    const seen = [];
+    const a = store.prefetch({ lod: 0, cells: [[0, 0]], t: 1, maxSteps: 1, masks: true, signal: old.signal, onChunk: () => assert.fail('aborted plan must not notify') });
+    await Promise.all([started.data.promise, started.mask.promise]);
+    let completed = false;
+    const b = store.prefetch({ lod: 0, cells: [[0, 0]], t: 1, maxSteps: 1, masks: true, signal: next.signal, onChunk: () => seen.push(!!store.peekMask(0, 0, 0, 1)) }).then((result) => { completed = true; return result; });
+    old.abort();
+    const calls = readable.log.filter(({ key }) => key.includes('/c/'));
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every(({ signal }) => !signal.aborted), 'successor owns data and mask before prior owner aborts');
+    gates[firstPart].resolve();
+    await new Promise(setImmediate);
+    assert.equal(completed, false, 'one part is not logical completion');
+    assert.deepEqual(seen, []);
+    gates[firstPart === 'data' ? 'mask' : 'data'].resolve();
+    const [, result] = await Promise.all([a, b]);
+    assert.equal(result.errors.length, 0);
+    assert.ok(store.peekRaw(0, 0, 0, 1));
+    assert.ok(store.peekMask(0, 0, 0, 1));
+    assert.deepEqual(seen, [true]);
+    assert.equal(readable.log.filter(({ key }) => key.includes('/c/')).length, 2, 'neither part fetched twice');
+    store.close();
+  });
+}
+
+test('fresh data prefetch waits for an already-running demand mask before completion or onChunk', async () => {
+  const readable = buildSyntheticStore({ nTime: 2, nBand: 1, height: 8, width: 8, chunk: 8, sharded: false, mask: true });
+  let maskStarted, releaseMask;
+  const started = new Promise((resolve) => { maskStarted = resolve; });
+  const gate = new Promise((resolve) => { releaseMask = resolve; });
+  const fetching = { async get(key, options) {
+    const bytes = await readable.get(key, options);
+    if (key.includes('/mask/c/')) { maskStarted(); await gate; }
+    return bytes;
+  } };
+  const store = await openStore('memory://demand-mask', { store: fetching, workers: 0 });
+  const demand = store.getMask(0, 0, 0, 1);
+  await started;
+  const seen = [];
+  let completed = false;
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 1, maxSteps: 1, masks: true, seek: true, onChunk: () => seen.push(!!store.peekMask(0, 0, 0, 1)) }).then((result) => { completed = true; return result; });
+  await new Promise(setImmediate);
+  assert.ok(store.peekRaw(0, 0, 0, 1), 'fresh data arrived');
+  assert.equal(completed, false);
+  assert.deepEqual(seen, []);
+  releaseMask();
+  const [, result] = await Promise.all([demand, job]);
+  assert.equal(result.errors.length, 0);
+  assert.deepEqual(seen, [true]);
+  assert.equal(readable.log.filter(({ key }) => key.includes('/mask/c/')).length, 1);
+  store.close();
+});
+
 /** The most requests the store had in flight at once while `body` ran. */
 async function peakInflight(rate, body) {
   const readable = buildSyntheticStore({ ...LARGE, delayMs: 20 });

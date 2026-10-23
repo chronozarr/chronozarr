@@ -1,5 +1,7 @@
 # Convert your data
 
+**Local release candidate — 0.5.0rc1, unpublished.** Follow the [candidate installation](development.md) before using this guide. For the released package, use the [0.4.1 conversion guide](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/convert.md).
+
 `chronozarr convert SOURCE OUT` writes a store from rasters that you already have. It reads one timestep at a time and encodes a few 512 by 512 cells at a time, so the files never have to fit in memory together. Since 0.4.1 the memory of the encode step stays nearly flat as the number of timesteps grows ([memory](performance.md#encoder-time-slabs)); in 0.4.0 it grew with them.
 
 | Your data | Section |
@@ -25,7 +27,7 @@ chronozarr convert "scenes/*.tif" my_store --dry-run   # check every file, write
 chronozarr convert "scenes/*.tif" my_store
 ```
 
-The dry run runs the same discovery and checks as conversion. It prints each file with its date, the grid, the bands, the scaling, the validity rule and the expected size. The pixel size is in the unit of the CRS: `m`, `degree` or `US survey foot`. A geographic grid whose longitudes run outside -180 to 180, such as 0 to 360, gets a `longitude:` line. The store keeps those values, so a lookup in xarray must use the same convention. A directory or `s3://` prefix is not searched recursively; use a glob such as `"scenes/**/*.tif"` for subdirectories. Listing an S3 prefix needs the `s3` extra (`uv tool install --python 3.13 'chronozarr[geo,s3]==0.4.1'`) and uses your AWS credentials.
+The dry run runs the same discovery and checks as conversion. It prints each file with its date, the grid, the bands, the scaling, the validity rule and the expected size. The pixel size is in the unit of the CRS: `m`, `degree` or `US survey foot`. A geographic grid whose longitudes run outside -180 to 180, such as 0 to 360, gets a `longitude:` line. The store keeps those values, so a lookup in xarray must use the same convention. A directory or `s3://` prefix is not searched recursively; use a glob such as `"scenes/**/*.tif"` for subdirectories. Listing an S3 prefix needs the `s3` extra in the [development installation](development.md#install-the-command-line-tool) and uses your AWS credentials.
 
 A date is read from a name only when the name holds exactly one. A name with no date, with several (`20240215_2024-03`), or two files with the same date are reported, never guessed. When the files that share a date are tiles of one image, the report says so and names `--mosaic-tiles` ([exports split into tiles](#exports-split-into-tiles)). `--date-pattern` says where the date is, for example `--date-pattern "ndvi_%Y%m%d"`. `--write-manifest found.csv` saves discovered files and dates as a manifest that `convert` reads back; it is the one output allowed with `--dry-run`. The manifest is written even when the checks find problems, and the problems are reported after it. A file whose date was not found gets a row with an empty `datetime`, and the report says which rows; fill them in or delete them, then convert the manifest. When the files name their bands, the manifest has a `bands` column with those names to edit.
 
@@ -248,13 +250,7 @@ chronozarr convert model.nc my_store --variable tas
 chronozarr convert data.zarr my_store --variable ndvi --crs EPSG:32618
 ```
 
-Reading a NetCDF4 file needs the `netcdf` extra, which adds h5netcdf and h5py. The quickstart install does not include it, so add it to the extras that you already use:
-
-```bash
-uv tool install --python 3.13 'chronozarr[geo,netcdf]==0.4.1'
-```
-
-In a uv project, run `uv add 'chronozarr[netcdf]==0.4.1'`. With pip, install `'chronozarr[netcdf]==0.4.1'` in your environment. Without the extra, `convert` stops with `reading a NetCDF4 file needs h5netcdf and h5py` and these commands. A Zarr store needs no extra. A classic NetCDF3 file, which starts with the bytes `CDF`, is not a NetCDF4 file: add `scipy` to the environment instead, for example `uv tool install --python 3.13 'chronozarr[geo]==0.4.1' --with scipy`.
+Reading a NetCDF4 file needs the `netcdf` extra, which adds h5netcdf, h5py and cftime. The [candidate installation](development.md) includes it for the command line tool and for a Python project. Without it, `convert` stops with `reading a NetCDF4 file needs h5netcdf and h5py`. A Zarr store needs no NetCDF reader. A classic NetCDF3 file, which starts with the bytes `CDF`, needs `scipy` instead: add `--with scipy` to the checkout's tool install, or add scipy to your analysis environment.
 
 `--variable` names the array to convert. Its dimensions must be time, y and x, with an optional band dimension. `--dims time=NAME,y=NAME,x=NAME[,band=NAME]` names them when they are not `time`, `y`, `x` or common aliases such as `lat` and `lon`. The coordinate system comes from a `crs`, `crs_wkt` or `spatial_ref` attribute, or from the CF grid mapping variable that the variable names in `grid_mapping`; reading a grid mapping needs pyproj. `--crs` gives it, as an EPSG code or WKT2 text, when the file does not declare it. A CRS with no EPSG code, such as Daymet's Lambert conformal conic, is stored as it is and is never reprojected. The CF `scale_factor`, `add_offset` and `units` of the variable apply to every band. `--mask-var` names a variable whose nonzero values mark valid pixels.
 
@@ -268,7 +264,7 @@ Many products keep a length-1 dimension next to time, y and x: OISST has `zlev`,
 squeezed:   zlev (length 1, value 0 meters)
 ```
 
-A dimension that is longer than 1 is not squeezed, because choosing among its values is a decision about your data. The error names it. If its values are the bands of your series, pass `--dims band=level`. If you want one of them, select it first, for example with xarray: `ds.isel(level=0)`.
+A dimension that is longer than 1 is not squeezed, because choosing among its values is a decision about your data. The error names it. If its values are the bands of your series, pass `--dims band=level`. If you want one of them, select it first, for example with xarray: `ds.isel(level=0)`. In a series of files, every squeezed dimension must have the same coordinate value and units. Files at different depths, levels or realizations are refused before anything is written.
 
 ### A series of NetCDF files
 
@@ -283,14 +279,14 @@ A folder is not searched recursively; the glob `"oisst/**/*.nc"` searches its su
 
 Each file is dated by the time coordinate inside it, not by its name, so `--date-pattern` does not apply. The store lists the steps in time order, whatever the order of the names. The dry run prints one line per file with its dates, so you can see the order before anything is written.
 
-Before it writes anything, `convert` checks every file against the first. The files must have the same variable, dimensions, `x` and `y` values, data type, `scale_factor`, `add_offset`, `units`, declared nodata and calendar, and the same CRS if they declare one. It reports every file that differs, with the same grouping as for [dated GeoTIFFs](#from-dated-geotiffs):
+Before it writes anything, `convert` checks every file against the first. The files must have the same variable, dimensions, squeezed coordinate values and units, `x` and `y` values, data type, band units, declared nodata and calendar, and the same CRS if they declare one. `scale_factor` and `add_offset` are checked independently after `--scale` and `--offset` replace whichever attribute you supplied; an attribute you did not override must still agree. It reports every file that differs, with the same grouping as for [dated GeoTIFFs](#from-dated-geotiffs):
 
 ```text
 2 problem(s) in 2 of 4 source file(s); nothing was written:
 
 /data/oisst/202001/oisst-avhrr-v02r01.20200117.nc
-  - has scale_factor 0.1 and add_offset 0; /data/oisst/202001/oisst-avhrr-v02r01.20200101.nc has 0.01 and 0. A store holds one value per band for every timestep, so the files must agree
-    fix: if the attributes are wrong, correct them; otherwise convert the files that share them in separate stores
+  - has scale_factor 0.1; /data/oisst/202001/oisst-avhrr-v02r01.20200101.nc has 0.01. A store holds one value per band for every timestep, so the files must agree
+    fix: if the attribute is wrong, correct it or pass --scale to replace it for every file; otherwise convert the files that share it in separate stores
 
 /data/oisst/202002/oisst-avhrr-v02r01.20200203.nc
   - has times 2020-02-02T12:00:00 that overlap those of /data/oisst/202002/oisst-avhrr-v02r01.20200202.nc (2020-02-02T12:00:00). Each time must come from one file
@@ -323,13 +319,7 @@ A date that Gregorian does not have, such as 30 February on a `360_day` calendar
 
 The store records what was done in its provenance: the source calendar, the option, the change in spacing and the dates that moved. `chronozarr info STORE` prints it as `notes:`, and `chronozarr stac` copies it into the STAC item. In Python it is `chronozarr.open_store("STORE").attrs.provenance["notes"]`. A `provenance=` that you pass to `chronozarr.convert` keeps its fields and gets the note added to its `notes`.
 
-These calendars need cftime. The `netcdf` extra installs it with the NetCDF reader. A Zarr store needs no NetCDF reader, so cftime is also an extra of its own. Add it to the extras that you already use:
-
-```bash
-uv tool install --python 3.13 'chronozarr[geo,netcdf,cftime]==0.4.1'
-```
-
-In a uv project, run `uv add 'chronozarr[cftime]==0.4.1'`. With pip, install `'chronozarr[cftime]==0.4.1'` in your environment. Without the extra, `convert` stops with `the time coordinate 'time' uses the 360_day calendar, which needs cftime` and these commands.
+These calendars need cftime. The development `netcdf` extra installs it with the NetCDF reader; `cftime` is also an extra of its own for Zarr inputs. Both are included in the [candidate installation](development.md). Without cftime, `convert` stops with `the time coordinate 'time' uses the 360_day calendar, which needs cftime`. Package 0.4.1 has no `cftime` extra and no calendar-mapping option, so use the source installation for this workflow.
 
 `chronozarr encode` takes the same option for a file with dimensions `(time, band, y, x)`. `chronozarr append` does not convert calendars, because it cannot record the conversion in the store you append to; convert the whole series instead. The option has no effect on a Gregorian time axis. In Python, `convert` has `calendar_to_gregorian="date"`. `chronozarr.encode` of a `DataArray` whose time coordinate holds cftime dates stops and says so; map the dates yourself, for example with `da.convert_calendar("proleptic_gregorian", align_on="date")`, which drops a date that Gregorian lacks, and describe that in `provenance=`.
 

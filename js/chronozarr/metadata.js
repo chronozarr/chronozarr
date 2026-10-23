@@ -1,5 +1,6 @@
 // Parsing of chronozarr root attributes and Zarr v3 array metadata into the shapes the reader uses.
 // No I/O: openStore fetches the JSON, this module validates and normalizes it.
+export { sameCrs } from './crs.js';
 
 export const DTYPES = {
   uint8: { Array: Uint8Array, bytes: 1 },
@@ -32,37 +33,41 @@ function checkExtensions(meta, baseUrl) {
   requireStore(!meta.storage_transformers?.length, baseUrl, 'unsupported storage_transformers; use chronozarr convert');
 }
 
-function registration(attrs, name, baseUrl) {
-  const declared = attrs?.zarr_conventions?.find((c) => c.name === name);
+function registration(attrs, name, notes) {
   const expected = CONVENTIONS[name];
-  requireStore(declared && Object.entries(expected).every(([key, value]) => declared[key] === value), baseUrl, `${name} registration must use the literal v0.1 UUID and URLs`);
+  const declared = attrs?.zarr_conventions?.find((c) => c.uuid === expected.uuid);
+  if (!declared || !Object.entries(expected).every(([key, value]) => declared[key] === value)) notes.push(`${name} registration differs from the profile; values are read from the declared arrays`);
 }
 
 /** Validate root discovery metadata before reading any measurements. */
 export function parseRoot(root, baseUrl) {
+  const notes = [];
   checkExtensions(root, baseUrl);
   requireStore(root.zarr_format === 3 && root.node_type === 'group', baseUrl, 'root must be a Zarr v3 group');
   const attrs = root.attributes;
   const cz = attrs?.chronozarr;
   requireStore(cz, baseUrl, 'root attributes have no "chronozarr" entry; use chronozarr convert');
   requireStore(typeof cz.spec_version === 'string' && SUPPORTED_SPEC.test(cz.spec_version), baseUrl, `unsupported spec_version ${cz.spec_version}; this reader opens 0.3.x and 0.4.x stores, use chronozarr convert to write a current one`);
+  if (!['0.3.0', '0.4.0'].includes(cz.spec_version)) notes.push(`spec_version ${cz.spec_version} is an unknown patch of 0.3.0 or 0.4.0; ordinary values are read as declared`);
   requireStore(!('temporal' in cz), baseUrl, 'temporal encoding is outside the v0.3 baseline; use chronozarr convert');
   requireStore(Array.isArray(cz.times) && cz.times.length > 0 && cz.times.every((t, i) => typeof t === 'string' && Number.isFinite(Date.parse(t)) && (i === 0 || Date.parse(t) > Date.parse(cz.times[i - 1]))), baseUrl, 'chronozarr.times must contain increasing ISO timestamps');
   requireStore(cz.crs === undefined || (typeof cz.crs === 'string' && CRS_CODE.test(cz.crs)), baseUrl, 'chronozarr.crs must be a CRS code such as "EPSG:32631" when present');
   requireStore(cz.nodata === null || Number.isFinite(cz.nodata), baseUrl, 'chronozarr.nodata must be a number or null');
   requireStore(cz.volatility_path === undefined || cz.volatility_path === 'volatility', baseUrl, 'volatility_path must equal volatility');
   for (const name of ['mask', 'coverage']) requireStore(cz[`${name}_variable`] === undefined || cz[`${name}_variable`] === name, baseUrl, `${name}_variable must equal ${name}`);
-  registration(attrs, 'multiscales', baseUrl);
-  requireStore(attrs.zarr_conventions.some((c) => c.name === 'chronozarr' && c.spec_url === 'https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md'), baseUrl, 'chronozarr registration is missing');
+  registration(attrs, 'multiscales', notes);
+  if (!attrs.zarr_conventions?.some((c) => c.name === 'chronozarr' && c.spec_url === 'https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md')) notes.push('chronozarr registration is absent or differs from the profile; stored values are unaffected');
   const ms = attrs.multiscales;
   requireStore(ms && !Array.isArray(ms) && Array.isArray(ms.layout) && ms.layout.length > 0, baseUrl, 'multiscales.layout is missing');
-  requireStore(ms.resampling_method === 'average', baseUrl, 'multiscales resampling_method must be average');
+  if (ms.resampling_method !== 'average') notes.push(`multiscales resampling_method is ${JSON.stringify(ms.resampling_method)}; overview levels are not declared block means, level 0 is unaffected`);
+  for (const mirror of ['levels', 'band_names', 'crs']) if (cz[mirror] === undefined) notes.push(`chronozarr.${mirror} is absent; canonical array metadata is used`);
+  if (cz.variable === undefined) notes.push('chronozarr.variable is absent; the data variable defaults to data');
   const datasets = ms.layout.map((entry, lod) => {
     requireStore(entry.asset === String(lod), baseUrl, 'multiscales assets must be consecutive level groups');
     if (lod > 0) requireStore(entry.derived_from === String(lod - 1) && JSON.stringify(entry.transform?.scale) === '[2,2]' && JSON.stringify(entry.transform?.translation) === '[0,0]', baseUrl, `multiscales level ${lod} must derive from its predecessor with scale [2,2] and translation [0,0]`);
     return { ...entry, path: entry.asset };
   });
-  return { cz, datasets };
+  return { cz, datasets, notes };
 }
 
 export function normalizeBands(cz, baseUrl) {
@@ -91,17 +96,14 @@ function declaredCrs(attrs, lod, baseUrl) {
   return { crs, wkt2, projjson };
 }
 
-/** Whether two spatial declarations name the same CRS, field for field. */
-export const sameCrs = (a, b) => a.crs === b.crs && a.wkt2 === b.wkt2 && JSON.stringify(a.projjson) === JSON.stringify(b.projjson);
-
 /**
  * P/S are authoritative; mirrors may only agree, never replace them. The `crs` mirror is optional, and without a
  * `proj:code` there is nothing to compare it with.
  */
-export function parseSpatial(meta, cz, lod, baseUrl) {
+export function parseSpatial(meta, cz, lod, baseUrl, notes = []) {
   const attrs = meta.attributes;
-  registration(attrs, 'proj', baseUrl);
-  registration(attrs, 'spatial', baseUrl);
+  registration(attrs, 'proj', notes);
+  registration(attrs, 'spatial', notes);
   const declared = declaredCrs(attrs, lod, baseUrl);
   const transform = attrs['spatial:transform'];
   requireStore(declared.crs === null || cz.crs === undefined || declared.crs === cz.crs, baseUrl, `level ${lod} proj:code disagrees with chronozarr.crs`);
@@ -132,9 +134,9 @@ function parseFillValue(value, dtype) {
 
 /**
  * How one array (the data array, or a mask/coverage variable) is laid out, from its zarr.json.
- * `rank` is 4 for (time, band, y, x) and 3 for (time, y, x). Inner chunks always span one timestep.
+ * `rank` is 4 for (time, band, y, x) and 3 for (time, y, x). The array adapter reads nonprofile chunks.
  */
-export function parseStorage(meta, { path, rank, baseUrl }) {
+export function parseStorage(meta, { path, rank, baseUrl, notes = [] }) {
   checkExtensions(meta, baseUrl);
   const where = `${baseUrl}: ${path}`;
   requireStore(meta.zarr_format === 3 && meta.node_type === 'array', baseUrl, `${path}/zarr.json is not a Zarr v3 array`);
@@ -142,43 +144,57 @@ export function parseStorage(meta, { path, rank, baseUrl }) {
   requireStore(meta.shape?.length === rank && meta.shape.every((n) => Number.isInteger(n) && n > 0), baseUrl, `${where} has ${meta.shape?.length} dimensions, expected ${rank}`);
   requireStore(meta.chunk_grid?.name === 'regular', baseUrl, `${where} chunk grid ${meta.chunk_grid?.name} is not supported`);
   const dims = rank === 4 ? ['time', 'band', 'y', 'x'] : ['time', 'y', 'x'];
-  requireStore(JSON.stringify(meta.dimension_names) === JSON.stringify(dims) && JSON.stringify(meta.attributes?._ARRAY_DIMENSIONS) === JSON.stringify(dims), baseUrl, `${where} dimension names must be ${dims}`);
+  requireStore(JSON.stringify(meta.dimension_names) === JSON.stringify(dims), baseUrl, `${where} dimension names must be ${dims}`);
+  requireStore(meta.attributes?._ARRAY_DIMENSIONS === undefined || JSON.stringify(meta.attributes._ARRAY_DIMENSIONS) === JSON.stringify(dims), baseUrl, `${where} _ARRAY_DIMENSIONS disagrees with dimension names ${dims}`);
+  if (meta.attributes?._ARRAY_DIMENSIONS === undefined) notes.push(`${path}: _ARRAY_DIMENSIONS is absent; dimension_names defines the axes`);
   const encoding = meta.chunk_key_encoding ?? { name: 'default' };
-  requireStore(encoding.name === 'default' && (encoding.configuration?.separator ?? '/') === '/', baseUrl, `${where} chunk_key_encoding ${encoding.name} is not supported`);
+  requireStore(['default', 'v2'].includes(encoding.name) && ['/', '.'].includes(encoding.configuration?.separator ?? (encoding.name === 'v2' ? '.' : '/')), baseUrl, `${where} chunk_key_encoding ${encoding.name} is not supported`);
+  const separator = encoding.configuration?.separator ?? (encoding.name === 'v2' ? '.' : '/');
   const storage = {
     dtype: meta.data_type,
     fillValue: parseFillValue(meta.fill_value, meta.data_type),
-    keyOf: (coords) => ['c', ...coords].join('/'),
+    keyOf: (coords) => (encoding.name === 'default' ? ['c', ...coords] : coords).join(separator),
+    shape: meta.shape,
   };
   const gridShape = meta.chunk_grid.configuration.chunk_shape;
   requireStore(Array.isArray(gridShape) && gridShape.length === rank && gridShape.every((n) => Number.isInteger(n) && n > 0), baseUrl, `${where} has invalid chunk shape`);
-  const checkCellShape = (shape) => requireStore(shape.at(-1) === shape.at(-2) && shape.at(-1) % 2 === 0, baseUrl, `${where} chunks must be square with a positive even size`);
+  requireStore(Array.isArray(meta.codecs), baseUrl, `${where} codecs must be an array`);
   const sharding = meta.codecs.find((c) => c.name === 'sharding_indexed');
   if (!sharding) {
-    checkCellShape(gridShape);
-    requireStore(gridShape[0] === 1, baseUrl, `${where} unsharded chunks must span one timestep, got ${gridShape}`);
     return { ...storage, sharded: false, shardTime: 1, innerShape: gridShape, innerCodecs: meta.codecs };
   }
   const cfg = sharding.configuration;
+  requireStore(meta.codecs.length === 1, baseUrl, `${where} codecs outside sharding_indexed are not supported: ${meta.codecs.map((c) => c.name)}`);
+  requireStore(cfg.index_location === undefined || ['start', 'end'].includes(cfg.index_location), baseUrl, `${where} unsupported index_location ${cfg.index_location}`);
   const indexCodecs = cfg.index_codecs.map((c) => c.name);
   requireStore(
     (indexCodecs.length === 1 && indexCodecs[0] === 'bytes') || (indexCodecs.length === 2 && indexCodecs[0] === 'bytes' && indexCodecs[1] === 'crc32c'),
     baseUrl,
     `${where} index_codecs [${indexCodecs}] are not supported`,
   );
+  requireStore((cfg.index_codecs[0].configuration?.endian ?? 'little') === 'little', baseUrl, `${where} big-endian shard index bytes are not supported`);
   const inner = cfg.chunk_shape;
-  checkCellShape(inner);
-  const sameSpace = gridShape.slice(1).every((n, i) => n === inner[i + 1]);
-  requireStore(inner[0] === 1 && sameSpace, baseUrl, `${where} shard shape (${gridShape}) must be (shard_time, ...) over inner chunks (${inner}) that span one timestep`);
+  requireStore(Array.isArray(inner) && inner.length === rank && inner.every((n, i) => Number.isInteger(n) && n > 0 && gridShape[i] % n === 0), baseUrl, `${where} shard shape (${gridShape}) is not divisible by inner chunks (${inner})`);
   return {
     ...storage,
     sharded: true,
     shardTime: gridShape[0],
+    shardShape: gridShape,
     innerShape: inner,
     innerCodecs: cfg.codecs,
     indexAtStart: (cfg.index_location ?? 'end') === 'start',
     indexHasCrc: indexCodecs.includes('crc32c'),
   };
+}
+
+/** The one-inner-chunk fast path; other declared layouts use the generic array reader. */
+export function isCellStorage(storage, cellShape) {
+  const shape = storage.innerShape;
+  const bytes = storage.innerCodecs[0];
+  return JSON.stringify(shape) === JSON.stringify(cellShape) &&
+    (!storage.sharded || storage.shardShape.slice(1).every((n, i) => n === shape[i + 1])) &&
+    bytes?.name === 'bytes' && (bytes.configuration?.endian ?? 'little') === 'little' &&
+    storage.innerCodecs.slice(1).every((codec) => ['zstd', 'gzip', 'zlib', 'blosc', 'lz4'].includes(codec.name));
 }
 
 /** What `decode` needs for one array: the typed inner chunk and its compression chain. `key` identifies it to workers. */

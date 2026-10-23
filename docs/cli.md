@@ -1,5 +1,7 @@
 # Command line
 
+**Local release candidate — 0.5.0rc1, unpublished.** Follow the [candidate installation](development.md) before using this reference. For the released package, use the [0.4.1 command line reference](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/cli.md).
+
 Run `chronozarr <command> --help` for every option. In a uv project, run `uv run chronozarr <command> --help`. A standalone tool or pip installation runs `chronozarr` directly.
 
 ## Create
@@ -39,9 +41,11 @@ Run `chronozarr <command> --help` for every option. In a uv project, run `uv run
 
 | Extra | Adds |
 |-------|------|
-| `geo` | GeoTIFF input and output, and `link --lonlat` for a store in a projected coordinate system |
+| `geo` | GeoTIFF input and output, and `link --lonlat` for projected coordinates or stored WKT2/PROJJSON definitions |
 | `notebook` | `chronozarr.view(store)` for Jupyter. See [notebooks](notebooks.md) |
 | `netcdf`, `dask` | NetCDF input (with cftime) and dask arrays |
 | `cftime` | Zarr time axes on a `360_day`, `noleap`, `all_leap` or `julian` calendar, without a NetCDF reader |
 | `s3` | Listing of an `s3://` prefix for `convert` |
 | `publish`, `publish-gcs`, `publish-azure` | The SDK that `publish` uses for S3 or R2, Google Cloud Storage or Azure. See [Publish a permanent link](publish.md) |
+
+`link --lonlat` needs no projection library for a store that declares only `EPSG:4326`. A stored WKT2 or PROJJSON definition takes precedence over its authority code; interpreting it or proving it equivalent to that code needs pyproj from the `geo` extra. This includes a geographic store with redundant WKT2. `--xy` and links without a centre remain usable without pyproj.

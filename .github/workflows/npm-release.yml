@@ -9,7 +9,8 @@ name: npm release
 # A manual run (workflow_dispatch with a tag) re-publishes an existing tag with the workflow file from the
 # branch it is started on, for when a release fails for a reason fixed after the tag was pushed.
 # The tag that triggers this workflow also triggers release.yml (PyPI), so one v* tag releases both packages
-# and both package versions must equal the tag.
+# and both package versions must describe the same release (e.g. Python 0.5.0rc1 and
+# npm 0.5.0-rc.1 share tag v0.5.0-rc.1). Prereleases use npm's next dist-tag.
 
 on:
   push:
@@ -39,20 +40,19 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.11"
       - name: Check the tag matches the package version
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          version="$(node -p "require('./package.json').version")"
-          if [ "v${version}" != "${TAG}" ]; then
-            echo "tag ${TAG} does not match js/package.json version ${version}" >&2
-            exit 1
-          fi
+          uv run --no-project python ../scripts/check_release.py --tag "${TAG}"
       - name: Install locked dependencies
-        run: npm ci
+        run: npm ci --min-release-age=7
       - name: Node tests
-        run: node --test
+        run: npm test
       - name: Pack
         run: mkdir -p ../dist && npm pack --pack-destination ../dist
       - name: Install the tarball into an empty project and import both entry points
@@ -102,7 +102,10 @@ jobs:
             echo "npm ${have} is older than ${required}, which trusted publishing needs" >&2
             exit 1
           fi
-      - name: Publish with provenance
+      - name: Publish with provenance to the release channel
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
-        run: npm publish "./dist/chronozarr-${TAG#v}.tgz" --provenance --access public
+        run: |
+          set -euo pipefail
+          if [[ "${TAG}" == *-* ]]; then channel=next; else channel=latest; fi
+          npm publish "./dist/chronozarr-${TAG#v}.tgz" --provenance --access public --tag "${channel}"

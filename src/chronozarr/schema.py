@@ -575,7 +575,10 @@ def check_crs_mirror(
     if not isinstance(mirror, str) or not mirror:
         problems.append(f"{label}: expected a non-empty string, got {mirror!r}")
         return
-    match = same_crs(Crs(code=mirror), reference)
+    # This alias mirrors proj:code when that field exists. Any disagreement between that
+    # code and a higher-priority WKT/PROJJSON definition is reported separately.
+    canonical_code = Crs(code=reference.code) if reference.code is not None else reference
+    match = same_crs(Crs(code=mirror), canonical_code)
     if match.same is False:
         problems.append(
             f"{label} {mirror!r} differs from the stored CRS (compared by {match.method})"
@@ -1675,6 +1678,13 @@ def _validate_into(store: Any, problems: list[str], notes: list[str]) -> str | N
     _check_shard_bytes(root, attrs, problems)
     problems.extend(_check_consolidated(store, root))
     _check_volatility(root, attrs, state, problems)
+    if state.crs is not None and attrs.chronozarr.spec_version in SPEC_VERSIONS:
+        expected_version = spec_version_for(state.crs)
+        if attrs.chronozarr.spec_version != expected_version:
+            problems.append(
+                f"chronozarr.spec_version: writers MUST write '{expected_version}' for "
+                f"this CRS, got '{attrs.chronozarr.spec_version}'; the store still decodes"
+            )
     problems.extend(state.found.breaks)
     notes.extend(state.found.advice)
     notes.extend(_crs_notes(attrs, state))

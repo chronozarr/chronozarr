@@ -10,6 +10,8 @@ chronozarr turns a georeferenced raster time series into an interactive dataset 
 
 ## Quickstart
 
+This quickstart uses the released **0.4.1** packages. The [candidate guides](docs/development.md) describe the local, unpublished **0.5.0rc1** Python / **0.5.0-rc.1** npm candidate; use the prepared checkout or local artifacts for new converter options, custom CRSs and the production viewer bundle. The [0.4.1 documentation](https://github.com/chronozarr/chronozarr/tree/v0.4.1/docs) stays with the release.
+
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then the `chronozarr` command:
 
 ```bash
@@ -66,11 +68,11 @@ A store is a Zarr v3 group, so xarray, zarr-python and GDAL 3.13 also read it wi
 npm install chronozarr@0.4.1
 ```
 
-The npm package has a DOM-free reader, a MapLibre layer, a GeoLibre plugin and the full viewer for self-hosting. See the [JavaScript reader](https://chronozarr.org/reference/javascript).
+The npm 0.4.1 package has a DOM-free reader, a MapLibre layer, a GeoLibre plugin and a module-based viewer for self-hosting. The [development viewer bundle](docs/viewer-distribution.md) is built from a checkout. See the [released JavaScript reader](https://github.com/chronozarr/chronozarr/blob/v0.4.1/js/README.md).
 
 ## Versions
 
-The Python and npm packages are 0.4.1. The store format specification is v0.3.0, a draft. A package upgrade does not change existing v0.3 stores. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. [Release notes for 0.4.1](https://github.com/chronozarr/chronozarr/blob/main/docs/release-0.4.1.md).
+The stable install examples above select Python and npm package 0.4.1, which implements the draft v0.3.0 format. This checkout prepares Python 0.5.0rc1 and npm 0.5.0-rc.1 locally; neither candidate has been published, tagged or deployed. The writer keeps EPSG stores at spec v0.3.0 and uses draft v0.4.0 for other CRSs. The candidate readers open both; a released 0.4.1 reader cannot open a v0.4.0 store. Use the [candidate installation](docs/development.md) for those stores. Existing v0.3 stores stay readable. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. See the [candidate release notes](docs/release-0.5.0rc1.md) and [released 0.4.1 notes](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/release-0.4.1.md).
 
 ## Documentation
 
@@ -87,7 +89,7 @@ The Python and npm packages are 0.4.1. The store format specification is v0.3.0,
 | Problems and fixes | [Troubleshooting](https://chronozarr.org/troubleshooting) |
 | Instructions for coding agents, and these docs as plain text | [Agent skill](https://github.com/chronozarr/chronozarr/blob/main/skills/chronozarr/SKILL.md), [llms.txt](https://chronozarr.org/llms.txt) |
 
-The pages are written in [`docs/`](https://github.com/chronozarr/chronozarr/tree/main/docs) and published to chronozarr.org. To contribute, see [CONTRIBUTING.md](https://github.com/chronozarr/chronozarr/blob/main/CONTRIBUTING.md).
+The pages are written in [`docs/`](https://github.com/chronozarr/chronozarr/tree/main/docs) for chronozarr.org. Candidate guides are labeled with their local version and publication status; use the [tagged 0.4.1 docs](https://github.com/chronozarr/chronozarr/tree/v0.4.1/docs) with that release. Changing these files does not deploy the site or its viewer. To contribute, see [CONTRIBUTING.md](https://github.com/chronozarr/chronozarr/blob/main/CONTRIBUTING.md).
 
 ## License
 

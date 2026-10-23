@@ -1,5 +1,7 @@
 # chronozarr on MapLibre
 
+This page describes the local, unpublished npm **0.5.0-rc.1** candidate, paired with Python **0.5.0rc1**; use the [candidate source or artifact route](../../docs/development.md). npm 0.4.1 supports the original EPSG spec 0.3 stores. Non-EPSG CRS definitions and the relaxed metadata reader described here require the candidate code; installing 0.4.1 does not add them. Package installation and deployment of the hosted viewer are separate.
+
 `ChronozarrLayer` draws a chronozarr store on a MapLibre GL JS map as a custom layer. It opens the store with `js/chronozarr/decoder.js` and picks the pyramid level from the map zoom. It uploads the raw chunks of the visible cells as integer or float textures. It runs the product band math in the fragment shader.
 
 Each cell is a small mesh. Its vertices were projected from the store's CRS to Web Mercator, so the raster lands on the basemap with no resampling step. The layer has no dependencies: MapLibre belongs to the host page.
@@ -116,9 +118,9 @@ The product colors are `PRODUCT_GLSL` from `js/shared/products-glsl.js`, the sam
 
 ### Projections
 
-Each store has one projection. WGS84 UTM (EPSG:326zz and EPSG:327zz), EPSG:3857 and EPSG:4326 are built in and recognized by `proj:code`, or by the ID that ends the store's `proj:wkt2`. Nothing is fetched for them.
+Each store has one projection. WGS84 UTM (EPSG:326zz and EPSG:327zz), EPSG:3857 and EPSG:4326 are built in. A store declaring only one of those `proj:code` values fetches no parser. A WKT2 or PROJJSON definition loads the parser once to verify its actual parameters before selecting a matching built-in; an authority ID alone cannot override the definition.
 
-Any other CRS needs the store to carry it as `proj:wkt2` or `proj:projjson` (a store with no authority code always does). The layer then loads proj4 with `import()`, a 24 KB gzipped build in `js/vendor/proj4`, and reads the definition. The build has the Lambert conformal conic (`lcc`), sinusoidal (`sinu`), Albers (`aea`), Lambert azimuthal (`laea`), stereographic (`stere`), transverse Mercator (`tmerc`), Mercator and geographic projections. It matches pyproj to a millimetre for Daymet LCC, MODIS sinusoidal and EPSG:3413. It applies no datum grid shifts. A code that is not built in and has no WKT2 or PROJJSON, or a definition in another projection, throws an error that says so. To add a projection, import it in `js/support/proj4-entry.js` and run `node js/support/vendor.mjs`.
+Any other CRS needs the store to carry it as `proj:wkt2` or `proj:projjson` (a store with no authority code always does). The layer then loads proj4 with `import()`, a 26 KB gzipped build in `js/vendor/proj4`, and reads the definition. The build has the Lambert conformal conic (`lcc`), sinusoidal (`sinu`), Albers (`aea`), Lambert azimuthal (`laea`), stereographic (`stere`), transverse Mercator (`tmerc`), Mercator and geographic projections. It matches pyproj to a millimetre for Daymet LCC, MODIS sinusoidal and EPSG:3413. It applies no datum grid shifts. A code that is not built in and has no WKT2 or PROJJSON, or a definition in another projection, throws an error that says so. To add a projection, import it in `js/support/proj4-entry.js` and run `node js/support/vendor.mjs`.
 
 A store that crosses the antimeridian or a UTM zone boundary is not supported. The store must declare its level-0 `transform`.
 

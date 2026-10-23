@@ -1410,7 +1410,6 @@ def _view_center(
     """
     level = opened.levels[0]
     extent = schema.bounds(level.transform, level.shape[2], level.shape[3])
-    crs = opened.crs.to_string()
     shown = opened.crs.describe()
     if store_xy is not None:
         x, y = store_xy
@@ -1422,8 +1421,9 @@ def _view_center(
     if lon_lat is None:
         return None
     lon, lat = lon_lat
+    crs = opened.crs.to_string()
     try:
-        x, y = lonlat_to_xy(crs, extent, lon, lat)
+        x, y = lonlat_to_xy(crs, extent, lon, lat, label=shown)
     except ImportError as exc:
         if exc.name != "pyproj":
             raise
@@ -1469,8 +1469,9 @@ def _view_center(
     default=None,
     metavar="LON,LAT",
     help="Centre the map on this longitude and latitude, in degrees (WGS 84), longitude first: "
-    "--lonlat -64.62,-3.41. Converted to the store's coordinate system, which needs pyproj (the "
-    "geo extra) unless the store is in EPSG:4326. Refused if the store does not cover the point.",
+    "--lonlat -64.62,-3.41. Needs pyproj (the geo extra) for projected coordinates or a stored "
+    "WKT2/PROJJSON definition whose equivalence to a code cannot be proved. A code-only "
+    "EPSG:4326 store needs no projection library. Refused if the store does not cover the point.",
 )
 @click.option(
     "--xy",

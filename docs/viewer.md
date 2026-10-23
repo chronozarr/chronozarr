@@ -1,12 +1,12 @@
-# Explore the live demo
+# Candidate viewer
 
-[Open the live demo](https://chronozarr.org/demo/). It loads 117 monthly Sentinel-2 composites of the Ucayali River in Peru, November 2015 to February 2026. The store is in a public storage bucket. The viewer reads it directly, with no server in between.
+**Local release candidate — 0.5.0rc1, unpublished.** This guide describes the npm `0.5.0-rc.1` viewer built from the [candidate checkout or artifact](development.md#build-the-candidate-viewer). For the released viewer, use the [0.4.1 viewer guide](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/viewer.md).
 
-This page describes the viewer. Every store that you preview, share or publish opens in the same viewer. It describes the viewer at chronozarr.org/demo/. A viewer folder copied from npm package 0.4.0 (see [Self-host the viewer](viewer-distribution.md)) lacks the start rule below and the messages for a stopped share or a blocked local store; copy it again from 0.4.1.
+[The live demo](https://chronozarr.org/demo/) loads 117 monthly Sentinel-2 composites of the Ucayali River in Peru, November 2015 to February 2026, from a public storage bucket. Its deployed build can differ from this checkout. Installing the candidate Python package does not change the hosted viewer; build a [self-hosted viewer](viewer-distribution.md) to use every feature below.
 
 ## Where it starts
 
-The demo opened from its plain address, `https://chronozarr.org/demo/`, starts at the latest well-covered timestep. Among the newest 24 timesteps, that is the latest in which at least half of the pixels are observed, according to the store's coverage plane, or valid, according to its mask. A store with neither plane starts at its last timestep. The public Ucayali store has neither, so it starts at its last month.
+The candidate viewer opened without a selected store or view starts its catalog's default store at the latest well-covered timestep. Among the newest 24 timesteps, that is the latest in which at least half of the pixels are observed, according to the store's coverage plane, or valid, according to its mask. A store with neither plane starts at its last timestep. The public Ucayali store has neither, so it starts at its last month. A copied viewer has an empty catalog until you supply a store.
 
 Any other address starts where it says. A link with a timestep (`t`) opens at that timestep. A link with a store, a product, a zoom or a centre but no `t` opens at the first timestep, as such links always have. A store that you preview, share or publish opens at its first timestep unless its link says otherwise.
 
@@ -68,7 +68,7 @@ The address uses these parameters:
 | `z` | Zoom, in screen pixels per stored pixel | `z=2.5` |
 | `c` | Map centre x,y in the store's coordinate system | `c=684500,9123350` |
 
-`chronozarr link STORE_URL` prints the same kind of link from the command line and checks it against the store. It sets `t`, `p`, `b`, `r`, `cm`, `z` and `c` with `--time`, `--product`, `--band`, `--range`, `--colormap`, `--zoom` and `--lonlat` or `--xy`. To show the viewer inside your own page, see [Embed the viewer](embedding.md).
+The candidate `chronozarr link STORE_URL` prints the same kind of link from the command line and checks it against the store. It sets `t`, `p`, `b`, `r`, `cm`, `z` and `c` with `--time`, `--product`, `--band`, `--range`, `--colormap`, `--zoom` and `--lonlat` or `--xy`. Use `--viewer` to point the link at your hosted candidate viewer. To show the viewer inside your own page, see [Embed the viewer](embedding.md).
 
 ### Choose a date and a place
 
@@ -76,8 +76,8 @@ The address uses these parameters:
 chronozarr link https://data.example.org/my_store --time 71 --lonlat -64.62,-3.41 --zoom 2
 ```
 
-- `--lonlat LON,LAT` is a longitude and a latitude in degrees, longitude first. `link` converts them to the store's coordinate system and writes the result as `c`. A store in degrees needs nothing else. A store in a projected system, such as UTM, needs the `geo` extra for the conversion. A longitude moves by 360 degrees when that puts it inside the store, so `-64.6` finds a store that counts longitudes from 0 to 360.
-- `--xy X,Y` is the point in the store's own coordinate system, the CRS that `chronozarr info` prints. Use it when you already have those numbers, for example from the `c` of a copied link. Give `--lonlat` or `--xy`, not both.
+- `--lonlat LON,LAT` is a longitude and a latitude in degrees, longitude first. `link` converts them to the store's coordinate system and writes the result as `c`. A store declaring only `EPSG:4326` needs no projection library. Projected coordinates and stored WKT2/PROJJSON definitions need pyproj from the `geo` extra to interpret the definition or prove it equivalent to its code, including a geographic store with redundant WKT2. A lower-priority code never replaces an unverified definition. A longitude moves by 360 degrees when that puts it inside the store, so `-64.6` finds a store that counts longitudes from 0 to 360.
+- `--xy X,Y` is the point in the store's own coordinate system, the CRS that `chronozarr info` prints. Use it when you already have those numbers, for example from the `c` of a copied link. It remains usable without pyproj, as does a link without a centre. Give `--lonlat` or `--xy`, not both.
 - `link` refuses a point that the store does not cover and prints what it does cover. The viewer would move such a centre to the nearest edge without a message.
 - `--zoom Z` is `z`, the number of screen pixels that draw one stored pixel. At 1 each stored pixel is one screen pixel, at 4 it is a square of 4 by 4, and at 0.5 one screen pixel shows 2 by 2 stored pixels. The map shows its width in screen pixels, times the pixel size, divided by the zoom: on a map 1,000 pixels wide, a store with 10 m pixels shows 10 km at zoom 1, 2.5 km at zoom 4 and 20 km at zoom 0.5. A centre without `--zoom` gets zoom 1. A zoom without a centre zooms on the middle of the store. The viewer cannot draw more than 16 device pixels per stored pixel, or less than half of what fits the whole store, and moves a zoom beyond that to the limit.
 

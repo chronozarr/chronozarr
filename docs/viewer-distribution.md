@@ -1,19 +1,21 @@
 # Self-host the viewer
 
-The npm package contains the full viewer, built: the page, one script for the viewer and the reader, one for the decode worker, the codecs and their licenses. The viewer runs in the browser. The host only serves files. Node.js copies the files once and is not needed on the host.
+**Local release candidate — 0.5.0rc1, unpublished.** This guide builds the npm `0.5.0-rc.1` viewer from the [candidate checkout](development.md). The same build is copied by the [local npm artifact](development.md#install-local-candidate-artifacts). For the released npm package, use the [0.4.1 distribution guide](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/viewer-distribution.md).
+
+The checkout builds the page, one script for the viewer and reader, one for the decode worker, the codecs and their licenses. The viewer runs in the browser. The host only serves files. Node.js builds and copies the files once and is not needed on the host. The npm 0.4.1 package copies a module-based viewer and does not contain this production bundle.
 
 ## Copy the viewer
 
-1. Install the package.
+1. Use the prepared [candidate checkout](development.md#install-the-command-line-tool). From its root, install the JavaScript build dependencies:
 
    ```sh
-   npm install chronozarr
+   npm ci --prefix js --min-release-age=7
    ```
 
 2. Copy the viewer into a new folder, `published/`.
 
    ```sh
-   ./node_modules/.bin/chronozarr-viewer published --store ./store
+   node js/support/viewer-bundle.mjs published --store ./store
    ```
 
 3. Copy your store into that folder.
@@ -50,7 +52,7 @@ In a notebook, pass `viewer_dir="published"` to `chronozarr.view` or `chronozarr
 Give an absolute URL instead of a path:
 
 ```sh
-./node_modules/.bin/chronozarr-viewer published --store https://example.org/my-store
+node js/support/viewer-bundle.mjs published --store https://example.org/my-store
 ```
 
 The host of the store must send CORS headers. See [hosting requirements](hosting-requirements.md).
@@ -58,7 +60,7 @@ The host of the store must send CORS headers. See [hosting requirements](hosting
 ## What the copy command does
 
 - It refuses to overwrite a folder that exists.
-- It copies the viewer as the package carries it: 13 files and 1.8 MB, where the modules the viewer is written in would be 213 files. A browser reads `demo/viewer.js` in one request, not one request per module level. The WebAssembly codecs (`demo/codecs/`) and proj4 (`demo/chunks/`) load only when a store needs them. Run from a checkout of the repository, the command builds the viewer first, which needs `npm ci` in `js/`.
+- It builds and copies this checkout's viewer. A browser reads `demo/viewer.js` in one request instead of fetching the source module graph. The WebAssembly codecs (`demo/codecs/`) and proj4 (`demo/chunks/`) load only when a store needs them. The copy command builds the viewer first using the dependencies installed above.
 - It does not check or copy data.
 - It writes an empty catalog. A store that fails to load never falls back to the public sample data.
 

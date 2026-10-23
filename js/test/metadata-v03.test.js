@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openStore } from '../chronozarr/decoder.js';
-import { CONVENTIONS } from '../chronozarr/metadata.js';
-import { DAYMET_LCC, MODIS_SINUSOIDAL, NSIDC_POLAR_STEREOGRAPHIC_NORTH, WGS84_UTM_31N } from '../support/crs-fixtures.js';
+import { CONVENTIONS, sameCrs } from '../chronozarr/metadata.js';
+import { DAYMET_LCC, MODIS_SINUSOIDAL, NSIDC_POLAR_STEREOGRAPHIC_NORTH, WGS84_GEOGRAPHIC, WGS84_PSEUDO_MERCATOR, WGS84_UTM_31N } from '../support/crs-fixtures.js';
 import { buildSyntheticStore } from '../support/synthetic-store.js';
 
 const spec = { nTime: 3, nBand: 2, height: 40, width: 33, chunk: 32, nLevels: 2, sharded: false, mask: true, coverage: true, levelsMirror: true };
@@ -31,8 +31,6 @@ test('literal convention registrations and canonical geometry open without coord
 });
 
 for (const [label, path, mutate, reason] of [
-  ['missing multiscales registration', '/zarr.json', m => m.attributes.zarr_conventions.pop(), /multiscales registration/],
-  ['commit registration URL', '/0/data/zarr.json', m => m.attributes.zarr_conventions[0].spec_url = 'https://github.com/zarr-conventions/proj/blob/deadbeef/README.md', /literal v0.1/],
   ['legacy discovery', '/zarr.json', m => m.attributes.multiscales = [{datasets:[{path:'0'}]}], /multiscales.layout/],
   ['level gap', '/zarr.json', m => m.attributes.multiscales.layout[1].asset = '2', /consecutive level groups/],
   ['wrong relative scale', '/zarr.json', m => m.attributes.multiscales.layout[1].transform.scale = [3,3], /scale \[2,2\]/],
@@ -46,11 +44,9 @@ for (const [label, path, mutate, reason] of [
   ['point registration', '/0/data/zarr.json', m => m.attributes['spatial:registration'] = 'point', /pixel-registered/],
   ['mirror geometry disagreement', '/zarr.json', m => m.attributes.chronozarr.levels[0].transform[2] = 42, /mirror transform/],
   ['band-name disagreement', '/zarr.json', m => m.attributes.chronozarr.band_names.reverse(), /band_names disagrees/],
-  ['grid disagreement', '/zarr.json', m => m.attributes.chronozarr.levels[0].grid = [99,99], /grid mirror/],
   ['plane geometry disagreement', '/0/mask/zarr.json', m => m.attributes['spatial:transform'][2] = 1, /auxiliary geometry/],
   ['missing dimension names', '/0/data/zarr.json', m => delete m.dimension_names, /dimension names/],
-  ['non-square chunks', '/0/data/zarr.json', m => m.chunk_grid.configuration.chunk_shape[3] = 16, /square/],
-  ['wrong key encoding', '/0/data/zarr.json', m => m.chunk_key_encoding.name = 'v2', /chunk_key_encoding/],
+  ['unknown key encoding', '/0/data/zarr.json', m => m.chunk_key_encoding.name = 'future-keys', /chunk_key_encoding/],
   ['unknown storage extension', '/0/data/zarr.json', m => m.storage_transformers = [{name:'encoded_measurements'}], /unsupported storage_transformers/],
   ['unknown mandatory field', '/zarr.json', m => m.future_encoding = {must_understand:true}, /unsupported required Zarr extension/],
 ]) {
@@ -68,6 +64,25 @@ test('ignorable Zarr extensions leave ordinary values unchanged', async () => {
   const store = await open(readable);
   assert.equal((await store.getCell(0, 0, 0, 1)).data[0], 1040);
 });
+
+for (const [label, path, mutate, note] of [
+  ['missing multiscales registration', '/zarr.json', m => m.attributes.zarr_conventions.pop(), /multiscales registration/],
+  ['alternate registration URL', '/0/data/zarr.json', m => m.attributes.zarr_conventions[0].spec_url = 'https://github.com/zarr-conventions/proj/blob/deadbeef/README.md', /proj registration/],
+  ['absent _ARRAY_DIMENSIONS', '/0/data/zarr.json', m => delete m.attributes._ARRAY_DIMENSIONS, /_ARRAY_DIMENSIONS/],
+  ['nearest overview method', '/zarr.json', m => m.attributes.multiscales.resampling_method = 'nearest', /overview levels.*level 0/],
+  ['absent overview method', '/zarr.json', m => delete m.attributes.multiscales.resampling_method, /resampling_method/],
+  ['grid mirror disagreement', '/zarr.json', m => m.attributes.chronozarr.levels[0].grid = [99,99], /grid mirror.*chunks/],
+  ['patch version', '/zarr.json', m => m.attributes.chronozarr.spec_version = '0.3.7', /0.3.7.*unknown patch/],
+]) {
+  test(`reader decodes and notes ${label}`, async () => {
+    const readable = buildSyntheticStore(spec);
+    edit(readable, path, mutate);
+    const store = await open(readable);
+    assert.equal((await store.getCell(0, 0, 0, 1)).data[0], 1040);
+    assert.ok(store.notes.some((text) => note.test(text)), JSON.stringify(store.notes));
+    store.close();
+  });
+}
 
 test('canonical metadata discovers levels and names with the optional reader mirrors absent', async () => {
   const readable = buildSyntheticStore({...spec, levelsMirror:false, consolidated:true});
@@ -131,3 +146,69 @@ for (const [label, path] of [['another level', '/1/data/zarr.json'], ['the mask'
     assert.ok(readable.log.every(({ key }) => key.endsWith('/zarr.json')), 'no measurements returned or fetched');
   });
 }
+
+test('equivalent redundant WKT and differently ordered PROJJSON do not change CRS identity', async () => {
+  const readable = buildSyntheticStore({ ...spec, crs: WGS84_UTM_31N.code });
+  edit(readable, '/1/data/zarr.json', (m) => { m.attributes['proj:wkt2'] = WGS84_UTM_31N.wkt2; });
+  const store = await open(readable);
+  assert.equal((await store.getCell(1, 0, 0, 1)).data[0], 1040);
+  store.close();
+  const jsonStore = buildSyntheticStore({ ...spec, crs: { projjson: DAYMET_LCC.projjson } });
+  edit(jsonStore, '/1/data/zarr.json', (m) => { m.attributes['proj:projjson'] = Object.fromEntries(Object.entries(m.attributes['proj:projjson']).reverse()); });
+  (await open(jsonStore)).close();
+});
+
+test('matching EPSG codes and root IDs do not hide different authoritative WKT parameters', async () => {
+  const readable = buildSyntheticStore({ ...spec, crs: { code: WGS84_UTM_31N.code, wkt2: WGS84_UTM_31N.wkt2 } });
+  edit(readable, '/1/data/zarr.json', (m) => { m.attributes['proj:wkt2'] = m.attributes['proj:wkt2'].replace('PARAMETER["False easting",500000', 'PARAMETER["False easting",600000'); });
+  await assert.rejects(open(readable), /CRS differs/);
+});
+
+for (const field of ['wkt2', 'projjson']) test(`EPSG:4326 code and equivalent authoritative ${field} share CRS meaning`, async () => {
+  assert.equal(await sameCrs({ crs: 'EPSG:4326' }, { [field]: WGS84_GEOGRAPHIC[field] }), true);
+  const readable = buildSyntheticStore({ ...spec, crs: 'EPSG:4326' });
+  edit(readable, '/1/data/zarr.json', (m) => { m.attributes[`proj:${field}`] = WGS84_GEOGRAPHIC[field]; });
+  (await open(readable)).close();
+});
+
+for (const field of ['wkt2', 'projjson']) test(`EPSG:3857 code and equivalent authoritative ${field} share CRS meaning`, async () => {
+  assert.equal(await sameCrs({ crs: 'EPSG:3857' }, { [field]: WGS84_PSEUDO_MERCATOR[field] }), true);
+  const readable = buildSyntheticStore({ ...spec, crs: 'EPSG:3857' });
+  edit(readable, '/1/data/zarr.json', (m) => { m.attributes[`proj:${field}`] = WGS84_PSEUDO_MERCATOR[field]; });
+  (await open(readable)).close();
+});
+
+test('different geographic axes and angular units remain different despite identical authority IDs', async () => {
+  const changedAxis = structuredClone(WGS84_GEOGRAPHIC.projjson);
+  changedAxis.coordinate_system.axis[0].direction = 'south';
+  const changedUnits = structuredClone(WGS84_GEOGRAPHIC.projjson);
+  for (const axis of changedUnits.coordinate_system.axis) axis.unit = 'radian';
+  const changedDatum = structuredClone(WGS84_GEOGRAPHIC.projjson);
+  changedDatum.datum_ensemble.name = 'A different reference-frame ensemble';
+  const changedMembers = structuredClone(WGS84_GEOGRAPHIC.projjson);
+  changedMembers.datum_ensemble.members.pop();
+  for (const projjson of [changedAxis, changedUnits, changedDatum, changedMembers]) assert.equal(await sameCrs({ crs: 'EPSG:4326' }, { projjson }), false);
+  for (const [crs, fixture, unit] of [['EPSG:4326', WGS84_GEOGRAPHIC, 'radian'], ['EPSG:3857', WGS84_PSEUDO_MERCATOR, { type: 'LinearUnit', name: 'foot', conversion_factor: 0.3048 }]]) {
+    for (const index of [0, 1]) {
+      const projjson = structuredClone(fixture.projjson);
+      projjson.coordinate_system.axis[index].unit = unit;
+      assert.equal(await sameCrs({ crs }, { projjson }), false, `${crs} axis ${index} units matter independently`);
+    }
+  }
+});
+
+test('pseudo-Mercator retains the authoritative geodetic ellipsoid even though projection calculations use a sphere', async () => {
+  const changedEllipsoid = structuredClone(WGS84_PSEUDO_MERCATOR.projjson);
+  changedEllipsoid.base_crs.datum_ensemble.ellipsoid.inverse_flattening = 300;
+  assert.equal(await sameCrs({ crs: 'EPSG:3857' }, { projjson: changedEllipsoid }), false);
+});
+
+test('WKT authority annotations with whitespace or optional children cannot hide contradictory methods', async () => {
+  const changed = WGS84_PSEUDO_MERCATOR.wkt2.replace('Popular Visualisation Pseudo Mercator', 'Mercator (variant A)').replace('ID["EPSG",1024]', 'ID["EPSG",9804]');
+  for (const wkt2 of [changed + '\n', changed.replace(/ID\["EPSG",3857\]\]$/, 'ID["EPSG",3857,URI["https://epsg.io/3857"]]]'), changed.replace(/\]$/, ',REMARK["after root ID"]]')]) {
+    assert.equal(await sameCrs({ crs: 'EPSG:3857' }, { wkt2 }), false);
+    const readable = buildSyntheticStore({ ...spec, crs: 'EPSG:3857' });
+    edit(readable, '/1/data/zarr.json', (m) => { m.attributes['proj:wkt2'] = wkt2; });
+    await assert.rejects(open(readable), /CRS differs/);
+  }
+});

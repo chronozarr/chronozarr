@@ -26,7 +26,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Protocol, runtime_checkable
 
 from chronozarr import schema
-from chronozarr.crs import Crs, same_crs
+from chronozarr.crs import same_crs
 from chronozarr.doctor import DEFAULT_ORIGIN, USER_AGENT, Check, diagnose
 from chronozarr.publish import (
     SHORT_TTL,
@@ -127,7 +127,6 @@ def _prefix_problems(hosted: schema.Chronozarr, local: schema.Chronozarr) -> lis
     for name in (
         "spec_version",
         "variable",
-        "crs",
         "nodata",
         "band_names",
         "mask_variable",
@@ -141,52 +140,124 @@ def _prefix_problems(hosted: schema.Chronozarr, local: schema.Chronozarr) -> lis
             )
     if hosted.bands != local.bands:
         problems.append("the bands (scale, offset or units) differ")
-    hosted_levels = hosted.levels or ()
-    local_levels = local.levels or ()
-    if len(hosted_levels) != len(local_levels):
-        problems.append(f"{len(hosted_levels)} levels on the host, {len(local_levels)} locally")
-    for theirs, ours in zip(hosted_levels, local_levels, strict=False):
-        spatial_theirs = (theirs.path, theirs.resolution, theirs.transform, theirs.shape[1:])
-        spatial_ours = (ours.path, ours.resolution, ours.transform, ours.shape[1:])
-        if spatial_theirs != spatial_ours or theirs.grid != ours.grid:
-            problems.append(
-                f"level {ours.path} has another grid (bands, pixel size, transform or chunk "
-                f"layout) on the host: {theirs.shape[1:]} against {ours.shape[1:]} pixels"
-            )
     return problems
 
 
-def _stored_crs(document: dict[str, Any], variable: str) -> Crs | None:
-    """The CRS in level 0's data array, from the consolidated metadata of a root document."""
+def _array_metadata(
+    root: dict[str, Any], path: str, read_node: Callable[[str], bytes | None], where: str
+) -> dict[str, Any]:
+    """Canonical array metadata from a snapshot, with the ordinary per-node fallback."""
     try:
-        attributes = document["consolidated_metadata"]["metadata"][f"0/{variable}"]["attributes"]
-        return schema.parse_crs(attributes, "level 0")
-    except (KeyError, TypeError, schema.SchemaError):
-        return None
+        document = root["consolidated_metadata"]["metadata"][path]
+    except (KeyError, TypeError):
+        document = None
+    if not isinstance(document, dict):
+        raw = read_node(f"{path}/zarr.json")
+        if raw is None:
+            raise PublishError(f"{where}/{path}/zarr.json cannot be read")
+        document = _read_json(raw, f"{where}/{path}/zarr.json")
+    if document.get("node_type") != "array":
+        raise PublishError(f"{where}/{path} is not an array")
+    return document
 
 
-def _crs_problems(hosted: dict[str, Any], local: dict[str, Any], variable: str) -> list[str]:
-    """The stored CRS of the hosted and local store must be the same.
+def _spatial_array_problems(
+    theirs: dict[str, Any], ours: dict[str, Any], path: str, hosted_n: int, local_n: int
+) -> list[str]:
+    """An append may grow time, but cannot change old pixels' geometry or decoding."""
+    problems = []
+    their_shape, our_shape = theirs["shape"], ours["shape"]
+    # An interrupted metadata-last upload may already have extended descendant time axes
+    # before replacing the root. Only the root's published prefix must remain addressable.
+    if (
+        not their_shape
+        or not our_shape
+        or their_shape[0] < hosted_n
+        or our_shape[0] != local_n
+        or their_shape[1:] != our_shape[1:]
+    ):
+        problems.append(
+            f"{path}: another grid: canonical shape differs beyond the appended time axis"
+        )
+    for key in (
+        "data_type",
+        "fill_value",
+        "dimension_names",
+        "chunk_grid",
+        "chunk_key_encoding",
+        "codecs",
+    ):
+        if theirs.get(key) != ours.get(key):
+            problems.append(f"{path}: canonical {key} differs from the hosted array")
+    their_attrs, our_attrs = theirs["attributes"], ours["attributes"]
+    their_transform = schema.parse_transform(their_attrs["spatial:transform"], path)
+    our_transform = schema.parse_transform(our_attrs["spatial:transform"], path)
+    if their_transform != our_transform or any(
+        their_attrs.get(key, default) != our_attrs.get(key, default)
+        for key, default in (
+            ("spatial:dimensions", None),
+            ("spatial:registration", None),
+            ("spatial:transform_type", "affine"),
+        )
+    ):
+        problems.append(f"{path}: canonical geometry differs from the hosted array")
+    their_crs = schema.parse_crs(their_attrs, path).resolved()
+    our_crs = schema.parse_crs(our_attrs, path).resolved()
+    match = same_crs(their_crs, our_crs)
+    if match.same is not True:
+        why = (
+            f"compared by {match.method}"
+            if match.same is False
+            else "equivalence cannot be established without pyproj"
+        )
+        problems.append(
+            f"{path}: the stored CRS differs or cannot be verified: {their_crs.describe()} "
+            f"on the host and {our_crs.describe()} locally ({why})"
+        )
+    return problems
 
-    A store without an EPSG code has no `crs` mirror to compare, and a hosted `zarr.json` may
-    change in place, so the CRS is read from level 0 of both. A store without consolidated
-    metadata has nothing to read and is not compared.
-    """
-    theirs, ours = _stored_crs(hosted, variable), _stored_crs(local, variable)
-    if theirs is None or ours is None:
-        return []
-    match = same_crs(theirs.resolved(), ours.resolved())
-    if match.same is True:
-        return []
-    why = (
-        f"compared by {match.method}"
-        if match.same is False
-        else "a code and a WKT2 can only be compared with pyproj, which is not installed"
+
+def _canonical_problems(
+    hosted: dict[str, Any],
+    local: dict[str, Any],
+    read_hosted: Callable[[str], bytes | None],
+    read_local: Callable[[str], bytes | None],
+) -> list[str]:
+    """Compare immutable canonical metadata independently of optional mirrors/consolidation."""
+    try:
+        their_root = schema.read_root_attrs(hosted["attributes"], schema.Findings())
+        our_root = schema.read_root_attrs(local["attributes"], schema.Findings())
+    except (KeyError, TypeError, ValueError) as exc:
+        return [f"cannot verify the canonical multiscales layout: {exc}"]
+    problems = []
+    their_paths = [entry.path for entry in their_root.datasets]
+    our_paths = [entry.path for entry in our_root.datasets]
+    if their_paths != our_paths:
+        return ["the store has another grid: canonical multiscales level paths differ"]
+    if hosted["attributes"]["multiscales"] != local["attributes"]["multiscales"]:
+        problems.append("the multiscales layout differs from the hosted snapshot")
+    their_meta, our_meta = their_root.chronozarr, our_root.chronozarr
+    variables = (
+        (their_meta.variable, our_meta.variable),
+        (their_meta.mask_variable, our_meta.mask_variable),
+        (their_meta.coverage_variable, our_meta.coverage_variable),
     )
-    return [
-        f"the stored CRS differs: {theirs.describe()} on the host and {ours.describe()} "
-        f"locally ({why})"
-    ]
+    for level in their_paths:
+        for their_name, our_name in variables:
+            if their_name is None or our_name is None:
+                continue  # a changed declaration is already a prefix problem
+            path, local_path = f"{level}/{their_name}", f"{level}/{our_name}"
+            try:
+                theirs = _array_metadata(hosted, path, read_hosted, "hosted store")
+                ours = _array_metadata(local, local_path, read_local, "local store")
+                problems.extend(
+                    _spatial_array_problems(
+                        theirs, ours, path, len(their_meta.times), len(our_meta.times)
+                    )
+                )
+            except (KeyError, TypeError, ValueError, OSError, PublishError) as exc:
+                problems.append(f"{path}: cannot verify canonical metadata: {exc}")
+    return problems
 
 
 def _named(keys: list[str]) -> str:
@@ -227,7 +298,12 @@ def plan_update(plan: PublishPlan, adapter: StorageAdapter) -> UpdatePlan:
     local = _chronozarr_block(local_document, f"{plan.store}/zarr.json")
 
     problems = _prefix_problems(hosted, local)
-    problems += _crs_problems(hosted_document, local_document, local.variable)
+    problems += _canonical_problems(
+        hosted_document,
+        local_document,
+        lambda key: adapter.read_object(dest.key(key)),
+        lambda key: (plan.store / key).read_bytes(),
+    )
     by_key = {dest.key(o.key): o for o in plan.objects}
     foreign = sorted(set(remote) - set(by_key))
     if foreign:

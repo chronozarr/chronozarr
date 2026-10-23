@@ -9,7 +9,8 @@ import lcc from 'proj4/lib/projections/lcc.js';
 import sinu from 'proj4/lib/projections/sinu.js';
 import stere from 'proj4/lib/projections/stere.js';
 import tmerc from 'proj4/lib/projections/tmerc.js';
+import etmerc from 'proj4/lib/projections/etmerc.js';
 
-for (const projection of [aea, laea, lcc, sinu, stere, tmerc]) Proj.projections.add(projection);
+for (const projection of [aea, laea, lcc, sinu, stere, tmerc, etmerc]) Proj.projections.add(projection);
 
 export default proj4;

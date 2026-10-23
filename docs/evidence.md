@@ -636,7 +636,9 @@ The baseline that the [colleague trial](colleague-trial.md#analysis) compares ag
 | Converted, and the store is wrong | 0 |
 | Traceback or timeout | 0 |
 
-After the shortest fix that works, 18 of 20 reach a correct store, at an estimated 2 to 90 minutes each. The other 2 (HDF4, HDF5) were not converted. 2 datasets end with a wrong store if the user stops after the fix that the message names: CHIRPS (-9999 stored as rainfall) and MODIS MOD13A1 (the file's scale of 10000 makes NDVI about 1e8). 3 more keep longitudes beyond 180 in EPSG:4326: the two OISST sets (280 to 360) and ERA5 over Fiji (165 to 195). zarr-layer 0.11.0 and GDAL 3.13.3 place such a store correctly ([GeoZarr review](../spec/review-2026-10-geozarr.md)), but a lookup by a longitude from -180 to 180 in xarray returns the nearest edge column without an error.
+After the verified historical fix chains, 18 of 20 reach a correct store, at an estimated 2 to 90 minutes each. The other 2 (HDF4, HDF5) were not converted. 2 datasets end with a wrong store if the user stops after the fix that the message names: CHIRPS (-9999 stored as rainfall) and MODIS MOD13A1 (the file's scale of 10000 makes NDVI about 1e8). 3 more keep longitudes beyond 180 in EPSG:4326: the two OISST sets (280 to 360) and ERA5 over Fiji (165 to 195). zarr-layer 0.11.0 and GDAL 3.13.3 place such a store correctly ([GeoZarr review](../spec/review-2026-10-geozarr.md)), but a lookup by a longitude from -180 to 180 in xarray returns the nearest edge column without an error.
+
+Evaluation correction, 2026-10-23: `scripts/corpus/run_corpus.py` now records policy `source-values-v2` for new results. Longitude extent is a lookup-convention diagnostic; correctness follows the independent source comparisons of dates, CRS, values and validity. The OISST/ERA5 routes in `classes.json` now keep their native coordinates. Original raw results and the recorded effort are unchanged; their historical coordinate wrapping or warping was not required for correctness.
 
 ### Simulated newcomers
 
@@ -874,8 +876,10 @@ The 20 datasets of the baseline, run on main at `83e5235` with the `geo` extra o
 | First run converts | 0 | 2 | 2 |
 | First run refused with a fix that works | 7 | 15 | 17 |
 | First run refused with no fix that works | 13 | 3 | 1 |
-| Messages alone lead to a correct store | 4 | 10 | 12 |
-| The same, with longitudes beyond 180 accepted | 4 | 14 | 17 |
+| Messages alone, historical longitude-restricted classifier | 4 | 10 | 12 |
+| Messages alone, source-value correctness including native longitude conventions | 4 | 14 | 17 |
+
+The second row of message-route results uses the corrected longitude interpretation described above. This changes the evaluation policy, not the source coordinates or the measured conversions; the historical classifier's counts remain visible in the preceding row.
 
 No first run gave a wrong store or a traceback in any of the three. The 18 hand-made routes of the baseline still give correct stores, except the two NSIDC routes, which the fill check now stops until `--nodata` is given.
 

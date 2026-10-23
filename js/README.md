@@ -1,5 +1,7 @@
 # chronozarr
 
+This page documents the local, unpublished npm **0.5.0-rc.1** candidate, paired with Python **0.5.0rc1**. Follow the [candidate installation](../docs/development.md) for the prepared checkout or local tarball, and see the [candidate release notes](../docs/release-0.5.0rc1.md). The published npm/CDN examples pinned to **0.4.1** below work for EPSG spec 0.3 stores in the original one-cell layout. That release does not include spec 0.4 CRS support, the relaxed reader contract, the new prefetch budgets or the bundled viewer described here. No candidate package or hosted viewer has been published or deployed.
+
 Browser and Node reader for [chronozarr](https://github.com/chronozarr/chronozarr) stores. The package also has a MapLibre GL JS custom layer that draws a store.
 
 A chronozarr store is a Zarr v3 time series of rasters with a multiscale pyramid. The writer makes one object per chunk by default and can shard the chunks. A client reads one timestep of one map cell with one HTTP request. For an unsharded store that request is a plain `GET` of one chunk. For a sharded store it is one range read of a shard, once the shard index is cached.
@@ -13,7 +15,7 @@ The viewer loads nothing from a third-party host at runtime and uses no web font
 ## Install
 
 ```bash
-npm install chronozarr
+npm install chronozarr@0.4.1 --min-release-age=7
 ```
 
 ```js
@@ -21,7 +23,18 @@ import { openStore } from 'chronozarr';
 import { ChronozarrLayer } from 'chronozarr/maplibre';
 ```
 
-Without a bundler, map the names in an import map. Either point them into `node_modules`:
+For the candidate reader, use the prepared local checkout directly. From its root:
+
+```bash
+npm ci --prefix js --min-release-age=7
+```
+
+```js
+import { openStore } from './js/chronozarr/decoder.js';
+import { ChronozarrLayer } from './js/maplibre/layer.js';
+```
+
+Without a bundler, map the names in an import map. For a released installation, point them into `node_modules`:
 
 ```html
 <script type="importmap">
@@ -32,7 +45,7 @@ Without a bundler, map the names in an import map. Either point them into `node_
 </script>
 ```
 
-or at a CDN:
+or use the released 0.4.1 reader from a CDN for an EPSG spec 0.3 store:
 
 ```html
 <script type="importmap">
@@ -81,6 +94,8 @@ store.close(); // aborts in-flight requests and releases the decode workers
 
 `store.crs` is the authority code the arrays declare as `proj:code`, or `null` for a store that declares none (spec 0.4 allows a CRS with no code). `store.wkt2` and `store.projjson` hold `proj:wkt2` and `proj:projjson`, `null` where absent. At least one of the three is set, and where they disagree the WKT2 outranks PROJJSON, which outranks the code.
 
+`store.notes` reports metadata deviations that leave values readable, including optional mirrors or `_ARRAY_DIMENSIONS` being absent, alternate registrations and unknown patch versions. The reader decodes declared time/band splits, nonsquare chunks and independent mask/coverage layouts into a padded `(band, y, x)` cell. Every level uses level 0's inner spatial chunk size for logical cells, even when its storage chunks differ. The one-request guarantee applies to the writer's ordinary one-cell layout; another declared layout can need several reads, assembles on the calling thread and caches decoded cells without a compressed tier. Stores with no `chronozarr` block remain a Python-reader feature.
+
 `prefetch` takes `playing: true` to extend the window to the whole loop. It takes `masks: true` to fetch the masks alongside the chunks.
 
 `openStore` takes these options. `chronozarr/decoder.js` documents all of them.
@@ -123,7 +138,7 @@ map.on('click', async (event) => console.log(await layer.getValueAt(event.lngLat
 
 The layer needs MapLibre GL JS 5 or later. The host page loads MapLibre, which is not a dependency of this package. The tested version is in [evidence.md](https://github.com/chronozarr/chronozarr/blob/main/docs/evidence.md#javascript-dependencies).
 
-The layer draws on the Web Mercator projection. It supports stores in UTM, EPSG:3857 and EPSG:4326, and stores whose arrays carry the CRS as `proj:wkt2` or `proj:projjson` in the Lambert conformal conic, sinusoidal, Albers, Lambert azimuthal, stereographic and transverse Mercator projections. Only those stores load proj4 (24 KB gzipped), by `import()`. Options, events, limits and the level-of-detail rule are in [js/maplibre/README.md](https://github.com/chronozarr/chronozarr/blob/main/js/maplibre/README.md).
+The layer draws on the Web Mercator projection. It supports stores in UTM, EPSG:3857 and EPSG:4326, and stores whose arrays carry the CRS as `proj:wkt2` or `proj:projjson` in the Lambert conformal conic, sinusoidal, Albers, Lambert azimuthal, stereographic and transverse Mercator projections. Definitions load proj4 by `import()` to verify their meaning; stores declaring only a built-in EPSG code need no parser. Options, events, limits and the level-of-detail rule are in [js/maplibre/README.md](https://github.com/chronozarr/chronozarr/blob/main/js/maplibre/README.md).
 
 ## Licenses
 
@@ -144,4 +159,4 @@ The viewer export uses gifenc, written by Matt DesLauriers. It is one file, and 
 
 `vendor/numcodecs/blosc.js`, `lz4.js` and `zstd.js` embed WebAssembly builds of Blosc (with its bundled zlib and snappy), LZ4 and Zstandard. Those C libraries carry their own permissive upstream licenses, BSD-style and zlib. numcodecs ships no separate notice for them.
 
-`vendor/proj4/proj4.js` is not a copy of a published file. esbuild bundles and minifies proj4's core, wkt-parser and the projections stores use (`js/support/proj4-entry.js`), which is 24.8 KB gzipped against 42.3 KB for proj4's own build. Its header records both versions, the esbuild version and a SHA-256 over every source file, and both licenses sit beside it. `node js/support/vendor.mjs` regenerates it and `--check` verifies it.
+`vendor/proj4/proj4.js` is not a copy of a published file. esbuild bundles and minifies proj4's core, wkt-parser and the projections stores use (`js/support/proj4-entry.js`), which is about 26 KB gzipped against 42.3 KB for proj4's own build. Its header records both versions, the esbuild version and a SHA-256 over every source file, and both licenses sit beside it. `node js/support/vendor.mjs` regenerates it and `--check` verifies it.
