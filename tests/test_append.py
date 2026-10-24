@@ -497,6 +497,38 @@ def test_nodata_of_a_store_input_must_match(tmp_path, truth):
     refuse(store, month, "nodata: the input has None, the store has 0")
 
 
+@pytest.mark.parametrize("stored,incoming", [(0, 65535), (0, None), (None, 0), (65535, 0)])
+def test_dataarray_nodata_conflict_leaves_store_untouched(tmp_path, stored, incoming):
+    data = make_truth(2, 1, 5, 7)
+    store = tmp_path / "store"
+    chronozarr.encode(make_da(data[:1]), store, nodata=stored, chunk_size=CHUNK)
+    month = make_da(data).isel(time=slice(1, 2))
+    month.attrs["nodata"] = incoming
+    month.data[0, 0, 0, 0] = 65535  # must not become a valid pixel in a nodata-0 store
+    refuse(store, month, f"nodata: the input has {incoming!r}, the store has {stored!r}")
+    assert len(chronozarr.open_store(store).times) == 1
+    assert not list(tmp_path.glob(".store-append-*"))
+
+
+@pytest.mark.parametrize("nodata", [None, 0, 65535])
+def test_dataarray_matching_nodata_preserves_raw_and_physical_values(tmp_path, nodata):
+    data = make_truth(2, 1, 5, 7)
+    data[1, 0, 0, :3] = [0, 100, 65535]
+    store = tmp_path / "store"
+    chronozarr.encode(make_da(data[:1]), store, nodata=nodata, chunk_size=CHUNK)
+    month = make_da(data).isel(time=slice(1, 2))
+    month.attrs["nodata"] = nodata
+    append(store, month)
+    opened = chronozarr.open_store(store)
+    assert chronozarr.validate(store) == []
+    assert opened.nodata == nodata
+    np.testing.assert_array_equal(opened.read(1), data[1])
+    expected = data[1].astype(np.float32)
+    if nodata is not None:
+        expected[data[1] == nodata] = np.nan
+    np.testing.assert_allclose(opened.to_xarray(physical=True).values[1], expected)
+
+
 def test_every_mismatch_is_listed(base_store, truth):
     other = make_truth(N_TIME, 2, HEIGHT, WIDTH + 1)
     bad = window(other, 8, 9).astype(np.uint8)
