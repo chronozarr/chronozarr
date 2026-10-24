@@ -1,6 +1,6 @@
 # chronozarr
 
-This page documents the local, unpublished npm **0.5.0-rc.1** candidate, paired with Python **0.5.0rc1**. Follow the [candidate installation](../docs/development.md) for the prepared checkout or local tarball, and see the [candidate release notes](../docs/release-0.5.0rc1.md). The published npm/CDN examples pinned to **0.4.1** below work for EPSG spec 0.3 stores in the original one-cell layout. That release does not include spec 0.4 CRS support, the relaxed reader contract, the new prefetch budgets or the bundled viewer described here. No candidate package or hosted viewer has been published or deployed.
+This page documents npm **0.5.1**, paired with Python **0.5.1**. It includes spec 0.4 CRS support, the relaxed reader contract, bandwidth-aware prefetching and the production viewer bundle. See the [release notes](https://chronozarr.org/reference/release-0.5.1) and [source installation](https://chronozarr.org/guides/development). Package installation and deployment of the hosted viewer are separate.
 
 Browser and Node reader for [chronozarr](https://github.com/chronozarr/chronozarr) stores. The package also has a MapLibre GL JS custom layer that draws a store.
 
@@ -15,7 +15,7 @@ The viewer loads nothing from a third-party host at runtime and uses no web font
 ## Install
 
 ```bash
-npm install chronozarr@0.4.1 --min-release-age=7
+npm install chronozarr@0.5.1
 ```
 
 ```js
@@ -23,7 +23,7 @@ import { openStore } from 'chronozarr';
 import { ChronozarrLayer } from 'chronozarr/maplibre';
 ```
 
-For the candidate reader, use the prepared local checkout directly. From its root:
+For local development, use a source checkout directly. From its root:
 
 ```bash
 npm ci --prefix js --min-release-age=7
@@ -45,13 +45,13 @@ Without a bundler, map the names in an import map. For a released installation, 
 </script>
 ```
 
-or use the released 0.4.1 reader from a CDN for an EPSG spec 0.3 store:
+or use the pinned 0.5.1 reader from a CDN:
 
 ```html
 <script type="importmap">
 { "imports": {
-  "chronozarr": "https://cdn.jsdelivr.net/npm/chronozarr@0.4.1/chronozarr/decoder.js",
-  "chronozarr/maplibre": "https://cdn.jsdelivr.net/npm/chronozarr@0.4.1/maplibre/layer.js"
+  "chronozarr": "https://cdn.jsdelivr.net/npm/chronozarr@0.5.1/chronozarr/decoder.js",
+  "chronozarr/maplibre": "https://cdn.jsdelivr.net/npm/chronozarr@0.5.1/maplibre/layer.js"
 } }
 </script>
 ```

@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from dataclasses import asdict, replace
 from datetime import date
 from pathlib import Path
 
@@ -182,11 +183,183 @@ def test_month_range_and_the_last_complete_month():
 def test_a_cached_acquisition_is_reused_only_for_the_same_slices(tmp_path):
     acquisition = ingest.Acquisition("sentinel-1a", 100, (make_slice(1), make_slice(2)))
     path = tmp_path / "S1.npz"
-    assert ingest.cached_record(acquisition, path) is None
-    np.savez(path, vv=np.zeros((1, 1)), vh=np.zeros((1, 1)))
+    assert ingest.cached_record(acquisition, GRID, path) is None
+    np.savez(path, vv=np.zeros((GRID.height, GRID.width)), vh=np.zeros((GRID.height, GRID.width)))
     ingest.sidecar_of(path).write_text(
-        json.dumps({"slices": ["S1", "S2"], "valid_fraction": 1.0, "npz": path.name})
+        json.dumps(
+            {
+                "slices": ["S1", "S2"],
+                "grid": GRID.spatial_identity,
+                "valid_fraction": 1.0,
+                "npz": path.name,
+            }
+        )
     )
-    assert ingest.cached_record(acquisition, path)["npz"] == str(path)
+    assert ingest.cached_record(acquisition, GRID, path)["npz"] == str(path)
     one_more = ingest.Acquisition("sentinel-1a", 100, (*acquisition.slices, make_slice(3)))
-    assert ingest.cached_record(one_more, path) is None
+    assert ingest.cached_record(one_more, GRID, path) is None
+
+
+@pytest.fixture
+def extracted_cache(tmp_path, monkeypatch):
+    vv = np.ones((GRID.height, GRID.width), dtype=np.float32)
+    vh = np.full_like(vv, 0.1)
+    vv[0, 0] = vh[0, 0] = np.nan
+    monkeypatch.setattr(ingest, "read_acquisition", lambda *_: (vv, vh))
+    acquisition = ingest.Acquisition("sentinel-1a", 100, (make_slice(1), make_slice(2)))
+    path = tmp_path / "original" / "S1.npz"
+    record = ingest.extract(acquisition, GRID, path)
+    return acquisition, path, record
+
+
+def test_extract_writes_spatial_identity_and_reuses_a_relocated_json_cache(
+    extracted_cache, tmp_path, monkeypatch
+):
+    acquisition, path, record = extracted_cache
+    expected = {
+        "crs": "EPSG:32718",
+        "transform": [20.0, 0.0, 1000.0, 0.0, -20.0, 9000.0],
+        "width": 4,
+        "height": 3,
+    }
+    sidecar = json.loads(ingest.sidecar_of(path).read_text())
+    assert record["grid"] == sidecar["grid"] == expected
+    assert sidecar["npz"] == path.name
+    with np.load(path) as cached:
+        assert cached["vv"].shape == cached["vh"].shape == (3, 4)
+        assert np.isnan(cached["vv"][0, 0]) and np.isnan(cached["vh"][0, 0])
+        np.testing.assert_allclose(cached["vv"][1:], 1.0)
+        np.testing.assert_allclose(cached["vh"][1:], 0.1)
+
+    moved = tmp_path / "relocated"
+    path.parent.rename(moved)
+    monkeypatch.setattr(ingest, "extract", lambda *_: pytest.fail("cached pixels were read again"))
+    restored = ingest.Grid(**json.loads(json.dumps(asdict(GRID))))
+    [reused] = ingest.extract_all([acquisition], restored, moved, workers=1)
+    assert reused["cached"] is True
+    assert reused["npz"] == str(moved / path.name)
+    assert reused["grid"] == expected
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"left": GRID.left + 20.0},  # same-sized box, translated one pixel
+        {"epsg": 32717},
+        {"width": GRID.width + 1},
+        {"height": GRID.height + 1},
+    ],
+)
+def test_cache_refuses_other_grids_before_any_extraction(extracted_cache, monkeypatch, changes):
+    acquisition, path, _ = extracted_cache
+    before = {p: p.read_bytes() for p in (path, ingest.sidecar_of(path))}
+    uncached = ingest.Acquisition("sentinel-1a", 101, (make_slice(3, absolute_orbit=101),))
+    monkeypatch.setattr(
+        ingest,
+        "ThreadPoolExecutor",
+        lambda **_: pytest.fail("cache validation must finish before extraction starts"),
+    )
+    with pytest.raises(SystemExit, match=r"spatial identity.*--name.*--out-dir"):
+        ingest.extract_all([uncached, acquisition], replace(GRID, **changes), path.parent, 1)
+    assert {p: p.read_bytes() for p in before} == before
+    assert not (path.parent / "S3.npz").exists()
+
+
+@pytest.mark.parametrize("missing", ["identity", "sidecar"])
+def test_legacy_cache_is_refused_without_extraction(extracted_cache, monkeypatch, missing):
+    acquisition, path, _ = extracted_cache
+    sidecar = ingest.sidecar_of(path)
+    if missing == "identity":
+        record = json.loads(sidecar.read_text())
+        del record["grid"]
+        sidecar.write_text(json.dumps(record))
+    else:
+        sidecar.unlink()
+    before = path.read_bytes()
+    uncached = ingest.Acquisition("sentinel-1a", 101, (make_slice(3, absolute_orbit=101),))
+    monkeypatch.setattr(
+        ingest,
+        "ThreadPoolExecutor",
+        lambda **_: pytest.fail("legacy cache must be refused before extraction starts"),
+    )
+    with pytest.raises(SystemExit, match=r"spatial identity.*--name.*--out-dir"):
+        ingest.extract_all([uncached, acquisition], GRID, path.parent, workers=1)
+    assert path.read_bytes() == before
+    assert not (path.parent / "S3.npz").exists()
+
+
+def test_extract_all_still_extracts_misses_and_changed_slices(extracted_cache):
+    acquisition, path, _ = extracted_cache
+    one_more = ingest.Acquisition("sentinel-1a", 100, (*acquisition.slices, make_slice(3)))
+    uncached = ingest.Acquisition("sentinel-1a", 101, (make_slice(4, absolute_orbit=101),))
+    records = ingest.extract_all([one_more, uncached], GRID, path.parent, workers=1)
+    assert [r["slices"] for r in records] == [["S1", "S2", "S3"], ["S4"]]
+    assert all("cached" not in r and Path(r["npz"]).is_file() for r in records)
+    sidecar = json.loads(ingest.sidecar_of(path).read_text())
+    assert sidecar["slices"] == ["S1", "S2", "S3"]
+    assert sidecar["grid"] == records[0]["grid"]
+
+
+@pytest.mark.parametrize(
+    ("start", "end", "expected"),
+    [
+        ("2024-02-01", "2024-02-29", []),
+        ("2023-02-01", "2023-02-28", []),
+        ("2024-01-15", "2024-02-29", ["2024-01 (from 2024-01-15)"]),
+        ("2024-01-01", "2024-02-28", ["2024-02 (until 2024-02-28)"]),
+    ],
+)
+def test_partial_months_respects_calendar_boundaries(start, end, expected):
+    assert ingest.partial_months(start, end) == expected
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_partial_month_run_warns_and_records_the_actual_interval(
+    tmp_path, monkeypatch, caplog, dry_run
+):
+    scene = make_slice(1, start="2024-01-15T10:37:09Z")
+    monkeypatch.setattr(ingest, "grid_for", lambda _: GRID)
+    monkeypatch.setattr(ingest, "discover", lambda *_: [scene])
+    source = tmp_path / "acquisition.npz"
+    np.savez(source, vv=np.full((3, 4), 0.01), vh=np.full((3, 4), 0.001))
+
+    def extract(*_args, **_kwargs):
+        assert not dry_run, "a dry run must not extract acquisitions"
+        return [{"start": scene.start, "valid_fraction": 1.0, "npz": str(source)}]
+
+    monkeypatch.setattr(ingest, "extract_all", extract)
+    output = tmp_path / "output"
+    args = [
+        "--bbox",
+        "-75.13",
+        "-7.76",
+        "-74.88",
+        "-7.51",
+        "--name",
+        "partial",
+        "--start",
+        "2024-01-15",
+        "--end",
+        "2024-01-15",
+        "--out-dir",
+        str(output),
+    ]
+    if dry_run:
+        args.append("--dry-run")
+    ingest.main(args)
+    assert "only in part" in caplog.text
+    assert "2024-01-15..2024-01-15" in caplog.text
+    if dry_run:
+        assert not output.exists()
+        return
+    store = output / "stores" / "partial" / ingest.STORE_NAME
+    decoded = ingest.chronozarr.open_store(store)
+    notes = decoded.attrs.provenance["notes"]
+    assert "Query interval: 2024-01-15..2024-01-15" in notes
+    assert "Partial boundary months: 2024-01 (from 2024-01-15)" in notes
+    assert "2024-01 (until 2024-01-15)" in notes
+    np.testing.assert_array_equal(
+        decoded.to_xarray().time.values, np.array(["2024-01-01"], dtype="datetime64[ns]")
+    )
+    manifest = json.loads(store.with_suffix(".scenes.json").read_text())
+    assert manifest["query"]["start"] == manifest["query"]["end"] == "2024-01-15"

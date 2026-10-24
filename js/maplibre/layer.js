@@ -11,7 +11,7 @@
 
 import { openStore } from '../chronozarr/decoder.js';
 import { COLORMAPS, colormapIndex } from '../shared/colormaps.js';
-import { channelBounds, computeStretchLo, describePixel, displayMode, dualPolRanges, findBand, inputConversion, inputIndices, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../shared/products.js';
+import { channelBounds, computeStretchLo, describePixel, displayMode, dualPolRanges, findBand, inputConversion, inputIndices, nodataToCompare, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../shared/products.js';
 import { TEXTURE_FORMATS } from '../shared/texture-formats.js';
 import { buildMesh, FLOATS_PER_VERTEX, MAX_DIVISIONS, originMatrix } from './mesh.js';
 import { createProjection, crsToPixel, footprintBounds, levelTransform, lonLatToMercator, mercatorPerTexel, pixelToCrs } from './projection.js';
@@ -51,6 +51,30 @@ function compile(gl, type, source) {
     throw new Error(`ChronozarrLayer: shader compile failed: ${log}`);
   }
   return shader;
+}
+
+/** Chunks have tightly packed rows, including uint8 masks. Preserve the shared map context's state. */
+function uploadChunk(gl, ...args) {
+  const alignment = gl.getParameter(gl.UNPACK_ALIGNMENT);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  try {
+    gl.texSubImage3D(...args);
+  } finally {
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, alignment);
+  }
+}
+
+/** Compact samples of a cell, retaining no reference to its full decoded arrays. */
+function sampleCell(data, mask, level, extent) {
+  const samples = [];
+  const count = Math.min(extent.width * extent.height, STRETCH_SAMPLES_PER_CELL);
+  for (let k = 0; k < count; k++) {
+    const i = Math.floor(k * extent.width * extent.height / count);
+    const offset = Math.floor(i / extent.width) * level.chunkWidth + i % extent.width;
+    if (mask && mask[offset] === 0) continue;
+    samples.push(Array.from({ length: level.nBand }, (_, b) => data[b * level.chunkWidth * level.chunkHeight + offset]));
+  }
+  return samples;
 }
 
 /**
@@ -96,6 +120,7 @@ export class ChronozarrLayer {
   #stretchLo;
   #ranges = new Map();
   #channelRanges = null;
+  #sampledView = null; // One completed view's compact samples, including an empty result; never full chunks.
   #bandInfo = null;
   #frame = 0;
   #state = 'loading';
@@ -282,12 +307,12 @@ export class ChronozarrLayer {
       values = Array.from({ length: level.nBand }, (_, b) => cell.data[b * level.chunkHeight * level.chunkWidth + offsetY * level.chunkWidth + offsetX]);
     }
     const { nodata } = this.#bandInfo;
-    let valid = nodata === null || values.some((value) => value !== nodata);
+    let maskValue = null;
     if (store.hasMask) {
       const mask = await store.getMask(0, cellRow, cellCol, t);
-      valid = mask[offsetY * level.chunkWidth + offsetX] !== 0;
+      maskValue = mask[offsetY * level.chunkWidth + offsetX];
     }
-    const described = describePixel(values, store.attrs.bands, nodata);
+    const described = describePixel(values, store.attrs.bands, nodata, maskValue);
     const [centreX, centreY] = pixelToCrs(this.#geo.transforms[0], col + 0.5, row + 0.5);
     const [centreLng, centreLat] = this.#geo.projection.toLonLat(centreX, centreY);
     return {
@@ -298,7 +323,7 @@ export class ChronozarrLayer {
       lngLat: { lng: centreLng, lat: centreLat },
       x: centreX,
       y: centreY,
-      valid,
+      valid: described.valid,
       bands: described.bands,
       ndvi: described.ndvi,
       ndwi: described.ndwi,
@@ -519,6 +544,7 @@ export class ChronozarrLayer {
     this.#openController.abort();
     for (const controller of this.#retired) controller.abort();
     this.#disposeGl();
+    this.#sampledView = null;
     this.#store?.close();
     this.#rejectOpened(new Error(`ChronozarrLayer "${this.id}" was removed`));
     this.#map = null;
@@ -690,9 +716,7 @@ export class ChronozarrLayer {
 
     const view = this.#productView();
     if (allResident && fine.length > 0) {
-      if (this.#stretchLo === null) this.#stretchLo = this.#measureStretch(lod, fine, t);
-      if (view.perChannel && view.range === null) this.#channelRanges = this.#measureChannelRanges(lod, fine, t, view.inputs);
-      else if (view.linear && view.range === null) this.#ranges.set(view.bandIndex, this.#measureRange(lod, fine, t, view.bandIndex));
+      this.#measureView(lod, fine, t, view);
     }
 
     if (fine.length + fallback.length > 0) this.#draw(gl, matrix, [...fallback, ...fine], this.#productView());
@@ -781,7 +805,7 @@ export class ChronozarrLayer {
     const gl = this.#gl;
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, gpu.maskTexture);
-    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, allocation.slot, gpu.chunk.width, gpu.chunk.height, 1, gl.RED_INTEGER, gl.UNSIGNED_BYTE, data);
+    uploadChunk(gl, gl.TEXTURE_2D_ARRAY, 0, 0, 0, allocation.slot, gpu.chunk.width, gpu.chunk.height, 1, gl.RED_INTEGER, gl.UNSIGNED_BYTE, data);
     this.#uploadedBytes += data.byteLength;
     this.#counters.uploads++;
     return allocation.slot;
@@ -799,7 +823,7 @@ export class ChronozarrLayer {
     const gl = this.#gl;
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, gpu.texture);
-    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, allocation.slot * gpu.slotLayers, gpu.chunk.width, gpu.chunk.height, gpu.slotLayers, gl[gpu.format.format], gl[gpu.format.type], data);
+    uploadChunk(gl, gl.TEXTURE_2D_ARRAY, 0, 0, 0, allocation.slot * gpu.slotLayers, gpu.chunk.width, gpu.chunk.height, gpu.slotLayers, gl[gpu.format.format], gl[gpu.format.type], data);
     this.#uploadedBytes += data.byteLength;
     this.#counters.uploads++;
     if (allocation.evicted !== null) this.#counters.evictions++;
@@ -843,47 +867,99 @@ export class ChronozarrLayer {
   }
 
   /** 2nd percentile of tone-mapped true-color reflectance, measured once from the first complete view and then kept, so scrubbing does not shift the tone mapping. */
-  #measureStretch(lod, items, t) {
+  #measureStretch(samples) {
     const { bands } = this.#bandInfo;
     const indices = ['red', 'green', 'blue'].map((common) => findBand(bands, common));
     if (indices.some((i) => i < 0)) return 0;
-    const samples = [];
-    this.#sample(lod, items, t, (values) => samples.push(indices.map((b) => toPhysical(values[b], bands[b]))));
-    return computeStretchLo(samples);
+    const rgb = samples.map((values) => indices.map((b) => toPhysical(values[b], bands[b])));
+    return rgb.length > 0 ? computeStretchLo(rgb) : null;
   }
 
   /** Per-channel ranges of the dual-pol composite (see dualPolRanges) from the valid values on screen, measured once. Null with no valid sample. */
-  #measureChannelRanges(lod, items, t, [copol, crosspol]) {
-    const { bands, nodata } = this.#bandInfo;
-    const samples = [];
-    this.#sample(lod, items, t, (stored) => {
-      if (stored[copol] === nodata || stored[crosspol] === nodata) return;
-      samples.push([toPhysical(stored[copol], bands[copol]), toPhysical(stored[crosspol], bands[crosspol])]);
-    });
-    return dualPolRanges(samples);
+  #measureChannelRanges(samples, [copol, crosspol]) {
+    const { bands } = this.#bandInfo;
+    const nodata = nodataToCompare(this.#store);
+    const channels = samples
+      .filter((stored) => stored[copol] !== nodata && stored[crosspol] !== nodata)
+      .map((stored) => [toPhysical(stored[copol], bands[copol]), toPhysical(stored[crosspol], bands[crosspol])]);
+    return dualPolRanges(channels);
   }
 
   /** Range of a linear single band: 2nd to 98th percentile of the valid physical values on screen, measured once per band. */
-  #measureRange(lod, items, t, bandIndex) {
+  #measureRange(samples, bandIndex) {
     const band = this.#bandInfo.bands[bandIndex];
-    const { nodata } = this.#bandInfo;
-    const values = [];
-    this.#sample(lod, items, t, (stored) => {
-      const value = stored[bandIndex];
-      if (value !== nodata && Number.isFinite(value)) values.push(toPhysical(value, band));
-    });
-    return percentileRange(values) ?? [0, 1];
+    const nodata = nodataToCompare(this.#store);
+    const values = samples.map((stored) => stored[bandIndex])
+      .filter((value) => value !== nodata && Number.isFinite(value))
+      .map((value) => toPhysical(value, band));
+    return percentileRange(values);
   }
 
-  /** Calls `visit` with the stored values of about STRETCH_SAMPLES_PER_CELL pixels of each cell. */
-  #sample(lod, items, t, visit) {
-    for (const { row, col, extent } of items) {
-      const stride = Math.max(1, Math.floor((extent.width * extent.height) / STRETCH_SAMPLES_PER_CELL));
-      for (let i = 0; i < extent.width * extent.height; i += stride) {
-        const values = this.#store.samplePixel(lod, row, col, t, i % extent.width, Math.floor(i / extent.width));
-        if (values) visit(values);
-      }
+  #sampleKey(lod, items, t) {
+    return `${t}/${lod}/${items.map(({ row, col }) => `${row},${col}`).sort().join(';')}`;
+  }
+
+  /** All visible cells must contribute, even when their CPU copies were evicted after GPU upload. */
+  #measureView(lod, items, t, view) {
+    if (this.#stretchLo === null && ['red', 'green', 'blue'].some((common) => findBand(this.#bandInfo.bands, common) < 0)) this.#stretchLo = 0;
+    if (this.#stretchLo !== null && (!view.linear || view.range !== null)) {
+      this.#sampledView = null;
+      return;
     }
+    const key = this.#sampleKey(lod, items, t);
+    const samples = this.#sampledView?.key === key ? this.#sampledView.values : this.#cachedSamples(lod, items, t);
+    if (samples === null) {
+      this.#requestSamples(lod, items, t, key);
+      return;
+    }
+    this.#sampledView = { key, values: samples };
+    if (this.#stretchLo === null) this.#stretchLo = this.#measureStretch(samples);
+    if (view.perChannel && view.range === null) this.#channelRanges = this.#measureChannelRanges(samples, view.inputs);
+    else if (view.linear && view.range === null) this.#ranges.set(view.bandIndex, this.#measureRange(samples, view.bandIndex));
+  }
+
+  /** Null means a CPU copy is unavailable; [] is a complete view with no valid samples. */
+  #cachedSamples(lod, items, t) {
+    const store = this.#store;
+    const samples = [];
+    for (const { row, col, extent } of items) {
+      const data = store.peekRaw(lod, row, col, t);
+      const mask = store.hasMask ? store.peekMask(lod, row, col, t) : null;
+      if (!data || (store.hasMask && !mask)) return null;
+      samples.push(...sampleCell(data, mask, store.levels[lod], extent));
+    }
+    return samples;
+  }
+
+  /** Recover samples one cell at a time, holding at most one raw data/mask pair outside the cache. */
+  #requestSamples(lod, items, t, key) {
+    if (this.#pending.has('samples')) return;
+    const failedAt = this.#failed.get('samples');
+    if (failedAt !== undefined && performance.now() - failedAt < FAILURE_COOLDOWN_MS) return;
+    const { signal } = this.#controller;
+    const store = this.#store;
+    this.#pending.add('samples');
+    const collect = async () => {
+      const samples = [];
+      for (const { row, col, extent } of items) {
+        const [data, mask] = await Promise.all([
+          store.getRaw(lod, row, col, t, { signal }),
+          store.hasMask ? store.getMask(lod, row, col, t, { signal }) : null,
+        ]);
+        samples.push(...sampleCell(data, mask, store.levels[lod], extent));
+      }
+      const current = this.#sampleKey(this.#lastView.lod, this.#lastView.cells.map(([row, col]) => ({ row, col })), this.#t);
+      if (!signal.aborted && !this.#disposed && key === current) this.#sampledView = { key, values: samples };
+    };
+    collect().catch((error) => {
+      if (!isAbort(error)) {
+        this.#failed.set('samples', performance.now());
+        this.#emit('error', { error, lod, t });
+      }
+    }).finally(() => {
+      this.#pending.delete('samples');
+      this.#repaint();
+    });
   }
 
   #draw(gl, matrix, items, view) {

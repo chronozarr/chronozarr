@@ -1,12 +1,12 @@
-# Candidate viewer
+# Explore the viewer
 
-**Local release candidate — 0.5.0rc1, unpublished.** This guide describes the npm `0.5.0-rc.1` viewer built from the [candidate checkout or artifact](development.md#build-the-candidate-viewer). For the released viewer, use the [0.4.1 viewer guide](https://github.com/chronozarr/chronozarr/blob/v0.4.1/docs/viewer.md).
+**Package version — 0.5.1.** This guide describes the viewer included in the npm package and built from the same source for chronozarr.org. See [self-host the viewer](viewer-distribution.md) to copy it to your own host.
 
-[The live demo](https://chronozarr.org/demo/) loads 117 monthly Sentinel-2 composites of the Ucayali River in Peru, November 2015 to February 2026, from a public storage bucket. Its deployed build can differ from this checkout. Installing the candidate Python package does not change the hosted viewer; build a [self-hosted viewer](viewer-distribution.md) to use every feature below.
+[The live demo](https://chronozarr.org/demo/) loads 117 monthly Sentinel-2 composites of the Ucayali River in Peru, November 2015 to February 2026, from a public storage bucket. Package publication and deployment of the hosted viewer are separate steps. Installing the Python package does not update the hosted demo.
 
 ## Where it starts
 
-The candidate viewer opened without a selected store or view starts its catalog's default store at the latest well-covered timestep. Among the newest 24 timesteps, that is the latest in which at least half of the pixels are observed, according to the store's coverage plane, or valid, according to its mask. A store with neither plane starts at its last timestep. The public Ucayali store has neither, so it starts at its last month. A copied viewer has an empty catalog until you supply a store.
+The viewer opened without a selected store or view starts its catalog's default store at the latest well-covered timestep. Among the newest 24 timesteps, that is the latest in which at least half of the pixels are observed, according to the store's coverage plane, or valid, according to its mask. A store with neither plane starts at its last timestep. The public Ucayali store has neither, so it starts at its last month. A copied viewer has an empty catalog until you supply a store.
 
 Any other address starts where it says. A link with a timestep (`t`) opens at that timestep. A link with a store, a product, a zoom or a centre but no `t` opens at the first timestep, as such links always have. A store that you preview, share or publish opens at its first timestep unless its link says otherwise.
 
@@ -25,13 +25,15 @@ Any other address starts where it says. A link with a timestep (`t`) opens at th
 | Change the product | Choose it in the product list, or press 1 to 9 |
 | Change the display range of one band | Choose Single band, then set the minimum and maximum. Auto fits the range to the pixels on the screen |
 | Color one band | Choose Single band, then pick Viridis, Magma or Turbo in the colormap list. The bar between the minimum and maximum shows the colors |
-| Show where no scene was observed | Click Gaps. It hatches the pixels whose value was carried over from an earlier month. It needs a store with a coverage plane |
+| Show zero coverage | Click Gaps. It hatches pixels whose coverage is 0. It needs a store with a coverage plane |
 | Copy a link to this view | Click Copy link |
 | Open another store | Paste its URL in the store field and click Open |
 | Save the loop as a video | Click Export, choose MP4, WebM or GIF and the range, click Export, then click the Download link. Firefox records WebM and GIF only. Embedded viewers have Export too |
 | Show load and decode statistics | Press D |
 
 Playback buffers two seconds of frames before it starts. On a link that cannot carry the speed you chose, it plays at the speed the link can feed instead of pausing again and again. It measures the link as the store loads, and counts only the frames ahead that are not in memory yet. The speed label then shows both speeds (`4 /s → 0.7`) and a hint says why (`0.7 step/s: link too slow for 4`). Playback speeds up over frames that are already loaded, and returns to your speed once the loop is in memory.
+
+At level 0, zero coverage means that no observation was recorded for that pixel. Overview coverage is a rounded mean and can become zero even when part of the block was observed. Zoom to native resolution before interpreting a hatch as an observation gap.
 
 ## Products
 
@@ -68,7 +70,7 @@ The address uses these parameters:
 | `z` | Zoom, in screen pixels per stored pixel | `z=2.5` |
 | `c` | Map centre x,y in the store's coordinate system | `c=684500,9123350` |
 
-The candidate `chronozarr link STORE_URL` prints the same kind of link from the command line and checks it against the store. It sets `t`, `p`, `b`, `r`, `cm`, `z` and `c` with `--time`, `--product`, `--band`, `--range`, `--colormap`, `--zoom` and `--lonlat` or `--xy`. Use `--viewer` to point the link at your hosted candidate viewer. To show the viewer inside your own page, see [Embed the viewer](embedding.md).
+`chronozarr link STORE_URL` prints the same kind of link from the command line and checks it against the store. It sets `t`, `p`, `b`, `r`, `cm`, `z` and `c` with `--time`, `--product`, `--band`, `--range`, `--colormap`, `--zoom` and `--lonlat` or `--xy`. Use `--viewer` to point the link at your hosted viewer. To show the viewer inside your own page, see [Embed the viewer](embedding.md).
 
 ### Choose a date and a place
 

@@ -6,7 +6,6 @@ Measures fresh reader handles on warm local storage, not browser delivery or col
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import platform
 import statistics
@@ -18,14 +17,14 @@ import rasterio
 import xarray as xr
 
 import chronozarr
+from chronozarr._convert_manifest import read_manifest
 
 
 def compare(
     manifest: Path, store_path: Path, plain_path: Path, output: Path, repeats: int
 ) -> None:
-    with manifest.open(newline="") as handle:
-        rows = list(csv.DictReader(handle))
-    files = [manifest.parent / row["uri"] for row in rows]
+    entries = read_manifest(manifest).entries
+    files = [Path(entry.uri) for entry in entries]
 
     def cogs():
         values, masks = [], []
@@ -48,8 +47,8 @@ def compare(
             return mask
 
         return (
-            np.stack([store.read(t=t) for t in range(len(rows))]),
-            np.stack([mask_at(t) for t in range(len(rows))]).astype(bool),
+            np.stack([store.read(t=t) for t in range(len(entries))]),
+            np.stack([mask_at(t) for t in range(len(entries))]).astype(bool),
         )
 
     def plain():

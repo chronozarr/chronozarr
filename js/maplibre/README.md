@@ -1,6 +1,6 @@
 # chronozarr on MapLibre
 
-This page describes the local, unpublished npm **0.5.0-rc.1** candidate, paired with Python **0.5.0rc1**; use the [candidate source or artifact route](../../docs/development.md). npm 0.4.1 supports the original EPSG spec 0.3 stores. Non-EPSG CRS definitions and the relaxed metadata reader described here require the candidate code; installing 0.4.1 does not add them. Package installation and deployment of the hosted viewer are separate.
+This page describes npm **0.5.1**, paired with Python **0.5.1**. Install it with `npm install chronozarr@0.5.1`, or use a [source checkout](../../docs/development.md). It reads supported spec 0.3 and 0.4 stores, including supported non-EPSG CRS definitions. Package installation and deployment of the hosted viewer are separate.
 
 `ChronozarrLayer` draws a chronozarr store on a MapLibre GL JS map as a custom layer. It opens the store with `js/chronozarr/decoder.js` and picks the pyramid level from the map zoom. It uploads the raw chunks of the visible cells as integer or float textures. It runs the product band math in the fragment shader.
 
@@ -82,6 +82,9 @@ map.on('click', async (e) => console.log(await layer.getValueAt(e.lngLat))); // 
 - `bands` has one entry per band with `name`, `units`, `reflectance`, `stored` and `value`. `stored` is the stored number. `value` is the stored number times `scale`, plus `offset`.
 - `ndvi`, `ndwi` and `isWater` are the products that the bands allow.
 
+For a masked pixel, `stored`, `value`, `ndvi` and `ndwi` are `null`, and `isWater` is false.
+When the mask marks a pixel valid, values equal to the nodata marker remain valid too.
+
 A removed layer cannot be added again. The reader ends an idle worker pool after 30 s.
 
 ### Events
@@ -113,6 +116,11 @@ The product colors are `PRODUCT_GLSL` from `js/shared/products-glsl.js`, the sam
 - A single band gets a linear stretch unless it looks like reflectance. A band looks like reflectance when the largest value of its dtype is 10 or less after scale and offset. The stretch runs from the 2nd to the 98th percentile of the valid values on screen, or over `range` in physical units. `colormap` then maps the gray level to colors (`js/shared/colormaps.js`).
 - The `dual_pol` product draws the co-pol band in red, the cross-pol band in green and their difference in dB in blue. Each channel is stretched from its 2nd to its 98th percentile, measured once from the first complete view.
 - Every other product keeps the tone-mapped reflectance look.
+
+Automatic display samples at most 300 pixels per visible cell. It waits for a complete view
+with valid samples before fixing a range or stretch. If CPU copies were evicted while the GPU
+still holds the view, it recovers samples one cell at a time; a cell can be fetched again if the
+reader no longer holds its bytes. Empty views keep the default display until valid samples arrive.
 
 ## Limits
 

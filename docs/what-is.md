@@ -40,10 +40,10 @@ There are two version numbers:
 
 | Item | Version | Meaning |
 |---|---|---|
-| Python package and npm package `chronozarr` | 0.4.1 | The software that writes, checks, serves and reads stores |
+| Python package and npm package `chronozarr` | 0.5.1 | The software that writes, checks, serves and reads stores |
 | Store format specification | v0.4.0, draft | The layout of the files in a store. A store whose CRS has an EPSG code declares `0.3.0`. A store whose CRS has none declares `0.4.0` |
 
-A package release does not change the stores that you already wrote. Package 0.4.1 reads and writes v0.3 stores, and refuses a v0.4 store: see [Opening a store](troubleshooting.md#opening-a-store). Later releases read both. Because a store with an EPSG code is always written as v0.3, every release opens it. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. The [release notes](release-0.4.1.md) list the changes in 0.4.1.
+A package release does not change the stores that you already wrote. Package 0.5.1 reads and writes both v0.3 and v0.4 stores. A reader from package 0.4.1 or earlier refuses a v0.4 store; upgrade the reader and keep the store. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. The [release notes](release-0.5.1.md) list the changes in 0.5.1.
 
 ## Next steps
 

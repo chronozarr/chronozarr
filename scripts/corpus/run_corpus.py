@@ -49,12 +49,24 @@ RESULTS = CORPUS / "results-2026-10-16.json"
 FETCH_PY = CORPUS / ".venv-fetch" / "bin" / "python"
 TIMEOUT = 600
 EVALUATION_POLICY = "source-values-v2"
-WORKTREE_SHA = subprocess.run(
-    ["git", "-C", str(WORKTREE), "rev-parse", "--short", "HEAD"],
-    capture_output=True,
-    text=True,
-    check=True,
-).stdout.strip()
+
+
+def worktree_revision(root: Path = WORKTREE) -> str:
+    """Identify this checkout without requiring Git when inspecting a source archive."""
+    if not (root / ".git").exists():
+        return "source-archive"
+    try:
+        return subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown-revision"
+
+
+WORKTREE_SHA = worktree_revision()
 # The released chronozarr wheel built from its git tag; needed only to create the Ax venv.
 TAG_WHEEL_ENV = "CHRONOZARR_TAG_WHEEL"
 TAIL_LINES = 60

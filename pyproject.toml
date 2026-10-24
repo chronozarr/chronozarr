@@ -1,6 +1,6 @@
 [project]
 name = "chronozarr"
-version = "0.5.0rc1"
+version = "0.5.1"
 description = "Turn a raster time series into static files that a browser plays and Python reads with the stored values"
 readme = "README.md"
 license = "Apache-2.0"
@@ -113,9 +113,18 @@ build-backend = "hatchling.build"
 packages = ["src/chronozarr"]
 
 [tool.hatch.build.targets.sdist]
-include = [
-    "src/chronozarr", "tests", "spec", "README.md", "LICENSE", "pyproject.toml",
-    "scripts/check_architecture.py", "scripts/check_release.py", ".sentrux/rules.toml",
+# Ship the inputs used by the tests as well as the Python package. Select exact root paths
+# so dependency trees and generated builds cannot contribute their README or tests files.
+only-include = [
+    "src/chronozarr", "tests", "spec", "docs", "examples", "scripts", "js",
+    "README.md", "CONTRIBUTING.md", "LICENSE", "pyproject.toml", "uv.lock",
+    ".gitignore", ".sentrux/rules.toml", "skills/chronozarr/SKILL.md",
+    "site/scripts/sync-content.mjs", "site/redirects.json", "site/vocs.config.tsx",
+    "site/README.md", "site/docs/pages/index.mdx",
+]
+exclude = [
+    "**/node_modules/**", "**/.venv*/**", "**/__pycache__/**", "**/*.pyc",
+    "/js/playwright-report/**", "/js/test-results/**",
 ]
 
 [tool.ruff]
@@ -130,7 +139,12 @@ known-first-party = ["chronozarr"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # Python 3.11 remains supported. Ignore only Google's one-year advance notice;
+    # actual end-of-life/unsupported-version warnings and all other warnings still fail.
+    'ignore:You are using a Python version \(3\.11\.[^)]+\) which Google will stop supporting in new releases of google\.api_core:FutureWarning:google\.api_core\._python_version_support',
+]
 markers = [
     "slow: marks tests that process real data",
     "unit: fast isolated tests",

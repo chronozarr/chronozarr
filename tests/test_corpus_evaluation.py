@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -92,3 +93,30 @@ def test_classification_guidance_separates_longitude_from_correctness():
         fix = classes[dataset]["fix"]
         assert "--crs EPSG:4326" in fix
         assert "warp" not in fix and "assign_coords" not in fix
+
+
+def test_source_archive_import_needs_no_git(tmp_path, monkeypatch):
+    source = tmp_path / "archive" / "scripts" / "corpus" / "run_corpus.py"
+    source.parent.mkdir(parents=True)
+    source.write_bytes((REPO / "scripts/corpus/run_corpus.py").read_bytes())
+    monkeypatch.setattr(
+        subprocess, "run", lambda *_args, **_kwargs: pytest.fail("an archive must not invoke Git")
+    )
+    spec = importlib.util.spec_from_file_location("archive_corpus_runner", source)
+    assert spec is not None and spec.loader is not None
+    archived = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(archived)
+    assert archived.WORKTREE_SHA == "source-archive"
+
+
+@pytest.mark.parametrize(
+    "error", [FileNotFoundError("git"), subprocess.CalledProcessError(128, "git")]
+)
+def test_unavailable_git_does_not_prevent_importing_the_evaluator(tmp_path, monkeypatch, error):
+    (tmp_path / ".git").mkdir()
+
+    def fail(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(subprocess, "run", fail)
+    assert corpus.worktree_revision(tmp_path) == "unknown-revision"

@@ -47,10 +47,10 @@ Run the commands from the repository root.
    uv run python examples/sentinel2_pc/ingest.py --aoi ucayali_santa_maria --skip-download --stac
    ```
 
-4. Check the store.
+4. Check the store you just created. For the first, Rio Grande scratch command:
 
    ```bash
-   uv run chronozarr doctor data/stores/ucayali_santa_maria/chronozarr
+   uv run chronozarr doctor /tmp/ingest_smoke/stores/rio_grande/chronozarr
    ```
 
 `--start` and `--end` change the date range, and `--out-dir` changes the root of `mosaics/` and `stores/`. Both dates are inclusive. Begin on the first day of a month and end on the last day of one: a month at either end that the range covers only in part is composited from the scenes inside the range, yet stored and carried forward like a whole month, and the run logs a warning that names it. The default `--end 2026-04-01` is such a case: an April 2026 month, if one appears, holds only scenes from April 1.

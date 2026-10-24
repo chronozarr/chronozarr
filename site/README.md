@@ -36,6 +36,12 @@ Build output is `docs/dist`. `worker.js` redirects www to the apex, redirects
 the paths of removed pages to their replacements, and forwards other requests to
 static assets. Unknown paths return 404.
 
+After building, `npm run test:hosting` uses the pinned root Wrangler and Chromium from the
+JavaScript project's Playwright installation to import the reader, MapLibre and GeoLibre from
+another local origin. It checks the real asset handler's CORS behavior, including shared module
+dependencies. Install Chromium once with `(cd ../js && npx --no-install playwright install chromium)`
+when running it locally. CI runs this check after every site build; it does not deploy.
+
 ## Content and visual direction
 
 The look is a 1960s to 70s corporate annual report: Archivo (a Univers-like grotesk)
@@ -96,8 +102,13 @@ Verified 2026-10-02 (America/New_York):
 - Unknown live paths return 404; www returns 301 to the apex while preserving path.
 - The package versions recorded by this historical deployment check were PyPI and npm chronozarr 0.2.1.
 
-The current Python and npm package release is 0.4.1; see
-[`docs/release-0.4.1.md`](../docs/release-0.4.1.md) for its release status.
+Release materials target Python and npm package 0.5.1; see
+[`docs/release-0.5.1.md`](../docs/release-0.5.1.md) for changes and publication status.
+The deployment tooling is pinned to Wrangler 4.151.1; the site workflow audits its
+dependencies as well as the site dependencies. The root package overrides Miniflare's Undici
+dependency to 7.30.1 for [GHSA-4qv8-2p9j-2685](https://github.com/advisories/GHSA-4qv8-2p9j-2685)
+and [GHSA-f72v-6w45-q472](https://github.com/advisories/GHSA-f72v-6w45-q472). That patch was
+published on 2026-10-15, passes the seven-day policy and is exercised by `test:hosting`.
 
 Live: https://chronozarr.org
 Fallback: https://chronozarr-docs.jake-gearon.workers.dev

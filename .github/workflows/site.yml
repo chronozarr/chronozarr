@@ -1,9 +1,9 @@
 name: Documentation site
 on:
   push:
-    paths: ['site/**', 'README.md', 'docs/**', 'spec/**', 'examples/bring_your_data/README.md', 'js/**', '.github/workflows/site.yml']
+    paths: ['site/**', 'README.md', 'docs/**', 'spec/**', 'examples/bring_your_data/README.md', 'js/**', 'package.json', 'package-lock.json', '.github/workflows/site.yml']
   pull_request:
-    paths: ['site/**', 'README.md', 'docs/**', 'spec/**', 'examples/bring_your_data/README.md', 'js/**', '.github/workflows/site.yml']
+    paths: ['site/**', 'README.md', 'docs/**', 'spec/**', 'examples/bring_your_data/README.md', 'js/**', 'package.json', 'package-lock.json', '.github/workflows/site.yml']
 permissions:
   contents: read
 jobs:
@@ -19,8 +19,15 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: |
+            package-lock.json
             site/package-lock.json
             js/package-lock.json
+      - name: Install locked deployment tooling
+        run: npm ci --min-release-age=7
+        working-directory: .
+      - name: Audit deployment tooling
+        run: npm audit
+        working-directory: .
       - run: npm ci --min-release-age=7
       - run: npm audit
       - run: npx --no-install playwright install --with-deps chromium
@@ -29,3 +36,4 @@ jobs:
       - run: npm ci --min-release-age=7
         working-directory: js
       - run: npm run build
+      - run: npm run test:hosting
