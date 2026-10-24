@@ -139,7 +139,12 @@ known-first-party = ["chronozarr"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # Python 3.11 remains supported. Ignore only Google's one-year advance notice;
+    # actual end-of-life/unsupported-version warnings and all other warnings still fail.
+    'ignore:You are using a Python version \(3\.11\.[^)]+\) which Google will stop supporting in new releases of google\.api_core:FutureWarning:google\.api_core\._python_version_support',
+]
 markers = [
     "slow: marks tests that process real data",
     "unit: fast isolated tests",

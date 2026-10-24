@@ -111,5 +111,12 @@ The final CI audit also identified two Undici advisories newly indexed on 2026-1
 is overridden to patched Undici 7.30.1, published 2026-10-15 and eligible under the seven-day
 policy. Root audit and the real local hosting check qualify this tooling-only change.
 
+Crossing into 2026-10-24 on the UTC CI runner activated Google's one-year Python 3.11 support
+notice, which stopped source-archive collection under the warnings-as-errors policy. The test
+configuration now ignores only that version-specific advance notice from the SDK's support
+module. Actual end-of-life/unsupported-version messages and other warnings still fail. The
+37 GCS adapter tests pass on isolated Python 3.11 in UTC; separate date-controlled probes verify
+the warning policy. This changes test configuration, not SDK behavior in the package.
+
 This round did not run full remote ingests, provider-account checks, public tunnels, deployment
 or package publication. The full unit suite remains a hosted-CI check, not a local run.
