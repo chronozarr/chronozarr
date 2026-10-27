@@ -3,6 +3,7 @@
 from chronozarr.append import AppendReport, append
 from chronozarr.decode import ChronoStore, HttpStore, open_store
 from chronozarr.encode import EncodeReport, encode
+from chronozarr.icechunk import IcechunkInput
 from chronozarr.leafmap import add_chronozarr
 from chronozarr.notebook import player
 from chronozarr.schema import Band, SchemaError, validate
@@ -14,6 +15,7 @@ __all__ = [
     "ChronoStore",
     "EncodeReport",
     "HttpStore",
+    "IcechunkInput",
     "SchemaError",
     "add_chronozarr",
     "append",

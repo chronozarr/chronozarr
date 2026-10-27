@@ -46,6 +46,7 @@ from chronozarr._convert_source import (
 )
 from chronozarr._install import extra_hint
 from chronozarr.crs import wkt2_from_cf
+from chronozarr.icechunk import IDENTITY, IcechunkInput, open_input
 from chronozarr.schema import Band
 from chronozarr.store import as_store, redact_url
 
@@ -319,11 +320,14 @@ class _Inspected:
     times: np.ndarray  # datetime64, or cftime dates when `facts.calendar` is set
 
 
-def _inspect(dataset: xr.Dataset, variable: str, dims: dict[str, str]) -> _Inspected:
+def _inspect(
+    dataset: xr.Dataset, variable: str, dims: dict[str, str], *, cast_float32: bool = False
+) -> _Inspected:
     """What `dataset` says about `variable`; ValueError when it cannot be a step of a store."""
     raw = dataset[variable]
     resolved, squeezed = _resolve_dims(raw, dims, variable)
-    if raw.dtype.name not in schema.DTYPES:
+    dtype = np.dtype("float32") if cast_float32 else raw.dtype
+    if dtype.name not in schema.DTYPES:
         raise ValueError(
             f"{variable} is {raw.dtype}; chronozarr stores hold {list(schema.DTYPES)}. "
             "Cast it first"
@@ -340,7 +344,7 @@ def _inspect(dataset: xr.Dataset, variable: str, dims: dict[str, str]) -> _Inspe
         dims=tuple(str(d) for d in raw.dims),
         x=np.asarray(da[resolved["x"]].values, dtype=np.float64),
         y=np.asarray(da[resolved["y"]].values, dtype=np.float64),
-        dtype=da.dtype,
+        dtype=dtype,
         scale=_scalar_attr(da, "scale_factor", 1.0),
         offset=_scalar_attr(da, "add_offset", 0.0),
         units=str(units) if units else None,
@@ -588,7 +592,7 @@ class _OpenFiles:
 class XarraySource(Source):
     def __init__(
         self,
-        source: str,
+        source: str | IcechunkInput,
         variable: str | None,
         dims: dict[str, str],
         crs: str | None,
@@ -604,6 +608,18 @@ class XarraySource(Source):
         files, found by `find_netcdf_files` for the folder or glob `source`. `scale` and `offset`
         replace their declarations before compatibility checks and band metadata are built."""
         check_rule(calendar_to_gregorian)
+        icechunk_source = source if isinstance(source, IcechunkInput) else None
+        source = str(source)
+        self._cast_float32 = bool(icechunk_source and icechunk_source.cast_float32)
+        if (
+            self._cast_float32
+            and nodata not in ("auto", None)
+            and not (isinstance(nodata, float) and np.isnan(nodata))
+        ):
+            raise ValueError(
+                "float64 rounding needs nodata auto, none or nan; keep a source sentinel in "
+                "its metadata so validity is decided before rounding"
+            )
         self.files = tuple(files) if files is not None else (source,)
         self.source = source
         if files is not None:
@@ -612,7 +628,16 @@ class XarraySource(Source):
             self.kind = "NetCDF file" if source.lower().endswith(NETCDF_SUFFIXES) else "Zarr store"
         self._dataset: xr.Dataset | None = None
         self._open = _OpenFiles(self.files)
-        dataset = _open_dataset(self.files[0])
+        dataset = (
+            open_input(icechunk_source, variable, mask_var)
+            if icechunk_source is not None
+            else _open_dataset(self.files[0])
+        )
+        self.icechunk_identity = (
+            dataset.attrs.get(IDENTITY) if icechunk_source is not None else None
+        )
+        if self.icechunk_identity is not None:
+            self.kind = "Icechunk snapshot"
         try:
             self._configure(
                 dataset,
@@ -655,7 +680,7 @@ class XarraySource(Source):
             raise ValueError(f"variable {variable!r} is not in {first}: {names}")
         self.variable = variable
         self._dims_arg = dims
-        ref = _inspect(dataset, variable, dims)
+        ref = _inspect(dataset, variable, dims, cast_float32=self._cast_float32)
         facts = ref.facts
         resolved = self._dims = ref.dims
         self._squeezed = ref.squeezed
@@ -702,10 +727,11 @@ class XarraySource(Source):
         if mask_var is not None:
             self._mask_variable(dataset, mask_var, variable, resolved, first)
         validity = _decide_validity(
-            ref.da.dtype,
+            facts.dtype,
             facts.declared,
             override=nodata,
-            explicit=[] if mask_var is None else [f"mask variable {mask_var}"],
+            explicit=([] if mask_var is None else [f"mask variable {mask_var}"])
+            + (["source validity before float32 rounding"] if self._cast_float32 else []),
             footprint=None,
         )
         self._sentinels: tuple[float | int, ...]
@@ -717,7 +743,7 @@ class XarraySource(Source):
         self.info = SourceInfo(
             grid,
             len(facts.bands),
-            ref.da.dtype,
+            facts.dtype,
             validity.nodata,
             facts.bands,
             bands,
@@ -879,6 +905,17 @@ class XarraySource(Source):
         return {
             "kind": "xarray",
             "source": self.source,
+            **(
+                {
+                    "icechunk": {
+                        key: value
+                        for key, value in self.icechunk_identity.items()
+                        if key not in ("requested_version", "encoded_cache_bytes")
+                    }
+                }
+                if self.icechunk_identity
+                else {}
+            ),
             **({"files": list(self.files)} if len(self.files) > 1 else {}),
             "variable": self.variable,
             "grid": [grid.crs, list(grid.transform), grid.height, grid.width],
@@ -919,14 +956,20 @@ class XarraySource(Source):
             values = values[np.newaxis]
         if self._flip_y:
             values = values[:, ::-1, :]
-        values = np.ascontiguousarray(values)
-        if not values.flags.writeable:
-            values = values.copy()
         valid = None
         if self.info.mask:
             ok = _value_valid(values, self._sentinels)
             if plane is not None:
                 ok &= (plane[::-1] if self._flip_y else plane) != 0
             valid = ok.astype(np.uint8)
+        if self._cast_float32 and np.any(
+            np.isfinite(values) & (np.abs(values) > np.finfo(np.float32).max)
+        ):
+            raise ValueError(
+                "finite source values overflow float32; choose another source or range"
+            )
+        values = np.ascontiguousarray(values, dtype=self.info.dtype)
+        if not values.flags.writeable:
+            values = values.copy()
         _settle_nan(values, valid, self.info.nodata, f"{self.files[k]} timestep {t}")
         return Step(values, valid)

@@ -14,6 +14,7 @@
 | A NetCDF file or a Zarr store with a time axis | [From NetCDF or Zarr](#from-netcdf-or-zarr) |
 | A folder or glob of NetCDF files, one per day or month | [A series of NetCDF files](#a-series-of-netcdf-files) |
 | An xarray `DataArray` in Python | [From xarray](#from-xarray) |
+| Icechunk repositories (checkout, Python 3.12+) | [Pinned Icechunk selections](icechunk.md) |
 | Rendered PNG frames | [PNG frames](png-frames.md) |
 
 Every route checks all inputs before it writes anything. Nothing is resampled or rescaled unless you ask.

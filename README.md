@@ -43,6 +43,9 @@ The dry run checks every file and writes nothing. `convert` writes the store. `s
 
 The [full quickstart](https://chronozarr.org/quickstart) has a sample dataset, the expected output of each command and the pip route.
 
+The checkout also converts [explicit, snapshot-pinned Icechunk selections](docs/icechunk.md),
+including a qualified materialized GFS window and virtual GRIB with explicit Float64 rounding.
+
 ## Share a store
 
 | Link | Command | Lasts | Needs |
