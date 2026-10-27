@@ -186,7 +186,7 @@ _NAN = "nan"  # token for a declared NaN nodata; the other tokens are None or a 
 def _declared_nodata(value: float | None, dtype: np.dtype) -> float | int | str | None:
     """A declared nodata value as a token, or None when unset or when no pixel can hold it.
 
-    A number is what `dtype` stores it as (float32-rounded; int for integer dtypes); NaN is
+    A number is what `dtype` stores it as (rounded to its float type; int for integers); NaN is
     `_NAN`. A value outside the dtype's range can never match a pixel, so it counts as unset.
     """
     if value is None:
@@ -197,9 +197,9 @@ def _declared_nodata(value: float | None, dtype: np.dtype) -> float | int | str 
     if dtype.kind == "f":
         if math.isinf(number):
             return number
-        if abs(number) > float(np.finfo(np.float32).max):
+        if abs(number) > float(np.finfo(dtype).max):
             return None
-        return float(np.float32(number))
+        return float(dtype.type(number))
     info = np.iinfo(dtype)
     if not number.is_integer() or not info.min <= number <= info.max:
         return None
