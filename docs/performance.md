@@ -108,7 +108,7 @@ What this does not show: Pixel comparisons between the JavaScript reader and Pyt
 
 ## 3. Ingestion throughput (Sentinel-2 example in the repository)
 
-What was measured: Wall time to build monthly median composites from Planetary Computer, with the new download pipeline against the previous one (`mosaic.py` at commit `01185cd`).
+What was measured: Wall time to build monthly median composites from Planetary Computer, with the new download pipeline against the repository's own previous one (`mosaic.py` at commit `01185cd`). The speed-ups compare the example with its earlier version, not with another tool.
 
 Result: Median of 3 interleaved runs per cell, 2026-10-10:
 

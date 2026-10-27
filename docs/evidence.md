@@ -1097,7 +1097,7 @@ Appending to a store written by main: `convert` on main wrote 2020 (429 files), 
 
 ## Sentinel-2 ingest performance
 
-Measured 2026-10-10 on one machine: Apple M3 Max laptop (16 CPUs, 128 GB), macOS, home connection in Chapel Hill, GDAL 3.12.1 from the rasterio 1.5.0 wheel, numpy 2.4.4. The pipeline is `examples/sentinel2_pc/mosaic.py`; the baseline is the same file at commit `01185cd`. Cross-machine performance has not been tested. The harness (`examples/sentinel2_pc/bench.py`) records the machine with every result, so the same commands can be run elsewhere unchanged.
+Measured 2026-10-10 on one machine: Apple M3 Max laptop (16 CPUs, 128 GB), macOS, home connection in Chapel Hill, GDAL 3.12.1 from the rasterio 1.5.0 wheel, numpy 2.4.4. The pipeline is `examples/sentinel2_pc/mosaic.py`; the baseline is the repository's own previous pipeline, the same file at commit `01185cd`, not another tool. Cross-machine performance has not been tested. The harness (`examples/sentinel2_pc/bench.py`) records the machine with every result, so the same commands can be run elsewhere unchanged.
 
 ### Method
 
@@ -1117,7 +1117,7 @@ The runs in this section and the next predate two later changes from the constra
 | Lake Mead, 1 month, 4 tiles | 16 | 34.9 s [34.1-35.0] | 20.3 s | 14.0 s | | 14.8 s | 12.7 / 3.0 GB |
 | Yukon delta, 3 sparse months | 11 | 145.4 s [142.6-152.3] | 69.2 s | 48.4 s | | 41.8 s | 14.5 / 4.6 GB |
 
-The new pipeline is 1.9 to 4.7 times faster than the baseline at its default settings (auto, or fixed-16, which auto equals when no read fails). At the baseline's concurrency (fixed-4), the pipeline changes alone give 1.7 to 2.1 times. The rest comes from concurrency: 16 reads beat 4 on every workload. Auto and fixed-16 are indistinguishable; auto-max32 is about 15 % slower on the short runs and about 14 % faster on the 3-month Yukon run, so the default ceiling is 16. Downloaded bytes fell 13 to 26 % on the native-grid workloads (Yukon: 1663 to 1289 MB, 1031 to 837 requests) from reading SCL first and skipping source blocks without a valid pixel; the warp path skips only whole scenes and read the same 499 MB as the baseline.
+The new pipeline is 1.9 to 4.7 times faster than the baseline (the repository's own previous pipeline) at its default settings (auto, or fixed-16, which auto equals when no read fails). At the baseline's concurrency (fixed-4), the pipeline changes alone give 1.7 to 2.1 times. The rest comes from concurrency: 16 reads beat 4 on every workload. Auto and fixed-16 are indistinguishable; auto-max32 is about 15 % slower on the short runs and about 14 % faster on the 3-month Yukon run, so the default ceiling is 16. Downloaded bytes fell 13 to 26 % on the native-grid workloads (Yukon: 1663 to 1289 MB, 1031 to 837 requests) from reading SCL first and skipping source blocks without a valid pixel; the warp path skips only whole scenes and read the same 499 MB as the baseline.
 
 Three of these runs retried a failed read (Ucayali fixed-16, warp auto-max32 and Yukon auto-capped; they are the top of each spread, up to 101 s). They predate the fix under "Read retries" and were still bit-exact.
 
