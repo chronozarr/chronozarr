@@ -1,6 +1,6 @@
 # chronozarr 0.5.1
 
-Python and npm **0.5.1** bring the changes since 0.4.1 together with sixteen merged-batch repairs and further release-review fixes. They add more raster inputs, custom coordinate systems and a bundled viewer, while retaining support for existing v0.3 stores.
+Python and npm **0.5.1** bring the changes since 0.4.1 together with sixteen merged-batch repairs and further release-review fixes. They add more raster inputs, custom coordinate systems and a bundled viewer, while retaining support for existing v0.3 stores. Published 2026-10-24 on PyPI and npm.
 
 Install 0.5.1 with the [quickstart](quickstart.md), or use the [source and local artifact routes](development.md). The [0.4.1 documentation](https://github.com/chronozarr/chronozarr/tree/v0.4.1/docs) remains available for that older release.
 
@@ -27,7 +27,7 @@ Python's `link --lonlat` uses pyproj from the `geo` extra to interpret a stored 
 | Store | 0.5.1 behavior | Released 0.4.1 behavior |
 |---|---|---|
 | EPSG CRS, spec `0.3.0` | Reads and writes this version | Reads the original supported layouts |
-| Other CRS, spec `0.4.0` | Reads and writes this version | Refuses this version |
+| Other CRS, spec `0.4.0` | Reads and writes this version | Refuses this version; upgrade the reader |
 | Existing ordinary spec `0.3.0` store | Reads without conversion | Continues to read |
 | Legacy spec `0.2` store | Convert with `chronozarr convert OLD_STORE NEW_STORE` | Conversion is also required |
 
@@ -35,7 +35,7 @@ Package versions and store specification versions are independent. Opening an ex
 
 ## Viewer, links and distribution
 
-The viewer adds a dual-polarization SAR composite, single-band Viridis/Magma/Turbo colormaps, viewport auto exposure for numeric and radar data, and MP4 export where the browser supports it. Embedded viewers retain export controls. Copy link and the Python player carry the selected display state; `chronozarr link` can set colormap, zoom and a centre in store coordinates or longitude/latitude.
+The viewer adds a dual-polarization SAR composite, single-band Viridis/Magma/Turbo colormaps, viewport auto exposure for numeric and radar data, and MP4 export where the browser supports it. Embedded viewers retain export controls. When a video export covers more frames than the viewer's cache holds, it loads the uncached frames in order and keeps only the next frame ready, instead of buffering two seconds of frames. Copy link and the Python player carry the selected display state; `chronozarr link` can set colormap, zoom and a centre in store coordinates or longitude/latitude.
 
 The npm tarball contains a production viewer bundle with a viewer script, decode worker and lazy codecs/projection parser. Catalog and root metadata requests start early. Bandwidth-aware playback and shared speculative request budgets adapt to slow links. Benchmark warm loops count their actual requests and bytes; the repository has paired speed-gate checks rather than treating a warm loop with traffic as a cache hit.
 
@@ -43,7 +43,7 @@ The Python package, npm package, dataset host and viewer served at chronozarr.or
 
 ## Sharing, publication and development tools
 
-`share` validates its local copy and checks browser access through the tunnel. Doctor probes and remote validation batch independent work, and object sizing can use a bounded GET when a host refuses HEAD. Cancellation stops a hanging doctor check, and link startup handles quick-tunnel DNS waits. Incremental publication compares canonical array metadata before uploading an appended store, even when optional summaries or consolidated metadata are absent.
+`share` validates its local copy and checks browser access through the tunnel. Doctor probes and remote validation batch independent work, and object sizing can use a bounded GET when a host refuses HEAD. Cancellation stops a hanging doctor check, and link startup handles quick-tunnel DNS waits. Incremental publication compares canonical array metadata before uploading an appended store, even when optional summaries or consolidated metadata are absent. `append` compares a DataArray's `nodata` attribute with the store's when the attribute is present, including `None`, and refuses a mismatch before writing; when the attribute is absent the input inherits the store's value.
 
 Repository examples add NISAR GCOV time-series and Sentinel-1 RTC monthly ingest. The corpus runner accepts a separate results directory and records its evaluation policy; longitude spelling outside −180 to 180 is a diagnostic rather than a correctness failure by itself. Quickstart and newcomer harnesses exercise printed instructions, and raw Markdown/llms pages and the repository skill make the guides available to coding agents. These source examples and harnesses have their own dependencies and operating limits.
 
@@ -96,8 +96,8 @@ are described and checked as recursive means, with level 0 used for water-area s
 
 ## Validation and publication status
 
-Release preparation starts from merged commit `63610f8` (PR #141). The core JavaScript reader and standalone viewer retain the tested `0.5.0rc1` runtime, with additional MapLibre adapter repairs from release review. Python additionally fixes local-server path containment and preserves module-alias MIME types. Release metadata, current installation guides, site navigation and deployment tooling are updated for the stable version. Source archives select explicit project paths and the shipped tests' inputs, with dependency and generated trees excluded. Unmerged SAR playback-cache work in PR #140 is outside this release.
+Release preparation started from merged commit `63610f8` (PR #141). The core JavaScript reader and standalone viewer retain the tested `0.5.0rc1` runtime, with additional MapLibre adapter repairs from release review. Python additionally fixes local-server path containment and preserves module-alias MIME types. Release metadata, current installation guides, site navigation and deployment tooling are updated for the stable version. Source archives select explicit project paths and the shipped tests' inputs, with dependency and generated trees excluded. Unmerged SAR playback-cache work in PR #140 is outside this release.
 
-Before promotion, the candidate passed Python 3.11 and 3.13 installed-wheel checks, JavaScript and browser checks, package installation and offline viewer checks, notebook checks and paired speed gates. The [candidate PR](https://github.com/chronozarr/chronozarr/pull/141) records the exact validation and its limits. Earlier results in the [measurement log](evidence.md) retain their dated sources and environments.
+Before publication, the release passed Python 3.11 and 3.13 installed-wheel checks, JavaScript and browser checks, package installation and offline viewer checks, notebook checks and paired speed gates. The [candidate PR](https://github.com/chronozarr/chronozarr/pull/141) records the exact validation and its limits. Earlier results in the [measurement log](evidence.md) retain their dated sources and environments.
 
-Final local qualification is recorded in `release-checks.md`, `manifest.json` and `SHA256SUMS`, which identify the source commit, artifact hashes and checks. This is the prepared release record. The `v0.5.1` tag triggers trusted publishing to PyPI and npm; the website and hosted viewer are deployed separately after both registry versions are verified. Local artifacts do not establish registry publication or site deployment.
+Final local qualification is recorded in `release-checks.md`, `manifest.json` and `SHA256SUMS`, which identify the source commit, artifact hashes and checks. chronozarr 0.5.1 was published on 2026-10-24 to PyPI and npm, from the `v0.5.1` tag by trusted publishing. The website and hosted viewer are deployed separately from the registry packages; installing either package does not update them.

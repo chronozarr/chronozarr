@@ -3,7 +3,10 @@ import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const dist = resolve(dirname(fileURLToPath(import.meta.url)), '../docs/dist');
+const site = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const dist = resolve(site, 'docs/dist');
+// Archived records are served but not listed (archived-pages.json).
+const archived = JSON.parse(readFileSync(resolve(site, 'archived-pages.json'), 'utf8')).routes;
 
 function pages(directory) {
   return readdirSync(directory).flatMap((name) => {
@@ -15,7 +18,7 @@ function pages(directory) {
   });
 }
 
-const routes = pages(dist).sort();
+const routes = pages(dist).filter((route) => !archived.includes(route)).sort();
 const urls = routes.map((route) => `  <url><loc>https://chronozarr.org${route}</loc></url>`).join('\n');
 writeFileSync(
   join(dist, 'sitemap.xml'),
