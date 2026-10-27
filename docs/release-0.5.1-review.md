@@ -1,5 +1,7 @@
 # 0.5.1 documentation and examples review
 
+Archived internal record.
+
 Review date: 2026-10-23. This records release preparation, not package publication or deployment. The release target is Python and npm 0.5.1. The original unpublished 0.5.0rc1 record and dated measurements retain their historical scope.
 
 ## Coverage

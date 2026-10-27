@@ -138,7 +138,6 @@ export default defineConfig({
       { text: 'Performance and evidence', link: '/performance' },
       { text: 'Measurement log', link: '/reference/evidence' },
       { text: '0.5.1 release notes', link: '/reference/release-0.5.1' },
-      { text: '0.5.0rc1 preparation record', link: '/reference/release-0.5.0rc1' },
       { text: 'Troubleshooting', link: '/troubleshooting' },
       { text: 'Format comparison', link: '/guides/format-comparison' },
     ] },
