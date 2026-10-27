@@ -1,6 +1,6 @@
 # chronozarr 0.5.1
 
-Python and npm **0.5.1** bring the changes since 0.4.1 together with sixteen merged-batch repairs and further release-review fixes. They add more raster inputs, custom coordinate systems and a bundled viewer, while retaining support for existing v0.3 stores.
+Python and npm **0.5.1** bring the changes since 0.4.1 together with sixteen merged-batch repairs and further release-review fixes. They add more raster inputs, custom coordinate systems and a bundled viewer, while retaining support for existing v0.3 stores. Published 2026-10-24 on PyPI and npm.
 
 Install 0.5.1 with the [quickstart](quickstart.md), or use the [source and local artifact routes](development.md). The [0.4.1 documentation](https://github.com/chronozarr/chronozarr/tree/v0.4.1/docs) remains available for that older release.
 
@@ -96,8 +96,8 @@ are described and checked as recursive means, with level 0 used for water-area s
 
 ## Validation and publication status
 
-Release preparation starts from merged commit `63610f8` (PR #141). The core JavaScript reader and standalone viewer retain the tested `0.5.0rc1` runtime, with additional MapLibre adapter repairs from release review. Python additionally fixes local-server path containment and preserves module-alias MIME types. Release metadata, current installation guides, site navigation and deployment tooling are updated for the stable version. Source archives select explicit project paths and the shipped tests' inputs, with dependency and generated trees excluded. Unmerged SAR playback-cache work in PR #140 is outside this release.
+Release preparation started from merged commit `63610f8` (PR #141). The core JavaScript reader and standalone viewer retain the tested `0.5.0rc1` runtime, with additional MapLibre adapter repairs from release review. Python additionally fixes local-server path containment and preserves module-alias MIME types. Release metadata, current installation guides, site navigation and deployment tooling are updated for the stable version. Source archives select explicit project paths and the shipped tests' inputs, with dependency and generated trees excluded. Unmerged SAR playback-cache work in PR #140 is outside this release.
 
-Before promotion, the candidate passed Python 3.11 and 3.13 installed-wheel checks, JavaScript and browser checks, package installation and offline viewer checks, notebook checks and paired speed gates. The [candidate PR](https://github.com/chronozarr/chronozarr/pull/141) records the exact validation and its limits. Earlier results in the [measurement log](evidence.md) retain their dated sources and environments.
+Before publication, the release passed Python 3.11 and 3.13 installed-wheel checks, JavaScript and browser checks, package installation and offline viewer checks, notebook checks and paired speed gates. The [candidate PR](https://github.com/chronozarr/chronozarr/pull/141) records the exact validation and its limits. Earlier results in the [measurement log](evidence.md) retain their dated sources and environments.
 
-Final local qualification is recorded in `release-checks.md`, `manifest.json` and `SHA256SUMS`, which identify the source commit, artifact hashes and checks. This is the prepared release record. The `v0.5.1` tag triggers trusted publishing to PyPI and npm; the website and hosted viewer are deployed separately after both registry versions are verified. Local artifacts do not establish registry publication or site deployment.
+Final local qualification is recorded in `release-checks.md`, `manifest.json` and `SHA256SUMS`, which identify the source commit, artifact hashes and checks. chronozarr 0.5.1 was published on 2026-10-24 to PyPI and npm, from the `v0.5.1` tag by trusted publishing. The website and hosted viewer are deployed separately from the registry packages; installing either package does not update them.
