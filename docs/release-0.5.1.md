@@ -27,7 +27,7 @@ Python's `link --lonlat` uses pyproj from the `geo` extra to interpret a stored 
 | Store | 0.5.1 behavior | Released 0.4.1 behavior |
 |---|---|---|
 | EPSG CRS, spec `0.3.0` | Reads and writes this version | Reads the original supported layouts |
-| Other CRS, spec `0.4.0` | Reads and writes this version | Refuses this version |
+| Other CRS, spec `0.4.0` | Reads and writes this version | Refuses this version; upgrade the reader |
 | Existing ordinary spec `0.3.0` store | Reads without conversion | Continues to read |
 | Legacy spec `0.2` store | Convert with `chronozarr convert OLD_STORE NEW_STORE` | Conversion is also required |
 
@@ -35,7 +35,7 @@ Package versions and store specification versions are independent. Opening an ex
 
 ## Viewer, links and distribution
 
-The viewer adds a dual-polarization SAR composite, single-band Viridis/Magma/Turbo colormaps, viewport auto exposure for numeric and radar data, and MP4 export where the browser supports it. Embedded viewers retain export controls. Copy link and the Python player carry the selected display state; `chronozarr link` can set colormap, zoom and a centre in store coordinates or longitude/latitude.
+The viewer adds a dual-polarization SAR composite, single-band Viridis/Magma/Turbo colormaps, viewport auto exposure for numeric and radar data, and MP4 export where the browser supports it. Embedded viewers retain export controls. When a video export covers more frames than the viewer's cache holds, it loads the uncached frames in order and keeps only the next frame ready, instead of buffering two seconds of frames. Copy link and the Python player carry the selected display state; `chronozarr link` can set colormap, zoom and a centre in store coordinates or longitude/latitude.
 
 The npm tarball contains a production viewer bundle with a viewer script, decode worker and lazy codecs/projection parser. Catalog and root metadata requests start early. Bandwidth-aware playback and shared speculative request budgets adapt to slow links. Benchmark warm loops count their actual requests and bytes; the repository has paired speed-gate checks rather than treating a warm loop with traffic as a cache hit.
 
@@ -43,7 +43,7 @@ The Python package, npm package, dataset host and viewer served at chronozarr.or
 
 ## Sharing, publication and development tools
 
-`share` validates its local copy and checks browser access through the tunnel. Doctor probes and remote validation batch independent work, and object sizing can use a bounded GET when a host refuses HEAD. Cancellation stops a hanging doctor check, and link startup handles quick-tunnel DNS waits. Incremental publication compares canonical array metadata before uploading an appended store, even when optional summaries or consolidated metadata are absent.
+`share` validates its local copy and checks browser access through the tunnel. Doctor probes and remote validation batch independent work, and object sizing can use a bounded GET when a host refuses HEAD. Cancellation stops a hanging doctor check, and link startup handles quick-tunnel DNS waits. Incremental publication compares canonical array metadata before uploading an appended store, even when optional summaries or consolidated metadata are absent. `append` compares a DataArray's `nodata` attribute with the store's when the attribute is present, including `None`, and refuses a mismatch before writing; when the attribute is absent the input inherits the store's value.
 
 Repository examples add NISAR GCOV time-series and Sentinel-1 RTC monthly ingest. The corpus runner accepts a separate results directory and records its evaluation policy; longitude spelling outside −180 to 180 is a diagnostic rather than a correctness failure by itself. Quickstart and newcomer harnesses exercise printed instructions, and raw Markdown/llms pages and the repository skill make the guides available to coding agents. These source examples and harnesses have their own dependencies and operating limits.
 
