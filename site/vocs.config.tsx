@@ -26,8 +26,18 @@ export default defineConfig({
   aiCta: false,
   // A function, not a bare element: Vocs 1.4.1 reads a bare element as a path-to-element map
   // (`typeof === 'object'`), finds no key matching the URL, and renders nothing.
-  head: () => (
+  // Link previews: Vocs writes og:title and og:description per page; the image and the page address come from here.
+  // The address ends in a slash because the host redirects /page to /page/. The image is made by
+  // scripts/make-previews.py; JPEG because X does not reliably accept WebP.
+  head: ({ path }) => (
     <>
+      <meta property="og:url" content={`https://chronozarr.org${path.replace(/(\/index)?(\.html)?\/?$/, '')}/`} />
+      <meta property="og:image" content="https://chronozarr.org/og.jpg" />
+      <meta property="og:image:width" content="1200" />
+      <meta property="og:image:height" content="630" />
+      <meta property="og:image:alt" content="False-color Sentinel-2 image of meanders of the Ucayali River, Peru, August 2025" />
+      <meta name="twitter:image" content="https://chronozarr.org/og.jpg" />
+      <meta name="twitter:image:alt" content="False-color Sentinel-2 image of meanders of the Ucayali River, Peru, August 2025" />
       <link rel="preconnect" href="https://fonts.googleapis.com" />
       <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
       <link
