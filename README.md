@@ -93,4 +93,4 @@ The pages are written in [`docs/`](https://github.com/chronozarr/chronozarr/tree
 
 ## License
 
-See [LICENSE](https://github.com/chronozarr/chronozarr/blob/main/LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/chronozarr/chronozarr/blob/main/LICENSE).
