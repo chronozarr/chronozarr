@@ -6,6 +6,7 @@ from chronozarr.encode import EncodeReport, encode
 from chronozarr.leafmap import add_chronozarr
 from chronozarr.notebook import player
 from chronozarr.schema import Band, SchemaError, validate
+from chronozarr.tile_ripper import convert_tile_ripper
 from chronozarr.view import diagnose_view, view
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "SchemaError",
     "add_chronozarr",
     "append",
+    "convert_tile_ripper",
     "diagnose_view",
     "encode",
     "open_store",

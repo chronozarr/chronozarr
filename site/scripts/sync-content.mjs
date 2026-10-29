@@ -13,6 +13,7 @@ const sources = {
   'docs/viewer.md': { route: 'viewer', description: 'The chronozarr viewer: playback, products, pixel time series, video export and links to a view.' },
   // Create and share
   'docs/convert.md': { route: 'guides/convert', description: 'Convert dated GeoTIFFs, COG manifests, NetCDF, Zarr or an xarray DataArray into a chronozarr store.' },
+  'docs/tile-ripper.md': { route: 'guides/tile-ripper', description: 'Convert completed Tile-Ripper observations through the unreleased Python bridge, preserving science, selected QA and source provenance.' },
   'docs/preview.md': { route: 'guides/preview', description: 'Open a local chronozarr store in the viewer with chronozarr preview. The data stays on your computer.' },
   'docs/share.md': { route: 'guides/share', description: 'Send a temporary link to a store on your computer with chronozarr share: what the recipient needs, and the limits.' },
   'docs/publish.md': { route: 'guides/publish', description: 'Publish a store to Amazon S3, Cloudflare R2, Google Cloud Storage or Azure with chronozarr publish, for a link that lasts.' },
@@ -59,7 +60,7 @@ const siteUrl = 'https://chronozarr.org';
 // appears once; the build fails otherwise. Agents may skip the "Optional" section.
 const llmsSections = [
   ['Start here', ['docs/what-is.md', 'docs/quickstart.md', 'docs/development.md', 'docs/viewer.md']],
-  ['Create and share', ['docs/convert.md', 'docs/preview.md', 'docs/share.md', 'docs/publish.md', 'docs/analyze.md']],
+  ['Create and share', ['docs/convert.md', 'docs/tile-ripper.md', 'docs/preview.md', 'docs/share.md', 'docs/publish.md', 'docs/analyze.md']],
   ['Guides and examples', [
     'docs/sentinel2.md', 'examples/bring_your_data/README.md', 'docs/examples.md', 'docs/png-frames.md', 'docs/append.md',
     'docs/embedding.md', 'docs/notebooks.md', 'docs/private.md', 'docs/hosting.md', 'docs/hosting-providers.md',
