@@ -107,6 +107,7 @@ export default defineConfig({
     ] },
     { text: 'Create and share', items: [
       { text: 'Convert your data', link: '/guides/convert' },
+      { text: 'Tile-Ripper bridge (checkout)', link: '/guides/tile-ripper' },
       { text: 'Preview on your computer', link: '/guides/preview' },
       { text: 'Share a temporary link', link: '/guides/share' },
       { text: 'Publish a permanent link', link: '/guides/publish' },
