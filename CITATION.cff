@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use chronozarr in your work, please cite it using the metadata below."
+type: software
+title: chronozarr
+version: 0.5.1
+date-released: 2026-10-24
+license: Apache-2.0
+repository-code: "https://github.com/chronozarr/chronozarr"
+url: "https://chronozarr.org"
+abstract: >-
+  chronozarr turns a georeferenced raster time series into an interactive dataset
+  that anyone can open with a link. In a web browser, the series plays or scrubs
+  like a video. You zoom and pan the map, and a click on a pixel shows its values
+  over time. In Python, the same files return the exact numbers you stored. No tile
+  server runs anywhere.
+keywords:
+  - zarr
+  - raster
+  - time-series
+  - remote-sensing
+  - earth-observation
+  - xarray
+authors:
+  - family-names: Gearon
+    given-names: James H.
+    affiliation: University of North Carolina at Chapel Hill

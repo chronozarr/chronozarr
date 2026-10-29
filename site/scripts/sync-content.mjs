@@ -56,8 +56,14 @@ const titles = Object.fromEntries(Object.keys(sources).map((source) => [source, 
 const PATH_LABEL = /^`?(?:\.\.\/)*(?:[\w.-]+\/)*[\w.-]+\.md(?:#[\w-]+)?`?$/;
 
 const siteUrl = 'https://chronozarr.org';
-// llms.txt (llmstxt.org) lists the pages in the sidebar's order, each as raw Markdown. Every key of `sources`
-// appears once; the build fails otherwise. Agents may skip the "Optional" section.
+// Internal records stay published at their URL, but the sidebar, llms.txt, llms-full.txt and the sitemap leave them out.
+const archivedRoutes = JSON.parse(readFileSync(resolve(repo, 'site/archived-pages.json'), 'utf8')).routes;
+const archived = Object.keys(sources).filter((source) => archivedRoutes.includes(`/${sources[source].route}`));
+if (archived.length !== archivedRoutes.length) {
+  throw new Error('site/archived-pages.json names a route that no key of sources publishes');
+}
+// llms.txt (llmstxt.org) lists the pages in the sidebar's order, each as raw Markdown. Every key of `sources` that is
+// not archived appears once; the build fails otherwise. Agents may skip the "Optional" section.
 const llmsSections = [
   ['Start here', ['docs/what-is.md', 'docs/quickstart.md', 'docs/development.md', 'docs/viewer.md']],
   ['Create and share', ['docs/convert.md', 'docs/tile-ripper.md', 'docs/preview.md', 'docs/share.md', 'docs/publish.md', 'docs/analyze.md']],
@@ -70,12 +76,12 @@ const llmsSections = [
     'docs/cli.md', 'docs/python.md', 'js/README.md', 'js/maplibre/README.md', 'spec/CHRONOZARR.md', 'docs/how-it-works.md',
     'docs/performance.md', 'docs/troubleshooting.md', 'docs/release-0.5.1.md',
   ]],
-  ['Optional', ['docs/evidence.md', 'docs/format-comparison.md', 'docs/release-0.5.1-review.md', 'docs/release-0.5.0rc1.md']],
+  ['Optional', ['docs/evidence.md', 'docs/format-comparison.md']],
 ];
 const listed = llmsSections.flatMap(([, entries]) => entries);
-const unlisted = Object.keys(sources).filter((source) => !listed.includes(source));
-if (unlisted.length || listed.length !== Object.keys(sources).length) {
-  throw new Error(`llmsSections must list every key of sources exactly once; unlisted: ${unlisted.join(', ') || 'none'}`);
+const unlisted = Object.keys(sources).filter((source) => !listed.includes(source) && !archived.includes(source));
+if (unlisted.length || listed.length !== Object.keys(sources).length - archived.length || listed.some((source) => archived.includes(source))) {
+  throw new Error(`llmsSections must list every key of sources that is not archived exactly once; unlisted: ${unlisted.join(', ') || 'none'}`);
 }
 
 /** Repository links in `text` made into links to published pages (`linkTo(route)`) or to GitHub. */
