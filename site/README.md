@@ -77,7 +77,8 @@ server, so an inline script in `vocs.config.tsx` sends `/page#old-section` on in
 `published-anchors.json` lists every route and section deployed on 2026-10-12.
 `scripts/check-links.mjs` runs after every build and fails it when a link on a page, a redirect,
 an old anchor or a published address leads to a page or section that the build lacks.
-`scripts/make-sitemap.mjs` writes `sitemap.xml`, and `docs/public/404.html` is served for unknown
+`archived-pages.json` lists internal records that stay served at their URL but are left out of the
+sidebar, `llms.txt`, `llms-full.txt` and the sitemap. `scripts/make-sitemap.mjs` writes `sitemap.xml`, and `docs/public/404.html` is served for unknown
 paths. `scripts/check-worker.mjs` runs the Worker against stand-in assets: every redirect, and the
 `Cache-Control: no-transform` that keeps Cloudflare's Web Analytics beacon off the viewer page.
 
