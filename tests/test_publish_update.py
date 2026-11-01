@@ -342,29 +342,59 @@ def test_refuses_a_hosted_store_on_another_grid(stores, truth, tmp_path, bucket)
     assert "another grid" in message
 
 
+def _without_consolidated(path: Path) -> None:
+    root = path / "zarr.json"
+    document = json.loads(root.read_text())
+    document.pop("consolidated_metadata", None)
+    root.write_text(json.dumps(document))
+
+
+@pytest.mark.parametrize("unconsolidated", [(), ("hosted",), ("local",), ("hosted", "local")])
 def test_refuses_a_hosted_store_in_another_crs_that_has_no_code_to_compare(
-    truth, tmp_path, bucket
+    truth, tmp_path, bucket, unconsolidated
 ):
     """Stores without an EPSG code carry no `crs` mirror, so the CRS is read from level 0."""
     first, second = tmp_path / "lcc", tmp_path / "sinusoidal"
     chronozarr.encode(make_da(truth[:4], BANDS), first, crs=LCC_WKT2, chunk_size=CHUNK)
     chronozarr.encode(make_da(truth[:4], BANDS), second, crs=SINUSOIDAL_WKT2, chunk_size=CHUNK)
+    for name, path in (("hosted", first), ("local", second)):
+        if name in unconsolidated:
+            _without_consolidated(path)
     publish_first(first, bucket)
     message = refusal(second, bucket)
     assert "stored CRS differs" in message
     assert "WKT2" in message
 
 
-def test_updates_a_hosted_store_that_has_no_epsg_code(truth, tmp_path, bucket):
+@pytest.mark.parametrize("unconsolidated", [(), ("hosted",), ("local",), ("hosted", "local")])
+def test_updates_a_hosted_store_that_has_no_epsg_code(truth, tmp_path, bucket, unconsolidated):
     first = tmp_path / "lcc"
     chronozarr.encode(make_da(truth[:4], BANDS), first, crs=LCC_WKT2, chunk_size=CHUNK)
+    if "hosted" in unconsolidated:
+        _without_consolidated(first)
     publish_first(first, bucket)
     later = tmp_path / "later"
     shutil.copytree(first, later)
     append(later, make_da(truth, BANDS).isel(time=slice(4, 6)), crs=LCC_WKT2)
+    if "local" in unconsolidated:
+        _without_consolidated(later)
     update = plan_update(plan_for(later, bucket), bucket)
     assert update.hosted_times == 4
     assert update.local_times == 6
+
+
+@pytest.mark.parametrize(
+    "answer", [None, b"{", b"{}", b'{"attributes": {}}', b'{"attributes": null}']
+)
+def test_update_refuses_an_unverifiable_hosted_crs(stores, bucket, monkeypatch, answer):
+    publish_first(stores["v1"], bucket)
+    _without_consolidated(bucket.root / PREFIX)
+    read = bucket.read_object
+    key = PREFIX + "0/data/zarr.json"
+    monkeypatch.setattr(bucket, "read_object", lambda name: answer if name == key else read(name))
+    with pytest.raises(PublishError, match=r"CRS|JSON"):
+        plan_update(plan_for(stores["v2"], bucket), bucket)
+    assert bucket.puts == []
 
 
 def test_refuses_a_hosted_store_with_other_times(stores, truth, tmp_path, bucket):

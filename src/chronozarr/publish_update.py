@@ -165,16 +165,19 @@ def _stored_crs(document: dict[str, Any], variable: str) -> Crs | None:
         return None
 
 
-def _crs_problems(hosted: dict[str, Any], local: dict[str, Any], variable: str) -> list[str]:
-    """The stored CRS of the hosted and local store must be the same.
+def _array_crs(document: dict[str, Any], where: str) -> Crs:
+    """The authoritative array CRS; an unreadable declaration cannot authorize an update."""
+    attributes = document.get("attributes")
+    if not isinstance(attributes, dict):
+        raise PublishError(f"cannot verify the CRS of {where}: no array attributes")
+    try:
+        return schema.parse_crs(attributes, where)
+    except schema.SchemaError as exc:
+        raise PublishError(f"cannot verify the CRS of {where}: {exc}") from exc
 
-    A store without an EPSG code has no `crs` mirror to compare, and a hosted `zarr.json` may
-    change in place, so the CRS is read from level 0 of both. A store without consolidated
-    metadata has nothing to read and is not compared.
-    """
-    theirs, ours = _stored_crs(hosted, variable), _stored_crs(local, variable)
-    if theirs is None or ours is None:
-        return []
+
+def _crs_problems(theirs: Crs, ours: Crs) -> list[str]:
+    """The stored CRS of the hosted and local store must be the same."""
     match = same_crs(theirs.resolved(), ours.resolved())
     if match.same is True:
         return []
@@ -227,7 +230,20 @@ def plan_update(plan: PublishPlan, adapter: StorageAdapter) -> UpdatePlan:
     local = _chronozarr_block(local_document, f"{plan.store}/zarr.json")
 
     problems = _prefix_problems(hosted, local)
-    problems += _crs_problems(hosted_document, local_document, local.variable)
+    # Consolidation is optional. Without it, read the data array's own declaration rather than
+    # skipping the guard: code-less stores have no root CRS mirror to compare.
+    theirs = _stored_crs(hosted_document, hosted.variable)
+    if theirs is None:
+        array_key = dest.key(f"0/{hosted.variable}/zarr.json")
+        raw_array = adapter.read_object(array_key)
+        if raw_array is None:
+            raise PublishError(f"cannot verify the hosted CRS: {array_key} could not be read")
+        theirs = _array_crs(_read_json(raw_array, array_key), array_key)
+    ours = _stored_crs(local_document, local.variable)
+    if ours is None:
+        array_path = plan.store / "0" / local.variable / "zarr.json"
+        ours = _array_crs(_read_json(array_path.read_bytes(), str(array_path)), str(array_path))
+    problems += _crs_problems(theirs, ours)
     by_key = {dest.key(o.key): o for o in plan.objects}
     foreign = sorted(set(remote) - set(by_key))
     if foreign:
