@@ -6,6 +6,20 @@ import { buildSyntheticStore } from '../support/synthetic-store.js';
 
 const shape = { nTime: 4, nBand: 1, height: 128, width: 128, chunk: 128, sharded: false };
 
+for (const [nBand, maxSize, expected] of [[32, 8192, true], [33, 8192, false], [33, 16384, true]]) {
+  test(`compact policy respects GPU size ${maxSize} for ${nBand} bands`, () => {
+    let compact = false;
+    const store = {
+      dtype: 'uint16',
+      levels: [{ gridRows: 1, gridCols: 1, nTime: 100, nBand, chunkWidth: 512, chunkHeight: 512, chunkBytes: nBand * 512 * 512 * 2 }],
+      budgets: () => ({ totalBytes: 768 * 1024 * 1024 }),
+      enableCompactCache() { compact = true; },
+      get compactCacheEnabled() { return compact; },
+    };
+    assert.equal(prepareMovieCache(store, maxSize), expected);
+  });
+}
+
 for (const dtype of ['uint8', 'uint16', 'int16', 'float32']) {
   for (const oversized of [false, true]) {
     test(`viewer cache policy: ${oversized ? 'oversized' : 'fitting'} ${dtype} timeline`, async () => {

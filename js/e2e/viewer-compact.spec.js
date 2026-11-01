@@ -1,9 +1,41 @@
 import { expect, test } from './fixtures.js';
 import { captureFrame, expectFrameMatchesStore, openViewer, waitForPaintedTime } from './viewer-helpers.js';
+import { buildSyntheticStore } from '../support/synthetic-store.js';
 
 const BUILT_VIEWER = Boolean(process.env.CHRONOZARR_E2E_BUILT_VIEWER);
 // The u16_mask store is 4 cells x 6 timesteps x 128 KiB = 3 MiB: more than 0.9 of this cap, so the viewer's cache policy packs it.
 const CAP_BYTES = 2 * 1024 * 1024;
+
+test('an oversized many-band timeline keeps raw GPU textures when compact textures exceed the driver limit', async ({ page, servers, storeUrl }) => {
+  // Exercise an 8192-pixel GPU boundary even on a driver that supports larger textures.
+  await page.addInitScript(() => {
+    const getParameter = WebGL2RenderingContext.prototype.getParameter;
+    WebGL2RenderingContext.prototype.getParameter = function (name) {
+      const value = getParameter.call(this, name);
+      return name === this.MAX_TEXTURE_SIZE ? Math.min(8192, value) : value;
+    };
+  });
+  await openViewer(page, servers, await storeUrl('u16_mask'));
+  const synthetic = buildSyntheticStore({ nTime: 2, nBand: 33, height: 16, width: 16, chunk: 512, sharded: false, consolidated: true });
+  const url = `${servers.appUrl}/many-band-store`;
+  await page.route(`${url}/**`, async (route) => {
+    const key = new URL(route.request().url()).pathname.slice('/many-band-store'.length);
+    const bytes = synthetic.files.get(key);
+    await route.fulfill({
+      status: bytes ? 200 : 404,
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      contentType: key.endsWith('.json') ? 'application/json' : 'application/octet-stream',
+      body: bytes ? Buffer.from(bytes) : '',
+    });
+  });
+  const result = await page.evaluate(async (url) => {
+    const { viewer } = window.chronozarr;
+    await viewer.loadStore(url, { totalBytes: 32 * 1024 * 1024 });
+    const frame = viewer.renderNow();
+    return { compact: viewer.store.compactCacheEnabled, paintedT: viewer.paintedT, complete: frame.complete, glError: viewer.canvas.getContext('webgl2').getError() };
+  }, url);
+  expect(result).toEqual({ compact: false, paintedT: 0, complete: true, glError: 0 });
+});
 
 test('compact GPU reads match raw rendering across bit widths, boundaries, masks and bands', async ({ page, servers }) => {
   test.skip(BUILT_VIEWER, 'imports Renderer and packUint16 from their source files, which the built viewer does not serve; the next test draws its compact shader');

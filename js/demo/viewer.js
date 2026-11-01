@@ -296,7 +296,7 @@ class Viewer {
     store.evictionScore = (entry) => this.#storeScore(entry);
     this.bands = normalizeBands(store.attrs.bands);
     this.dtype = store.dtype;
-    prepareMovieCache(store);
+    prepareMovieCache(store, this.renderer.limits.maxSize);
     this.#configurePool();
     this.#playback = this.#createPlayback();
     this.#movieMemo = null;
