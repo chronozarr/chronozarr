@@ -79,5 +79,5 @@ test('the licenses of what the bundles contain go with them: the vendored packag
 test('proj4 is a chunk of its own that only a store with a CRS of its own loads', () => {
   const chunks = readdirSync(path.join(demo, 'chunks'));
   assert.ok(chunks.some((name) => /^proj4-/.test(name)), 'a proj4 chunk');
-  assert.doesNotMatch(text('viewer.js'), /\+proj=/, 'the projection definitions are not in the viewer script');
+  assert.doesNotMatch(text('viewer.js'), /Fast_Transverse_Mercator|Extended_Transverse_Mercator/, 'proj4 implementation stays in its lazy chunk; CRS comparison may name builtin definitions');
 });

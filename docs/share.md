@@ -67,7 +67,7 @@ Each run makes a new address. A link from an earlier run does not work again.
 
 ## What happens
 
-1. `share` serves the store from your computer on `127.0.0.1`. It serves only the store folder, and the viewer folder when you pass `--viewer-dir`.
+1. `share` serves the store from your computer on `127.0.0.1`. It serves only the store folder, and the viewer folder when you pass `--viewer-dir`. A symlink is served only when its resolved target remains inside that same folder.
 2. `cloudflared` gives that server a public https address on `trycloudflare.com`.
 3. `share` reads the store through that address, as a browser would, and prints the link only when the read works.
 

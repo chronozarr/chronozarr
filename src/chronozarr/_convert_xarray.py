@@ -42,9 +42,11 @@ from chronozarr._convert_source import (
     _scaling,
     _settle_nan,
     _value_valid,
+    override_scaling,
 )
 from chronozarr._install import extra_hint
 from chronozarr.crs import wkt2_from_cf
+from chronozarr.icechunk import IDENTITY, IcechunkInput, open_input
 from chronozarr.schema import Band
 from chronozarr.store import as_store, redact_url
 
@@ -163,16 +165,43 @@ def _show_time(moment: np.datetime64) -> str:
     return str(np.datetime_as_string(moment, unit="D" if midnight else "s"))
 
 
-def _squeeze_note(da: xr.DataArray, dropped: Sequence[str]) -> str:
-    """The plan line for the singleton dimensions of `da` that are dropped, with their values."""
-    parts = []
-    for name in dropped:
-        detail = "length 1"
-        if name in da.coords:
-            units = da[name].attrs.get("units")
-            detail += f", value {_show_value(da[name].values.ravel()[0])}"
-            detail += f" {units}" if units else ""
-        parts.append(f"{name} ({detail})")
+@dataclass(frozen=True, eq=False)
+class _SqueezedDimension:
+    """The identity of a dropped length-1 dimension, retained for the series check."""
+
+    name: str
+    coordinate: np.ndarray | None
+    units: str | None
+
+    @classmethod
+    def of(cls, da: xr.DataArray, name: str) -> _SqueezedDimension:
+        if name not in da.coords:
+            return cls(name, None, None)
+        coordinate = da[name]
+        units = coordinate.attrs.get("units")
+        return cls(name, np.asarray(coordinate.values).copy(), str(units) if units else None)
+
+    def value_text(self) -> str:
+        if self.coordinate is None:
+            return "no coordinate"
+        shown = f"value {_show_value(self.coordinate.ravel()[0])}"
+        return f"{shown} {self.units}" if self.units else shown
+
+    def agrees(self, other: _SqueezedDimension) -> bool:
+        if self.name != other.name or self.units != other.units:
+            return False
+        if self.coordinate is None or other.coordinate is None:
+            return self.coordinate is other.coordinate
+        floats = self.coordinate.dtype.kind in "fc" and other.coordinate.dtype.kind in "fc"
+        return bool(np.array_equal(self.coordinate, other.coordinate, equal_nan=floats))
+
+
+def _squeeze_note(dropped: Sequence[_SqueezedDimension]) -> str:
+    """The plan line for the singleton dimensions that are dropped, with their values."""
+    parts = [
+        f"{d.name} (length 1{'' if d.coordinate is None else ', ' + d.value_text()})"
+        for d in dropped
+    ]
     return "squeezed:   " + ", ".join(parts)
 
 
@@ -265,7 +294,7 @@ def _crs_from_attrs(da: xr.DataArray, dataset: xr.Dataset) -> str | None:
 
 @dataclass(frozen=True, eq=False)
 class _Facts:
-    """What one file says about the variable. The files of a series agree on all of it."""
+    """What one file declares; series comparisons apply the requested scaling overrides."""
 
     dims: tuple[str, ...]
     x: np.ndarray
@@ -278,6 +307,7 @@ class _Facts:
     crs: str | None
     bands: tuple[str, ...]
     calendar: str | None  # a cftime calendar's name; None for dates that numpy holds
+    squeezed: tuple[_SqueezedDimension, ...]
 
 
 @dataclass(frozen=True, eq=False)
@@ -290,16 +320,20 @@ class _Inspected:
     times: np.ndarray  # datetime64, or cftime dates when `facts.calendar` is set
 
 
-def _inspect(dataset: xr.Dataset, variable: str, dims: dict[str, str]) -> _Inspected:
+def _inspect(
+    dataset: xr.Dataset, variable: str, dims: dict[str, str], *, cast_float32: bool = False
+) -> _Inspected:
     """What `dataset` says about `variable`; ValueError when it cannot be a step of a store."""
     raw = dataset[variable]
     resolved, squeezed = _resolve_dims(raw, dims, variable)
-    if raw.dtype.name not in schema.DTYPES:
+    dtype = np.dtype("float32") if cast_float32 else raw.dtype
+    if dtype.name not in schema.DTYPES:
         raise ValueError(
             f"{variable} is {raw.dtype}; chronozarr stores hold {list(schema.DTYPES)}. "
             "Cast it first"
         )
     da = raw.isel({d: 0 for d in squeezed})
+    squeezed_dimensions = tuple(_SqueezedDimension.of(raw, d) for d in squeezed)
     times, calendar = _time_values(da, resolved["time"])
     units = da.attrs.get("units")
     if "band" in resolved:
@@ -310,7 +344,7 @@ def _inspect(dataset: xr.Dataset, variable: str, dims: dict[str, str]) -> _Inspe
         dims=tuple(str(d) for d in raw.dims),
         x=np.asarray(da[resolved["x"]].values, dtype=np.float64),
         y=np.asarray(da[resolved["y"]].values, dtype=np.float64),
-        dtype=da.dtype,
+        dtype=dtype,
         scale=_scalar_attr(da, "scale_factor", 1.0),
         offset=_scalar_attr(da, "add_offset", 0.0),
         units=str(units) if units else None,
@@ -323,8 +357,9 @@ def _inspect(dataset: xr.Dataset, variable: str, dims: dict[str, str]) -> _Inspe
         crs=_crs_from_attrs(da, dataset),
         bands=bands,
         calendar=calendar,
+        squeezed=squeezed_dimensions,
     )
-    note = _squeeze_note(raw, squeezed) if squeezed else None
+    note = _squeeze_note(squeezed_dimensions) if squeezed else None
     return _Inspected(da, resolved, squeezed, note, facts, times)
 
 
@@ -354,9 +389,16 @@ def _nodata_text(tokens: frozenset[float | int | str]) -> str:
 
 
 def _differences(
-    found: _Facts, ref: _Facts, first: str, *, check_crs: bool, check_nodata: bool
+    found: _Facts,
+    ref: _Facts,
+    first: str,
+    *,
+    check_crs: bool,
+    check_nodata: bool,
+    scale: float | None,
+    offset: float | None,
 ) -> list[tuple[str, str | None]]:
-    """How a file's facts differ from the first file's, as (what, fix) pairs."""
+    """How a file differs from the first, after scaling overrides, as (what, fix) pairs."""
     if found.dims != ref.dims:
         return [
             (
@@ -366,6 +408,16 @@ def _differences(
             )
         ]
     out: list[tuple[str, str | None]] = []
+    for dimension, wanted in zip(found.squeezed, ref.squeezed, strict=True):
+        if not dimension.agrees(wanted):
+            out.append(
+                (
+                    f"has squeezed dimension {dimension.name!r} with {dimension.value_text()}; "
+                    f"{first} has {wanted.value_text()}. The files must select the same "
+                    "coordinate before a dimension can be dropped",
+                    "select the same depth, level or realization in every file, or " + _FIX_DROP,
+                )
+            )
     axes = [
         d
         for d in (_axis_difference("x", found.x, ref.x), _axis_difference("y", found.y, ref.y))
@@ -383,16 +435,21 @@ def _differences(
         out.append(
             (f"is {found.dtype}; {first} is {ref.dtype}", "cast one of them, or " + _FIX_DROP)
         )
-    if (found.scale, found.offset) != (ref.scale, ref.offset):
-        out.append(
-            (
-                f"has scale_factor {found.scale:g} and add_offset {found.offset:g}; {first} has "
-                f"{ref.scale:g} and {ref.offset:g}. A store holds one value per band for every "
-                "timestep, so the files must agree",
-                "if the attributes are wrong, correct them; otherwise convert the files that "
-                "share them in separate stores",
+    found_scaling = _effective_scaling(found, scale, offset)
+    ref_scaling = _effective_scaling(ref, scale, offset)
+    for attribute, given, wanted in zip(
+        ("scale_factor", "add_offset"), found_scaling, ref_scaling, strict=True
+    ):
+        if given != wanted:
+            option = "--scale" if attribute == "scale_factor" else "--offset"
+            out.append(
+                (
+                    f"has {attribute} {given:g}; {first} has {wanted:g}. A store holds one "
+                    "value per band for every timestep, so the files must agree",
+                    f"if the attribute is wrong, correct it or pass {option} to replace it "
+                    "for every file; otherwise convert the files that share it in separate stores",
+                )
             )
-        )
     if found.units != ref.units:
         out.append((f"has units {found.units!r}; {first} has {ref.units!r}", _FIX_DROP))
     if check_nodata and found.declared != ref.declared:
@@ -422,6 +479,17 @@ def _differences(
             )
         )
     return out
+
+
+def _effective_scaling(
+    facts: _Facts, scale: float | None, offset: float | None
+) -> tuple[float, float]:
+    """The scale and offset that will be written, after applying independent overrides."""
+    return _scaling(
+        facts.scale if scale is None else scale,
+        facts.offset if offset is None else offset,
+        "the variable",
+    )
 
 
 def _crs_text(text: str | None) -> str:
@@ -524,7 +592,7 @@ class _OpenFiles:
 class XarraySource(Source):
     def __init__(
         self,
-        source: str,
+        source: str | IcechunkInput,
         variable: str | None,
         dims: dict[str, str],
         crs: str | None,
@@ -532,10 +600,26 @@ class XarraySource(Source):
         mask_var: str | None = None,
         calendar_to_gregorian: str | None = None,
         files: Sequence[str] | None = None,
+        *,
+        scale: float | None = None,
+        offset: float | None = None,
     ) -> None:
         """`source` is a NetCDF file or a Zarr store; `files` instead is a series of NetCDF
-        files, found by `find_netcdf_files` for the folder or glob `source`."""
+        files, found by `find_netcdf_files` for the folder or glob `source`. `scale` and `offset`
+        replace their declarations before compatibility checks and band metadata are built."""
         check_rule(calendar_to_gregorian)
+        icechunk_source = source if isinstance(source, IcechunkInput) else None
+        source = str(source)
+        self._cast_float32 = bool(icechunk_source and icechunk_source.cast_float32)
+        if (
+            self._cast_float32
+            and nodata not in ("auto", None)
+            and not (isinstance(nodata, float) and np.isnan(nodata))
+        ):
+            raise ValueError(
+                "float64 rounding needs nodata auto, none or nan; keep a source sentinel in "
+                "its metadata so validity is decided before rounding"
+            )
         self.files = tuple(files) if files is not None else (source,)
         self.source = source
         if files is not None:
@@ -544,9 +628,28 @@ class XarraySource(Source):
             self.kind = "NetCDF file" if source.lower().endswith(NETCDF_SUFFIXES) else "Zarr store"
         self._dataset: xr.Dataset | None = None
         self._open = _OpenFiles(self.files)
-        dataset = _open_dataset(self.files[0])
+        dataset = (
+            open_input(icechunk_source, variable, mask_var)
+            if icechunk_source is not None
+            else _open_dataset(self.files[0])
+        )
+        self.icechunk_identity = (
+            dataset.attrs.get(IDENTITY) if icechunk_source is not None else None
+        )
+        if self.icechunk_identity is not None:
+            self.kind = "Icechunk snapshot"
         try:
-            self._configure(dataset, variable, dims, crs, nodata, mask_var, calendar_to_gregorian)
+            self._configure(
+                dataset,
+                variable,
+                dims,
+                crs,
+                nodata,
+                mask_var,
+                calendar_to_gregorian,
+                scale,
+                offset,
+            )
         except BaseException:
             dataset.close()
             raise
@@ -564,6 +667,8 @@ class XarraySource(Source):
         nodata: float | int | None | str,
         mask_var: str | None,
         calendar_to_gregorian: str | None,
+        scale: float | None,
+        offset: float | None,
     ) -> None:
         first = self.files[0]
         names = [n for n in dataset.data_vars if n != mask_var]
@@ -575,17 +680,26 @@ class XarraySource(Source):
             raise ValueError(f"variable {variable!r} is not in {first}: {names}")
         self.variable = variable
         self._dims_arg = dims
-        ref = _inspect(dataset, variable, dims)
+        ref = _inspect(dataset, variable, dims, cast_float32=self._cast_float32)
         facts = ref.facts
         resolved = self._dims = ref.dims
         self._squeezed = ref.squeezed
 
+        declared_bands = tuple(
+            Band(name=n, scale=facts.scale, offset=facts.offset, units=facts.units)
+            for n in facts.bands
+        )
+        bands, scaling_note = override_scaling(declared_bands, scale, offset)
+        _effective_scaling(facts, scale, offset)
         parts = (
-            self._check_series(ref, crs, nodata, mask_var) if len(self.files) > 1 else [ref.times]
+            self._check_series(ref, crs, nodata, mask_var, scale, offset)
+            if len(self.files) > 1
+            else [ref.times]
         )
         self.notes = (
             *self._arrange_times(parts, ref, calendar_to_gregorian),
             *([] if ref.squeeze_note is None else [ref.squeeze_note]),
+            *([] if not scaling_note else [f"override:   {scaling_note}"]),
         )
 
         x, y = facts.x, facts.y
@@ -613,10 +727,11 @@ class XarraySource(Source):
         if mask_var is not None:
             self._mask_variable(dataset, mask_var, variable, resolved, first)
         validity = _decide_validity(
-            ref.da.dtype,
+            facts.dtype,
             facts.declared,
             override=nodata,
-            explicit=[] if mask_var is None else [f"mask variable {mask_var}"],
+            explicit=([] if mask_var is None else [f"mask variable {mask_var}"])
+            + (["source validity before float32 rounding"] if self._cast_float32 else []),
             footprint=None,
         )
         self._sentinels: tuple[float | int, ...]
@@ -625,14 +740,10 @@ class XarraySource(Source):
         else:
             self._sentinels = () if validity.nodata is None else (validity.nodata,)
 
-        scale, offset = _scaling(facts.scale, facts.offset, f"variable {variable!r}")
-        bands = tuple(
-            Band(name=n, scale=scale, offset=offset, units=facts.units) for n in facts.bands
-        )
         self.info = SourceInfo(
             grid,
             len(facts.bands),
-            ref.da.dtype,
+            facts.dtype,
             validity.nodata,
             facts.bands,
             bands,
@@ -687,6 +798,8 @@ class XarraySource(Source):
         crs: str | None,
         nodata: float | int | None | str,
         mask_var: str | None,
+        scale: float | None,
+        offset: float | None,
     ) -> list[np.ndarray]:
         """The time axis of every file, after checking all files against the first.
 
@@ -696,7 +809,9 @@ class XarraySource(Source):
         times = {self.files[0]: ref.times}
         problems: list[Problem] = []
         for path in self.files[1:]:
-            found, differences = self._check_member(path, ref, crs, nodata, mask_var)
+            found, differences = self._check_member(
+                path, ref, crs, nodata, mask_var, scale, offset
+            )
             problems += differences
             if found is not None:
                 times[path] = found
@@ -716,6 +831,8 @@ class XarraySource(Source):
         crs: str | None,
         nodata: float | int | None | str,
         mask_var: str | None,
+        scale: float | None,
+        offset: float | None,
     ) -> tuple[np.ndarray | None, list[Problem]]:
         """The times of another file of the series, and what differs from the first file."""
         try:
@@ -738,6 +855,8 @@ class XarraySource(Source):
                         self.files[0],
                         check_crs=crs is None,
                         check_nodata=nodata == "auto",
+                        scale=scale,
+                        offset=offset,
                     )
                 ]
                 if mask_var is not None:
@@ -786,6 +905,17 @@ class XarraySource(Source):
         return {
             "kind": "xarray",
             "source": self.source,
+            **(
+                {
+                    "icechunk": {
+                        key: value
+                        for key, value in self.icechunk_identity.items()
+                        if key not in ("requested_version", "encoded_cache_bytes")
+                    }
+                }
+                if self.icechunk_identity
+                else {}
+            ),
             **({"files": list(self.files)} if len(self.files) > 1 else {}),
             "variable": self.variable,
             "grid": [grid.crs, list(grid.transform), grid.height, grid.width],
@@ -826,14 +956,20 @@ class XarraySource(Source):
             values = values[np.newaxis]
         if self._flip_y:
             values = values[:, ::-1, :]
-        values = np.ascontiguousarray(values)
-        if not values.flags.writeable:
-            values = values.copy()
         valid = None
         if self.info.mask:
             ok = _value_valid(values, self._sentinels)
             if plane is not None:
                 ok &= (plane[::-1] if self._flip_y else plane) != 0
             valid = ok.astype(np.uint8)
+        if self._cast_float32 and np.any(
+            np.isfinite(values) & (np.abs(values) > np.finfo(np.float32).max)
+        ):
+            raise ValueError(
+                "finite source values overflow float32; choose another source or range"
+            )
+        values = np.ascontiguousarray(values, dtype=self.info.dtype)
+        if not values.flags.writeable:
+            values = values.copy()
         _settle_nan(values, valid, self.info.nodata, f"{self.files[k]} timestep {t}")
         return Step(values, valid)

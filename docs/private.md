@@ -78,7 +78,7 @@ The data never leaves your machine after the copy. Your cloud credentials stay i
 
 The limits:
 
-- `serve_store` and `view` take a local directory or an `http(s)` URL. They reject `s3://` and other URIs. They do not read a bucket on demand.
+- `serve_store` takes a local directory. `view` accepts a local directory or an `http(s)` URL; an HTTP store is read directly by the browser. Neither reads an `s3://` bucket on demand.
 - The copy costs disk space and transfer charges from the bucket's host.
 - Only a browser on the same machine reaches `127.0.0.1` directly. Remote kernels need a browser-reachable route. With `jupyter-server-proxy` and `viewer_dir`, JupyterHub uses a same-origin proxy; other environments can use port forwarding or `base_url`. See [remote notebooks](notebooks.md#remote-notebooks).
 - The loopback server answers with `Access-Control-Allow-Origin: *` (`_CORS_HEADERS` in `src/chronozarr/view.py`). While it runs, a web page open in the same browser can read the store if it knows the port. Chrome asks permission before a public page reaches a local address. Close the server when you finish.

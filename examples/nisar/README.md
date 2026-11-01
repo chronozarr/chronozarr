@@ -1,24 +1,32 @@
 # NISAR backscatter
 
-`ingest.py` builds a store of NISAR L2 GCOV backscatter over one box straight from the ASF DAAC: it needs only a free [NASA Earthdata login](https://urs.earthdata.nasa.gov) and reads the box out of each granule by HTTP range requests, so nothing of the 2 GB granules lands on disk. Run the commands from the repository root.
+`ingest.py` builds a store of NISAR L2 GCOV backscatter over one box straight from the ASF DAAC. It reads the box by HTTP range requests and caches the extracted window rather than downloading each full 2 GB granule. Run the commands from the repository root.
+
+Configure a free [NASA Earthdata login](https://urs.earthdata.nasa.gov) in a local `~/.netrc` entry for `urs.earthdata.nasa.gov` before running the example. Follow the [Earthdata netrc setup guide](https://nsidc.org/data/user-resources/help-center/creating-netrc-file-earthdata-login) and restrict the file to its owner with `chmod 600 ~/.netrc`. The script uses that credential file without an interactive login. `--dry-run` also needs credentials and network access: it searches ASF and reads the first granule's grid metadata, then stops before extracting or writing windows.
 
 ## The public store
 
-The public store `https://data.chronozarr.org/colorado_yuma/nisar-gcov-v2` is the Lower Colorado River at Yuma: Imperial and Laguna dams, Mittry Lake, the Gila confluence, the Yuma and Mexicali valleys and the border reach, 39 km by 46 km, from NISAR track 5 ascending, frame 18. It holds every provisional GCOV date of that frame between 2025-12-04 and 2026-10-12, 26 dates 12 days apart, HH and HV at the product's 10 m posting. The frame's two earlier dates, 2025-10-29 (a partial frame) and 2025-11-22 (unfocused samples over the west), cover only half the box and are left out by `--start`. It was built with:
+The public store `https://data.chronozarr.org/colorado_yuma/nisar-gcov-v2` is the Lower Colorado River at Yuma: Imperial and Laguna dams, Mittry Lake, the Gila confluence, the Yuma and Mexicali valleys and the border reach, 39 km by 46 km, from NISAR track 5 ascending, frame 18. It holds 26 provisional GCOV dates between 2025-12-04 and 2026-10-12, on a 12-day cycle with the 2026-08-01 acquisition missing, HH and HV at the product's 10 m posting. The frame's two earlier dates, 2025-10-29 (a partial frame) and 2025-11-22 (unfocused samples over the west), cover only half the box and are left out by `--start`. The recorded build used:
 
 ```sh
 uv sync --extra nisar
 uv run python examples/nisar/ingest.py --bbox -114.82 32.50 -114.42 32.90 --name colorado_yuma \
-    --start 2025-12-01 --store nisar-gcov-v2
+    --start 2025-12-01 --end 2026-10-14 --track 5 --direction A --frame 18 \
+    --workers 6 --store nisar-gcov-v2
 ```
 
-Add `--dry-run` to list the dates and the window and write nothing. The run takes about ten minutes: a minute per granule with six read at once (`--workers`), then the encode. It writes:
+Add `--dry-run` to list the dates and the window without writing output. The recorded six-worker run took about ten minutes: approximately a minute per granule, with six read at once, then the encode. The script defaults to four workers when `--workers` is omitted; timing depends on the link and cache. It writes:
 
 | Path | What |
 |---|---|
 | `data/stores/colorado_yuma/nisar-gcov-v2` | the store: 26 timesteps, 5 levels, 1.9 GB in 5,308 objects. `--store` names it; a re-encode takes a new name, because a published store is immutable |
 | `data/stores/colorado_yuma/nisar-gcov-v2.scenes.json` | the manifest: the ASF query, every granule's ASF properties and HDF5 identification, the window, the valid fraction and dB percentiles per date |
 | `data/cache/nisar/colorado_yuma/<granule>.npz` | the window of each granule; a rerun reads these instead of the granules |
+
+Each cache sidecar records the window's CRS, transform and dimensions. A rerun reuses a
+granule only on exactly that grid. An existing cache without this spatial identity, or
+from another box, stops the run before any extraction or cache overwrite; use another
+`--name` or `--out-dir` for a new cache. Changing only `--store` keeps the same cache.
 
 Then check it, share it and look at it:
 

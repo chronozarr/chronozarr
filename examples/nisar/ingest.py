@@ -131,6 +131,16 @@ class Window:
     def transform(self) -> list[float]:
         return [self.dx, 0.0, self.x[0] - self.dx / 2, 0.0, self.dy, self.y[0] - self.dy / 2]
 
+    @property
+    def spatial_identity(self) -> dict:
+        """The cache's grid identity, with the same types before and after JSON storage."""
+        return {
+            "crs": f"EPSG:{self.epsg}",
+            "transform": self.transform,
+            "width": self.width,
+            "height": self.height,
+        }
+
 
 def parse_scene(properties: dict, short_name: str) -> Scene | None:
     """A Scene from an asf_search result, or None when the name is not a standard GCOV product."""
@@ -176,7 +186,8 @@ def select_scenes(
     ]
     if not pinned:
         raise SystemExit("no scene matches the track, direction and frame asked for")
-    counts = Counter((s.track, s.direction, s.frame) for s in pinned)
+    dates = {(s.track, s.direction, s.frame, s.start) for s in pinned}
+    counts = Counter((track, direction, frame) for track, direction, frame, _ in dates)
     key = max(counts, key=lambda k: (counts[k], -k[0], k[1], -k[2]))
     chosen = [s for s in pinned if (s.track, s.direction, s.frame) == key]
     latest: dict[str, Scene] = {}
@@ -380,6 +391,7 @@ def extract(scene: Scene, window: Window, out: Path) -> dict:
     np.savez_compressed(out, HH=hh_db, HV=hv_db, mask=valid.astype(np.uint8))
     record = {
         **asdict(scene),
+        "window": window.spatial_identity,
         "identification": identification,
         "npz": str(out),
         "npz_sha256": hashlib.sha256(out.read_bytes()).hexdigest(),
@@ -415,9 +427,15 @@ def extract_all(scenes: list[Scene], window: Window, cache: Path, workers: int) 
     records: dict[str, dict] = {}
     pending = []
     for scene, _, path in jobs:
-        if path.is_file() and sidecar_of(path).is_file():
+        if path.is_file():
+            sidecar = sidecar_of(path)
+            record = json.loads(sidecar.read_text()) if sidecar.is_file() else {}
+            if record.get("window") != window.spatial_identity:
+                raise SystemExit(
+                    f"{path}: cached window has missing or different spatial identity; "
+                    "use another --name or --out-dir for a new cache"
+                )
             logger.info("cached %s", path.name)
-            record = json.loads(sidecar_of(path).read_text())
             records[scene.granule] = {**record, "npz": str(path), "cached": True}
         else:
             pending.append((scene, window, path))

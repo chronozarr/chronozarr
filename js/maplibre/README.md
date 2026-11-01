@@ -1,5 +1,7 @@
 # chronozarr on MapLibre
 
+This page describes npm **0.5.1**, paired with Python **0.5.1**. Install it with `npm install chronozarr@0.5.1`, or use a [source checkout](../../docs/development.md). It reads supported spec 0.3 and 0.4 stores, including supported non-EPSG CRS definitions. Package installation and deployment of the hosted viewer are separate.
+
 `ChronozarrLayer` draws a chronozarr store on a MapLibre GL JS map as a custom layer. It opens the store with `js/chronozarr/decoder.js` and picks the pyramid level from the map zoom. It uploads the raw chunks of the visible cells as integer or float textures. It runs the product band math in the fragment shader.
 
 Each cell is a small mesh. Its vertices were projected from the store's CRS to Web Mercator, so the raster lands on the basemap with no resampling step. The layer has no dependencies: MapLibre belongs to the host page.
@@ -80,6 +82,9 @@ map.on('click', async (e) => console.log(await layer.getValueAt(e.lngLat))); // 
 - `bands` has one entry per band with `name`, `units`, `reflectance`, `stored` and `value`. `stored` is the stored number. `value` is the stored number times `scale`, plus `offset`.
 - `ndvi`, `ndwi` and `isWater` are the products that the bands allow.
 
+For a masked pixel, `stored`, `value`, `ndvi` and `ndwi` are `null`, and `isWater` is false.
+When the mask marks a pixel valid, values equal to the nodata marker remain valid too.
+
 A removed layer cannot be added again. The reader ends an idle worker pool after 30 s.
 
 ### Events
@@ -112,13 +117,18 @@ The product colors are `PRODUCT_GLSL` from `js/shared/products-glsl.js`, the sam
 - The `dual_pol` product draws the co-pol band in red, the cross-pol band in green and their difference in dB in blue. Each channel is stretched from its 2nd to its 98th percentile, measured once from the first complete view.
 - Every other product keeps the tone-mapped reflectance look.
 
+Automatic display samples at most 300 pixels per visible cell. It waits for a complete view
+with valid samples before fixing a range or stretch. If CPU copies were evicted while the GPU
+still holds the view, it recovers samples one cell at a time; a cell can be fetched again if the
+reader no longer holds its bytes. Empty views keep the default display until valid samples arrive.
+
 ## Limits
 
 ### Projections
 
-Each store has one projection. WGS84 UTM (EPSG:326zz and EPSG:327zz), EPSG:3857 and EPSG:4326 are built in and recognized by `proj:code`, or by the ID that ends the store's `proj:wkt2`. Nothing is fetched for them.
+Each store has one projection. WGS84 UTM (EPSG:326zz and EPSG:327zz), EPSG:3857 and EPSG:4326 are built in. A store declaring only one of those `proj:code` values fetches no parser. A WKT2 or PROJJSON definition loads the parser once to verify its actual parameters before selecting a matching built-in; an authority ID alone cannot override the definition.
 
-Any other CRS needs the store to carry it as `proj:wkt2` or `proj:projjson` (a store with no authority code always does). The layer then loads proj4 with `import()`, a 24 KB gzipped build in `js/vendor/proj4`, and reads the definition. The build has the Lambert conformal conic (`lcc`), sinusoidal (`sinu`), Albers (`aea`), Lambert azimuthal (`laea`), stereographic (`stere`), transverse Mercator (`tmerc`), Mercator and geographic projections. It matches pyproj to a millimetre for Daymet LCC, MODIS sinusoidal and EPSG:3413. It applies no datum grid shifts. A code that is not built in and has no WKT2 or PROJJSON, or a definition in another projection, throws an error that says so. To add a projection, import it in `js/support/proj4-entry.js` and run `node js/support/vendor.mjs`.
+Any other CRS needs the store to carry it as `proj:wkt2` or `proj:projjson` (a store with no authority code always does). The layer then loads proj4 with `import()`, a 26 KB gzipped build in `js/vendor/proj4`, and reads the definition. The build has the Lambert conformal conic (`lcc`), sinusoidal (`sinu`), Albers (`aea`), Lambert azimuthal (`laea`), stereographic (`stere`), transverse Mercator (`tmerc`), Mercator and geographic projections. It matches pyproj to a millimetre for Daymet LCC, MODIS sinusoidal and EPSG:3413. It applies no datum grid shifts. A code that is not built in and has no WKT2 or PROJJSON, or a definition in another projection, throws an error that says so. To add a projection, import it in `js/support/proj4-entry.js` and run `node js/support/vendor.mjs`.
 
 A store that crosses the antimeridian or a UTM zone boundary is not supported. The store must declare its level-0 `transform`.
 

@@ -1,5 +1,7 @@
 # Troubleshooting
 
+**Package version — 0.5.1.** Follow the [installation guide](quickstart.md#1-install) before using this reference. The [release notes](release-0.5.1.md) describe compatibility and changes since 0.4.1.
+
 Find the step where the problem appears. Each row gives the message or symptom, its cause and the fix.
 
 ## Installation
@@ -8,7 +10,7 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 |---|---|
 | `No solution found when resolving dependencies` and `Python>=3.11` | uv chose an older Python that comes first on your computer. Add `--python 3.13` to `uv tool install` or `uv init` |
 | `chronozarr: command not found` after `uv tool install` | uv's tool folder is not on your `PATH`. Run `uv tool update-shell`, then open a new terminal |
-| `this command needs rasterio` | The `geo` extra is missing. Install it the way you installed chronozarr: `uv tool install --python 3.13 'chronozarr[geo]'`, listing every extra you use at once, such as `'chronozarr[geo,publish]'`; `uv add 'chronozarr[geo]'` in a uv project; or pip with `'chronozarr[geo]'` |
+| `this command needs rasterio` | The `geo` extra is missing. Include it with the extras you use in the [development checkout installation](development.md). Use the local-checkout dependency for a Python project or notebook |
 | `Connection refused` for chronozarr.org or data.chronozarr.org, or a security block page, on a university or company network or a VPN | The network's DNS filter blocks the domain. Try another network, or ask your IT team to allow chronozarr.org |
 | `chronozarr --version` prints an older version | An older install comes first on your `PATH`, or a pinned environment is active. Check `which chronozarr` |
 | The first command after an install takes 10 to 25 seconds | On macOS the system checks new program files once. Later commands start in about a second |
@@ -37,8 +39,8 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 | A `range:` line shows values far outside the physical range, and the command did not stop | The scale is applied as stored * scale + offset. Pass `--scale` and `--offset` with the right values, or correct the files, for example with `gdal_edit.py -scale -offset` |
 | A palette PNG is refused | Expand it to RGB first: `gdal_translate -expand rgba` |
 | The output folder exists | A store is never overwritten. Choose a new folder |
-| `reading a NetCDF4 file needs h5netcdf and h5py`. Older releases print xarray's `found the following matches with the input file in xarray's IO backends`, or `No module named 'h5py'` | The `netcdf` extra is missing. Install it the way you installed chronozarr: `uv tool install --python 3.13 'chronozarr[geo,netcdf]==0.4.1'`, listing every extra you use at once; `uv add 'chronozarr[netcdf]==0.4.1'` in a uv project; or pip with `'chronozarr[netcdf]==0.4.1'`. A classic NetCDF3 file (it starts with `CDF`) needs `scipy` instead: add `--with scipy` to `uv tool install`. See [From NetCDF or Zarr](convert.md#from-netcdf-or-zarr) |
-| `the time coordinate 'time' uses the 360_day calendar, which needs cftime` (also `noleap`, `all_leap`, `julian`). Older releases print xarray's `unable to decode time units ... installing cftime` | cftime is missing. The `netcdf` extra includes it, so this appears for a Zarr store or an install that predates it. Install the `cftime` extra the way you installed chronozarr: `uv tool install --python 3.13 'chronozarr[geo,netcdf,cftime]==0.4.1'`, listing every extra you use at once; `uv add 'chronozarr[cftime]==0.4.1'` in a uv project; or pip with `'chronozarr[cftime]==0.4.1'`. See [Climate model calendars](convert.md#climate-model-calendars) |
+| `reading a NetCDF4 file needs h5netcdf and h5py`. Older releases print xarray's `found the following matches with the input file in xarray's IO backends`, or `No module named 'h5py'` | Include `netcdf` in the [installation guide](quickstart.md#1-install). A classic NetCDF3 file (it starts with `CDF`) needs `scipy` instead: add `--with scipy` to the checkout's tool install, or add scipy to the analysis environment. See [From NetCDF or Zarr](convert.md#from-netcdf-or-zarr) |
+| `the time coordinate 'time' uses the 360_day calendar, which needs cftime` (also `noleap`, `all_leap`, `julian`). Older releases print xarray's `unable to decode time units ... installing cftime` | Include `cftime` or `netcdf` in the [installation guide](quickstart.md#1-install). Package 0.4.1 has no `cftime` extra or calendar-mapping option. See [Climate model calendars](convert.md#climate-model-calendars) |
 | `uses the 360_day calendar, and a store holds Gregorian timestamps`. Older releases print `the time coordinate 'time' is object, not datetimes` | The time axis is on a calendar with no Gregorian equivalent. Pass `--calendar-to-gregorian date` to keep each step's date and time of day as its Gregorian timestamp. The message says what that does to the spacing between steps, and the store records it. See [Climate model calendars](convert.md#climate-model-calendars) |
 | `2 of 780 dates that Gregorian does not have` | The calendar has days Gregorian lacks, such as 30 February on a `360_day` calendar. `--calendar-to-gregorian date-or-month-end` moves each to the last day of its month and records which |
 | `both land on` or `on or before the previous step`, with `date-or-month-end` | Moving the dates put two steps on one day, as daily `360_day` data does on 28, 29 and 30 February. Drop one step of each pair first, for example with xarray, then convert the result |
@@ -48,12 +50,12 @@ Find the step where the problem appears. Each row gives the message or symptom, 
 
 ## Opening a store
 
-A store whose CRS has no EPSG code, such as a Lambert conformal conic or a sinusoidal grid, declares `spec_version` `0.4.0`. A store whose CRS has an EPSG code declares `0.3.0`, and every chronozarr release opens it. Releases up to 0.4.1 refuse a `0.4.0` store, and their message names the wrong fix.
+A store whose CRS has no EPSG code, such as a Lambert conformal conic or a sinusoidal grid, declares `spec_version` `0.4.0`. A store whose CRS has an EPSG code declares `0.3.0`; package 0.3 and later open supported v0.3 layouts. Releases up to 0.4.1 refuse a `0.4.0` store, and their message names the wrong fix.
 
 | Message | Cause and fix |
 |---|---|
-| `chronozarr.spec_version: unsupported or missing version '0.4.0'; expected 0.3.0; use chronozarr convert before opening with a v0.3 reader` | The store has no EPSG code and the installed chronozarr is 0.4.1 or older. Do not run `chronozarr convert`: it reads v0.2 stores, not this one. Upgrade chronozarr past 0.4.1: `uv tool upgrade chronozarr` for a tool install, `uv add --upgrade-package chronozarr chronozarr` in a uv project, or the `--upgrade` option of your installer. Then check `chronozarr --version` |
-| `not a valid chronozarr store: unsupported spec_version 0.4.0; use chronozarr convert to convert this store to v0.3` in the viewer or the JavaScript package | The viewer or package is older than the store. Use a newer build. The hosted viewer at chronozarr.org/demo changes when the site is deployed, and a copy you host or embed needs a newer build. See [viewer distribution](viewer-distribution.md) |
+| `chronozarr.spec_version: unsupported or missing version '0.4.0'; expected 0.3.0; use chronozarr convert before opening with a v0.3 reader` | The installed chronozarr is 0.4.1 or older and cannot read this custom-CRS store. Install 0.5.1 with the [installation guide](quickstart.md#1-install), then check that `chronozarr --version` reports `0.5.1`. Keep the existing store; it needs no conversion |
+| `not a valid chronozarr store: unsupported spec_version 0.4.0; use chronozarr convert to convert this store to v0.3` in the viewer or the JavaScript package | Install the npm 0.5.1 [viewer bundle](viewer-distribution.md). The hosted viewer changes when the site is deployed; a Python package install does not update it. An npm 0.4.1 viewer needs a package upgrade to read this store |
 | `unsupported or missing version '0.2.0'` | The store is v0.2. `chronozarr convert OLD NEW` writes a v0.3 store from it |
 | `unsupported or missing version` with a version later than 0.4.0 | The store was written by a newer chronozarr. Upgrade chronozarr |
 | `cannot read the CRS ... Pass an authority code such as EPSG:32631 or WKT2 text` | `encode` was given a CRS it could not parse. Pass `EPSG:xxxxx`, or WKT2 text. WKT1, PROJJSON and PROJ strings need pyproj to be converted: install it, or convert the CRS to WKT2 yourself |
@@ -68,7 +70,7 @@ A store whose CRS has no EPSG code, such as a Lambert conformal conic or a sinus
 | `Shared link not available` | The temporary link from `chronozarr share` has stopped. Ask the sender for a new one |
 | True color looks white or black | The bands may lack their scale. A Sentinel-2 band stored as 0 to 10000 needs a scale of 0.0001. Check with `chronozarr bands STORE` |
 | A single band looks flat | Its display range does not fit the data. Click Auto, or set the minimum and maximum |
-| Hatched or flat areas in some months | No observation covered those pixels, and the value was carried over from an earlier month. Click Gaps to show them |
+| Hatched or flat areas in some months | Gaps hatches zero coverage. At level 0 this records an observation gap; at overview levels the rounded count can also become zero. Inspect the native level and validity mask before interpreting the area |
 | The map stays empty and an error names CORS | The host does not send `Access-Control-Allow-Origin`. Run `chronozarr doctor URL`. See [Publish a permanent link](publish.md) |
 | `Open` reports that the store cannot be reached | Check the address. It must be the store, the folder that holds the root `zarr.json`, and start with `https://` |
 

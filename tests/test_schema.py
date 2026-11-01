@@ -14,6 +14,7 @@ from zarr.storage import MemoryStore
 
 import chronozarr
 from chronozarr import schema
+from tests.crs_samples import LCC_WKT2
 from tests.narrow import array_at, group_at
 from tests.synthetic import build_store, make_truth
 
@@ -44,6 +45,38 @@ def _edit_root(path, edit):
 
 def test_encoded_store_conforms(good_store):
     assert chronozarr.validate(good_store) == []
+
+
+@pytest.mark.parametrize(
+    ("crs", "wrong_version", "expected_version"),
+    [("EPSG:32631", "0.4.0", "0.3.0"), (LCC_WKT2, "0.3.0", "0.4.0")],
+    ids=["epsg", "no-epsg"],
+)
+def test_writer_version_rule_fails_validation_but_does_not_prevent_decoding(
+    tmp_path, crs, wrong_version, expected_version
+):
+    path = tmp_path / "version"
+    truth = make_truth(2, 2, 8, 8)
+    chronozarr.encode(
+        truth,
+        path,
+        times=np.array(["2024-01-01", "2024-02-01"], dtype="datetime64[ms]"),
+        crs=crs,
+        transform=[10, 0, 0, 0, -10, 80],
+        bands=["red", "nir"],
+        chunk_size=4,
+    )
+    _edit_root(
+        path,
+        lambda key, block: (
+            block.update(spec_version=wrong_version) if key == "chronozarr" else None
+        ),
+    )
+    np.testing.assert_array_equal(chronozarr.open_store(path).read(0), truth[0])
+    assert any(
+        "spec_version" in message and f"MUST write '{expected_version}'" in message
+        for message in chronozarr.validate(path)
+    )
 
 
 def test_every_array_declares_dimension_names(good_store):

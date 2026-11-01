@@ -1,16 +1,10 @@
 # Python API
 
+**Package version — 0.5.1.** Follow the [installation guide](quickstart.md#1-install) before using this reference. The [release notes](release-0.5.1.md) describe compatibility and changes since 0.4.1.
+
 The `chronozarr` package writes a store, reads it and opens it in xarray. The [quickstart](quickstart.md) has a first run, and [Analyze a store in Python](analyze.md) has common tasks. This page lists the functions. The docstring of `chronozarr.encode` lists every option of `encode`.
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first. For a project that imports the library, add it to that project's environment with
-`uv add chronozarr` (or `uv add 'chronozarr[geo]'` for GeoTIFF and export
-features), then run scripts with `uv run python script.py`. With pip, install
-into the active environment using `pip install chronozarr`, then run
-`python script.py` and `chronozarr` directly. If you need only the CLI, use
-`uv tool install chronozarr` or a one-off
-`uvx --from chronozarr chronozarr --help`; those isolated commands do not
-install the library into your project.
-The shell examples below assume the CLI is installed with `uv tool install`.
+For a project that imports the library, use the [local-checkout dependency](development.md#python-projects-and-notebooks) in that project's environment, then run scripts with `uv run python script.py`. Use the same environment as your notebook kernel. The shell examples below assume the [development CLI](development.md#install-the-command-line-tool) is installed; its isolated tool environment does not install the library into your project.
 
 ## Write a store
 
@@ -46,13 +40,11 @@ da = store.to_xarray(lod=0, times=[0], physical=False)
 
 `store.notes` lists what the store leaves out or spells otherwise and the reader read through, such as an absent `levels` mirror or a registration with other URLs. It is empty for a store that conforms. A store can open with notes and still fail `chronozarr validate`: the reader decodes what it can read as declared, and `validate` checks the spec's rules for writers.
 
-`store.crs` is the CRS the store declares: an authority code, WKT2 text, PROJJSON, or several of them. `store.crs.to_string()` returns the code when there is one and otherwise the WKT2 or PROJJSON text, which pyproj and rasterio accept. When representations disagree, the WKT2 is used and a warning says so.
+`store.crs` is the CRS the store declares: an authority code, WKT2 text, PROJJSON, or several of them. WKT2 takes precedence over PROJJSON, which takes precedence over the code. `store.crs.to_string()` returns that definition, shortened to the code only when equivalence is proved; pyproj and rasterio accept the resulting text. Without pyproj, an unverified code cannot replace a stored WKT2 or PROJJSON definition. A proven disagreement produces a warning. For `link --lonlat`, interpreting a full definition needs the `geo` extra even for a geographic store; a code-only `EPSG:4326` store needs no projection library. `--xy` remains usable without it.
 
 ## Read a store that chronozarr did not write
 
 `open_store` also reads a pyramid written by ndpyramid or by ESA's EOPF, or any Zarr v3 store whose root `multiscales` lists the levels. It finds the levels, the geometry and the CRS in the store's own metadata, and `store.notes` says what it had to assume: scale and offset taken as 1 and 0, no time axis (one timestep dated 1970-01-01), the fill value that marks a missing pixel, levels left out or in another order. Level 0 is the finest level whatever order the layout lists.
-
-After selecting the bands shared by all levels, the reader requires one nodata marker per level, matching band names and order, and matching scale and offset across levels. Conflicting declarations are refused. Normalize them first, or open the bands or levels separately with xarray.
 
 ```python
 store = chronozarr.open_store("https://example.org/product.zarr/measurements/reflectance")
@@ -72,7 +64,7 @@ raw = xr.open_dataset("my_store", engine="chronozarr", physical=False)
 
 The backend reads lazily. It returns physical values unless you pass `physical=False`. The `lod` argument selects the level, and the default is 0. When the store has notes, `ds.attrs["chronozarr_notes"]` lists them.
 
-Install `chronozarr[dask]` to pass `chunks=` and get dask arrays.
+Include `dask` in the [local-checkout dependency](development.md#python-projects-and-notebooks) to pass `chunks=` and get dask arrays.
 
 A plain Zarr reader opens a level without chronozarr and returns the stored values. See [Read a store without chronozarr](how-it-works.md#read-a-store-without-chronozarr).
 

@@ -247,8 +247,10 @@ def _mismatches(
             if meta.coverage_variable
             else "coverage: the store has no coverage and append cannot add it; leave it out"
         )
-    if not isinstance(request.nodata, str) and request.nodata != meta.nodata:
-        found.append(f"nodata: the input has {request.nodata!r}, the store has {meta.nodata!r}")
+    if "nodata" in prepared.attrs or not isinstance(request.nodata, str):
+        nodata = prepared.attrs.get("nodata", request.nodata)
+        if nodata != meta.nodata:
+            found.append(f"nodata: the input has {nodata!r}, the store has {meta.nodata!r}")
 
     last = schema.parse_time(meta.times[-1])
     first_new = times_ms[0].astype("datetime64[ms]")
@@ -415,9 +417,11 @@ def _append_in_place(
         spill_dir: Directory for the temp files of iterable input. Default: next to `store`.
 
     The input must match the store's grid, bands, dtype, CRS and nodata; a mismatch raises a
-    ValueError listing every difference and leaves the store untouched. Only the shards (or
-    chunks of an unsharded store) that gain a timestep are written; the other objects keep their
-    bytes. See the module docstring for what happens when the append fails midway.
+    ValueError listing every difference and leaves the store untouched. A DataArray's `nodata`
+    attribute is checked when present, including None; when absent it inherits the store's.
+    Only the shards (or chunks of an unsharded store) that gain a timestep are written; the
+    other objects keep their bytes. See the module docstring for what happens when the append
+    fails midway.
     """
     started = time.perf_counter()
     cells_in_flight = workers if workers is not None else DEFAULT_CELLS_IN_FLIGHT

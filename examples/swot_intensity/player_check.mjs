@@ -4,9 +4,11 @@ import { chromium } from '../../js/node_modules/playwright/index.mjs';
 import { startStaticServer } from '../../js/support/static-server.js';
 
 const root = path.resolve(import.meta.dirname, '../..');
+if (process.argv.includes('--live')) {
+  throw new Error('--live is unavailable for the two-date SWOT intensity fixture; prepare the local store and run without --live.');
+}
 const server = await startStaticServer(root);
 const base = server.url;
-const live = process.argv.includes('--live');
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 try {
   const page = await browser.newPage({ viewport: { width: 1100, height: 850 } });
@@ -14,10 +16,10 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/notebook-check.html', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><body></body></html>' }));
   await page.goto(`${base}/notebook-check.html`);
-  await page.evaluate(async ({ base, live }) => {
+  await page.evaluate(async ({ base }) => {
     const values = {
-      store_url: live ? 'https://data.chronozarr.org/ucayali_santa_maria/png-v03' : `${base}/data/stores/swot_intensity/local-20261002`,
-      viewer_url: live ? 'https://chronozarr.org/demo/' : `${base}/js/demo/index.html`,
+      store_url: `${base}/data/stores/swot_intensity/local-20261002`,
+      viewer_url: `${base}/js/demo/index.html`,
       controls: false, height: 560, theme: 'light', t: 0, product: 'band', band: 'intensity_dB', range: [30, 80], colormap: 'gray', speed: 4, playing: false,
       times: [], products: [], bands: [], ready: false, state: {}, click: {}, error: {},
     };
@@ -38,7 +40,7 @@ try {
     window.listenerCount = () => [...listeners.values()].reduce((sum, group) => sum + group.size, 0);
     const widget = (await import('/src/chronozarr/player.js')).default;
     window.dispose = widget.render({ model: window.model, el: document.body });
-  }, { base, live });
+  }, { base });
   await page.waitForFunction(() => window.values.ready, null, { timeout: 60000 });
   assert.equal(await page.evaluate(() => window.values.times.length), 2);
   const frame = page.frames().find(frame => frame !== page.mainFrame());

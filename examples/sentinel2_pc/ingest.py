@@ -97,7 +97,7 @@ HERE = Path(__file__).resolve().parent
 DEFAULT_OUT_DIR = HERE.parents[1] / "data"
 
 # Sentinel-2 L2A bands used here. Composites are stored as DN with the processing-baseline offset
-# removed (mosaic.py), so reflectance = DN * 0.0001.
+# removed and corrected positive DNs clipped to 1..65535 (mosaic.py), so reflectance = DN * 0.0001.
 S2_COMMON_NAMES = {"B02": "blue", "B03": "green", "B04": "red", "B08": "nir"}
 REFLECTANCE_SCALE = 0.0001
 PROVENANCE = {
@@ -107,7 +107,8 @@ PROVENANCE = {
     "notes": (
         "Sentinel-2 L2A scenes from Microsoft Planetary Computer with eo:cloud_cover < 80. Per "
         "pixel and month, the median of scenes whose SCL class is 4, 5, 6, 7 or 11 and whose "
-        "bands are non-zero; the +1000 offset of processing baseline 04.00 and later is removed. "
+        "bands are non-zero; the +1000 offset of processing baseline 04.00 and later is removed "
+        "before the median, clipping corrected positive DNs to 1..65535. "
         "A pixel with no valid scene takes the previous month's composite, and stays 0 if there "
         "is none. coverage is the number of valid scenes behind the pixel that month (saturated "
         "at 255), and 0 where the value is carried forward or missing."
@@ -152,10 +153,10 @@ def check_existing_grid(mosaic_dir: Path, aoi: dict) -> None:
     """Exit if the monthly files already in `mosaic_dir` are not on this AOI's grid.
 
     A month that exists is skipped, so a directory left by another bounding box under the same
-    name would otherwise be encoded as this AOI. Only GeoTIFF months are checked; every month of
-    a store must share the grid of the first (checked when encoding).
+    name would otherwise be encoded as this AOI. Both GeoTIFF and legacy NPZ months are checked;
+    every month of a store must share the grid of the first (checked when encoding).
     """
-    existing = sorted(mosaic_dir.glob("*.tif"))
+    existing = months.month_files(mosaic_dir)
     if not existing:
         return
     transform, height, width = compute_target_grid(tuple(aoi["bbox"]), aoi["epsg"])

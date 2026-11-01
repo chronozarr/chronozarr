@@ -136,11 +136,11 @@ def make_non_epsg(path: Path, wkt2: str = LCC_WKT2) -> None:
 def test_store_with_the_crs_as_wkt2_or_projjson_only_opens_and_conforms(
     good_store, store_copy, pyproj_crs, form
 ):
-    """What the 0.3.0 mirrors say (EPSG:32631) agrees with the stored definition."""
+    """A definition without proj:code uses 0.4.0; its optional mirrors still agree."""
     utm = pyproj_crs.from_epsg(32631)
     definition = utm.to_wkt("WKT2_2019") if form == "wkt2" else json.loads(utm.to_json())
     expected = stored_values(good_store)
-    rewrite(store_copy, arrays=only(**{form: definition}))
+    rewrite(store_copy, arrays=only(**{form: definition}), block=set_version("0.4.0"))
 
     assert chronozarr.validate(store_copy) == []
     opened = chronozarr.open_store(store_copy)
@@ -195,7 +195,11 @@ def test_info_prints_the_code_when_there_is_one(good_store):
 def test_both_spec_versions_open(store_copy, version):
     rewrite(store_copy, block=set_version(version))
     assert chronozarr.open_store(store_copy).attrs.spec_version == version
-    assert chronozarr.validate(store_copy) == []
+    problems = chronozarr.validate(store_copy)
+    if version == "0.3.0":
+        assert problems == []
+    else:
+        assert any("writers MUST write '0.3.0'" in problem for problem in problems)
 
 
 def test_another_spec_version_is_refused_and_names_the_ones_accepted(store_copy):
@@ -258,6 +262,14 @@ def test_wkt2_wins_over_the_code_when_they_disagree(store_copy, pyproj_crs):
     )
 
 
+def test_matching_codes_do_not_hide_different_level_definitions(store_copy, pyproj_crs):
+    root = zarr.open_group(store_copy, mode="r+", zarr_format=3, use_consolidated=False)
+    array_at(root, "1/data").attrs["proj:wkt2"] = pyproj_crs.from_epsg(32632).to_wkt()
+    rewrite(store_copy)
+    with pytest.raises(schema.SchemaError, match="CRS differs from level 0"):
+        chronozarr.open_store(store_copy)
+
+
 # --- Mirrors --------------------------------------------------------------------------------
 
 
@@ -299,7 +311,7 @@ def test_without_pyproj_an_unverifiable_mirror_is_a_note_not_a_failure(
     store_copy, pyproj_crs, monkeypatch
 ):
     utm = pyproj_crs.from_epsg(32631).to_wkt("WKT2_2019")
-    rewrite(store_copy, arrays=only(wkt2=utm))
+    rewrite(store_copy, arrays=only(wkt2=utm), block=set_version("0.4.0"))
     monkeypatch.setattr("chronozarr.crs._pyproj", lambda: None)
     chronozarr.open_store(store_copy)
     report = schema.validate_report(store_copy)
@@ -307,10 +319,11 @@ def test_without_pyproj_an_unverifiable_mirror_is_a_note_not_a_failure(
     assert any("not compared" in n and "pyproj" in n for n in report.notes)
 
 
-def test_a_030_store_without_an_epsg_code_is_noted_for_released_readers(store_copy):
+def test_a_030_store_without_an_epsg_code_decodes_but_does_not_conform(store_copy):
     rewrite(store_copy, arrays=only(wkt2=LCC_WKT2), groups=drop_mirrors, block=drop_mirrors)
     report = schema.validate_report(store_copy)
-    assert report.problems == []
+    chronozarr.open_store(store_copy)
+    assert any("writers MUST write '0.4.0'" in problem for problem in report.problems)
     assert any("0.3.0" in n and "0.4.0" in n for n in report.notes)
 
 

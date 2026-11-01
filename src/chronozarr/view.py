@@ -188,8 +188,13 @@ class StoreRequestHandler(SimpleHTTPRequestHandler):
             root = self._state.viewer_root
         else:
             return None
-        target = root.joinpath(*parts[1:])
-        return target if target.is_file() else None
+        try:
+            root = root.resolve()
+            target = root.joinpath(*parts[1:]).resolve()
+            return target if target.is_relative_to(root) and target.is_file() else None
+        except (OSError, RuntimeError, ValueError):
+            # Broken or looping links and invalid paths are not served objects either.
+            return None
 
     def send_head(self) -> BinaryIO | None:
         self._count(self.path)
@@ -225,7 +230,7 @@ class StoreRequestHandler(SimpleHTTPRequestHandler):
             self.send_response(HTTPStatus.OK)
         self._remaining = end - start + 1
         handle.seek(start)
-        self.send_header("Content-Type", self.guess_type(str(target)))
+        self.send_header("Content-Type", self.guess_type(self._split(self.path)[-1]))
         self.send_header("Content-Length", str(self._remaining))
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Last-Modified", self.date_time_string(modified))

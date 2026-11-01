@@ -1,14 +1,28 @@
 # chronozarr.org
 
-Vocs 1.4.1 + React + MDX, matching the dgov docs framework. The `toml` override
-pins the patched parser at 4.2.0; `npm audit` reports zero vulnerabilities.
+Vocs 1.4.1 + React + MDX, matching the dgov docs framework. Targeted overrides
+pin patched DOMPurify 3.4.17, KaTeX 0.18.2 and TOML 5.0.1, and keep Vite on the
+patched 7.3.7 and 8.3.4 branches used by the framework. These versions passed
+the seven-day release-age limit and a full `npm audit` on 2026-10-23.
+
+`mermaid-isomorphic` renders Mermaid's classic browser bundle, which embeds
+old DOMPurify and KaTeX independently of the installed packages. The
+`prepare-mermaid` script rebuilds Mermaid 11's public core module with the
+patched dependencies before install completes and before dev/build. It checks
+every installed renderer's entry paths, the actual bundled dependency inputs
+and versions, and fails if that contract changes. The generated file is inside
+`node_modules`; the lockfile and preparation script reproduce it. No runtime
+viewer dependencies or rendering features are removed.
 
 ## Develop and deploy
 
 ```sh
-(cd js && npm ci)   # esbuild, for the viewer that the build bundles
+(cd js && npm ci --min-release-age=7)   # esbuild, for the viewer that the build bundles
 cd site
-npm ci
+npm ci --min-release-age=7
+npm audit
+npx --no-install playwright install chromium
+npm run test:dependencies
 npm run dev
 npm run build
 npm run preview
@@ -16,11 +30,17 @@ npm run deploy
 ```
 
 Deployment uses the repository's pinned Wrangler binary. Install root tooling
-with `npm ci` from the repository root if it is absent. The site has its own
+with `npm ci --min-release-age=7` from the repository root if it is absent. The site has its own
 Worker, `chronozarr-docs`; the browser demo is built (`js/support/build-viewer.mjs`, esbuild, so `npm ci` in `js/` first) and the shared modules are copied into this same deployment by `scripts/copy-demo.mjs`.
 Build output is `docs/dist`. `worker.js` redirects www to the apex, redirects
 the paths of removed pages to their replacements, and forwards other requests to
 static assets. Unknown paths return 404.
+
+After building, `npm run test:hosting` uses the pinned root Wrangler and Chromium from the
+JavaScript project's Playwright installation to import the reader, MapLibre and GeoLibre from
+another local origin. It checks the real asset handler's CORS behavior, including shared module
+dependencies. Install Chromium once with `(cd ../js && npx --no-install playwright install chromium)`
+when running it locally. CI runs this check after every site build; it does not deploy.
 
 ## Content and visual direction
 
@@ -57,7 +77,8 @@ server, so an inline script in `vocs.config.tsx` sends `/page#old-section` on in
 `published-anchors.json` lists every route and section deployed on 2026-10-12.
 `scripts/check-links.mjs` runs after every build and fails it when a link on a page, a redirect,
 an old anchor or a published address leads to a page or section that the build lacks.
-`scripts/make-sitemap.mjs` writes `sitemap.xml`, and `docs/public/404.html` is served for unknown
+`archived-pages.json` lists internal records that stay served at their URL but are left out of the
+sidebar, `llms.txt`, `llms-full.txt` and the sitemap. `scripts/make-sitemap.mjs` writes `sitemap.xml`, and `docs/public/404.html` is served for unknown
 paths. `scripts/check-worker.mjs` runs the Worker against stand-in assets: every redirect, and the
 `Cache-Control: no-transform` that keeps Cloudflare's Web Analytics beacon off the viewer page.
 
@@ -82,8 +103,13 @@ Verified 2026-10-02 (America/New_York):
 - Unknown live paths return 404; www returns 301 to the apex while preserving path.
 - The package versions recorded by this historical deployment check were PyPI and npm chronozarr 0.2.1.
 
-The current Python and npm package release is 0.4.1; see
-[`docs/release-0.4.1.md`](../docs/release-0.4.1.md) for its release status.
+Release materials target Python and npm package 0.5.1; see
+[`docs/release-0.5.1.md`](../docs/release-0.5.1.md) for changes and publication status.
+The deployment tooling is pinned to Wrangler 4.151.1; the site workflow audits its
+dependencies as well as the site dependencies. The root package overrides Miniflare's Undici
+dependency to 7.30.1 for [GHSA-4qv8-2p9j-2685](https://github.com/advisories/GHSA-4qv8-2p9j-2685)
+and [GHSA-f72v-6w45-q472](https://github.com/advisories/GHSA-f72v-6w45-q472). That patch was
+published on 2026-10-15, passes the seven-day policy and is exercised by `test:hosting`.
 
 Live: https://chronozarr.org
 Fallback: https://chronozarr-docs.jake-gearon.workers.dev

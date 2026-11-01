@@ -5,10 +5,11 @@ A store names its CRS by an authority code (`proj:code`), WKT2 text (`proj:wkt2`
 `proj:wkt2`; `Crs.resolved()` applies that, ranking wkt2 above projjson above code, and
 `Crs.disagreements()` says what contradicts what so that `validate` can report it.
 
-Equality needs no pyproj. Two CRSs are the same when their codes are equal or their WKT2 text is
-identical outside quoted names after whitespace is removed. Anything else needs pyproj, which is
+Equality compares the highest-precedence definition of each CRS. Identical codes, WKT2 text
+outside whitespace, or PROJJSON objects need no pyproj. Anything else needs pyproj, which is
 used when it is installed; `CrsMatch.method` says which test decided. Without pyproj a code and
-a WKT2 cannot be compared and the answer is "unavailable".
+a WKT2 cannot be compared and the answer is "unavailable". An unverifiable lower-precedence
+code never overrides the definition used for coordinates.
 """
 
 from __future__ import annotations
@@ -138,9 +139,9 @@ class Crs:
         )
 
     def to_string(self) -> str:
-        """A string pyproj and rasterio read as a CRS: the code, else the WKT2, else JSON."""
+        """The authoritative CRS as text, shortened to its code only when shown equivalent."""
         resolved = self.resolved()
-        if resolved.code is not None:
+        if resolved.code is not None and same_crs(Crs(code=resolved.code), resolved).same:
             return resolved.code
         if resolved.wkt2 is not None:
             return resolved.wkt2
@@ -149,7 +150,7 @@ class Crs:
     def describe(self) -> str:
         """A short name for messages: the code, or the kind and name of the definition."""
         resolved = self.resolved()
-        if resolved.code is not None:
+        if resolved.code is not None and resolved.to_string() == resolved.code:
             return resolved.code
         if resolved.wkt2 is not None:
             named = _WKT_NAME_RE.match(resolved.wkt2)
@@ -162,7 +163,7 @@ class Crs:
 class CrsMatch:
     """The answer to "are these the same CRS?": same, or None when it could not be told, and how.
 
-    `method` is "code", "wkt2 text", "pyproj" or "unavailable".
+    `method` is "code", "wkt2 text", "projjson", "pyproj" or "unavailable".
     """
 
     same: bool | None
@@ -239,11 +240,14 @@ def _pyproj_same(first: str, second: str) -> bool | None:
 
 
 def same_crs(a: Crs, b: Crs) -> CrsMatch:
-    """Compare two CRSs by code, then by WKT2 text, then (if installed) by pyproj."""
+    """Compare the authoritative definitions, never a lower-precedence shared code."""
+    a, b = a._ranked()[0][1], b._ranked()[0][1]
     if a.code is not None and b.code is not None and a.code.upper() == b.code.upper():
         return CrsMatch(True, "code")
     if a.wkt2 is not None and b.wkt2 is not None and _squash(a.wkt2) == _squash(b.wkt2):
         return CrsMatch(True, "wkt2 text")
+    if a.projjson is not None and b.projjson is not None and a.projjson == b.projjson:
+        return CrsMatch(True, "projjson")
     if _pyproj() is not None:
         verdict = _pyproj_same(_text_of(a), _text_of(b))
         if verdict is not None:

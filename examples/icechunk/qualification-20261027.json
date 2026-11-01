@@ -1,0 +1,268 @@
+{
+  "checked_at": "2026-10-27T19:54:11.334891+00:00",
+  "python": "3.13.17 (main, Oct 21 2026, 17:49:18) [Clang 23.1.3 ]",
+  "icechunk": "2.3.0",
+  "sources": [
+    {
+      "name": "materialized",
+      "repository": "https://dynamical-noaa-gfs.s3.us-west-2.amazonaws.com/noaa-gfs-analysis/v0.1.0.icechunk",
+      "snapshot": "6K6H23PYR6QXA9VM0C6G",
+      "indexers": {
+        "time": [
+          48072,
+          48074
+        ],
+        "latitude": [
+          224,
+          226
+        ],
+        "longitude": [
+          316,
+          318
+        ]
+      },
+      "source_dtype": "float32",
+      "output_dtype": "float32",
+      "explicit_rounding": false,
+      "units": "degree_Celsius",
+      "source_crs_wkt": "GEOGCS[\"unknown\",DATUM[\"unknown\",SPHEROID[\"unknown\",6371229,0]],PRIMEM[\"Greenwich\",0,AUTHORITY[\"EPSG\",\"8901\"]],UNIT[\"degree\",0.0174532925199433,AUTHORITY[\"EPSG\",\"9122\"]],AXIS[\"Longitude\",EAST],AXIS[\"Latitude\",NORTH]]",
+      "source_values": [
+        [
+          [
+            20.125,
+            21
+          ],
+          [
+            20.25,
+            21.375
+          ]
+        ],
+        [
+          [
+            19.375,
+            20.5
+          ],
+          [
+            20.125,
+            20.25
+          ]
+        ]
+      ],
+      "expected_float32": [
+        [
+          [
+            20.125,
+            21
+          ],
+          [
+            20.25,
+            21.375
+          ]
+        ],
+        [
+          [
+            19.375,
+            20.5
+          ],
+          [
+            20.125,
+            20.25
+          ]
+        ]
+      ],
+      "output": "materialized",
+      "exact_expected_values": true,
+      "import_seconds": 2.9449357909616083,
+      "plan": [
+        "source:     Icechunk snapshot, 2 timesteps (2026-10-25 .. 2026-10-25)",
+        "grid:       WKT2 \"unknown\", 2 x 2 px, 0.25 degree pixels (transform origin -101.125, 34.125)",
+        "data:       1 bands (temperature_2m), float32",
+        "scaling:    temperature_2m = stored * 1 +0 [degree_Celsius]",
+        "validity:   mask (nodata nan was requested), no nodata",
+        "snapshot:   6K6H23PYR6QXA9VM0C6G",
+        "selection:  {'time': [48072, 48074], 'latitude': [224, 226], 'longitude': [316, 318]}",
+        "source cache: 33554432 encoded bytes (maintained Icechunk cache; separate memory allowance)",
+        "source I/O: decoded chunk 14400000 bytes; a selection still reads whole source chunks/messages",
+        "resampling: none needed, every source is on the target grid",
+        "raw size:   0.00 GB (0 MB per timestep; memory about 0 MB while staging)",
+        "output:     about 0.00 GB in 1 levels (zstd 5 ratio 1.56 on 3 sampled cells)",
+        "time:       read about 0.58 s per timestep (1.2 s sequential, less with --read-ahead), encode about 0.0 s"
+      ]
+    },
+    {
+      "name": "virtual",
+      "repository": "https://dynamical-noaa-gfs.s3.us-west-2.amazonaws.com/noaa-gfs-analysis-virtual/v0.1.0.icechunk",
+      "snapshot": "SJSV5KG1GSWR2XQD2SW0",
+      "indexers": {
+        "time": [
+          48072,
+          48074
+        ],
+        "latitude": [
+          224,
+          226
+        ],
+        "longitude": [
+          316,
+          318
+        ]
+      },
+      "source_dtype": "float64",
+      "output_dtype": "float32",
+      "explicit_rounding": true,
+      "units": "degree_Celsius",
+      "source_crs_wkt": "GEOGCS[\"unknown\",DATUM[\"unknown\",SPHEROID[\"unknown\",6371229,0]],PRIMEM[\"Greenwich\",0,AUTHORITY[\"EPSG\",\"8901\"]],UNIT[\"degree\",0.0174532925199433,AUTHORITY[\"EPSG\",\"9122\"]],AXIS[\"Longitude\",EAST],AXIS[\"Latitude\",NORTH]]",
+      "source_values": [
+        [
+          [
+            20.150996093750052,
+            21.04099609375004
+          ],
+          [
+            20.30099609375003,
+            21.420996093750034
+          ]
+        ],
+        [
+          [
+            19.33757812500005,
+            20.497578125000018
+          ],
+          [
+            20.167578125000034,
+            20.207578125000055
+          ]
+        ]
+      ],
+      "expected_float32": [
+        [
+          [
+            20.1509952545166,
+            21.040996551513672
+          ],
+          [
+            20.300996780395508,
+            21.420995712280273
+          ]
+        ],
+        [
+          [
+            19.33757781982422,
+            20.497577667236328
+          ],
+          [
+            20.167577743530273,
+            20.207578659057617
+          ]
+        ]
+      ],
+      "output": "virtual",
+      "exact_expected_values": true,
+      "import_seconds": 2.787589667015709,
+      "plan": [
+        "source:     Icechunk snapshot, 2 timesteps (2026-10-25 .. 2026-10-25)",
+        "grid:       WKT2 \"unknown\", 2 x 2 px, 0.25 degree pixels (transform origin -101.125, 34.125)",
+        "data:       1 bands (temperature_2m), float32",
+        "scaling:    temperature_2m = stored * 1 +0 [degree_Celsius]",
+        "validity:   mask (source validity before float32 rounding; nodata nan was requested), no nodata",
+        "fill:       19.33757781982422 (12 % of the valid pixels sampled), 20.497577667236328 (12 %), 21.040996551513672 (12 %) and 21.420995712280273 (12 %) lie far outside the other values (20.15 to 20.3). The store keeps them as data; a store takes one nodata value and --nodata gave nan",
+        "snapshot:   SJSV5KG1GSWR2XQD2SW0",
+        "selection:  {'time': [48072, 48074], 'latitude': [224, 226], 'longitude': [316, 318]}",
+        "source cache: 0 encoded bytes (maintained Icechunk cache; separate memory allowance)",
+        "source I/O: decoded chunk 8305920 bytes; a selection still reads whole source chunks/messages",
+        "precision:  explicit float64 to float32 rounding; source validity mask",
+        "resampling: none needed, every source is on the target grid",
+        "raw size:   0.00 GB (0 MB per timestep; memory about 0 MB while staging)",
+        "output:     about 0.00 GB in 1 levels (zstd 5 ratio 1.56 on 3 sampled cells)",
+        "time:       read about 0.27 s per timestep (0.5 s sequential, less with --read-ahead), encode about 0.0 s"
+      ]
+    }
+  ],
+  "limits": "Two time steps, a 2x2 window; same-library reference, no viewer speed claim. Elapsed import includes metadata, sampling, source reads and encoding; no wire counters.",
+  "javascript": {
+    "reader": "existing chronozarr DOM-free JavaScript reader over HTTP",
+    "checks": [
+      {
+        "source": "materialized",
+        "exactFloat32Values": true,
+        "warmReadRequests": 0,
+        "times": [
+          [
+            [
+              20.125,
+              21
+            ],
+            [
+              20.25,
+              21.375
+            ]
+          ],
+          [
+            [
+              19.375,
+              20.5
+            ],
+            [
+              20.125,
+              20.25
+            ]
+          ]
+        ]
+      },
+      {
+        "source": "virtual",
+        "exactFloat32Values": true,
+        "warmReadRequests": 0,
+        "times": [
+          [
+            [
+              20.1509952545166,
+              21.040996551513672
+            ],
+            [
+              20.300996780395508,
+              21.420995712280273
+            ]
+          ],
+          [
+            [
+              19.33757781982422,
+              20.497577667236328
+            ],
+            [
+              20.167577743530273,
+              20.207578659057617
+            ]
+          ]
+        ]
+      }
+    ]
+  },
+  "browser": {
+    "renderer": "existing viewer, headless Chromium SwiftShader; functional smoke, no timing claim",
+    "checks": [
+      {
+        "source": "materialized",
+        "completeFirstFrame": true,
+        "glError": 0,
+        "paintedSteps": [
+          0,
+          1,
+          0
+        ],
+        "pageErrors": []
+      },
+      {
+        "source": "virtual",
+        "completeFirstFrame": true,
+        "glError": 0,
+        "paintedSteps": [
+          0,
+          1,
+          0
+        ],
+        "pageErrors": []
+      }
+    ]
+  }
+}

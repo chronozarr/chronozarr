@@ -8,7 +8,7 @@
 
 - a chronozarr store, for example one month that `chronozarr convert` wrote
 - a Zarr store or NetCDF file with dims `(time, band, y, x)`
-- one GeoTIFF (`.tif`, `.tiff`) or a quoted glob of GeoTIFFs, one per timestep, with the date in each file name. Package 0.4.1 reads GeoTIFFs only through a glob: for one file, quote a pattern that matches it, such as `'scenes/2024-07*.tif'`
+- one GeoTIFF (`.tif`, `.tiff`) or a quoted glob of GeoTIFFs, one per timestep, with the date in each file name
 
 The grid, bands, dtype, CRS and nodata of `INPUT` must match `STORE`. For GeoTIFFs this includes how the files mark invalid pixels: the nodata they declare (or none) must be the store's, and they must give a mask (an alpha band, an internal mask or a nodata of NaN) exactly when the store has one. The command checks this before it copies or writes anything, and the message names both values. The command has three options:
 
@@ -25,7 +25,7 @@ The append writes the objects that gain a timestep, plus the metadata. Every oth
 - An unsharded store writes new chunk objects. This is the encoder default.
 - A sharded store rewrites the shard that receives each new timestep, whole.
 
-The new timesteps get every chunk, including chunks that hold only the fill value. A store written by chronozarr before 0.5.0 has no object for such a chunk. An append leaves those absent, and readers read them as fill.
+The new timesteps get every chunk, including chunks that hold only the fill value. A store written by chronozarr before 0.5.1 has no object for such a chunk. An append leaves those absent, and readers read them as fill.
 
 For a sharded store that will grow, choose a finite `--shard-time` only when the object count justifies the rewrite cost. Measured costs are in [evidence.md](evidence.md#appending).
 

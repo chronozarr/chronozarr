@@ -24,7 +24,7 @@ from tests.fixtures.netcdf_days import FILL, day_ok, day_values, write_days, wri
 pytestmark = pytest.mark.unit
 
 pytest.importorskip("rasterio")
-pytest.importorskip("h5netcdf")
+h5netcdf = pytest.importorskip("h5netcdf")
 
 OPTIONS: dict[str, Any] = {"chunk_size": 16}
 SERIES: dict[str, Any] = {"variable": "sst", "crs": "EPSG:4326"}
@@ -237,6 +237,80 @@ def test_files_that_declare_different_fill_values_are_refused_unless_nodata_is_g
     assert "nodata -9999" in _problems(folder)["d1.nc"]
     plan = plan_conversion(folder, sample=False, nodata=-999, **SERIES)
     assert plan.source.info.nodata == -999
+
+
+def _scaling_member(path: Path, day: int, scale: float, offset: float) -> None:
+    write_days(path, [day], scale=scale)
+    with h5netcdf.File(path, "a") as dataset:
+        dataset.variables["sst"].attrs["add_offset"] = offset
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "overrides", "effective"),
+    [
+        pytest.param((0.01, 0), (0.02, 0), {"scale": 0.0001}, (0.0001, 0), id="scale-only"),
+        pytest.param((0.01, 0), (0.01, 10), {"offset": 0.0}, (0.01, 0), id="offset-only"),
+        pytest.param(
+            (0.01, 0),
+            (0.02, 10),
+            {"scale": 0.0001, "offset": 1.0},
+            (0.0001, 1),
+            id="scale-and-offset",
+        ),
+        pytest.param((0.0, 0), (0.0, 0), {"scale": 0.01}, (0.01, 0), id="invalid-source-scale"),
+        pytest.param(
+            (0.01, np.nan),
+            (0.01, np.nan),
+            {"offset": 0.0},
+            (0.01, 0),
+            id="invalid-source-offset",
+        ),
+    ],
+)
+def test_scaling_overrides_apply_before_series_checks_and_keep_packed_values(
+    tmp_path, first, second, overrides, effective
+):
+    folder = tmp_path / "days"
+    folder.mkdir()
+    _scaling_member(folder / "d0.nc", 0, *first)
+    _scaling_member(folder / "d1.nc", 1, *second)
+    out = tmp_path / "store"
+    report = convert(folder, out, **SERIES, **OPTIONS, **overrides)
+    band = chronozarr.open_store(out).attrs.bands[0]
+    assert (band.scale, band.offset) == effective
+    assert np.array_equal(_stored(out), _expected([0, 1]))
+    notes = report.plan.source.notes
+    assert "squeezed:   zlev (length 1, value 0 meters)" in notes
+    (override_note,) = (note for note in notes if note.startswith("override:"))
+    for attribute, option in (("scale", "--scale"), ("offset", "--offset")):
+        assert (option in override_note) == (attribute in overrides)
+    assert "the files declare" in override_note
+    assert chronozarr.validate(out) == []
+
+
+@pytest.mark.parametrize(
+    ("overrides", "remaining", "replaced"),
+    [
+        ({"scale": 0.0001}, "add_offset", "scale_factor"),
+        ({"offset": 0.0}, "scale_factor", "add_offset"),
+    ],
+)
+def test_scaling_override_still_checks_the_other_attribute(
+    tmp_path, overrides, remaining, replaced
+):
+    folder = tmp_path / "days"
+    folder.mkdir()
+    _scaling_member(folder / "d0.nc", 0, 0.01, 0)
+    _scaling_member(folder / "d1.nc", 1, 0.02, 10)
+    out = tmp_path / "store"
+    with pytest.raises(PreflightError) as caught:
+        convert(folder, out, **SERIES, **OPTIONS, **overrides)
+    (problem,) = caught.value.problems
+    assert problem.uri.endswith("d1.nc")
+    assert remaining in problem.detail
+    assert replaced not in problem.detail
+    assert not out.exists()
+    assert not out.with_name("store.convert-work").exists()
 
 
 def test_a_series_needs_one_variable_to_be_chosen(tmp_path):

@@ -75,6 +75,18 @@ def test_a_geographic_store_names_its_extent_in_degrees_once():
     assert "longitude 0 to 10 and latitude 0 to 10" in str(raised.value)
 
 
+def test_a_short_label_changes_errors_without_changing_the_projection():
+    pyproj = pytest.importorskip("pyproj")
+    wkt2 = pyproj.CRS.from_epsg(32631).to_wkt()
+    label = 'WKT2 "WGS 84 / UTM zone 31N"'
+    assert lonlat_to_xy(wkt2, UTM_EXTENT, 3.0, 0.0, label=label) == (500000.0, 0.0)
+    with pytest.raises(ValueError) as raised:
+        lonlat_to_xy(wkt2, UTM_EXTENT, 3.0, 5.0, label=label)
+    assert label in str(raised.value)
+    assert "longitude 2.9982 to 3.0027" in str(raised.value)
+    assert wkt2 not in str(raised.value)
+
+
 @pytest.mark.parametrize(
     ("lon", "lat"), [(0.0, 91.0), (0.0, -90.5), (float("nan"), 0.0), (0.0, float("inf"))]
 )

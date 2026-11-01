@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest a change to the format, command line, Python API or viewer
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The task, and the step where chronozarr gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What chronozarr should do. A command or code sketch helps.
+    validations:
+      required: false
+  - type: checkboxes
+    id: searched
+    attributes:
+      label: Checks
+      options:
+        - label: I searched the existing issues and did not find this request.
+          required: true

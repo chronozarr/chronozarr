@@ -158,6 +158,10 @@ async function recordVideo(session, { format, from, to, stepsPerSecond, onProgre
         const player = new Playback({
           count: total,
           stepsPerSecond,
+          wrap: false,
+          // The loop may exceed the cache: keep only the next frame ready, not two seconds of frames.
+          startSeconds: 1 / stepsPerSecond,
+          lowSeconds: 1 / stepsPerSecond,
           getIndex: () => index,
           goTo: (i) => {
             index = i;
@@ -169,8 +173,8 @@ async function recordVideo(session, { format, from, to, stepsPerSecond, onProgre
             }
           },
           isReady: (i) => session.isReady(from + i),
-          prepare: (i) =>
-            ensureLoaded(session, from + i, signal).catch((error) => {
+          prepare: (indices) =>
+            Promise.all(indices.map((i) => ensureLoaded(session, from + i, signal))).catch((error) => {
               player.pause();
               reject(error);
             }),

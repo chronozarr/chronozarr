@@ -77,7 +77,8 @@ def fetch_sample(output: Path) -> None:
         "scl_valid_classes": [4, 5, 6, 7, 11],
         "processing": (
             "One acquisition per month, bilinear band resampling to a 10 m UTM grid; "
-            "SCL nearest-neighbour validity; baseline offset correction; "
+            "SCL nearest-neighbour validity; baseline offset correction with corrected "
+            "positive DNs clipped to 1..65535; "
             "no compositing or gap filling."
         ),
         "scenes": [],

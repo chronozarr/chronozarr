@@ -223,15 +223,15 @@ test('stores without mask or coverage answer null everywhere', async () => {
   assert.ok((await store.getCoverage(0, 0, 0, 0)) instanceof Uint8Array);
 });
 
-test('mask and coverage are found in consolidated metadata even without the root attributes', async () => {
+test('an undeclared mask array is ignored: only the root declaration selects validity', async () => {
   const readable = buildSyntheticStore({ ...base, specVersion: '0.3.0', mask: true, consolidated: true });
   const root = JSON.parse(new TextDecoder().decode(readable.files.get('/zarr.json')));
   delete root.attributes.chronozarr.mask_variable;
   readable.files.set('/zarr.json', new TextEncoder().encode(JSON.stringify(root)));
   const store = await openStore('memory://consolidated-aux', { store: readable, workers: 0 });
-  assert.equal(store.hasMask, true);
+  assert.equal(store.hasMask, false);
   assert.equal(readable.log.length, 1, 'one GET opens the store: everything came from consolidated metadata');
-  assert.ok((await store.getMask(0, 0, 0, 2)) instanceof Uint8Array);
+  assert.equal(await store.getMask(0, 0, 0, 2), null);
 });
 
 test('mask chunks of a sharded store with several time shards', async () => {

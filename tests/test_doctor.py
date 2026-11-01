@@ -26,6 +26,7 @@ from functools import partial
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -42,7 +43,7 @@ from chronozarr.doctor import DEFAULT_ORIGIN, Check, diagnose
 from chronozarr.schema import validate
 from chronozarr.view import StoreRequestHandler, serve_store, view
 from tests.round_trips import RoundTrips
-from tests.synthetic import build_store, make_truth
+from tests.synthetic import build_store, make_da, make_truth
 
 pytestmark = pytest.mark.unit
 
@@ -97,7 +98,7 @@ class FlakyHandler(StoreRequestHandler):
 class NoHeadHandler(StoreRequestHandler):
     """Refuses HEAD, as a host behind URLs presigned for GET does. Records each GET's Range."""
 
-    ranges: list[str | None]
+    ranges: ClassVar[list[str | None]]
 
     def do_HEAD(self):
         self.send_error(HTTPStatus.FORBIDDEN)
@@ -670,6 +671,66 @@ def test_http_store_sizes_an_object_when_the_host_refuses_head(sharded_store):
         with pytest.raises(FileNotFoundError):
             asyncio.run(store.getsize("no/such/key"))
     assert handler.ranges == ["bytes=0-0", "bytes=0-0"]
+
+
+@pytest.mark.parametrize("status", [HTTPStatus.FORBIDDEN, HTTPStatus.METHOD_NOT_ALLOWED])
+def test_partial_shards_and_planes_read_without_head_or_version_headers(tmp_path, status):
+    class GetOnly(NoHeadHandler):
+        ranges: ClassVar[list[str | None]] = []
+
+        def do_HEAD(self):
+            self.send_error(status)
+
+        def send_header(self, keyword, value):
+            if keyword.lower() not in {"etag", "last-modified"}:
+                super().send_header(keyword, value)
+
+    truth = make_truth(4, 1, 20, 22)
+    data = make_da(truth)
+    mask = np.ones((4, 20, 22), dtype=np.uint8)
+    mask[:, 0, 0] = 0
+    coverage = mask * 3
+    path = tmp_path / "published"
+    chronozarr.encode(
+        data.isel(time=slice(0, 3)),
+        path,
+        chunk_size=16,
+        n_lods=1,
+        shard=True,
+        shard_time=2,
+        mask=mask[:3],
+        coverage=coverage[:3],
+    )
+    with serving(GetOnly, path) as url:
+        assert validate(url) == []
+        old = chronozarr.open_store(url)
+        np.testing.assert_array_equal(old.read(0), truth[0])
+        np.testing.assert_array_equal(old.read(2), truth[2])
+        np.testing.assert_array_equal(old.read_mask(2), mask[2])
+        np.testing.assert_array_equal(old.read_coverage(2), coverage[2])
+        probes = GetOnly.ranges.count("bytes=0-0")
+        np.testing.assert_array_equal(old.read(2), truth[2])
+        # No version header can establish index freshness, even at an unchanged length.
+        assert GetOnly.ranges.count("bytes=0-0") > probes
+
+        staging = tmp_path / "staging"
+        shutil.copytree(path, staging)
+        chronozarr.append(
+            staging, data.isel(time=slice(3, 4)), mask=mask[3:], coverage=coverage[3:]
+        )
+        for source in sorted(staging.rglob("*"), key=lambda p: p == staging / "zarr.json"):
+            if source.is_file():
+                target = path / source.relative_to(staging)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                upload = target.with_name(target.name + ".upload")
+                shutil.copyfile(source, upload)
+                os.replace(upload, target)
+        np.testing.assert_array_equal(old.read(2), truth[2])
+        assert len(old.times) == 3
+        fresh = chronozarr.open_store(url)
+        np.testing.assert_array_equal(fresh.read(3), truth[3])
+        np.testing.assert_array_equal(fresh.read_mask(3), mask[3])
+        np.testing.assert_array_equal(fresh.read_coverage(3), coverage[3])
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="os.fork is POSIX only")

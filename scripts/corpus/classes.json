@@ -1,7 +1,10 @@
 {
   "_rules": {
-    "OK": "converts; dates (count and order), CRS and sampled values equal the independent read of the source, values inside the physical range a scientist expects, longitudes inside +-180 for EPSG:4326",
-    "WRONG": "converts but something is wrong: dates, orientation, values, CRS, longitudes beyond +-180, undeclared fill stored as data, scale convention wrong, dropped steps",
+    "evaluation_policy": "source-values-v2",
+    "OK": "converts; dates (count and order), CRS, validity and sampled values equal the independent read of the source, with values inside the expected physical range",
+    "WRONG": "converts but source correctness fails: dates, orientation, values, CRS, undeclared fill stored as data, scale convention wrong or dropped steps",
+    "longitude": "x_beyond_180 is a longitude-convention diagnostic, not a correctness failure; compare placement with the source and use its longitude convention for lookups",
+    "history": "The original longitude-only WRONG verdict was corrected after independent GDAL and zarr-layer placement checks. Existing raw records are preserved; new records name evaluation_policy. The minutes and fix_records below retain the historical attempts, including optional coordinate changes.",
     "ACTIONABLE": "refuses, and for every problem reported the message names a fix that clears that problem when applied",
     "UNACTIONABLE": "refuses, and some problem has no named fix, or the named fix does not clear it, or applying it loses data",
     "CRASH": "traceback, unhandled exception or timeout (none occurred)",
@@ -145,9 +148,9 @@
   "oisst-psl-daily": {
     "first_run": "UNACTIONABLE",
     "first_message": "found the following matches with the input file in xarray's IO backends: ['netcdf4', 'h5netcdf']. But their dependencies may not be installed, see: <xarray docs urls> (no mention of chronozarr[netcdf])",
-    "chain": "with the extra: 'does not declare a CRS; pass --crs EPSG:xxxxx' (named, works); the store then converts but is WRONG: x runs 280..360 in EPSG:4326; wrapping longitudes to -180..180 first gives OK",
+    "chain": "with the extra: 'does not declare a CRS; pass --crs EPSG:xxxxx' (named, works); x runs 280..360 in EPSG:4326 and is correctly placed. The historical longitude-only WRONG verdict was retracted; fix2 wrapped coordinates for lookup convenience, which is not required for correctness",
     "after_fix": "OK",
-    "fix": "install chronozarr[netcdf]; --crs EPSG:4326; ds.assign_coords(lon=((ds.lon+180)%360)-180).sortby('lon') and save",
+    "fix": "install chronozarr[netcdf]; --crs EPSG:4326; use the native 280..360 longitudes for lookups",
     "minutes": "30",
     "fix_records": [
       "step1",
@@ -197,9 +200,9 @@
   "era5-fiji-antimeridian-nc": {
     "first_run": "UNACTIONABLE",
     "first_message": "found the following matches with the input file in xarray's IO backends: ['netcdf4', 'h5netcdf']. But their dependencies may not be installed (same text)",
-    "chain": "with the extra: does not declare a CRS; pass --crs EPSG:4326 (works); the store is WRONG: x runs 165..195 through 180 in EPSG:4326. Wrapping to -180..180 would split Fiji in two; warping each step to a Pacific-centred CRS (EPSG:3832) and converting the GeoTIFF series gives OK",
+    "chain": "with the extra: does not declare a CRS; pass --crs EPSG:4326 (works); the native 165..195 grid through 180 is correctly placed and keeps Fiji continuous. The historical longitude-only WRONG verdict was retracted; fix2 used optional Pacific-centred reprojection, which is not required for correctness",
     "after_fix": "OK",
-    "fix": "install chronozarr[netcdf] to read it at all; for a store that is not wrong, warp each of 80 steps to EPSG:3832 GeoTIFFs and use --date-pattern \"era5_t2m_%Y%m%d_%H%M\" --nodata nan",
+    "fix": "install chronozarr[netcdf]; --crs EPSG:4326; keep the continuous native 165..195 longitude grid",
     "minutes": "60",
     "fix_records": [
       "step1",

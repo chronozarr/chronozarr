@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 from pathlib import Path
 
@@ -12,6 +11,7 @@ import rasterio
 import xarray as xr
 
 import chronozarr
+from chronozarr._convert_manifest import read_manifest
 
 
 def inventory(path: Path) -> dict:
@@ -20,9 +20,8 @@ def inventory(path: Path) -> dict:
 
 
 def verify(manifest: Path, store_path: Path, plain_path: Path, output: Path) -> None:
-    with manifest.open(newline="") as handle:
-        rows = list(csv.DictReader(handle))
-    source_files = [manifest.parent / row["uri"] for row in rows]
+    entries = read_manifest(manifest).entries
+    source_files = [Path(entry.uri) for entry in entries]
     store = chronozarr.open_store(store_path)
     source_valid, cogs = [], []
     with (
@@ -31,7 +30,7 @@ def verify(manifest: Path, store_path: Path, plain_path: Path, output: Path) -> 
             plain_path, group="0", zarr_format=3, chunks=None, mask_and_scale=False
         ) as plain,
     ):
-        assert len(rows) == len(store.times) == plain.sizes["time"]
+        assert len(entries) == len(store.times) == plain.sizes["time"]
         for t, path in enumerate(source_files):
             with rasterio.open(path) as source:
                 truth = source.read()
@@ -40,7 +39,7 @@ def verify(manifest: Path, store_path: Path, plain_path: Path, output: Path) -> 
                 np.testing.assert_array_equal(store.read_mask(t=t), valid)
                 np.testing.assert_array_equal(plain[store.attrs.variable].isel(time=t), truth)
                 np.testing.assert_array_equal(plain[store.attrs.mask_variable].isel(time=t), valid)
-                assert str(store.times[t].astype("datetime64[D]")) == rows[t]["datetime"]
+                assert store.times[t].astype("datetime64[ms]") == entries[t].time
                 expected = truth.astype(np.float32)
                 for band, (scale, offset) in enumerate(
                     zip(source.scales, source.offsets, strict=True)
@@ -61,7 +60,7 @@ def verify(manifest: Path, store_path: Path, plain_path: Path, output: Path) -> 
                 "Local observations: adoption and level-0 fidelity; "
                 "not a scale or delivery benchmark."
             ),
-            "dates": [row["datetime"] for row in rows],
+            "dates": [np.datetime_as_string(entry.time, unit="auto") for entry in entries],
             "shape": list(store.levels[0].shape),
             "valid_fractions": [float(v.mean()) for v in source_valid],
             "spec_version": store.attrs.spec_version,
