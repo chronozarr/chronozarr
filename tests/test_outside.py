@@ -481,6 +481,64 @@ def test_a_crs_in_a_wkt1_grid_mapping_is_read_without_pyproj_by_its_authority(
 # --- What is refused --------------------------------------------------------------------------
 
 
+def test_bands_with_different_nodata_markers_are_refused(eopf_copy):
+    root = zarr.open_group(str(eopf_copy), mode="r+", use_consolidated=False)
+    array_at(group_at(root, "r10m"), "b03").attrs["_FillValue"] = 1.0
+    consolidate(eopf_copy)
+    with pytest.raises(schema.SchemaError, match=r"r10m.*different nodata markers"):
+        chronozarr.open_store(eopf_copy)
+
+
+@pytest.mark.parametrize("attribute,value", [("scale_factor", 0.5), ("add_offset", 2.0)])
+def test_overview_calibration_must_match_the_finest_level(coarsen, tmp_path, attribute, value):
+    path = tmp_path / "calibration.zarr"
+    shutil.copytree(coarsen.path, path)
+    root = zarr.open_group(str(path), mode="r+", use_consolidated=False)
+    array_at(group_at(root, "1"), "tmax").attrs[attribute] = value
+    consolidate(path)
+    with pytest.raises(schema.SchemaError, match=r"different band scale or offset"):
+        chronozarr.open_store(path)
+
+
+def test_absent_overview_calibration_matches_explicit_identity(coarsen, tmp_path):
+    path = tmp_path / "identity.zarr"
+    shutil.copytree(coarsen.path, path)
+    root = zarr.open_group(str(path), mode="r+", use_consolidated=False)
+    array = array_at(group_at(root, "1"), "tmax")
+    del array.attrs["scale_factor"]
+    del array.attrs["add_offset"]
+    consolidate(path)
+    store = chronozarr.open_store(path)
+    np.testing.assert_array_equal(store.physical(0, 1)[0], coarsen.levels["1"][0])
+
+
+@pytest.mark.parametrize("coarse_bands", [(4, 8), (8, 4), (4, 12), (4,)])
+def test_band_cubes_require_the_same_band_identity_and_order(tmp_path, coarse_bands):
+    path = tmp_path / "band-cube.zarr"
+    root = zarr.open_group(str(path), mode="w", zarr_format=3)
+    root.attrs["multiscales"] = {"layout": [{"asset": "0"}, {"asset": "1"}]}
+    for index, bands in enumerate(((4, 8), coarse_bands)):
+        group = root.create_group(str(index))
+        factor, size = 2**index, 4 // 2**index
+        group.attrs.update(
+            {"proj:code": "EPSG:4326", "spatial:transform": [factor, 0, 0, 0, -factor, 4]}
+        )
+        group.create_array(
+            "data",
+            data=np.stack([np.full((size, size), band * 10, dtype=np.uint16) for band in bands]),
+            dimension_names=("band", "y", "x"),
+        )
+        group.create_array("band", data=np.array(bands, dtype=np.int32), dimension_names=("band",))
+    consolidate(path)
+    if coarse_bands != (4, 8):
+        with pytest.raises(schema.SchemaError, match="different band names or order"):
+            chronozarr.open_store(path)
+    else:
+        store = chronozarr.open_store(path)
+        assert store.bands == ("4", "8")
+        np.testing.assert_array_equal(store.physical(0, 1)[:, 0, 0], [40, 80])
+
+
 def test_a_group_with_no_multiscales_is_refused_naming_what_is_needed(tmp_path):
     path = tmp_path / "plain.zarr"
     root = zarr.open_group(str(path), mode="w", zarr_format=3)

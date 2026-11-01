@@ -52,6 +52,8 @@ da = store.to_xarray(lod=0, times=[0], physical=False)
 
 `open_store` also reads a pyramid written by ndpyramid or by ESA's EOPF, or any Zarr v3 store whose root `multiscales` lists the levels. It finds the levels, the geometry and the CRS in the store's own metadata, and `store.notes` says what it had to assume: scale and offset taken as 1 and 0, no time axis (one timestep dated 1970-01-01), the fill value that marks a missing pixel, levels left out or in another order. Level 0 is the finest level whatever order the layout lists.
 
+After selecting the bands shared by all levels, the reader requires one nodata marker per level, matching band names and order, and matching scale and offset across levels. Conflicting declarations are refused. Normalize them first, or open the bands or levels separately with xarray.
+
 ```python
 store = chronozarr.open_store("https://example.org/product.zarr/measurements/reflectance")
 store.notes
