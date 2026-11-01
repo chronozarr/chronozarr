@@ -18,6 +18,9 @@ This recorded snapshot contains the requested two times, 2026-10-25 00:00 and 01
 The window covers latitude 34 and 33.75 degrees and longitude -101 and -100.75 degrees.
 `--isel` uses integer indexes and an exclusive stop. Give an index or finite slice for
 every dimension of the chosen variable, including ensemble member or level where present.
+An integer time selection such as `--isel time=48072` imports one timestep, equivalent to
+`--isel time=48072:48073`. For one forecast step, select one initialization and use
+`--isel lead_time=0` (or another lead index).
 
 ```bash
 uv run --no-sync chronozarr convert \

@@ -1,0 +1,169 @@
+[
+  {
+    "label": "baseline",
+    "sensor": "nisar",
+    "repeat": 0,
+    "phases": [
+      {
+        "name": "cold",
+        "elapsedMs": 258.69999980926514,
+        "cadence": {
+          "medianMs": null,
+          "p95Ms": null,
+          "p99Ms": null,
+          "maxMs": 0,
+          "gapsOver50Ms": 0
+        },
+        "frameCost": {
+          "uploadMedianMs": 23.800000190734863,
+          "uploadP95Ms": 23.800000190734863,
+          "renderMedianMs": 32.799999713897705,
+          "renderP95Ms": 32.799999713897705
+        },
+        "longTasks": [],
+        "loopRates": [],
+        "paints": {
+          "count": 1,
+          "complete": 1,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "continuity": {
+          "count": 0,
+          "wraps": 0,
+          "discontinuities": 0
+        },
+        "network": {
+          "requests": 132,
+          "bytes": 51622329
+        },
+        "peakSampledImageryMiB": 124.37322235107422,
+        "peakSampledAuxMiB": 18.656367301940918,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        }
+      },
+      {
+        "name": "prefetch",
+        "elapsedMs": 4273.599999904633,
+        "cadence": {
+          "medianMs": null,
+          "p95Ms": null,
+          "p99Ms": null,
+          "maxMs": 0,
+          "gapsOver50Ms": 0
+        },
+        "frameCost": {
+          "uploadMedianMs": null,
+          "uploadP95Ms": null,
+          "renderMedianMs": null,
+          "renderP95Ms": null
+        },
+        "longTasks": [],
+        "loopRates": [],
+        "paints": {
+          "count": 0,
+          "complete": 0,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [],
+          "cells": []
+        },
+        "continuity": {
+          "count": 0,
+          "wraps": 0,
+          "discontinuities": 0
+        },
+        "network": {
+          "requests": 2592,
+          "bytes": 986940874
+        },
+        "peakSampledImageryMiB": 1535.914743423462,
+        "peakSampledAuxMiB": 89.03348445892334,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        }
+      },
+      {
+        "name": "play",
+        "elapsedMs": 21979.199999809265,
+        "achievedFps": 14.161016679036686,
+        "initialBufferMs": 0,
+        "refillPauses": 16,
+        "cadence": {
+          "medianMs": 33.69999980926514,
+          "p95Ms": 598.4000000953674,
+          "p99Ms": 858.7999997138977,
+          "maxMs": 1033.4000000953674,
+          "gapsOver50Ms": 33
+        },
+        "frameCost": {
+          "uploadMedianMs": 0.2999997138977051,
+          "uploadP95Ms": 3.09999942779541,
+          "renderMedianMs": 1.7000012397766113,
+          "renderP95Ms": 7.700000286102295
+        },
+        "longTasks": [],
+        "loopRates": [
+          13.606182648689677,
+          17.865732149104915,
+          10.894159055157525,
+          17.034658982423938,
+          17.11089174070418,
+          10.310913704023912,
+          15.061113366337844,
+          17.072690260931,
+          16.815418447294842,
+          11.798339155340775,
+          16.484909969023743,
+          12.151804076069773
+        ],
+        "paints": {
+          "count": 312,
+          "complete": 312,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "continuity": {
+          "count": 312,
+          "wraps": 12,
+          "discontinuities": 0
+        },
+        "network": {
+          "requests": 7019,
+          "bytes": 4953462365
+        },
+        "peakSampledImageryMiB": 1535.8784008026123,
+        "peakSampledAuxMiB": 93.44056129455566,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "pass": false
+      }
+    ]
+  }
+]

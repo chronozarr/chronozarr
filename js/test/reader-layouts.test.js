@@ -69,13 +69,14 @@ for (const options of [
   { label: 'v2 dot keys and big-endian bytes', keys: 'v2', endian: 'big' },
   { label: 'spatial/band/time sharding, index at end', sharded: true },
   { label: 'spatial/band/time sharding, index at start', sharded: true, indexLocation: 'start' },
-]) {
-  test(`reader returns exact values and independent planes for ${options.label}`, async () => {
+]) for (const compact of [false, true]) {
+  test(`reader returns exact values and independent planes for ${options.label}${compact ? ', compact cache' : ''}`, async () => {
     const readable = buildSyntheticStore(spec);
     writeLayout(readable, 'data', [2, 1, 3, 5], options);
     writeLayout(readable, 'mask', [3, 2, 4], options);
     writeLayout(readable, 'coverage', [2, 4, 3], options);
     const store = await openStore('memory://layouts', { store: readable, workers: 0 });
+    if (compact) assert.equal(store.enableCompactCache(), true);
     assert.ok(store.notes.some((note) => /chunk layout/.test(note)));
     const level = store.levels[0];
     assert.deepEqual([level.chunkHeight, level.chunkWidth], [3, 5]);
@@ -91,6 +92,8 @@ for (const options of [
         assert.equal(coverage[y * 5 + x], inside ? observed(t, gy, gx) : 0);
       }
     }
+    if (compact) assert.ok(store.peekCompact(0, 0, 0, 0), 'assembled values retain packed backing');
+    assert.deepEqual([...store.samplePixel(0, 0, 0, 3, 0, 0)], [0, 1, 2].map((b) => value(3, b, 0, 0)));
     const requests = readable.log.length;
     await store.getRaw(0, 0, 0, 3);
     await store.getMask(0, 0, 0, 3);

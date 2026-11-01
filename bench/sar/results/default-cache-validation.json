@@ -1,0 +1,20 @@
+{
+  "date_local": "2026-10-18",
+  "scope": "Bounded native-resolution startup/refill buffers and coordinated movie prefetch; cache budgets unchanged",
+  "javascript_unit": {"passed": 573, "failed": 0, "skipped": 0},
+  "browser": {
+    "passed": 6,
+    "specs": ["viewer-masks", "viewer-dual-pol", "viewer-lifecycle", "viewer-coarse"],
+    "note": "Five mask/SAR/lifecycle tests passed initially. The coarse-first timing assertion failed during brief diagnostic contention, then passed in an isolated rerun; the initial failure is retained in the local Playwright artifacts."
+  },
+  "regressions": [
+    "26-date rolling fake cache at 60 steps/s, multiple wraps, asynchronous loads, capacity resize and speed changes",
+    "Non-wrapping playback",
+    "Explicit per-cell prefetch timestep limit preserves existing unlimited compressed lookahead behavior",
+    "Current frame and demand batch headroom",
+    "Camera changes abort old buffer pumps"
+  ],
+  "package_assets": "check-pack passed: 95 files, 89 reachable from exports",
+  "syntax_and_whitespace": "Checks passed",
+  "release": "No release, deployment, upload, commit or push"
+}

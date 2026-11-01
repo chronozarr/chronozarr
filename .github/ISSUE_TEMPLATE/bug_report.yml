@@ -1,0 +1,53 @@
+name: Bug report
+description: Report a problem with the chronozarr command, Python package or viewer
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: chronozarr version
+      description: Output of `chronozarr --version`.
+      placeholder: "chronozarr, version 0.5.1"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: For example macOS 26, Ubuntu 24.04, Windows 11.
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: Output of `python --version` in the environment where the command ran.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command run
+      description: The exact command with its arguments. Quote any glob pattern.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Full error output
+      description: Paste the whole output, not only the last line.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: chronozarr doctor output
+      description: >-
+        Needed when a hosted store is involved. Run `chronozarr doctor <store URL>` and paste
+        the output. Remove any login, token or signed query string from the URL first.
+      render: shell
+    validations:
+      required: false

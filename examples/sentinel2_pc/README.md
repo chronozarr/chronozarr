@@ -138,7 +138,7 @@ uv run python examples/sentinel2_pc/bench.py compare --workloads lab-ucayali-x2 
     --configs baseline,auto,auto-rows1024,auto-mem1500 --reps 3 --lab 0,0,0 --baseline-ref d7c2ce1
 ```
 
-On one laptop and home connection (2026-10-10), the default settings were 1.9 to 4.7 times faster than the earlier implementation on five Planetary Computer workloads. Peak memory was 3 to 4 times lower on full-size AOIs, and the output arrays were bit-exact. Against a local server without shaping the speed-up was 7.9 times. The tables, method, failures and limits are in [evidence](../../docs/evidence.md#sentinel-2-ingest-performance). Only this machine has been measured so far.
+On one laptop and home connection (2026-10-10), the default settings were 1.9 to 4.7 times faster than this example's own earlier implementation on five Planetary Computer workloads. Peak memory was 3 to 4 times lower on full-size AOIs, and the output arrays were bit-exact. Against a local server without shaping the speed-up was 7.9 times. The tables, method, failures and limits are in [evidence](../../docs/evidence.md#sentinel-2-ingest-performance). Only this machine has been measured so far.
 
 ## What the script does
 

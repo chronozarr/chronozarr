@@ -280,7 +280,12 @@ def open_input(source: IcechunkInput, variable: str | None, mask_var: str | None
         names += [
             n for n in (mapping, "spatial_ref", "crs") if isinstance(n, str) and n in dataset
         ]
-        selected = dataset[list(dict.fromkeys(names))].isel(dict(source.indexers))
+        # Preserve dimension roles for the converter; it squeezes singleton auxiliary axes.
+        indexers = {
+            name: slice(index, index + 1) if isinstance(index, int) else index
+            for name, index in source.indexers.items()
+        }
+        selected = dataset[list(dict.fromkeys(names))].isel(indexers)
         selected, time_note = _forecast_times(selected, variable)
         identity = {
             "repository": redact_url(str(source.repository)),

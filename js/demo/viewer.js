@@ -18,6 +18,7 @@ import { redactText, redactUrl } from '../chronozarr/redact.js';
 import { toggleExportPanel } from './export.js';
 import { FrameMonitor, formatBytes, formatMs, formatRate, hitRate, readStats } from './perf.js';
 import { Renderer } from './renderer.js';
+import { prepareMovieCache } from './cache-policy.js';
 import { MAX_SCALE, bindViewerInput } from './input.js';
 import { formatValue, sidebarHtml } from './inspector.js';
 import { COLORMAPS, colormapGradient, colormapIndex } from '../shared/colormaps.js';
@@ -246,7 +247,7 @@ class Viewer {
    * metadata (`openMs`), to the first frame that covers the whole view at some level (`coarseMs`, from the call;
    * `coarseAfterMetadataMs`) and to the first complete frame at the target level (`firstPaintMs`).
    * @param {string} url
-   * @param {{lod?:number, fetch?:typeof fetch, maxCacheBytes?:number, workers?:number, camera?:{cx:number,cy:number,scale:number},
+   * @param {{lod?:number, fetch?:typeof fetch, maxCacheBytes?:number, totalBytes?:number, workers?:number, camera?:{cx:number,cy:number,scale:number},
    *   viewSearch?:string, store?:object, startTime?:(store:object)=>Promise<number>}} [options]  `viewSearch`: a query string whose t, p, b, z, c parameters restore the view (see permalink.js).
    *   `store`: a store the caller has opened and checked (open-store.js); it is used as is, with no second read.
    *   `startTime`: where to start in time when `viewSearch` names no timestep (start-time.js); without it, the first timestep.
@@ -262,7 +263,7 @@ class Viewer {
     const started = performance.now();
     let store = options.store ?? null;
     try {
-      store ??= await openStore(url, { fetch: options.fetch, maxCacheBytes: options.maxCacheBytes, workers: options.workers });
+      store ??= await openStore(url, { fetch: options.fetch, maxCacheBytes: options.maxCacheBytes, totalBytes: options.totalBytes, workers: options.workers });
       checkUniformChunks(store);
     } catch (error) {
       const failure = await explainOpenError(error, { url });
@@ -295,6 +296,7 @@ class Viewer {
     store.evictionScore = (entry) => this.#storeScore(entry);
     this.bands = normalizeBands(store.attrs.bands);
     this.dtype = store.dtype;
+    prepareMovieCache(store);
     this.#configurePool();
     this.#playback = this.#createPlayback();
     this.#movieMemo = null;
@@ -365,6 +367,7 @@ class Viewer {
   #beginView(kind) {
     this.#viewTiming = { kind, startedAt: performance.now(), coarseAt: null, fullAt: null };
     if (kind === 'camera') {
+      this.#stopBufferPumps();
       this.#dropSpeculativeFetches();
       this.#hook('view');
     }
@@ -626,16 +629,18 @@ class Viewer {
     this.#coarseLoop = null;
     const renderer = new Renderer(canvas);
     const first = store.levels[0];
-    renderer.configure({ dtype: this.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots: Math.max(4, 2 * cells.length + 4), hasMask: store.hasMask });
+    const bytesPerSample = first.chunkBytes / (first.nBand * first.chunkWidth * first.chunkHeight);
+    const slots = renderer.planSlots(first.nBand, first.chunkWidth, first.chunkHeight, POOL_BUDGET_BYTES, Math.max(4, 2 * cells.length + 4), bytesPerSample, store.hasMask, store.compactCacheEnabled);
+    renderer.configure({ dtype: this.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots, hasMask: store.hasMask, compact: store.compactCacheEnabled });
     const camera = { ...this.camera, scale: this.camera.scale * scale };
     const chunksFor = (t) => cells.flatMap(([row, col]) => [t].map((ct) => [row, col, ct]));
-    const masksReady = (t) => !store.hasMask || cells.every(([row, col]) => store.peekMask(lod, row, col, t));
+    const masksReady = (t) => !store.hasMask || cells.every(([row, col]) => store.hasCachedMask(lod, row, col, t));
     return {
       canvas,
       lod,
       cellCount: cells.length,
       fits: (timesteps) => store.loopFits(lod, cells.length, timesteps),
-      isReady: (t) => chunksFor(t).every(([row, col, ct]) => store.peekRaw(lod, row, col, ct)) && masksReady(t),
+      isReady: (t) => chunksFor(t).every(([row, col, ct]) => store.hasCachedRaw(lod, row, col, ct)) && masksReady(t),
       /** Fetch timestep t for every cell, with its validity mask, at demand priority. */
       prepare: (t, signal) =>
         Promise.all([...chunksFor(t).map(([row, col, ct]) => store.getRaw(lod, row, col, ct, { signal })), ...cells.map(([row, col]) => this.#maskRead(lod, row, col, t, signal))]),
@@ -905,11 +910,11 @@ class Viewer {
   #cellReady(lod, row, col, t) {
     const { store, renderer } = this;
     for (const ct of [t]) {
-      if (!renderer.isResident(chunkKey(lod, row, col, ct)) && !store.peekRaw(lod, row, col, ct)) return false;
+      if (!renderer.isResident(chunkKey(lod, row, col, ct)) && !store.hasCachedRaw(lod, row, col, ct)) return false;
     }
     if (store.hasMask) {
       const slot = renderer.peekSlot(chunkKey(lod, row, col, t));
-      if (!(slot >= 0 && renderer.hasMaskAt(slot)) && !store.peekMask(lod, row, col, t)) return false;
+      if (!(slot >= 0 && renderer.hasMaskAt(slot)) && !store.hasCachedMask(lod, row, col, t)) return false;
     }
     return true;
   }
@@ -941,8 +946,14 @@ class Viewer {
     const cells = movie ? this.#visibleCells(lod) : [...this.#view.cells].map((k) => k.split('/').map(Number));
     const seek = !movie && this.#seekPending;
     if (!movie) this.#seekPending = false;
-    // Only as far ahead as the link lets the movie play in the next few seconds: the rest would be fetched for nothing if it stops.
-    const maxSteps = movie && this.#playback?.linkLimited ? Math.ceil(LINK_PREFETCH_SECONDS * this.#playback.effectiveStepsPerSecond) + 1 : undefined;
+    // A movie plans no more timesteps than its decoded startup/refill window holds (compressed-only speculation must not push
+    // those frames out), and, on a link that limits it, no further ahead than the next few seconds of playback at the speed it
+    // delivers: the rest would be fetched for nothing if it stops.
+    let maxSteps;
+    if (movie) {
+      maxSteps = this.#playbackCapacity(lod) + 1 + BUFFER_BATCH;
+      if (this.#playback?.linkLimited) maxSteps = Math.min(maxSteps, Math.ceil(LINK_PREFETCH_SECONDS * this.#playback.effectiveStepsPerSecond) + 1);
+    }
     const job = this.store
       .prefetch({
         lod,
@@ -1047,8 +1058,25 @@ class Viewer {
       isReady: (index) => this.isTimestepReady(index),
       linkSteps: () => this.#linkStepsAhead(),
       prepare: (indices) => this.#fillBuffer(indices),
+      maxAhead: () => this.#playbackCapacity(),
       onChange: () => this.#updatePlayUi(),
     });
+  }
+
+  /** Future whole frames retained at the current level. Reserve the shown frame and one demand batch;
+   * loopFits also accounts for masks and leaves headroom for unrelated cached chunks. Re-evaluate after
+   * camera, pinned-level or cache-budget changes rather than freezing a startup estimate. */
+  #playbackCapacity(lod = this.#targetLod()) {
+    const cells = this.#visibleCells(lod).length;
+    let lo = 0;
+    let hi = this.store.times.length;
+    while (lo < hi) {
+      const frames = Math.ceil((lo + hi) / 2);
+      if (this.store.loopFits(lod, cells, frames)) lo = frames;
+      else hi = frames - 1;
+    }
+    // A loop that fits can stay fully warm; otherwise use a rolling window with room for refills.
+    return lo >= this.store.times.length ? lo - 1 : Math.max(1, lo - 1 - BUFFER_BATCH);
   }
 
   /**
@@ -1117,7 +1145,7 @@ class Viewer {
   #loadTimestep(lod, t, signal) {
     return Promise.all(
       this.#visibleCells(lod).map(([row, col]) =>
-        Promise.all([this.store.getRaw(lod, row, col, t, { signal }), this.#maskRead(lod, row, col, t, signal)]),
+        Promise.all([this.store.ensureRaw(lod, row, col, t, { signal }), this.#maskRead(lod, row, col, t, signal)]),
       ),
     );
   }
@@ -1153,8 +1181,8 @@ class Viewer {
     const first = store.levels[0];
     const wanted = store.levels.reduce((n, l) => n + l.gridRows * l.gridCols * l.nTime, 0);
     const bytesPerSample = first.chunkBytes / (first.nBand * first.chunkWidth * first.chunkHeight);
-    const slots = renderer.planSlots(first.nBand, first.chunkWidth, first.chunkHeight, POOL_BUDGET_BYTES, wanted, bytesPerSample, store.hasMask);
-    renderer.configure({ dtype: this.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots, hasMask: store.hasMask });
+    const slots = renderer.planSlots(first.nBand, first.chunkWidth, first.chunkHeight, POOL_BUDGET_BYTES, wanted, bytesPerSample, store.hasMask, store.compactCacheEnabled);
+    renderer.configure({ dtype: this.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots, hasMask: store.hasMask, compact: store.compactCacheEnabled });
     this.#maxVisibleCells = Math.floor(slots / 2);
   }
 
@@ -1267,7 +1295,7 @@ class Viewer {
     const cells = this.#visibleCells(lod);
     const count = store.times.length;
     let cold = 0;
-    for (const [row, col] of cells) for (let t = 0; t < count; t++) if (!store.peekRaw(lod, row, col, t)) cold++;
+    for (const [row, col] of cells) for (let t = 0; t < count; t++) if (!store.hasCachedRaw(lod, row, col, t)) cold++;
     const bytesPerStep = this.#wireBytesPerStep(lod, cells);
     // The speed asked for, not the one the link leaves (#linkStepsAhead): the level is the one that can feed what was asked for.
     const stepsPerSecond = this.#playback?.displayStepsPerSecond ?? this.#speed;
@@ -1368,7 +1396,7 @@ class Viewer {
     const key = chunkKey(lod, row, col, t);
     const resident = renderer.slotOf(key);
     if (resident >= 0) return resident;
-    const data = this.store.peekRaw(lod, row, col, t);
+    const data = this.store.peekCompact(lod, row, col, t) ?? this.store.peekRaw(lod, row, col, t);
     return data ? renderer.upload(key, { lod, row, col, t }, data) : -1;
   }
 
@@ -1398,7 +1426,7 @@ class Viewer {
           const chunk = chunkKey(lod, row, col, ct);
           let slot = renderer.peekSlot(chunk);
           if (slot < 0) {
-            const data = store.peekRaw(lod, row, col, ct);
+            const data = store.peekCompact(lod, row, col, ct) ?? store.peekRaw(lod, row, col, ct);
             if (!data) continue;
             slot = renderer.upload(chunk, { lod, row, col, t: ct }, data, { background: true });
           }
@@ -1662,7 +1690,7 @@ class Viewer {
     let pixels = 0;
     for (const [row, col] of cells) {
       const { width, height } = store.cellExtent(lod, row, col);
-      for (const ct of chunks) if (!store.peekRaw(lod, row, col, ct)) pixels += width * height;
+      for (const ct of chunks) if (!store.hasCachedRaw(lod, row, col, ct)) pixels += width * height;
     }
     return pixels * bytesPerPixel;
   }
@@ -1678,7 +1706,7 @@ class Viewer {
     const { signal } = wave.controller;
     let done = 0;
     for (const [row, col] of wanted) {
-      Promise.all([this.store.getRaw(lod, row, col, t, { signal }), this.#maskRead(lod, row, col, t, signal)]).then(
+      Promise.all([this.store.ensureRaw(lod, row, col, t, { signal }), this.#maskRead(lod, row, col, t, signal)]).then(
         () => {
           if (signal.aborted) return;
           this.#setProgress((++done / wanted.length) * 0.98);

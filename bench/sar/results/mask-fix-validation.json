@@ -1,0 +1,20 @@
+{
+  "date_local": "2026-10-18",
+  "scope": "Compact auxiliary retention and nonmaterializing readiness checks; local changes only",
+  "javascript_unit": {
+    "command": "node --test js/test/*.test.js",
+    "passed": 570,
+    "failed": 0,
+    "skipped": 0
+  },
+  "browser": {
+    "command": "playwright test viewer-masks.spec.js viewer-dual-pol.spec.js viewer-lifecycle.spec.js --workers=1",
+    "passed": 5,
+    "failed": 0,
+    "coverage": ["masked pixel rendering and chart gaps", "SAR composite GPU/CPU agreement", "band switching", "inspector and ratio charts", "store replacement and cache cleanup"]
+  },
+  "package_assets": "check-pack passed: 95 files, 89 reachable from exports",
+  "whitespace": "git diff --check passed",
+  "regression": "320 mixed 512-square masks exceed the original auxiliary budget; repeated presence scans, exact restores and budget resize perform no additional mask requests",
+  "release": "No release, deployment, upload, commit or push"
+}

@@ -2,8 +2,6 @@
 
 This checkout targets Python and npm **0.5.1**. Use these instructions to run local source or qualify local artifacts. For a registry installation, start with the [quickstart](quickstart.md). The [release notes](release-0.5.1.md) describe changes and store compatibility.
 
-The earlier [0.5.0rc1 preparation record](release-0.5.0rc1.md) describes the unpublished candidate that preceded this release. It is a historical record; the current guides all target 0.5.1.
-
 ## Install the command line tool
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then use a checkout of the release source. Replace `/absolute/path/to/chronozarr` with its local directory. The `v0.5.1` tag identifies the release source once publication completes.

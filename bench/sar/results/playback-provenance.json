@@ -1,0 +1,11 @@
+{
+  "head": "ca799a1b985fb6b4090131632f7574508440d84e",
+  "note": "Production benchmark/reader/store sources unchanged throughout runs. Harness gained play-only/fps/resource-diagnostic/provenance options after baseline invocation started; baseline records without play are preliminary.",
+  "sha256": {
+    "js/demo/bench.js": "d0d704627361dbede0373fc7c63b3d5eeda38d2b64d9182d7b894f83cdbab4c8",
+    "js/demo/playback.js": "2e09e221f5efec45384cc9d4f93d6d78bc204e47c8974c4e0c30e5cd59111267",
+    "js/chronozarr/decoder.js": "5f0636acbc5289f00e0efd0dd035debd4c3193ee2e99bbd08eefb1bd104207f0",
+    "data/stores/ucayali_santa_maria/s1-rtc-monthly-v1/zarr.json": "d4170dab38df1b871e8d6e2caf159d2bf0b60426eb79a60e5ceb5915b0cd1740",
+    "data/stores/colorado_yuma/nisar-gcov-v2/zarr.json": "30c43aed96475d1abce3cd7d0d6beb76a51ed571e901a79bd95ce07c35a40010"
+  }
+}

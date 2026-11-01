@@ -826,3 +826,59 @@ test('masks count against the idle allowance too', async () => {
   assert.ok(withMasks.fetched <= withoutMasks.fetched, 'masks used part of the same allowance');
   assert.ok(masked.stats.cache.speculativeBytes <= budget + SMALL_CHUNK * 2, `speculative bytes stay near the cap (${masked.stats.cache.speculativeBytes})`);
 });
+
+test('loopFits includes the compact mask window and leaves unmasked data capacity unchanged', async () => {
+  const options = { totalBytes: 8 * 1024 ** 3, workers: 0 };
+  const spec = { ...SMALL, dtype: 'uint8', specVersion: '0.3.0' };
+  const masked = await openStore('memory://masked-fit', { ...options, store: buildSyntheticStore({ ...spec, mask: true }) });
+  const plain = await openStore('memory://plain-fit', { ...options, store: buildSyntheticStore(spec) });
+  assert.equal(plain.loopFits(0, 400000), true, 'data alone fits its decoded window');
+  assert.equal(masked.loopFits(0, 400000), false, 'binary mask backing would exceed its bounded tier');
+  assert.equal(masked.loopFits(0, 1000), true, 'ordinary views fit both tiers');
+  masked.close();
+  plain.close();
+});
+
+test('reader restores every mixed 512px mask after decoded eviction and budget resize without another fetch', async () => {
+  // Start with tiny fixture payloads, then enlarge the declared spatial geometry.
+  // Only masks are requested: four shared source patterns avoid allocating a full
+  // imagery fixture or retaining 80 MiB of independent source-mask buffers.
+  const nTime = 320;
+  const chunk = 512;
+  const readable = buildSyntheticStore({ ...SMALL, nTime, sharded: false, specVersion: '0.3.0', mask: true });
+  const patterns = Array.from({ length: 4 }, (_, t) => Uint8Array.from({ length: chunk * chunk }, (_, i) => maskValue(t, Math.floor(i / chunk), i % chunk)));
+  for (const name of ['data', 'mask']) {
+    const key = `/0/${name}/zarr.json`;
+    const meta = JSON.parse(new TextDecoder().decode(readable.files.get(key)));
+    meta.shape.splice(-2, 2, chunk, chunk);
+    meta.chunk_grid.configuration.chunk_shape.splice(-2, 2, chunk, chunk);
+    readable.files.set(key, new TextEncoder().encode(JSON.stringify(meta)));
+  }
+  for (let t = 0; t < nTime; t++) readable.files.set(`/0/mask/c/${t}/0/0`, patterns[t % 4]);
+  const MIB = 1024 ** 2;
+  const store = await openStore('memory://evicted-masks', { store: readable, workers: 0, totalBytes: 768 * MIB });
+  try {
+    for (let t = 0; t < nTime; t++) assert.deepEqual(await store.getMask(0, 0, 0, t), patterns[t % 4]);
+    assert.ok(nTime * chunk * chunk > store.budgets().auxBytes, 'decoded source masks exceed even the full auxiliary budget');
+    const lastMask = store.peekMask(0, 0, 0, nTime - 1);
+    const beforeProbeBytes = store.estimatedBytes();
+    for (let probe = 0; probe < 3; probe++) for (let t = 0; t < nTime; t++) assert.equal(store.hasCachedMask(0, 0, 0, t), true);
+    assert.equal(store.estimatedBytes(), beforeProbeBytes, 'readiness probes do not allocate decoded masks');
+    assert.equal(store.peekMask(0, 0, 0, nTime - 1), lastMask, 'readiness probes do not evict a decoded mask');
+    const initialReads = readable.log.filter(({ key }) => key.startsWith('/0/mask/c/')).length;
+    assert.equal(initialReads, nTime, 'one source read per timestep');
+    for (let loop = 0; loop < 2; loop++) {
+      if (loop === 1) store.setBudgets({ totalBytes: 64 * MIB });
+      for (let t = 0; t < nTime; t++) {
+        const mask = store.peekMask(0, 0, 0, t);
+        assert.deepEqual(mask, patterns[t % 4], `exact restored mask at timestep ${t}`);
+        assert.equal(await store.getMask(0, 0, 0, t), mask, 'demand joins the synchronously restored decoded mask');
+      }
+      assert.ok(store.estimatedBytes() <= store.budgets().auxBytes, 'auxiliary retention obeys its cap, including after resize');
+    }
+    assert.equal(readable.log.filter(({ key }) => key.startsWith('/0/mask/c/')).length, initialReads, 'no mask refetch through peek or demand after decoded eviction');
+    assert.equal(readable.log.filter(({ key }) => key.startsWith('/0/data/c/')).length, 0);
+  } finally {
+    store.close();
+  }
+});

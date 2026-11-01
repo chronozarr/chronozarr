@@ -13,6 +13,7 @@ const sources = {
   'docs/viewer.md': { route: 'viewer', description: 'The chronozarr viewer: playback, products, pixel time series, video export and links to a view.' },
   // Create and share
   'docs/convert.md': { route: 'guides/convert', description: 'Convert dated GeoTIFFs, COG manifests, NetCDF, Zarr or an xarray DataArray into a chronozarr store.' },
+  'docs/tile-ripper.md': { route: 'guides/tile-ripper', description: 'Convert completed Tile-Ripper observations through the unreleased Python bridge, preserving science, selected QA and source provenance.' },
   'docs/preview.md': { route: 'guides/preview', description: 'Open a local chronozarr store in the viewer with chronozarr preview. The data stays on your computer.' },
   'docs/share.md': { route: 'guides/share', description: 'Send a temporary link to a store on your computer with chronozarr share: what the recipient needs, and the limits.' },
   'docs/publish.md': { route: 'guides/publish', description: 'Publish a store to Amazon S3, Cloudflare R2, Google Cloud Storage or Azure with chronozarr publish, for a link that lasts.' },
@@ -55,11 +56,17 @@ const titles = Object.fromEntries(Object.keys(sources).map((source) => [source, 
 const PATH_LABEL = /^`?(?:\.\.\/)*(?:[\w.-]+\/)*[\w.-]+\.md(?:#[\w-]+)?`?$/;
 
 const siteUrl = 'https://chronozarr.org';
-// llms.txt (llmstxt.org) lists the pages in the sidebar's order, each as raw Markdown. Every key of `sources`
-// appears once; the build fails otherwise. Agents may skip the "Optional" section.
+// Internal records stay published at their URL, but the sidebar, llms.txt, llms-full.txt and the sitemap leave them out.
+const archivedRoutes = JSON.parse(readFileSync(resolve(repo, 'site/archived-pages.json'), 'utf8')).routes;
+const archived = Object.keys(sources).filter((source) => archivedRoutes.includes(`/${sources[source].route}`));
+if (archived.length !== archivedRoutes.length) {
+  throw new Error('site/archived-pages.json names a route that no key of sources publishes');
+}
+// llms.txt (llmstxt.org) lists the pages in the sidebar's order, each as raw Markdown. Every key of `sources` that is
+// not archived appears once; the build fails otherwise. Agents may skip the "Optional" section.
 const llmsSections = [
   ['Start here', ['docs/what-is.md', 'docs/quickstart.md', 'docs/development.md', 'docs/viewer.md']],
-  ['Create and share', ['docs/convert.md', 'docs/preview.md', 'docs/share.md', 'docs/publish.md', 'docs/analyze.md']],
+  ['Create and share', ['docs/convert.md', 'docs/tile-ripper.md', 'docs/preview.md', 'docs/share.md', 'docs/publish.md', 'docs/analyze.md']],
   ['Guides and examples', [
     'docs/sentinel2.md', 'examples/bring_your_data/README.md', 'docs/examples.md', 'docs/png-frames.md', 'docs/append.md',
     'docs/embedding.md', 'docs/notebooks.md', 'docs/private.md', 'docs/hosting.md', 'docs/hosting-providers.md',
@@ -69,12 +76,12 @@ const llmsSections = [
     'docs/cli.md', 'docs/python.md', 'js/README.md', 'js/maplibre/README.md', 'spec/CHRONOZARR.md', 'docs/how-it-works.md',
     'docs/performance.md', 'docs/troubleshooting.md', 'docs/release-0.5.1.md',
   ]],
-  ['Optional', ['docs/evidence.md', 'docs/format-comparison.md', 'docs/release-0.5.1-review.md', 'docs/release-0.5.0rc1.md']],
+  ['Optional', ['docs/evidence.md', 'docs/format-comparison.md']],
 ];
 const listed = llmsSections.flatMap(([, entries]) => entries);
-const unlisted = Object.keys(sources).filter((source) => !listed.includes(source));
-if (unlisted.length || listed.length !== Object.keys(sources).length) {
-  throw new Error(`llmsSections must list every key of sources exactly once; unlisted: ${unlisted.join(', ') || 'none'}`);
+const unlisted = Object.keys(sources).filter((source) => !listed.includes(source) && !archived.includes(source));
+if (unlisted.length || listed.length !== Object.keys(sources).length - archived.length || listed.some((source) => archived.includes(source))) {
+  throw new Error(`llmsSections must list every key of sources that is not archived exactly once; unlisted: ${unlisted.join(', ') || 'none'}`);
 }
 
 /** Repository links in `text` made into links to published pages (`linkTo(route)`) or to GitHub. */

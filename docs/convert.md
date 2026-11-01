@@ -15,9 +15,10 @@
 | A folder or glob of NetCDF files, one per day or month | [A series of NetCDF files](#a-series-of-netcdf-files) |
 | An xarray `DataArray` in Python | [From xarray](#from-xarray) |
 | Icechunk repositories (checkout, Python 3.12+) | [Pinned Icechunk selections](icechunk.md) |
+| Completed Tile-Ripper COG observation outputs (checkout, Python API) | [Direct observation conversion](tile-ripper.md) |
 | Rendered PNG frames | [PNG frames](png-frames.md) |
 
-Every route checks all inputs before it writes anything. Nothing is resampled or rescaled unless you ask.
+Each route checks input metadata before encoding. Payload checks continue as data is read; temporary spill may be written during those checks. Nothing is resampled or rescaled unless you ask.
 
 ## From dated GeoTIFFs
 

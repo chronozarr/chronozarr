@@ -46,6 +46,10 @@ The [full quickstart](https://chronozarr.org/quickstart) has a sample dataset, t
 The checkout also converts [explicit, snapshot-pinned Icechunk selections](docs/icechunk.md),
 including a qualified materialized GFS window and virtual GRIB with explicit Float64 rounding.
 
+The checkout's [Tile-Ripper Python bridge](docs/tile-ripper.md) converts completed
+COG observation outputs directly, joining a selected quality mask to its science
+scene and retaining source identities without an intermediate stacked store.
+
 ## Share a store
 
 | Link | Command | Lasts | Needs |
@@ -96,4 +100,4 @@ The pages are written in [`docs/`](https://github.com/chronozarr/chronozarr/tree
 
 ## License
 
-See [LICENSE](https://github.com/chronozarr/chronozarr/blob/main/LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/chronozarr/chronozarr/blob/main/LICENSE).

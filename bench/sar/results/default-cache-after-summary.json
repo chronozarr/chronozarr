@@ -1,0 +1,1010 @@
+[
+  {
+    "label": "after",
+    "sensor": "nisar",
+    "repeat": 0,
+    "errors": [],
+    "phases": [
+      {
+        "name": "cold",
+        "args": {
+          "view": "full"
+        },
+        "elapsedMs": 276,
+        "loopRates": [],
+        "stepContinuity": {
+          "count": 0,
+          "wraps": 0,
+          "discontinuities": 0
+        },
+        "paints": {
+          "count": 1,
+          "complete": 1,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "firstCompleteLod0Ms": 275.5,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "readerNetwork": {
+          "requests": 145,
+          "bytes": 55005477,
+          "deduped": 0,
+          "inflight": 0
+        },
+        "pageRequestsByArray": {
+          "metadata": {
+            "requests": 1,
+            "bytes": 74653,
+            "uniquePaths": 1,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          },
+          "0/data": {
+            "requests": 72,
+            "bytes": 54933216,
+            "uniquePaths": 72,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          },
+          "0/mask": {
+            "requests": 72,
+            "bytes": 29377,
+            "uniquePaths": 72,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          }
+        },
+        "cacheMax": {
+          "decodedBytes": 75497472,
+          "compressedBytes": 54917304,
+          "imageryBytes": 130414776,
+          "auxBytes": 19562619,
+          "estimatedBytes": 149977395
+        },
+        "sampledBudgetViolations": 0
+      },
+      {
+        "name": "prefetch",
+        "args": {},
+        "elapsedMs": 4089.2999997138977,
+        "loopRates": [],
+        "stepContinuity": {
+          "count": 0,
+          "wraps": 0,
+          "discontinuities": 0
+        },
+        "paints": {
+          "count": 0,
+          "complete": 0,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [],
+          "cells": []
+        },
+        "firstCompleteLod0Ms": null,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "readerNetwork": {
+          "requests": 2592,
+          "bytes": 986940874
+        },
+        "pageRequestsByArray": {
+          "0/mask": {
+            "requests": 1296,
+            "bytes": 529309,
+            "uniquePaths": 1296,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          },
+          "0/data": {
+            "requests": 1296,
+            "bytes": 986979591,
+            "uniquePaths": 1296,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          }
+        },
+        "cacheMax": {
+          "decodedBytes": 1434451968,
+          "compressedBytes": 674419101,
+          "imageryBytes": 1610580469,
+          "auxBytes": 93358375,
+          "estimatedBytes": 1703484874
+        },
+        "sampledBudgetViolations": 0
+      },
+      {
+        "name": "play",
+        "args": {
+          "fps": 30,
+          "loops": 3
+        },
+        "elapsedMs": 5334.599999904633,
+        "finished": true,
+        "steps": 78,
+        "rate": 14.480761274306992,
+        "stats": {
+          "steps": 78,
+          "bufferingPauses": 4,
+          "wrapPauses": 0,
+          "bufferingMs": 2750.0999999999995,
+          "longestBufferingMs": 1033.2999999999993,
+          "initialBufferMs": 0,
+          "firstStepAt": 4547.5,
+          "lastStepAt": 9864.9
+        },
+        "loopRates": [
+          13.26963906581741,
+          18.18436145279241,
+          12.95788686768004
+        ],
+        "stepContinuity": {
+          "count": 78,
+          "wraps": 3,
+          "discontinuities": 0
+        },
+        "paints": {
+          "count": 78,
+          "complete": 78,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "firstCompleteLod0Ms": 2.5999999046325684,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "readerNetwork": {
+          "requests": 2233,
+          "bytes": 1315819699
+        },
+        "pageRequestsByArray": {
+          "0/mask": {
+            "requests": 504,
+            "bytes": 205648,
+            "uniquePaths": 504,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          },
+          "0/data": {
+            "requests": 1729,
+            "bytes": 1316898514,
+            "uniquePaths": 1510,
+            "duplicateRequests": 219,
+            "maxRequestsPerPath": 3
+          }
+        },
+        "cacheMax": {
+          "decodedBytes": 1609564160,
+          "compressedBytes": 175617347,
+          "imageryBytes": 1610560908,
+          "auxBytes": 97979530,
+          "estimatedBytes": 1708392093
+        },
+        "sampledBudgetViolations": 0
+      },
+      {
+        "name": "play",
+        "args": {
+          "fps": 60,
+          "loops": 3
+        },
+        "elapsedMs": 4441.799999713898,
+        "finished": true,
+        "steps": 78,
+        "rate": 17.567074283628404,
+        "stats": {
+          "steps": 78,
+          "bufferingPauses": 4,
+          "wrapPauses": 0,
+          "bufferingMs": 2733.199999999999,
+          "longestBufferingMs": 716.6000000000004,
+          "initialBufferMs": 41.399999809265864,
+          "firstStepAt": 9948.2,
+          "lastStepAt": 14331.4
+        },
+        "loopRates": [
+          20.75894710291501,
+          20.935663095260022,
+          13.388948970136196
+        ],
+        "stepContinuity": {
+          "count": 78,
+          "wraps": 3,
+          "discontinuities": 0
+        },
+        "paints": {
+          "count": 78,
+          "complete": 78,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "firstCompleteLod0Ms": 45.39999961853027,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "readerNetwork": {
+          "requests": 1448,
+          "bytes": 1108072870
+        },
+        "pageRequestsByArray": {
+          "0/data": {
+            "requests": 1453,
+            "bytes": 1108393983,
+            "uniquePaths": 1337,
+            "duplicateRequests": 116,
+            "maxRequestsPerPath": 3
+          }
+        },
+        "cacheMax": {
+          "decodedBytes": 1609564160,
+          "compressedBytes": 847573,
+          "imageryBytes": 1610411733,
+          "auxBytes": 97979530,
+          "estimatedBytes": 1708391263
+        },
+        "sampledBudgetViolations": 0
+      },
+      {
+        "name": "switch",
+        "args": {},
+        "elapsedMs": 847.8000001907349,
+        "loopRates": [],
+        "stepContinuity": {
+          "count": 20,
+          "wraps": 0,
+          "discontinuities": 0
+        },
+        "paints": {
+          "count": 23,
+          "complete": 16,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "firstCompleteLod0Ms": 5.5,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "readerNetwork": {
+          "requests": 225,
+          "bytes": 100427918
+        },
+        "pageRequestsByArray": {
+          "0/data": {
+            "requests": 225,
+            "bytes": 150858390,
+            "uniquePaths": 171,
+            "duplicateRequests": 54,
+            "maxRequestsPerPath": 3
+          }
+        },
+        "cacheMax": {
+          "decodedBytes": 1609564160,
+          "compressedBytes": 823277,
+          "imageryBytes": 1610387437,
+          "auxBytes": 97979530,
+          "estimatedBytes": 1708366967
+        },
+        "sampledBudgetViolations": 0
+      }
+    ]
+  },
+  {
+    "label": "after",
+    "sensor": "nisar",
+    "repeat": 1,
+    "errors": [],
+    "phases": [
+      {
+        "name": "cold",
+        "args": {
+          "view": "full"
+        },
+        "elapsedMs": 242,
+        "loopRates": [],
+        "stepContinuity": {
+          "count": 0,
+          "wraps": 0,
+          "discontinuities": 0
+        },
+        "paints": {
+          "count": 1,
+          "complete": 1,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "firstCompleteLod0Ms": 241.60000038146973,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "readerNetwork": {
+          "requests": 145,
+          "bytes": 55005477,
+          "deduped": 0,
+          "inflight": 0
+        },
+        "pageRequestsByArray": {
+          "metadata": {
+            "requests": 1,
+            "bytes": 74653,
+            "uniquePaths": 1,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          },
+          "0/data": {
+            "requests": 72,
+            "bytes": 54933216,
+            "uniquePaths": 72,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          },
+          "0/mask": {
+            "requests": 72,
+            "bytes": 29377,
+            "uniquePaths": 72,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          }
+        },
+        "cacheMax": {
+          "decodedBytes": 75497472,
+          "compressedBytes": 54917304,
+          "imageryBytes": 130414776,
+          "auxBytes": 19562619,
+          "estimatedBytes": 149977395
+        },
+        "sampledBudgetViolations": 0
+      },
+      {
+        "name": "prefetch",
+        "args": {},
+        "elapsedMs": 3948,
+        "loopRates": [],
+        "stepContinuity": {
+          "count": 0,
+          "wraps": 0,
+          "discontinuities": 0
+        },
+        "paints": {
+          "count": 0,
+          "complete": 0,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [],
+          "cells": []
+        },
+        "firstCompleteLod0Ms": null,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "readerNetwork": {
+          "requests": 2592,
+          "bytes": 986940874
+        },
+        "pageRequestsByArray": {
+          "0/mask": {
+            "requests": 1296,
+            "bytes": 529309,
+            "uniquePaths": 1296,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          },
+          "0/data": {
+            "requests": 1296,
+            "bytes": 986979591,
+            "uniquePaths": 1296,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          }
+        },
+        "cacheMax": {
+          "decodedBytes": 1434451968,
+          "compressedBytes": 674051465,
+          "imageryBytes": 1610586418,
+          "auxBytes": 93358375,
+          "estimatedBytes": 1703351835
+        },
+        "sampledBudgetViolations": 0
+      },
+      {
+        "name": "play",
+        "args": {
+          "fps": 30,
+          "loops": 3
+        },
+        "elapsedMs": 5345.699999809265,
+        "finished": true,
+        "steps": 78,
+        "rate": 14.42271671562438,
+        "stats": {
+          "steps": 78,
+          "bufferingPauses": 4,
+          "wrapPauses": 0,
+          "bufferingMs": 2766.7000000000007,
+          "longestBufferingMs": 1016.6000000000004,
+          "initialBufferMs": 0,
+          "firstStepAt": 4362.900000095367,
+          "lastStepAt": 9701.7
+        },
+        "loopRates": [
+          13.418496055649019,
+          18.100807573290012,
+          12.731991577892472
+        ],
+        "stepContinuity": {
+          "count": 78,
+          "wraps": 3,
+          "discontinuities": 0
+        },
+        "paints": {
+          "count": 78,
+          "complete": 78,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "firstCompleteLod0Ms": 2.8000001907348633,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "readerNetwork": {
+          "requests": 2224,
+          "bytes": 1302760774
+        },
+        "pageRequestsByArray": {
+          "0/mask": {
+            "requests": 504,
+            "bytes": 205648,
+            "uniquePaths": 504,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          },
+          "0/data": {
+            "requests": 1720,
+            "bytes": 1307623912,
+            "uniquePaths": 1520,
+            "duplicateRequests": 200,
+            "maxRequestsPerPath": 3
+          }
+        },
+        "cacheMax": {
+          "decodedBytes": 1609564160,
+          "compressedBytes": 175541492,
+          "imageryBytes": 1610584055,
+          "auxBytes": 97979530,
+          "estimatedBytes": 1708391342
+        },
+        "sampledBudgetViolations": 0
+      },
+      {
+        "name": "play",
+        "args": {
+          "fps": 60,
+          "loops": 3
+        },
+        "elapsedMs": 4473.200000286102,
+        "finished": true,
+        "steps": 79,
+        "rate": 17.728078549024957,
+        "stats": {
+          "steps": 79,
+          "bufferingPauses": 4,
+          "wrapPauses": 0,
+          "bufferingMs": 2699.9000000000015,
+          "longestBufferingMs": 699.8999999999996,
+          "initialBufferMs": 49.09999990463257,
+          "firstStepAt": 9785,
+          "lastStepAt": 14184.8
+        },
+        "loopRates": [
+          20.252754380853705,
+          20.925553319919516,
+          13.649010446059284
+        ],
+        "stepContinuity": {
+          "count": 79,
+          "wraps": 3,
+          "discontinuities": 0
+        },
+        "paints": {
+          "count": 79,
+          "complete": 79,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "firstCompleteLod0Ms": 54.30000019073486,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "readerNetwork": {
+          "requests": 1468,
+          "bytes": 1115799354
+        },
+        "pageRequestsByArray": {
+          "0/data": {
+            "requests": 1468,
+            "bytes": 1117440400,
+            "uniquePaths": 1323,
+            "duplicateRequests": 145,
+            "maxRequestsPerPath": 3
+          }
+        },
+        "cacheMax": {
+          "decodedBytes": 1609564160,
+          "compressedBytes": 848251,
+          "imageryBytes": 1610412411,
+          "auxBytes": 97979530,
+          "estimatedBytes": 1708391941
+        },
+        "sampledBudgetViolations": 0
+      },
+      {
+        "name": "switch",
+        "args": {},
+        "elapsedMs": 901.8000001907349,
+        "loopRates": [],
+        "stepContinuity": {
+          "count": 20,
+          "wraps": 0,
+          "discontinuities": 0
+        },
+        "paints": {
+          "count": 22,
+          "complete": 16,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "firstCompleteLod0Ms": 11.5,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "readerNetwork": {
+          "requests": 269,
+          "bytes": 130044084
+        },
+        "pageRequestsByArray": {
+          "0/data": {
+            "requests": 271,
+            "bytes": 184254097,
+            "uniquePaths": 205,
+            "duplicateRequests": 66,
+            "maxRequestsPerPath": 3
+          }
+        },
+        "cacheMax": {
+          "decodedBytes": 1609564160,
+          "compressedBytes": 824379,
+          "imageryBytes": 1610388539,
+          "auxBytes": 97979530,
+          "estimatedBytes": 1708368069
+        },
+        "sampledBudgetViolations": 0
+      }
+    ]
+  },
+  {
+    "label": "after",
+    "sensor": "nisar",
+    "repeat": 2,
+    "errors": [],
+    "phases": [
+      {
+        "name": "cold",
+        "args": {
+          "view": "full"
+        },
+        "elapsedMs": 260.19999980926514,
+        "loopRates": [],
+        "stepContinuity": {
+          "count": 0,
+          "wraps": 0,
+          "discontinuities": 0
+        },
+        "paints": {
+          "count": 1,
+          "complete": 1,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "firstCompleteLod0Ms": 259.69999980926514,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "readerNetwork": {
+          "requests": 145,
+          "bytes": 55005477,
+          "deduped": 0,
+          "inflight": 0
+        },
+        "pageRequestsByArray": {
+          "metadata": {
+            "requests": 1,
+            "bytes": 74653,
+            "uniquePaths": 1,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          },
+          "0/data": {
+            "requests": 72,
+            "bytes": 54933216,
+            "uniquePaths": 72,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          },
+          "0/mask": {
+            "requests": 72,
+            "bytes": 29377,
+            "uniquePaths": 72,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          }
+        },
+        "cacheMax": {
+          "decodedBytes": 75497472,
+          "compressedBytes": 54917304,
+          "imageryBytes": 130414776,
+          "auxBytes": 19562619,
+          "estimatedBytes": 149977395
+        },
+        "sampledBudgetViolations": 0
+      },
+      {
+        "name": "prefetch",
+        "args": {},
+        "elapsedMs": 3972.7000002861023,
+        "loopRates": [],
+        "stepContinuity": {
+          "count": 0,
+          "wraps": 0,
+          "discontinuities": 0
+        },
+        "paints": {
+          "count": 0,
+          "complete": 0,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [],
+          "cells": []
+        },
+        "firstCompleteLod0Ms": null,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "readerNetwork": {
+          "requests": 2592,
+          "bytes": 986940874
+        },
+        "pageRequestsByArray": {
+          "0/mask": {
+            "requests": 1296,
+            "bytes": 529309,
+            "uniquePaths": 1296,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          },
+          "0/data": {
+            "requests": 1296,
+            "bytes": 986979591,
+            "uniquePaths": 1296,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          }
+        },
+        "cacheMax": {
+          "decodedBytes": 1434451968,
+          "compressedBytes": 676200386,
+          "imageryBytes": 1610566966,
+          "auxBytes": 93358375,
+          "estimatedBytes": 1703525912
+        },
+        "sampledBudgetViolations": 0
+      },
+      {
+        "name": "play",
+        "args": {
+          "fps": 30,
+          "loops": 3
+        },
+        "elapsedMs": 5414.200000286102,
+        "finished": true,
+        "steps": 78,
+        "rate": 14.271151886587527,
+        "stats": {
+          "steps": 78,
+          "bufferingPauses": 4,
+          "wrapPauses": 0,
+          "bufferingMs": 2833.2000000000007,
+          "longestBufferingMs": 1033.2999999999993,
+          "initialBufferMs": 0,
+          "firstStepAt": 4430.700000286102,
+          "lastStepAt": 9826.2
+        },
+        "loopRates": [
+          13.330489494896398,
+          18.155156764004897,
+          12.430080796658627
+        ],
+        "stepContinuity": {
+          "count": 78,
+          "wraps": 3,
+          "discontinuities": 0
+        },
+        "paints": {
+          "count": 78,
+          "complete": 78,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "firstCompleteLod0Ms": 2.5999999046325684,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "readerNetwork": {
+          "requests": 2226,
+          "bytes": 1306437743
+        },
+        "pageRequestsByArray": {
+          "0/mask": {
+            "requests": 504,
+            "bytes": 205648,
+            "uniquePaths": 504,
+            "duplicateRequests": 0,
+            "maxRequestsPerPath": 1
+          },
+          "0/data": {
+            "requests": 1722,
+            "bytes": 1306719520,
+            "uniquePaths": 1506,
+            "duplicateRequests": 216,
+            "maxRequestsPerPath": 3
+          }
+        },
+        "cacheMax": {
+          "decodedBytes": 1609564160,
+          "compressedBytes": 175447710,
+          "imageryBytes": 1610601022,
+          "auxBytes": 97979530,
+          "estimatedBytes": 1708391925
+        },
+        "sampledBudgetViolations": 0
+      },
+      {
+        "name": "play",
+        "args": {
+          "fps": 60,
+          "loops": 3
+        },
+        "elapsedMs": 5613.400000095367,
+        "finished": true,
+        "steps": 79,
+        "rate": 14.097234773179107,
+        "stats": {
+          "steps": 79,
+          "bufferingPauses": 4,
+          "wrapPauses": 0,
+          "bufferingMs": 3799.9000000000015,
+          "longestBufferingMs": 1766.5,
+          "initialBufferMs": 47.600000000000364,
+          "firstStepAt": 9909.6,
+          "lastStepAt": 15442.6
+        },
+        "loopRates": [
+          20.491803278688526,
+          20.091183063067803,
+          8.652534193874947
+        ],
+        "stepContinuity": {
+          "count": 79,
+          "wraps": 3,
+          "discontinuities": 0
+        },
+        "paints": {
+          "count": 79,
+          "complete": 79,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "firstCompleteLod0Ms": 50.5,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "readerNetwork": {
+          "requests": 1450,
+          "bytes": 1102912937
+        },
+        "pageRequestsByArray": {
+          "0/data": {
+            "requests": 1450,
+            "bytes": 1103232061,
+            "uniquePaths": 1343,
+            "duplicateRequests": 107,
+            "maxRequestsPerPath": 2
+          }
+        },
+        "cacheMax": {
+          "decodedBytes": 1609564160,
+          "compressedBytes": 848695,
+          "imageryBytes": 1610412855,
+          "auxBytes": 97979530,
+          "estimatedBytes": 1708392385
+        },
+        "sampledBudgetViolations": 0
+      },
+      {
+        "name": "switch",
+        "args": {},
+        "elapsedMs": 923.1999998092651,
+        "loopRates": [],
+        "stepContinuity": {
+          "count": 20,
+          "wraps": 0,
+          "discontinuities": 0
+        },
+        "paints": {
+          "count": 21,
+          "complete": 15,
+          "partial": 0,
+          "coarse": 0,
+          "levels": [
+            0
+          ],
+          "cells": [
+            72
+          ]
+        },
+        "firstCompleteLod0Ms": 0.40000009536743164,
+        "budgets": {
+          "totalBytes": 1610612736,
+          "decodedBytes": 1610612736,
+          "compressedBytes": 1610612736,
+          "auxBytes": 161061274,
+          "speculativeBytesInitial": 16777216
+        },
+        "readerNetwork": {
+          "requests": 188,
+          "bytes": 59039456
+        },
+        "pageRequestsByArray": {
+          "0/data": {
+            "requests": 194,
+            "bytes": 81278973,
+            "uniquePaths": 110,
+            "duplicateRequests": 84,
+            "maxRequestsPerPath": 5
+          }
+        },
+        "cacheMax": {
+          "decodedBytes": 1609564160,
+          "compressedBytes": 829645,
+          "imageryBytes": 1610393805,
+          "auxBytes": 97979530,
+          "estimatedBytes": 1708373335
+        },
+        "sampledBudgetViolations": 0
+      }
+    ]
+  }
+]

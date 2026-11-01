@@ -119,6 +119,81 @@ def test_local_roundtrip_preserves_raw_values_scale_mask_and_identity(tmp_path: 
     assert identity["indexers"] == {"time": [0, 2], "y": [0, 3], "x": [0, 4]}
 
 
+@pytest.mark.parametrize("forecast", [False, True])
+@pytest.mark.parametrize("index", [0, 2])
+def test_integer_time_selection_preserves_one_timestep_and_mask(
+    tmp_path: Path, forecast: bool, index: int
+) -> None:
+    original = _dataset(forecast=forecast)
+    path, _, snapshot = _repo(tmp_path, original)
+    axis = "lead_time" if forecast else "time"
+    selected = {axis: index, **({"init_time": 0} if forecast else {})}
+    indexes = {**selected, "y": slice(0, 3), "x": slice(0, 4)}
+    out = tmp_path / "out"
+    convert(
+        IcechunkInput(path, indexes, snapshot=snapshot),
+        out,
+        variable="temp",
+        mask_var="valid",
+        nodata=None,
+        chunk_size=16,
+        n_lods=1,
+    )
+    opened = open_store(out)
+    data = opened.to_xarray()
+    assert data.shape == (1, 1, 3, 4)
+    expected_time = (
+        original.init_time.values[0] + original.lead_time.values[index]
+        if forecast
+        else original.time.values[index]
+    )
+    np.testing.assert_array_equal(data.time.values, np.array([expected_time]))
+    np.testing.assert_array_equal(data.values[0, 0], original.temp.isel(selected).values)
+    np.testing.assert_array_equal(opened.read_mask(0), original.valid.isel(selected).values)
+    assert opened.attrs.provenance is not None
+    identity = json.loads(opened.attrs.provenance["notes"].removeprefix("Icechunk import: "))
+    assert identity["snapshot"] == snapshot
+    assert identity["indexers"][axis] == index
+    if forecast:
+        assert identity["indexers"]["init_time"] == 0
+
+
+@pytest.mark.parametrize("forecast", [False, True])
+def test_cli_imports_one_integer_selected_time(tmp_path: Path, forecast: bool) -> None:
+    original = _dataset(forecast=forecast)
+    path, _, snapshot = _repo(tmp_path, original)
+    axis = "lead_time" if forecast else "time"
+    out = tmp_path / "out"
+    args = [
+        "convert",
+        str(path),
+        str(out),
+        "--icechunk",
+        "--icechunk-snapshot",
+        snapshot,
+        "--variable",
+        "temp",
+        "--isel",
+        f"{axis}=1",
+        "--isel",
+        "y=0:3",
+        "--isel",
+        "x=0:4",
+        "--mask-var",
+        "valid",
+        "--nodata",
+        "none",
+    ]
+    if forecast:
+        args.extend(["--isel", "init_time=0"])
+    result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    data = open_store(out).to_xarray()
+    assert data.sizes["time"] == 1
+    selected = {axis: 1, **({"init_time": 0} if forecast else {})}
+    np.testing.assert_array_equal(data.values[0, 0], original.temp.isel(selected).values)
+
+
 def test_branch_advancement_does_not_change_open_plan_or_reuse_staging(tmp_path: Path) -> None:
     original = _dataset()
     path, repo, first = _repo(tmp_path, original)
