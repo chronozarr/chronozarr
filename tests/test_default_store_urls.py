@@ -15,6 +15,7 @@ V03_PREFIXES = (
     "/ucayali_santa_maria/png-v03",
     "/ucayali_santa_maria/s1-rtc-monthly-v1",
     "/colorado_yuma/nisar-gcov-v2",
+    "/lake_mead/imagery-recovered-20261101",
 )
 SCANNED_SUFFIXES = {".py", ".js", ".mjs", ".html", ".json", ".md"}
 SKIPPED_DIRS = {"node_modules", "vendor", "test", "e2e", "support", "__pycache__"}
