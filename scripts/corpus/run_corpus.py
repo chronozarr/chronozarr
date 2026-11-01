@@ -48,12 +48,25 @@ CORPUS = Path(
 RESULTS = CORPUS / "results-2026-10-16.json"
 FETCH_PY = CORPUS / ".venv-fetch" / "bin" / "python"
 TIMEOUT = 600
-WORKTREE_SHA = subprocess.run(
-    ["git", "-C", str(WORKTREE), "rev-parse", "--short", "HEAD"],
-    capture_output=True,
-    text=True,
-    check=True,
-).stdout.strip()
+EVALUATION_POLICY = "source-values-v2"
+
+
+def worktree_revision(root: Path = WORKTREE) -> str:
+    """Identify this checkout without requiring Git when inspecting a source archive."""
+    if not (root / ".git").exists():
+        return "source-archive"
+    try:
+        return subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown-revision"
+
+
+WORKTREE_SHA = worktree_revision()
 # The released chronozarr wheel built from its git tag; needed only to create the Ax venv.
 TAG_WHEEL_ENV = "CHRONOZARR_TAG_WHEEL"
 TAIL_LINES = 60
@@ -315,7 +328,12 @@ FIX_WORDS = re.compile(
 
 
 def auto_class(rec: dict) -> str:
-    """Draft class; the final one is set by hand in classes.json after reading each message."""
+    """Draft source-correctness class; longitude convention is a separate diagnostic.
+
+    A native EPSG:4326 grid may legitimately extend beyond 180 degrees. Its placement,
+    values and validity are checked against the source rather than a longitude spelling.
+    The final message-actionability class is reviewed by hand in classes.json.
+    """
     steps = [s for s in (rec["dry_run"], rec["convert"], rec["validate"]) if s]
     if any(s["timed_out"] for s in steps):
         return "CRASH"
@@ -338,7 +356,6 @@ def auto_class(rec: dict) -> str:
         and values.get("compared", 0) > 0
         and values.get("n_mismatch", 1) == 0
         and values.get("invalid_shown_as_valid", 1) == 0
-        and not checks.get("x_beyond_180")
         and checks.get("range", {}).get("store_outside", 0) == 0
         and checks.get("range", {}).get("source_outside", 0) == 0
     )
@@ -354,7 +371,7 @@ def store_record(key: str, rec: dict) -> None:
     with open(RESULTS.with_suffix(".lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         doc = load_results()
-        doc.setdefault("records", {})[key] = rec
+        doc.setdefault("records", {})[key] = {**rec, "evaluation_policy": EVALUATION_POLICY}
         doc["versions"] = {v: VERSIONS[v]["label"] for v in VERSIONS}
         tmp = RESULTS.with_suffix(".tmp")
         tmp.write_text(json.dumps(doc, indent=1) + "\n")

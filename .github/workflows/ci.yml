@@ -57,6 +57,9 @@ jobs:
       - name: Build distributions
         if: matrix.python-version == '3.11'
         run: uv build
+      - name: Collect tests from the source archive without a checkout
+        if: matrix.python-version == '3.11'
+        run: uv run --no-sync python scripts/check_sdist.py dist/*.tar.gz
 
   js:
     name: JavaScript

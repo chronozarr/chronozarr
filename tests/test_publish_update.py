@@ -10,13 +10,16 @@ import hashlib
 import json
 import shutil
 import urllib.parse
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pytest
 import xarray as xr
+import zarr
 from botocore.stub import Stubber
 from click.testing import CliRunner
+from zarr.errors import ZarrUserWarning
 
 import chronozarr
 import chronozarr._publish_adapters as adapters_module
@@ -365,6 +368,168 @@ def test_updates_a_hosted_store_that_has_no_epsg_code(truth, tmp_path, bucket):
     update = plan_update(plan_for(later, bucket), bucket)
     assert update.hosted_times == 4
     assert update.local_times == 6
+
+
+def refresh_metadata(path: Path, *, consolidated: bool) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ZarrUserWarning)
+        zarr.consolidate_metadata(path)
+    if not consolidated:
+        node = path / "zarr.json"
+        document = json.loads(node.read_text())
+        document.pop("consolidated_metadata", None)
+        node.write_text(json.dumps(document))
+
+
+def omit_optional_geometry_summaries(path: Path, *, consolidated: bool) -> None:
+    root = zarr.open_group(path, mode="r+", zarr_format=3, use_consolidated=False)
+    block = root.attrs["chronozarr"]
+    assert isinstance(block, dict)
+    block.pop("levels", None)
+    block.pop("band_names", None)
+    root.attrs["chronozarr"] = block
+    for _, group in root.groups():
+        attrs = group.attrs.asdict()
+        for key in ("transform", "resolution", "crs"):
+            attrs.pop(key, None)
+        group.attrs.put(attrs)
+        for coordinate in ("x", "y"):
+            if coordinate in group:
+                del group[coordinate]
+    refresh_metadata(path, consolidated=consolidated)
+
+
+@pytest.mark.parametrize("consolidated", [True, False])
+def test_update_refuses_changed_canonical_geometry_without_optional_mirrors(
+    tmp_path, bucket, consolidated
+):
+    first, second = tmp_path / "first", tmp_path / "shifted"
+    values = make_truth(2, 2, 16, 16)
+    encode_head(values, first, 2)
+    omit_optional_geometry_summaries(first, consolidated=consolidated)
+    shutil.copytree(first, second)
+    for node in second.rglob("zarr.json"):
+        document = json.loads(node.read_text())
+        attrs = document.get("attributes", {})
+        for key in ("transform", "spatial:transform"):
+            if key in attrs:
+                attrs[key][2] += 1_000_000
+        if "spatial:bbox" in attrs:
+            attrs["spatial:bbox"][0] += 1_000_000
+            attrs["spatial:bbox"][2] += 1_000_000
+        node.write_text(json.dumps(document))
+    refresh_metadata(second, consolidated=consolidated)
+    assert chronozarr.validate(first) == chronozarr.validate(second) == []
+    publish_first(first, bucket)
+
+    assert "canonical geometry differs" in refusal(second, bucket)
+
+
+def test_update_refuses_changed_canonical_crs_without_consolidation(tmp_path, bucket):
+    first, second = tmp_path / "lcc", tmp_path / "sinusoidal"
+    values = make_truth(2, 2, 16, 16)
+    chronozarr.encode(make_da(values, BANDS), first, crs=LCC_WKT2, chunk_size=CHUNK)
+    shutil.copytree(first, second)
+    for node in second.rglob("zarr.json"):
+        document = json.loads(node.read_text())
+        attrs = document.get("attributes", {})
+        if "proj:wkt2" in attrs:
+            attrs["proj:wkt2"] = SINUSOIDAL_WKT2
+            attrs["_CRS"] = {"wkt": SINUSOIDAL_WKT2}
+        node.write_text(json.dumps(document))
+    for path in (first, second):
+        refresh_metadata(path, consolidated=False)
+        assert chronozarr.validate(path) == []
+    publish_first(first, bucket)
+
+    assert "stored CRS differs" in refusal(second, bucket)
+
+
+@pytest.mark.parametrize("consolidated", [True, False])
+@pytest.mark.parametrize("planes", [True, False])
+def test_update_preserves_a_valid_append_without_optional_geometry_summaries(
+    tmp_path, bucket, consolidated, planes
+):
+    values = make_truth(3, 2, 16, 16)
+    first, second = tmp_path / "first", tmp_path / "later"
+    valid = (values[:, 0] != 0).astype("uint8")
+    initial = {"mask": valid[:2], "coverage": valid[:2] * 2} if planes else {}
+    added = {"mask": valid[2:], "coverage": valid[2:] * 2} if planes else {}
+    encode_head(values, first, 2, **initial)
+    omit_optional_geometry_summaries(first, consolidated=consolidated)
+    shutil.copytree(first, second)
+    append(second, make_da(values, BANDS).isel(time=slice(2, 3)), **added)
+    refresh_metadata(second, consolidated=consolidated)
+    publish_first(first, bucket)
+
+    update = plan_update(plan_for(second, bucket), bucket)
+    publish_update(update, bucket, check_store=ok_checks, fetch_root=fetch_times(3))
+    assert hosted_digests(bucket) == local_digests(second)
+    opened = chronozarr.open_store(bucket.root / PREFIX)
+    for time in range(3):
+        np.testing.assert_array_equal(opened.read(time), values[time])
+        if planes:
+            np.testing.assert_array_equal(opened.read_mask(time), valid[time])
+            np.testing.assert_array_equal(opened.read_coverage(time), valid[time] * 2)
+
+
+def test_update_refuses_when_canonical_hosted_metadata_cannot_be_read(tmp_path, bucket):
+    first = tmp_path / "first"
+    encode_head(make_truth(2, 2, 16, 16), first, 2)
+    omit_optional_geometry_summaries(first, consolidated=False)
+    publish_first(first, bucket)
+    # The hosted root remains readable, but its required canonical data node is unavailable.
+    (bucket.root / PREFIX / "0/data/zarr.json").unlink()
+
+    assert "cannot verify canonical metadata" in refusal(first, bucket)
+
+
+def test_update_compares_canonical_geometry_when_only_one_snapshot_has_mirrors(tmp_path, bucket):
+    values = make_truth(3, 2, 16, 16)
+    first, second = tmp_path / "first", tmp_path / "later"
+    encode_head(values, first, 2)
+    shutil.copytree(first, second)
+    append(second, make_da(values, BANDS).isel(time=slice(2, 3)))
+    root = zarr.open_group(second, mode="r+", zarr_format=3, use_consolidated=False)
+    block = root.attrs["chronozarr"]
+    assert isinstance(block, dict)
+    block.pop("levels")
+    block.pop("crs")
+    root.attrs["chronozarr"] = block
+    for _, group in root.groups():
+        attrs = group.attrs.asdict()
+        for key in ("transform", "resolution", "crs"):
+            attrs.pop(key)
+        group.attrs.put(attrs)
+    refresh_metadata(second, consolidated=True)
+    publish_first(first, bucket)
+
+    update = plan_update(plan_for(second, bucket), bucket)
+    assert (update.hosted_times, update.local_times) == (2, 3)
+
+
+def test_update_resumes_after_descendant_metadata_was_extended_without_consolidation(
+    tmp_path, bucket
+):
+    values = make_truth(3, 2, 16, 16)
+    first, second = tmp_path / "first", tmp_path / "later"
+    encode_head(values, first, 2)
+    omit_optional_geometry_summaries(first, consolidated=False)
+    shutil.copytree(first, second)
+    append(second, make_da(values, BANDS).isel(time=slice(2, 3)))
+    refresh_metadata(second, consolidated=False)
+    publish_first(first, bucket)
+    update = plan_update(plan_for(second, bucket), bucket)
+    bucket.fail_keys = {PREFIX + "zarr.json"}
+    with pytest.raises(PublishError, match="root metadata"):
+        publish_update(update, bucket, check_store=ok_checks, fetch_root=fetch_times(3))
+    bucket.fail_keys.clear()
+    bucket.puts.clear()
+
+    resumed = plan_update(plan_for(second, bucket), bucket)
+    assert [obj.key for obj in resumed.todo] == ["zarr.json"]
+    publish_update(resumed, bucket, check_store=ok_checks, fetch_root=fetch_times(3))
+    assert hosted_digests(bucket) == local_digests(second)
 
 
 def test_refuses_a_hosted_store_with_other_times(stores, truth, tmp_path, bucket):

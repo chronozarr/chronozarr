@@ -426,6 +426,36 @@ def test_scene_mask_applies_offset_and_band_zeros():
     assert n == 1
 
 
+@pytest.mark.parametrize("epsg", [EPSG, EPSG + 1])
+@pytest.mark.parametrize("baseline", [3.0, 5.0])
+def test_single_scene_loader_matches_the_ingest_primitives(tmp_path, epsg, baseline):
+    grid = _grid()
+    hrefs = scene_files(tmp_path, np.random.default_rng(7), "single", grid, 0, 0, epsg=epsg)
+    ref = scene("single", date(2024, 1, 1), hrefs, baseline=baseline)
+    expected = np.stack(
+        [reproject_ref(hrefs[b], grid, np.uint16, Resampling.bilinear) for b in BANDS]
+    )
+    valid = np.isin(exact_nearest_ref(hrefs["SCL"], grid), list(mosaic.SCL_VALID))
+    mosaic.apply_scene_mask(expected, valid, ref.boa_offset)
+    values, mask = mosaic.load_scene(
+        ref, grid.transform, grid.crs, grid.height, grid.width, sign=str
+    )
+    np.testing.assert_array_equal(values, expected)
+    np.testing.assert_array_equal(mask, valid)
+
+
+def test_single_scene_loader_skips_bands_when_scl_is_all_invalid(tmp_path):
+    grid = _grid()
+    hrefs = scene_files(tmp_path, np.random.default_rng(8), "empty", grid, 0, 0, scl_classes=(8,))
+    ref = scene("empty", date(2024, 1, 1), hrefs)
+    for band in BANDS:
+        Path(hrefs[band]).unlink()
+    values, mask = mosaic.load_scene(
+        ref, grid.transform, grid.crs, grid.height, grid.width, sign=str
+    )
+    assert not values.any() and not mask.any()
+
+
 # --- the pipeline ------------------------------------------------------------------------------
 
 

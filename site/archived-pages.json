@@ -1,0 +1,7 @@
+{
+ "_comment": "Internal records that stay published at their URL but are left out of the sidebar, llms.txt, llms-full.txt and sitemap.xml. Routes, as in scripts/sync-content.mjs.",
+ "routes": [
+  "/reference/release-0.5.1-review",
+  "/reference/release-0.5.0rc1"
+ ]
+}

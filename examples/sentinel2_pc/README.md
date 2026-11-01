@@ -47,10 +47,10 @@ Run the commands from the repository root.
    uv run python examples/sentinel2_pc/ingest.py --aoi ucayali_santa_maria --skip-download --stac
    ```
 
-4. Check the store.
+4. Check the store you just created. For the first, Rio Grande scratch command:
 
    ```bash
-   uv run chronozarr doctor data/stores/ucayali_santa_maria/chronozarr
+   uv run chronozarr doctor /tmp/ingest_smoke/stores/rio_grande/chronozarr
    ```
 
 `--start` and `--end` change the date range, and `--out-dir` changes the root of `mosaics/` and `stores/`. Both dates are inclusive. Begin on the first day of a month and end on the last day of one: a month at either end that the range covers only in part is composited from the scenes inside the range, yet stored and carried forward like a whole month, and the run logs a warning that names it. The default `--end 2026-04-01` is such a case: an April 2026 month, if one appears, holds only scenes from April 1.
@@ -138,7 +138,7 @@ uv run python examples/sentinel2_pc/bench.py compare --workloads lab-ucayali-x2 
     --configs baseline,auto,auto-rows1024,auto-mem1500 --reps 3 --lab 0,0,0 --baseline-ref d7c2ce1
 ```
 
-On one laptop and home connection (2026-10-10), the default settings were 1.9 to 4.7 times faster than the earlier implementation on five Planetary Computer workloads. Peak memory was 3 to 4 times lower on full-size AOIs, and the output arrays were bit-exact. Against a local server without shaping the speed-up was 7.9 times. The tables, method, failures and limits are in [evidence](../../docs/evidence.md#sentinel-2-ingest-performance). Only this machine has been measured so far.
+On one laptop and home connection (2026-10-10), the default settings were 1.9 to 4.7 times faster than this example's own earlier implementation on five Planetary Computer workloads. Peak memory was 3 to 4 times lower on full-size AOIs, and the output arrays were bit-exact. Against a local server without shaping the speed-up was 7.9 times. The tables, method, failures and limits are in [evidence](../../docs/evidence.md#sentinel-2-ingest-performance). Only this machine has been measured so far.
 
 ## What the script does
 

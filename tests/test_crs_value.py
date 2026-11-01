@@ -33,7 +33,7 @@ def test_projjson_wins_over_the_code_and_wkt2_wins_over_projjson(pyproj_crs):
     assert agreeing.disagreements() == []
 
 
-def test_without_pyproj_the_code_is_kept_because_nothing_proves_a_disagreement(
+def test_without_pyproj_wkt2_still_takes_precedence_over_an_unverifiable_code(
     monkeypatch, pyproj_crs
 ):
     other = pyproj_crs.from_epsg(32632).to_wkt("WKT2_2019")
@@ -41,7 +41,27 @@ def test_without_pyproj_the_code_is_kept_because_nothing_proves_a_disagreement(
     both = Crs(code="EPSG:32631", wkt2=other)
     assert both.disagreements() == []
     assert both.resolved() == both
-    assert both.to_string() == "EPSG:32631"
+    assert both.to_string() == other
+
+
+@pytest.mark.parametrize("with_pyproj", [True, False])
+def test_matching_codes_do_not_override_different_authoritative_wkt2(
+    monkeypatch, pyproj_crs, with_pyproj
+):
+    first = Crs(code="EPSG:32631", wkt2=pyproj_crs.from_epsg(32631).to_wkt())
+    second = Crs(code="EPSG:32631", wkt2=pyproj_crs.from_epsg(32632).to_wkt())
+    if not with_pyproj:
+        monkeypatch.setattr(crs_module, "_pyproj", lambda: None)
+    match = same_crs(first, second)
+    assert match.same is (False if with_pyproj else None)
+
+
+def test_without_pyproj_projjson_takes_precedence_over_the_code(monkeypatch, pyproj_crs):
+    definition = pyproj_crs.from_epsg(32632).to_json_dict()
+    monkeypatch.setattr(crs_module, "_pyproj", lambda: None)
+    value = Crs(code="EPSG:32631", projjson=definition)
+    assert json.loads(value.to_string()) == definition
+    assert same_crs(value, Crs(projjson=definition)).same is True
 
 
 def test_same_code_is_the_same_crs_whatever_the_case_and_needs_no_pyproj(monkeypatch):

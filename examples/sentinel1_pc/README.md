@@ -20,6 +20,12 @@ Add `--dry-run` to list the acquisitions and the empty months and write nothing.
 | `data/stores/ucayali_santa_maria/s1-rtc-monthly-v1.scenes.json` | the manifest: the query, the orbit, the grid, every acquisition (slices, platform, valid fraction, dB percentiles) and every month (its acquisitions, valid fraction, dB percentiles). The public store's manifest is `examples/sentinel1_pc/ucayali_santa_maria.scenes.json` |
 | `data/cache/sentinel1/ucayali_santa_maria/<slice id>.npz` | the 20 m VV and VH power of each acquisition with its record beside it; a rerun reads these instead of the scenes |
 
+Each cache sidecar records the grid's CRS, transform and dimensions. A rerun reuses an
+acquisition only on exactly that grid and with the same slices. An existing cache without
+this spatial identity, or from another box, stops the run before any extraction or cache
+overwrite; use another `--name` or `--out-dir` for a new cache. Changing only `--store`
+keeps the same acquisition cache.
+
 Then check it, share it and look at it:
 
 ```sh
@@ -43,6 +49,11 @@ power = 10 ** (vh / 10)                              # gamma0 power, for means a
 `--bbox W S E N` (degrees) and `--name` are the only required arguments. `ingest.py` asks Planetary Computer for IW scenes with VV and VH over the box between `--start` (default 2017-01-01) and `--end` (default the last day of the previous month, so every month is complete), and takes the relative orbit with the most acquisition dates, so every month sees the box from the same geometry; `--orbit` pins one. The slices of one pass are mosaicked into one acquisition. The grid is the box snapped outwards to whole 10 m pixels in the UTM zone of its centre, as `examples/sentinel2_pc` builds its grid, then coarsened 2x. Scenes are read without a warp: a scene in another UTM zone, or one not offset from the grid by whole pixels, stops the run before anything is read, so keep the box inside one zone.
 
 Some items' `proj:transform` does not describe the file (six 2024 S1A items over the Ucayali box carry a fractional, south-up transform; their files are north-up on whole 10 m). The ingest takes the window from each file's own header and checks the alignment there.
+
+For whole-month composites, start on the first day and end on the last day of a month.
+Explicit dates inside a month use only acquisitions within that interval. The run warns about
+partial boundary months, including in a dry run, and records the query interval and partial
+months in the store's provenance. Their time labels still use the month's first day.
 
 ### What is stored
 

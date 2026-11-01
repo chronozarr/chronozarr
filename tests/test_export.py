@@ -8,6 +8,7 @@ import subprocess
 
 import numpy as np
 import pytest
+import zarr
 
 import chronozarr
 from chronozarr.convert import convert
@@ -136,6 +137,37 @@ def test_level_and_time_selection(store_and_truth, tmp_path):
         assert np.array_equal(src.read(), store.read(3, 1))
         assert tuple(src.transform)[:6] == store.levels[1].transform
         assert src.tags()["CHRONOZARR_LEVEL"] == "1"
+
+
+def test_foreign_overview_export_uses_its_own_missing_value(tmp_path):
+    rasterio = pytest.importorskip("rasterio")
+    path = tmp_path / "foreign.zarr"
+    root = zarr.open_group(path, mode="w", zarr_format=3)
+    root.attrs["multiscales"] = {"layout": [{"asset": "0"}, {"asset": "1"}]}
+    for level, marker in enumerate((-32768, -9999)):
+        group = root.create_group(str(level))
+        size, step = 4 // 2**level, 2**level
+        group.attrs.update(
+            {"proj:code": "EPSG:4326", "spatial:transform": [step, 0, 0, 0, -step, 4]}
+        )
+        data = group.create_array(
+            "data",
+            shape=(size, size),
+            dtype="int16",
+            dimension_names=("y", "x"),
+            attributes={"_FillValue": marker},
+        )
+        data[:] = -32768  # valid in the overview, missing at the finest level
+        data[0, 0] = marker
+
+    store = chronozarr.open_store(path)
+    assert np.isnan(store.physical(0, 1)[0, 0, 0])
+    (target,) = export_cog(store, tmp_path / "cogs", level=1, times=[0])
+    with rasterio.open(target) as src:
+        assert src.nodata == -9999
+        np.testing.assert_array_equal(src.read(1), store.read(0, 1)[0])
+        assert src.read_masks(1)[0, 0] == 0
+        assert src.read_masks(1)[0, 1] == 255
 
 
 def test_existing_files_and_bad_level_are_errors(store_and_truth, tmp_path):

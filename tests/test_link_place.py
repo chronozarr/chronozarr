@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import json
 import sys
+import warnings
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+import zarr
 from click.testing import CliRunner
+from zarr.errors import ZarrUserWarning
 
 import chronozarr
 from chronozarr.cli import main
 from chronozarr.view import serve_store, viewer_url
+from tests.narrow import array_at
 from tests.synthetic import make_da, make_truth
 
 pytestmark = pytest.mark.unit
@@ -34,6 +40,21 @@ def _serve(path: Path, crs: str, transform: tuple[float, ...], rows: int, cols: 
     da.attrs.update(crs=crs, transform=transform)
     chronozarr.encode(da, path, chunk_size=16)
     return serve_store(path)
+
+
+def _store_definition(path: Path, form: str, definition: str | dict[str, Any]) -> None:
+    """Retain the code and mirrors while replacing every level's authoritative definition."""
+    root = zarr.open_group(path, mode="r+", zarr_format=3, use_consolidated=False)
+    for _, group in root.groups():
+        data = array_at(group, "data")
+        attrs = data.attrs.asdict()
+        attrs.pop("proj:wkt2", None)
+        attrs.pop("proj:projjson", None)
+        attrs[f"proj:{form}"] = definition
+        data.attrs.put(attrs)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ZarrUserWarning)
+        zarr.consolidate_metadata(path)
 
 
 @pytest.fixture
@@ -176,19 +197,93 @@ def test_link_still_needs_a_hosted_store_for_a_place(args, tmp_path):
     assert "not an http(s) URL" in _run("link", str(tmp_path), *args, ok=False).output
 
 
-def test_link_tells_a_store_without_pyproj_to_install_it_or_use_xy(utm, monkeypatch):
+def test_link_tells_a_code_only_projected_store_without_pyproj_to_install_it_or_use_xy(
+    tmp_path, monkeypatch
+):
     monkeypatch.setitem(sys.modules, "pyproj", None)
-    refused = _run("link", utm, "--lonlat", "3,0", ok=False).output
-    assert "Invalid value for --lonlat" in refused
-    assert "a store in EPSG:32631 needs pyproj to place a longitude and latitude" in refused
-    assert "chronozarr[geo]" in refused
-    assert "--xy" in refused
-    assert _params(_run("link", utm, "--xy", "500000,0"))["c"] == ["500000,0"]
+    path = tmp_path / "code-only"
+    server = _serve(path, "EPSG:32631", (10.0, 0.0, 499800.0, 0.0, -10.0, 100.0), 40, 50)
+    try:
+        assert chronozarr.open_store(path).crs.wkt2 is None
+        refused = _run("link", server.url, "--lonlat", "3,0", ok=False).output
+        assert "Invalid value for --lonlat" in refused
+        assert "a store in EPSG:32631 needs pyproj to place a longitude and latitude" in refused
+        assert "chronozarr[geo]" in refused
+        assert "--xy" in refused
+        assert _params(_run("link", server.url, "--xy", "500000,0"))["c"] == ["500000,0"]
+    finally:
+        server.close()
 
 
-def test_link_needs_no_pyproj_for_a_geographic_store(degrees, monkeypatch):
+def test_link_needs_no_pyproj_for_a_code_only_geographic_store(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "pyproj", None)
-    assert _params(_run("link", degrees, "--lonlat", "-64.6,3.25"))["c"] == ["295.4,3.25"]
+    path = tmp_path / "code-only"
+    server = _serve(path, "EPSG:4326", (0.5, 0.0, 280.0, 0.0, -0.5, 10.0), 20, 50)
+    try:
+        assert chronozarr.open_store(path).crs.wkt2 is None
+        assert _params(_run("link", server.url, "--lonlat", "-64.6,3.25"))["c"] == ["295.4,3.25"]
+    finally:
+        server.close()
+
+
+@pytest.mark.parametrize("form", ["wkt2", "projjson"])
+def test_link_needs_pyproj_for_a_redundant_geographic_definition(tmp_path, monkeypatch, form):
+    pyproj = pytest.importorskip("pyproj")
+    path = tmp_path / "full-definition"
+    server = _serve(path, "EPSG:4326", (0.5, 0.0, 280.0, 0.0, -0.5, 10.0), 20, 50)
+    try:
+        known = pyproj.CRS.from_epsg(4326)
+        definition = known.to_wkt() if form == "wkt2" else known.to_json_dict()
+        _store_definition(path, form, definition)
+        assert getattr(chronozarr.open_store(path).crs, form) == definition
+        assert _params(_run("link", server.url, "--lonlat", "-64.6,3.25"))["c"] == ["295.4,3.25"]
+
+        monkeypatch.setitem(sys.modules, "pyproj", None)
+        refused = _run("link", server.url, "--lonlat", "-64.6,3.25", ok=False).output
+        assert f'a store in {"WKT2" if form == "wkt2" else "PROJJSON"} "WGS 84"' in refused
+        assert "needs pyproj" in refused and "chronozarr[geo]" in refused and "--xy" in refused
+        raw = (
+            definition
+            if isinstance(definition, str)
+            else json.dumps(definition, separators=(",", ":"), sort_keys=True)
+        )
+        assert raw not in refused
+        assert _params(_run("link", server.url, "--xy", "295.4,3.25"))["c"] == ["295.4,3.25"]
+        assert "c" not in _params(_run("link", server.url))
+    finally:
+        server.close()
+
+
+@pytest.mark.parametrize("form", ["wkt2", "projjson"])
+@pytest.mark.parametrize("parser_available", [True, False])
+def test_link_never_inherits_the_geographic_shortcut_from_a_stale_code(
+    tmp_path, monkeypatch, form, parser_available
+):
+    pyproj = pytest.importorskip("pyproj")
+    path = tmp_path / "stale-code"
+    server = _serve(path, "EPSG:4326", (10.0, 0.0, 499800.0, 0.0, -10.0, 100.0), 40, 50)
+    try:
+        projected = pyproj.CRS.from_epsg(32631)
+        definition = projected.to_wkt() if form == "wkt2" else projected.to_json_dict()
+        _store_definition(path, form, definition)
+        if parser_available:
+            with pytest.warns(UserWarning, match="describe different CRSs"):
+                result = _run("link", server.url, "--lonlat", "3,0")
+            assert _params(result)["c"] == ["500000,0"]
+        else:
+            monkeypatch.setitem(sys.modules, "pyproj", None)
+            refused = _run("link", server.url, "--lonlat", "3,0", ok=False).output
+            assert "needs pyproj" in refused and "--xy" in refused
+            raw = (
+                definition
+                if isinstance(definition, str)
+                else json.dumps(definition, separators=(",", ":"), sort_keys=True)
+            )
+            assert raw not in refused
+            assert _params(_run("link", server.url, "--xy", "500000,0"))["c"] == ["500000,0"]
+            assert "c" not in _params(_run("link", server.url))
+    finally:
+        server.close()
 
 
 def test_link_help_explains_the_zoom_and_the_two_ways_to_give_a_centre():
@@ -197,3 +292,5 @@ def test_link_help_explains_the_zoom_and_the_two_ways_to_give_a_centre():
     assert "--xy X,Y" in text
     assert "--zoom" in text
     assert "Screen pixels per stored pixel" in text
+    assert "code-only EPSG:4326" in text
+    assert "stored WKT2/PROJJSON definition" in text

@@ -79,7 +79,7 @@ A coarser level, for a quick look at a large store. Level 0 has the original res
 overview = xr.open_dataset("my_store", engine="chronozarr", lod=1)
 ```
 
-Mask and coverage: a store with a validity mask has a `mask` variable (1 is valid). A store with a coverage plane has a `coverage` variable: the number of observations behind each pixel. A coverage of 0 means that no observation is behind the pixel: its value was filled from another timestep, or it was never observed.
+Mask and coverage: a store with a validity mask has a `mask` variable (1 is valid). At level 0, `coverage` records the input observation count for each pixel; 0 means that no observation was recorded there, including carried values. Coarser levels hold rounded means of those counts, so a zero overview value can also summarize a block containing an observed pixel. Use the mask for validity and level 0 for observation counts.
 
 ## Without chronozarr installed
 
@@ -89,7 +89,7 @@ Each level is a plain Zarr v3 group. Any Zarr reader returns the stored values:
 ds = xr.open_zarr("my_store", group="0", zarr_format=3, chunks=None)
 ```
 
-This route does not apply scale, offset, nodata or the mask. A store with a mask holds 0 where the mask is 0, also for float data whose source had NaN, so apply the `mask` variable before you compute statistics. The store records the scale, offset and nodata in the root `zarr.json`. See [How it works](how-it-works.md#read-a-store-without-chronozarr).
+This route does not apply scale, offset, nodata or the mask. A masked pixel can retain a finite source value, so use the `mask` variable to exclude invalid pixels before computing statistics. Source NaNs are replaced with a finite fill value during conversion; that replacement does not make the pixel valid. The store records the scale, offset and nodata in the root `zarr.json`. See [How it works](how-it-works.md#read-a-store-without-chronozarr).
 
 ## Export to GIS software
 

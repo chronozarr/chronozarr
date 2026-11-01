@@ -154,7 +154,7 @@ def likely_fills(steps: Sequence[Step], info: SourceInfo) -> list[Fill]:
             hits.setdefault(code.value, []).append((info.band_names[band], code))
     fills = []
     for value, shown in hits.items():
-        best = max((code for _, code in shown), key=lambda code: (code.isolated, code.share))
+        best = max((code for _, code in shown), key=lambda code: (code.share, code.isolated))
         fills.append(
             Fill(value, best.share, tuple(name for name, _ in shown), best.isolated, best.rest)
         )

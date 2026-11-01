@@ -10,16 +10,18 @@ chronozarr turns a georeferenced raster time series into an interactive dataset 
 
 ## Quickstart
 
+This quickstart targets Python and npm **0.5.1**. The [release notes](https://chronozarr.org/reference/release-0.5.1) cover the new conversion options, custom coordinate systems, viewer bundle and compatibility with existing stores.
+
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then the `chronozarr` command:
 
 ```bash
-uv tool install --python 3.13 'chronozarr[geo]==0.4.1'
+uv tool install --python 3.13 'chronozarr[geo]==0.5.1'
 ```
 
 chronozarr supports Python 3.11 and newer. `--python 3.13` makes uv use 3.13 even when an older Python comes first on your computer. With pip, in an environment with Python 3.11 or newer:
 
 ```bash
-python -m pip install 'chronozarr[geo]==0.4.1'
+python -m pip install 'chronozarr[geo]==0.5.1'
 ```
 
 Use a folder with one GeoTIFF per date, with the date in each file name, such as `ndvi_2024-01.tif`. All files share one grid. To try it without your own files, export twelve months of the public demo as GeoTIFFs:
@@ -40,6 +42,10 @@ chronozarr preview my_store    # or: private, opens on this computer only
 The dry run checks every file and writes nothing. `convert` writes the store. `share` prints a temporary link that you or a colleague open in a browser. It needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/), works only while the command runs and your computer is on, and anyone with the link can read the store. `preview` opens the store in your browser through a local server. Its link opens only on this computer.
 
 The [full quickstart](https://chronozarr.org/quickstart) has a sample dataset, the expected output of each command and the pip route.
+
+The checkout's [Tile-Ripper Python bridge](docs/tile-ripper.md) converts completed
+COG observation outputs directly, joining a selected quality mask to its science
+scene and retaining source identities without an intermediate stacked store.
 
 ## Share a store
 
@@ -63,14 +69,14 @@ A store is a Zarr v3 group, so xarray, zarr-python and GDAL 3.13 also read it wi
 ## JavaScript
 
 ```bash
-npm install chronozarr@0.4.1
+npm install chronozarr@0.5.1
 ```
 
-The npm package has a DOM-free reader, a MapLibre layer, a GeoLibre plugin and the full viewer for self-hosting. See the [JavaScript reader](https://chronozarr.org/reference/javascript).
+The npm package has a DOM-free reader, a MapLibre layer, a GeoLibre plugin and the production viewer for [self-hosting](https://chronozarr.org/guides/viewer-distribution). See the [JavaScript reader](https://chronozarr.org/reference/javascript).
 
 ## Versions
 
-The Python and npm packages are 0.4.1. The store format specification is v0.3.0, a draft. A package upgrade does not change existing v0.3 stores. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. [Release notes for 0.4.1](https://github.com/chronozarr/chronozarr/blob/main/docs/release-0.4.1.md).
+Python and npm package **0.5.1** read both draft store formats: **v0.3.0** for CRSs with an EPSG code and **v0.4.0** for other CRSs. Package versions and store specification versions are independent. Existing v0.3 stores need no conversion. Readers from package 0.4.1 and earlier cannot open v0.4 stores; upgrade the reader to 0.5.1. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. See the [0.5.1 release notes](https://chronozarr.org/reference/release-0.5.1).
 
 ## Documentation
 
@@ -87,8 +93,8 @@ The Python and npm packages are 0.4.1. The store format specification is v0.3.0,
 | Problems and fixes | [Troubleshooting](https://chronozarr.org/troubleshooting) |
 | Instructions for coding agents, and these docs as plain text | [Agent skill](https://github.com/chronozarr/chronozarr/blob/main/skills/chronozarr/SKILL.md), [llms.txt](https://chronozarr.org/llms.txt) |
 
-The pages are written in [`docs/`](https://github.com/chronozarr/chronozarr/tree/main/docs) and published to chronozarr.org. To contribute, see [CONTRIBUTING.md](https://github.com/chronozarr/chronozarr/blob/main/CONTRIBUTING.md).
+The pages are written in [`docs/`](https://github.com/chronozarr/chronozarr/tree/main/docs) for chronozarr.org. Use the [source installation guide](https://chronozarr.org/guides/development) when developing from a checkout. Package publication and site deployment are separate steps. To contribute, see [CONTRIBUTING.md](https://github.com/chronozarr/chronozarr/blob/main/CONTRIBUTING.md).
 
 ## License
 
-See [LICENSE](https://github.com/chronozarr/chronozarr/blob/main/LICENSE).
+Apache-2.0. See [LICENSE](https://github.com/chronozarr/chronozarr/blob/main/LICENSE).

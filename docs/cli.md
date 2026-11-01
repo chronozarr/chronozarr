@@ -1,5 +1,7 @@
 # Command line
 
+**Package version — 0.5.1.** Follow the [installation guide](quickstart.md#1-install) before using this reference. The [release notes](release-0.5.1.md) describe compatibility and changes since 0.4.1.
+
 Run `chronozarr <command> --help` for every option. In a uv project, run `uv run chronozarr <command> --help`. A standalone tool or pip installation runs `chronozarr` directly.
 
 ## Create
@@ -7,7 +9,7 @@ Run `chronozarr <command> --help` for every option. In a uv project, run `uv run
 | Command | What it does |
 |---------|--------------|
 | `convert SOURCE OUT` | The command for existing raster files. Writes a store one timestep at a time from a directory, quoted glob or `s3://` prefix of dated rasters (GeoTIFF, BIL, GRIB2, HDF5, zips of one raster), a manifest of COGs or PNG frames, a Zarr store or a NetCDF file. `--dry-run` checks every file and reports all problems per file. Also converts a v0.2 store to v0.3 |
-| `encode INPUT OUT` | Writes a store in memory from a Zarr store, a NetCDF file or a quoted glob of GeoTIFFs. Points to `convert` for anything else |
+| `encode INPUT OUT` | Writes a store in memory from a Zarr variable or `.nc` file with literal `(time, band, y, x)` dimensions, or a quoted glob of GeoTIFFs. Use `convert` for existing raster and CF-encoded variables |
 | `append STORE INPUT` | Adds timesteps at the end of a store. See [Append timesteps](append.md) |
 | `bands STORE` | Lists the bands, the role each plays and the viewer products they allow. `--band-role B04=red` sets a band's `common_name`. `encode` and `convert` take the same flag. See [Band roles](python.md#band-roles-and-the-first-view) |
 
@@ -39,9 +41,11 @@ Run `chronozarr <command> --help` for every option. In a uv project, run `uv run
 
 | Extra | Adds |
 |-------|------|
-| `geo` | GeoTIFF input and output, and `link --lonlat` for a store in a projected coordinate system |
+| `geo` | GeoTIFF input and output, and `link --lonlat` for projected coordinates or stored WKT2/PROJJSON definitions |
 | `notebook` | `chronozarr.view(store)` for Jupyter. See [notebooks](notebooks.md) |
 | `netcdf`, `dask` | NetCDF input (with cftime) and dask arrays |
 | `cftime` | Zarr time axes on a `360_day`, `noleap`, `all_leap` or `julian` calendar, without a NetCDF reader |
 | `s3` | Listing of an `s3://` prefix for `convert` |
 | `publish`, `publish-gcs`, `publish-azure` | The SDK that `publish` uses for S3 or R2, Google Cloud Storage or Azure. See [Publish a permanent link](publish.md) |
+
+`link --lonlat` needs no projection library for a store that declares only `EPSG:4326`. A stored WKT2 or PROJJSON definition takes precedence over its authority code; interpreting it or proving it equivalent to that code needs pyproj from the `geo` extra. This includes a geographic store with redundant WKT2. `--xy` and links without a centre remain usable without pyproj.

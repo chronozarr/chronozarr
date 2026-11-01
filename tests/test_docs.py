@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 import xarray as xr
 from packaging.version import Version
+from scripts.check_release import npm_version
 
 import chronozarr
 from chronozarr.cli import main
@@ -99,17 +100,21 @@ def test_the_docs_show_the_commands_people_need() -> None:
 
 
 def test_install_pins_match_the_release() -> None:
-    """The docs pin the release that PyPI has. A development version on main is the next one."""
+    """Stable install pins stay stable while the checkout prepares a prerelease."""
     version = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))["project"][
         "version"
     ]
     npm = json.loads((REPO / "js/package.json").read_text(encoding="utf-8"))["version"]
-    # PEP 440 writes a development release 0.5.0.dev0; npm's semver writes it 0.5.0-dev.0.
-    assert npm == re.sub(r"\.dev(\d+)$", r"-dev.\1", version), (
+    # PEP 440 and npm spell development and release-candidate suffixes differently.
+    expected_npm = npm_version(version)
+    assert npm == expected_npm, (
         f"pyproject.toml ({version}) and js/package.json ({npm}) must be the same version"
     )
     # Install pins, and the `chronozarr --version` output that the quickstart shows.
-    pin = re.compile(r"chronozarr(?:\[[^\]]*\])?(?:==|@|, version )(\d+\.\d+\.\d+)")
+    pin = re.compile(
+        r"chronozarr(?:\[[^\]]*\])?(?:==|@|, version )"
+        r"(\d+\.\d+\.\d+(?:(?:a|b|rc)\d+|-(?:dev|a|b|rc)\.\d+|\.dev\d+)?)"
+    )
     # The evidence log and release notes record the versions that were measured or released.
     records = {"evidence.md", *(p.name for p in USER_DOCS if p.name.startswith("release-"))}
     pinned: dict[str, list[str]] = {}
@@ -119,7 +124,7 @@ def test_install_pins_match_the_release() -> None:
     assert pinned, "no user doc pins a chronozarr version"
     assert len(pinned) == 1, f"the docs pin more than one release: {pinned}"
     release = Version(next(iter(pinned)))
-    if Version(version).is_devrelease:
+    if Version(version).is_prerelease:
         assert Version(version) > release, (
             f"pyproject.toml is {version}, not after the release {release} that the docs pin"
         )

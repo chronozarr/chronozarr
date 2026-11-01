@@ -38,7 +38,7 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
-from catalog import REQUIRED_BANDS, SceneRef
+from catalog import REQUIRED_BANDS, SceneRef, sign_href
 from months import month_path
 from performance import AdaptiveLimiter, Settings
 from rasterio.crs import CRS  # ty: ignore[unresolved-import]  (compiled module, no stubs)
@@ -475,6 +475,35 @@ def apply_scene_mask(bands: np.ndarray, valid: np.ndarray, boa_offset: int) -> i
         block_valid &= np.all(block > 0, axis=0)
         block[:, ~block_valid] = 0
     return int(valid.sum())
+
+
+def load_scene(
+    scene: SceneRef,
+    transform: Affine,
+    crs: CRS,
+    height: int,
+    width: int,
+    *,
+    sign: Callable[[str], str] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Read one bounded observation for the sample-manifest scripts, without compositing.
+
+    Uses the ingest's SCL sampling, band resampling and offset/clipping rules. The caller owns
+    the memory budget for this small AOI; full monthly ingests use the strip-based pipeline.
+    """
+    grid = Grid(transform, crs, height, width)
+    sign = sign or sign_href
+    scl = np.zeros((height, width), dtype=np.uint8)
+    read_asset(sign(scene.scl_href), grid, scl, Resampling.nearest, GDAL_ENV)
+    valid = _SCL_LUT[scl]
+    bands = np.zeros((len(REQUIRED_BANDS), height, width), dtype=np.uint16)
+    if valid.any():
+        for b, name in enumerate(REQUIRED_BANDS):
+            read_asset(
+                sign(scene.asset_hrefs[name]), grid, bands[b], Resampling.bilinear, GDAL_ENV, valid
+            )
+        apply_scene_mask(bands, valid, scene.boa_offset)
+    return bands, valid
 
 
 def median_rows(stack: np.ndarray, r0: int, r1: int) -> tuple[np.ndarray, np.ndarray]:

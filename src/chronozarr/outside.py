@@ -436,7 +436,10 @@ def _with_validity(level: _Read, found: Findings) -> _Read:
     where = f"level {level.path}"
     fills = {_fill(array, where, found) for array in level.arrays.arrays.values()}
     if len(fills) > 1:
-        found.should(where, f"the arrays disagree on the fill value {sorted(map(str, fills))}")
+        raise SchemaError(
+            f"{where}: the bands have different fill values {sorted(map(str, fills))}; "
+            "chronozarr needs one missing-value marker per level"
+        )
     scales = tuple(_scale(array, where, found) for array in level.arrays.arrays.values())
     return replace(level, nodata=next(iter(fills)), scales=scales)
 
@@ -586,8 +589,10 @@ def _read_times(level: _Read, found: Findings) -> np.ndarray:
 
 
 def _same_axes(first: _Read, other: _Read) -> None:
+    first_names = _band_names(first.group, first.arrays)
+    other_names = _band_names(other.group, other.arrays)
     for what, a, b in (
-        ("bands", len(first.arrays.arrays), len(other.arrays.arrays)),
+        ("bands (count, names or order)", first_names, other_names),
         ("data types", first.first.dtype, other.first.dtype),
         ("axes", first.arrays.axes, other.arrays.axes),
     ):
@@ -595,6 +600,18 @@ def _same_axes(first: _Read, other: _Read) -> None:
             raise SchemaError(f"levels {first.path} and {other.path} have different {what}")
     if same_crs(first.crs, other.crs).same is False:
         raise SchemaError(f"levels {first.path} and {other.path} have different CRSs")
+    encodings = [
+        [
+            (1.0 if s is None else s, 0.0 if o is None else o)
+            for s, o in _band_scales(level, names, Findings())
+        ]
+        for level, names in ((first, first_names), (other, other_names))
+    ]
+    if encodings[0] != encodings[1]:
+        raise SchemaError(
+            f"levels {first.path} and {other.path} have different scale or offset; "
+            "chronozarr needs the same physical encoding at every level"
+        )
 
 
 def _marker(nodata: int | float | None) -> str:

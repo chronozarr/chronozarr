@@ -11,6 +11,7 @@
 //   viewer.js                   the viewer and the reader, one file with no static imports
 //   decode-worker.js            the decode worker with zarrita's codec registry inside it
 //   bench.js                    `chronozarr.bench()` and the other console benchmarks (loaded only when one is called)
+//   projection.js               embed lon/lat adapter (loaded only for an embed)
 //   codecs/{zstd,blosc,lz4}.js  the WebAssembly codecs, one copy that the viewer and the worker both load, when a store needs it
 //   chunks/*.js                 loaded only for a store whose CRS needs proj4
 //
@@ -49,6 +50,15 @@ const benchApart = {
   name: 'bench-apart',
   setup(esbuild) {
     esbuild.onResolve({ filter: /^\.\/bench\.js$/ }, () => ({ path: './bench.js', external: true }));
+  },
+};
+
+// The embed adapter and the metadata reader share CRS identity code. Building this lazy adapter apart avoids
+// esbuild extracting that shared code into a static dependency in front of the normal viewer.
+const projectionApart = {
+  name: 'projection-apart',
+  setup(esbuild) {
+    esbuild.onResolve({ filter: /maplibre\/projection\.js$/ }, (args) => args.kind === 'dynamic-import' ? { path: './projection.js', external: true } : undefined);
   },
 };
 
@@ -95,7 +105,8 @@ export async function buildViewer(outDir) {
 
   const entry = (...parts) => path.join(JS_DIR, ...parts);
   await Promise.all([
-    build({ ...COMMON, entryPoints: { viewer: entry('demo/viewer.js') }, outdir: demo, splitting: true, chunkNames: 'chunks/[name]-[hash]', plugins: [lazyCodecs, benchApart, registryInWorker] }),
+    build({ ...COMMON, entryPoints: { viewer: entry('demo/viewer.js') }, outdir: demo, splitting: true, chunkNames: 'chunks/[name]-[hash]', plugins: [lazyCodecs, benchApart, projectionApart, registryInWorker] }),
+    build({ ...COMMON, entryPoints: { projection: entry('maplibre/projection.js') }, outdir: demo, splitting: true, chunkNames: 'chunks/[name]-[hash]' }),
     build({ ...COMMON, entryPoints: { bench: entry('demo/bench.js') }, outdir: demo, plugins: [lazyCodecs, registryInWorker] }),
     build({ ...COMMON, entryPoints: { 'decode-worker': entry('chronozarr/decode-worker.js') }, outdir: demo, plugins: [lazyCodecs, registryInWorker] }),
     build({

@@ -15,7 +15,7 @@ from click.testing import CliRunner
 
 import chronozarr
 from chronozarr.cli import main
-from chronozarr.convert import convert, plan_conversion
+from chronozarr.convert import PreflightError, convert, plan_conversion
 from tests.fixtures.netcdf_days import HEIGHT, WIDTH, day_values, lat, lon, write_days
 
 pytestmark = pytest.mark.unit
@@ -126,3 +126,60 @@ def test_a_mask_variable_with_the_same_length_one_dimension_is_squeezed_too(tmp_
     plane = store.read_mask(0)
     assert plane is not None
     assert np.array_equal(plane.astype(bool), ok[0, 0, ::-1].astype(bool))
+
+
+def _singleton_member(path, day: int, dimension: str, value: Any, units: str | None) -> None:
+    coords: dict[str, Any] = {
+        "time": ("time", [float(day)], {"units": "days since 2020-01-01"}),
+    }
+    if value is not None:
+        coords[dimension] = (dimension, [value], {} if units is None else {"units": units})
+    _write(
+        path,
+        ("time", dimension, "lat", "lon"),
+        np.full((1, 1, HEIGHT, WIDTH), 100 + day, dtype=np.int16),
+        **coords,
+    )
+
+
+@pytest.mark.parametrize(
+    ("dimension", "value", "units"),
+    [("zlev", 0.0, "meters"), ("realization", "r1", None), ("height", None, None)],
+)
+def test_series_with_the_same_singleton_coordinate_converts(tmp_path, dimension, value, units):
+    folder = tmp_path / "days"
+    folder.mkdir()
+    for day in range(2):
+        _singleton_member(folder / f"d{day}.nc", day, dimension, value, units)
+    out = tmp_path / "store"
+    report = convert(folder, out, variable="sst", crs="EPSG:4326", **OPTIONS)
+    assert _stored(out)[:, 0, 0, 0].tolist() == [100, 101]
+    assert any(n.startswith(f"squeezed:   {dimension} ") for n in report.plan.source.notes)
+    assert chronozarr.validate(out) == []
+
+
+@pytest.mark.parametrize(
+    ("dimension", "first_value", "second_value", "first_units", "second_units"),
+    [
+        pytest.param("zlev", 0.0, 10.0, "meters", "meters", id="different-depth"),
+        pytest.param("zlev", 10.0, 10.0, "meters", "feet", id="different-depth-units"),
+        pytest.param("realization", "r1", "r2", None, None, id="different-realization"),
+        pytest.param("height", None, 10.0, None, "meters", id="coordinate-only-in-one-file"),
+    ],
+)
+def test_series_refuses_changed_singleton_identity_before_writing(
+    tmp_path, dimension, first_value, second_value, first_units, second_units
+):
+    folder = tmp_path / "days"
+    folder.mkdir()
+    _singleton_member(folder / "d0.nc", 0, dimension, first_value, first_units)
+    _singleton_member(folder / "d1.nc", 1, dimension, second_value, second_units)
+    out = tmp_path / "store"
+    with pytest.raises(PreflightError) as caught:
+        convert(folder, out, variable="sst", crs="EPSG:4326", **OPTIONS)
+    (problem,) = caught.value.problems
+    assert problem.uri.endswith("d1.nc")
+    assert f"squeezed dimension {dimension!r}" in problem.detail
+    assert "d0.nc" in problem.detail and "same coordinate" in problem.detail
+    assert not out.exists()
+    assert not out.with_name("store.convert-work").exists()

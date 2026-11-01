@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +29,7 @@ ingest = load_ingest()
 pytestmark = pytest.mark.unit
 
 COLLECTION = "NISAR_L2_GCOV_PROVISIONAL_V1"
+WINDOW = ingest.Window(32612, (1005.0, 1015.0), (4995.0, 4985.0), 10.0, -10.0, 2, 2)
 
 
 def granule(
@@ -93,6 +97,21 @@ def test_select_scenes_takes_the_series_with_most_dates_and_the_highest_counter(
         ingest.select_scenes(scenes, track=99)
 
 
+def test_select_scenes_counts_distinct_dates_before_ranking_product_versions():
+    scenes = [
+        scene(1, frame=18, counter=1),
+        scene(1, frame=18, counter=2),
+        scene(1, frame=18, counter=3),
+        scene(1, frame=19),
+        scene(2, frame=19),
+    ]
+    key, selected = ingest.select_scenes(scenes)
+    assert key == (5, "A", 19)
+    assert [s.cycle for s in selected] == [1, 2]
+    key, pinned = ingest.select_scenes(scenes, frame=18)
+    assert key == (5, "A", 18) and len(pinned) == 1 and pinned[0].counter == 3
+
+
 def test_stored_db_quantizes_to_a_hundredth_of_a_db_and_clips_at_minus_60():
     power = np.array([[1.0, 0.1, 1e-7, 1e-9, 0.0, np.nan]], dtype=np.float32)
     valid = np.array([[True, True, True, True, False, False]])
@@ -147,3 +166,101 @@ def test_utc_naive_strips_the_zone_and_refuses_a_naive_stamp():
     )
     with pytest.raises(ValueError):
         ingest.utc_naive("2026-01-11T12:51:10")
+
+
+@pytest.fixture
+def extracted_cache(tmp_path, monkeypatch):
+    hh = np.array([[1.0, 0.1], [1e-7, 0.0]], dtype=np.float32)
+    hv = np.array([[0.1, 0.01], [0.001, 0.1]], dtype=np.float32)
+    mask = np.array([[1, 2], [255, 1]], dtype=np.uint8)
+    monkeypatch.setattr(ingest, "read_window", lambda *_: (hh, hv, mask, {}))
+    first = scene(1)
+    path = tmp_path / "original" / f"{first.granule}.npz"
+    record = ingest.extract(first, WINDOW, path)
+    return first, path, record
+
+
+def test_extract_writes_spatial_identity_and_reuses_a_relocated_json_cache(
+    extracted_cache, tmp_path, monkeypatch
+):
+    first, path, record = extracted_cache
+    expected = {
+        "crs": "EPSG:32612",
+        "transform": [10.0, 0.0, 1000.0, 0.0, -10.0, 5000.0],
+        "width": 2,
+        "height": 2,
+    }
+    sidecar = json.loads(ingest.sidecar_of(path).read_text())
+    assert record["window"] == sidecar["window"] == expected
+    assert sidecar["npz"] == path.name
+    with np.load(path) as cached:
+        assert cached["HH"].tolist() == [[6000, 5000], [0, 0]]
+        assert cached["HV"].tolist() == [[5000, 4000], [0, 0]]
+        assert cached["mask"].tolist() == [[1, 1], [0, 0]]
+
+    moved = tmp_path / "relocated"
+    path.parent.rename(moved)
+    monkeypatch.setattr(ingest, "extract", lambda *_: pytest.fail("cached pixels were read again"))
+    restored = ingest.Window(**json.loads(json.dumps(asdict(WINDOW))))
+    assert isinstance(WINDOW.x, tuple) and isinstance(restored.x, list)
+    for window in (WINDOW, restored):
+        [reused] = ingest.extract_all([first], window, moved, workers=1)
+        assert reused["cached"] is True
+        assert reused["npz"] == str(moved / path.name)
+        assert reused["window"] == expected
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"x": (1015.0, 1025.0)},  # same-sized box, translated one pixel
+        {"epsg": 32611},
+        {"width": 3, "x": (1005.0, 1025.0)},
+        {"height": 3, "y": (4995.0, 4975.0)},
+    ],
+)
+def test_cache_refuses_other_grids_before_any_extraction(extracted_cache, monkeypatch, changes):
+    first, path, _ = extracted_cache
+    before = {p: p.read_bytes() for p in (path, ingest.sidecar_of(path))}
+    monkeypatch.setattr(
+        ingest,
+        "ProcessPoolExecutor",
+        lambda **_: pytest.fail("cache validation must finish before extraction starts"),
+    )
+    with pytest.raises(SystemExit, match=r"spatial identity.*--name.*--out-dir"):
+        ingest.extract_all([scene(2), first], replace(WINDOW, **changes), path.parent, workers=1)
+    assert {p: p.read_bytes() for p in before} == before
+    assert not (path.parent / f"{scene(2).granule}.npz").exists()
+
+
+@pytest.mark.parametrize("missing", ["identity", "sidecar"])
+def test_legacy_cache_is_refused_without_extraction(extracted_cache, monkeypatch, missing):
+    first, path, _ = extracted_cache
+    sidecar = ingest.sidecar_of(path)
+    if missing == "identity":
+        record = json.loads(sidecar.read_text())
+        del record["window"]
+        sidecar.write_text(json.dumps(record))
+    else:
+        sidecar.unlink()
+    before = path.read_bytes()
+    monkeypatch.setattr(
+        ingest,
+        "ProcessPoolExecutor",
+        lambda **_: pytest.fail("legacy cache must be refused before extraction starts"),
+    )
+    with pytest.raises(SystemExit, match=r"spatial identity.*--name.*--out-dir"):
+        ingest.extract_all([scene(2), first], WINDOW, path.parent, workers=1)
+    assert path.read_bytes() == before
+    assert not (path.parent / f"{scene(2).granule}.npz").exists()
+
+
+def test_extract_all_still_extracts_a_cache_miss(extracted_cache, monkeypatch):
+    first, path, _ = extracted_cache
+    # Threads keep the fixture's local read stub in this process; production uses processes.
+    monkeypatch.setattr(ingest, "ProcessPoolExecutor", ThreadPoolExecutor)
+    records = ingest.extract_all([first, scene(2)], WINDOW, path.parent, workers=1)
+    assert records[0]["cached"] is True
+    assert "cached" not in records[1]
+    assert Path(records[1]["npz"]).is_file()
+    assert records[1]["window"] == records[0]["window"]

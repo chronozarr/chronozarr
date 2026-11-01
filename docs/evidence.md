@@ -636,7 +636,9 @@ The baseline that the [colleague trial](colleague-trial.md#analysis) compares ag
 | Converted, and the store is wrong | 0 |
 | Traceback or timeout | 0 |
 
-After the shortest fix that works, 18 of 20 reach a correct store, at an estimated 2 to 90 minutes each. The other 2 (HDF4, HDF5) were not converted. 2 datasets end with a wrong store if the user stops after the fix that the message names: CHIRPS (-9999 stored as rainfall) and MODIS MOD13A1 (the file's scale of 10000 makes NDVI about 1e8). 3 more keep longitudes beyond 180 in EPSG:4326: the two OISST sets (280 to 360) and ERA5 over Fiji (165 to 195). zarr-layer 0.11.0 and GDAL 3.13.3 place such a store correctly ([GeoZarr review](../spec/review-2026-10-geozarr.md)), but a lookup by a longitude from -180 to 180 in xarray returns the nearest edge column without an error.
+After the verified historical fix chains, 18 of 20 reach a correct store, at an estimated 2 to 90 minutes each. The other 2 (HDF4, HDF5) were not converted. 2 datasets end with a wrong store if the user stops after the fix that the message names: CHIRPS (-9999 stored as rainfall) and MODIS MOD13A1 (the file's scale of 10000 makes NDVI about 1e8). 3 more keep longitudes beyond 180 in EPSG:4326: the two OISST sets (280 to 360) and ERA5 over Fiji (165 to 195). zarr-layer 0.11.0 and GDAL 3.13.3 place such a store correctly ([GeoZarr review](../spec/review-2026-10-geozarr.md)), but a lookup by a longitude from -180 to 180 in xarray returns the nearest edge column without an error.
+
+Evaluation correction, 2026-10-23: `scripts/corpus/run_corpus.py` now records policy `source-values-v2` for new results. Longitude extent is a lookup-convention diagnostic; correctness follows the independent source comparisons of dates, CRS, values and validity. The OISST/ERA5 routes in `classes.json` now keep their native coordinates. Original raw results and the recorded effort are unchanged; their historical coordinate wrapping or warping was not required for correctness.
 
 ### Simulated newcomers
 
@@ -874,8 +876,10 @@ The 20 datasets of the baseline, run on main at `83e5235` with the `geo` extra o
 | First run converts | 0 | 2 | 2 |
 | First run refused with a fix that works | 7 | 15 | 17 |
 | First run refused with no fix that works | 13 | 3 | 1 |
-| Messages alone lead to a correct store | 4 | 10 | 12 |
-| The same, with longitudes beyond 180 accepted | 4 | 14 | 17 |
+| Messages alone, historical longitude-restricted classifier | 4 | 10 | 12 |
+| Messages alone, source-value correctness including native longitude conventions | 4 | 14 | 17 |
+
+The second row of message-route results uses the corrected longitude interpretation described above. This changes the evaluation policy, not the source coordinates or the measured conversions; the historical classifier's counts remain visible in the preceding row.
 
 No first run gave a wrong store or a traceback in any of the three. The 18 hand-made routes of the baseline still give correct stores, except the two NSIDC routes, which the fill check now stops until `--nodata` is given.
 
@@ -1093,7 +1097,7 @@ Appending to a store written by main: `convert` on main wrote 2020 (429 files), 
 
 ## Sentinel-2 ingest performance
 
-Measured 2026-10-10 on one machine: Apple M3 Max laptop (16 CPUs, 128 GB), macOS, home connection in Chapel Hill, GDAL 3.12.1 from the rasterio 1.5.0 wheel, numpy 2.4.4. The pipeline is `examples/sentinel2_pc/mosaic.py`; the baseline is the same file at commit `01185cd`. Cross-machine performance has not been tested. The harness (`examples/sentinel2_pc/bench.py`) records the machine with every result, so the same commands can be run elsewhere unchanged.
+Measured 2026-10-10 on one machine: Apple M3 Max laptop (16 CPUs, 128 GB), macOS, home connection in Chapel Hill, GDAL 3.12.1 from the rasterio 1.5.0 wheel, numpy 2.4.4. The pipeline is `examples/sentinel2_pc/mosaic.py`; the baseline is the repository's own previous pipeline, the same file at commit `01185cd`, not another tool. Cross-machine performance has not been tested. The harness (`examples/sentinel2_pc/bench.py`) records the machine with every result, so the same commands can be run elsewhere unchanged.
 
 ### Method
 
@@ -1113,7 +1117,7 @@ The runs in this section and the next predate two later changes from the constra
 | Lake Mead, 1 month, 4 tiles | 16 | 34.9 s [34.1-35.0] | 20.3 s | 14.0 s | | 14.8 s | 12.7 / 3.0 GB |
 | Yukon delta, 3 sparse months | 11 | 145.4 s [142.6-152.3] | 69.2 s | 48.4 s | | 41.8 s | 14.5 / 4.6 GB |
 
-The new pipeline is 1.9 to 4.7 times faster than the baseline at its default settings (auto, or fixed-16, which auto equals when no read fails). At the baseline's concurrency (fixed-4), the pipeline changes alone give 1.7 to 2.1 times. The rest comes from concurrency: 16 reads beat 4 on every workload. Auto and fixed-16 are indistinguishable; auto-max32 is about 15 % slower on the short runs and about 14 % faster on the 3-month Yukon run, so the default ceiling is 16. Downloaded bytes fell 13 to 26 % on the native-grid workloads (Yukon: 1663 to 1289 MB, 1031 to 837 requests) from reading SCL first and skipping source blocks without a valid pixel; the warp path skips only whole scenes and read the same 499 MB as the baseline.
+The new pipeline is 1.9 to 4.7 times faster than the baseline (the repository's own previous pipeline) at its default settings (auto, or fixed-16, which auto equals when no read fails). At the baseline's concurrency (fixed-4), the pipeline changes alone give 1.7 to 2.1 times. The rest comes from concurrency: 16 reads beat 4 on every workload. Auto and fixed-16 are indistinguishable; auto-max32 is about 15 % slower on the short runs and about 14 % faster on the 3-month Yukon run, so the default ceiling is 16. Downloaded bytes fell 13 to 26 % on the native-grid workloads (Yukon: 1663 to 1289 MB, 1031 to 837 requests) from reading SCL first and skipping source blocks without a valid pixel; the warp path skips only whole scenes and read the same 499 MB as the baseline.
 
 Three of these runs retried a failed read (Ucayali fixed-16, warp auto-max32 and Yukon auto-capped; they are the top of each spread, up to 101 s). They predate the fix under "Read retries" and were still bit-exact.
 

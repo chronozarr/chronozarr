@@ -83,7 +83,7 @@ curl -s -D - -o /dev/null -H "$O" -H 'Accept-Encoding: gzip, br' -H 'Range: byte
 curl -s -o /dev/null -w '%{http_code}\n' "$URL/no-such-key"
 ```
 
-The key `KEY` names the chunk of timestep 0, band 0, cell (0, 0) in an unsharded store. In a sharded store it names the first shard. chronozarr stores every chunk, all-fill ones included. A store written by chronozarr before 0.5.0, or by another tool, can omit the chunk of a cell that holds only fill. The host then answers `404` for it. Pick another cell.
+The key `KEY` names the chunk of timestep 0, band 0, cell (0, 0) in an unsharded store. In a sharded store it names the first shard. chronozarr stores every chunk, all-fill ones included. A store written by chronozarr releases up to 0.4.1, or by another tool, can omit the chunk of a cell that holds only fill. The host then answers `404` for it. Pick another cell.
 
 Expect these answers:
 
