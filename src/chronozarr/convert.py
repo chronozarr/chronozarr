@@ -297,6 +297,7 @@ from chronozarr._convert_xarray import (
 )
 from chronozarr.bands import assign_roles
 from chronozarr.encode import EncodeReport, encode
+from chronozarr.icechunk import IcechunkInput, identity_note
 
 # Raw input bytes per second through `encode()` (spill, pyramid, zstd level 5, write). Measured
 # 230 to 260 MB/s on the 117-month Ucayali stack (7.1 GB in 27 to 31 s) on a 16-thread M3 Max
@@ -420,6 +421,31 @@ class Plan:
             f"validity:   {info.validity}",
             *([f"fill:       {self.fill}"] if self.fill else []),
             *self.source.notes,
+            *(
+                [
+                    f"snapshot:   {self.source.icechunk_identity['snapshot']}",
+                    f"selection:  {self.source.icechunk_identity['indexers']}",
+                    "source cache: "
+                    f"{self.source.icechunk_identity['encoded_cache_bytes']} encoded bytes "
+                    "(maintained Icechunk cache; separate memory allowance)",
+                    "source I/O: decoded chunk "
+                    f"{self.source.icechunk_identity['decoded_source_chunk_bytes']} bytes; "
+                    "a selection still reads whole source chunks/messages",
+                    *(
+                        ["precision:  explicit float64 to float32 rounding; source validity mask"]
+                        if self.source.icechunk_identity["source_dtype"]
+                        != self.source.icechunk_identity["output_dtype"]
+                        else []
+                    ),
+                    *(
+                        [f"time axis:  {self.source.icechunk_identity['forecast']}"]
+                        if self.source.icechunk_identity["forecast"]
+                        else []
+                    ),
+                ]
+                if isinstance(self.source, XarraySource) and self.source.icechunk_identity
+                else []
+            ),
         ]
         if self.warped:
             out.append(
@@ -464,7 +490,7 @@ def _sample_indices(n: int) -> list[int]:
 
 @_tolerate_unlocated_frames
 def plan_conversion(
-    source_path: str | Path,
+    source_path: str | Path | IcechunkInput,
     *,
     variable: str | None = None,
     dims: str | None = None,
@@ -495,9 +521,12 @@ def plan_conversion(
     check_rule(calendar_to_gregorian)
     text = str(source_path)
     suffix = Path(text).suffix.lower()
-    is_manifest = suffix in (".csv", ".json")
-    netcdf_files = None if is_manifest else find_netcdf_files(text)
-    discovered = not is_manifest and netcdf_files is None and is_discovery_source(text)
+    is_icechunk = isinstance(source_path, IcechunkInput)
+    is_manifest = not is_icechunk and suffix in (".csv", ".json")
+    netcdf_files = None if is_manifest or is_icechunk else find_netcdf_files(text)
+    discovered = (
+        not is_icechunk and not is_manifest and netcdf_files is None and is_discovery_source(text)
+    )
     if date_pattern is not None and netcdf_files is not None:
         raise ValueError(
             f"--date-pattern applies to rasters; NetCDF files are dated by their time coordinate "
@@ -588,9 +617,11 @@ def plan_conversion(
     else:
         from chronozarr._convert_legacy import LegacySource, legacy_metadata
 
-        metadata = None if netcdf_files is not None else legacy_metadata(source_path)
+        metadata = (
+            None if is_icechunk or netcdf_files is not None else legacy_metadata(source_path)
+        )
         if metadata is not None:
-            source = LegacySource(source_path)
+            source = LegacySource(text)
             if (
                 any(
                     v is not None
@@ -621,7 +652,7 @@ def plan_conversion(
             )
         if metadata is None:
             source = XarraySource(
-                text,
+                source_path if is_icechunk else text,
                 variable,
                 _parse_dims(dims),
                 crs,
@@ -887,7 +918,7 @@ def _write_draft(draft: ManifestDraft, path: Path) -> str:
 
 @_tolerate_unlocated_frames
 def convert(
-    source: str | Path,
+    source: str | Path | IcechunkInput,
     out: str | Path,
     *,
     variable: str | None = None,
@@ -979,6 +1010,12 @@ def convert(
     `encode_options` go to `chronozarr.encode`: chunk_size, codec, level, volatility,
     shard, shard_time, n_lods, workers, provenance.
     """
+    if isinstance(source, IcechunkInput) and source.virtual_prefixes and resume:
+        raise ValueError(
+            "resume is unsupported for Icechunk imports allowing virtual sources: a snapshot "
+            "pins references, but this importer does not bind external object versions; "
+            "start a fresh import in a new work directory"
+        )
     if read_ahead < 1:
         raise ValueError(f"read_ahead must be >= 1, got {read_ahead}")
     if write_manifest_to is not None:
@@ -1080,6 +1117,16 @@ def convert(
         encode_options["provenance"] = provenance_with_note(
             str(source), plan.source.calendar, encode_options.get("provenance")
         )
+    if isinstance(plan.source, XarraySource) and plan.source.icechunk_identity:
+        prior = encode_options.get("provenance")
+        provenance = (
+            dict(prior)
+            if prior
+            else {"sources": [str(source)], "composite": "none", "gap_fill": "none"}
+        )
+        note = identity_note(plan.source.icechunk_identity)
+        provenance["notes"] = f"{provenance['notes']}\n{note}" if provenance.get("notes") else note
+        encode_options["provenance"] = provenance
     try:
         started = time.perf_counter()
         staged, reused = _stage(plan, work, read_ahead, progress)
@@ -1099,7 +1146,13 @@ def convert(
         )
         encode_s = time.perf_counter() - started
     except BaseException as exc:
-        exc.add_note(f"staged timesteps are kept in {work}; rerun with --resume to reuse them")
+        if isinstance(source, IcechunkInput) and source.virtual_prefixes:
+            exc.add_note(
+                f"staged timesteps are kept in {work} for inspection; virtual-source resume "
+                "is unsupported without external object identities, so start a fresh import"
+            )
+        else:
+            exc.add_note(f"staged timesteps are kept in {work}; rerun with --resume to reuse them")
         raise
     shutil.rmtree(work)
     return ConvertReport(plan, report, staged, reused, read_s, encode_s)

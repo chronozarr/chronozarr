@@ -55,6 +55,7 @@ from chronozarr.decode import ChronoStore, open_store
 from chronozarr.doctor import DEFAULT_ORIGIN, diagnose, is_url
 from chronozarr.encode import EncodeReport, encode
 from chronozarr.export import export_cog, select_times
+from chronozarr.icechunk import IcechunkInput, parse_indexers
 from chronozarr.place import check_xy, lonlat_to_xy
 from chronozarr.schema import Band, SchemaError, validate_report
 from chronozarr.share import share, wait_for_address
@@ -909,6 +910,54 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
 @click.argument("out", type=click.Path(path_type=Path))
 @_encode_options
 @click.option(
+    "--icechunk",
+    is_flag=True,
+    help="SOURCE is an anonymous HTTPS or local Icechunk repository "
+    "(needs the icechunk extra, Python 3.12+).",
+)
+@click.option("--icechunk-branch", default=None, help="Resolve this branch once (default main).")
+@click.option("--icechunk-tag", default=None, help="Use this Icechunk tag instead of a branch.")
+@click.option("--icechunk-snapshot", default=None, help="Use this immutable Icechunk snapshot ID.")
+@click.option(
+    "--isel",
+    multiple=True,
+    help="Icechunk only: repeat DIM=INDEX or DIM=START:STOP (exclusive stop) "
+    "for every variable dimension.",
+)
+@click.option(
+    "--virtual-prefix",
+    multiple=True,
+    help="Icechunk only: allow anonymous virtual reads under this exact s3:// or https:// "
+    "prefix ending /.",
+)
+@click.option(
+    "--cast-float32",
+    is_flag=True,
+    help="Icechunk only: explicitly round a float64 variable to float32, recorded in provenance.",
+)
+@click.option(
+    "--max-import-mb",
+    type=click.FloatRange(min=0, min_open=True),
+    default=512.0,
+    show_default=True,
+    help="Icechunk selected decoded output limit, in MiB; not a wire-byte or RSS cap.",
+)
+@click.option(
+    "--source-cache-mb",
+    type=click.FloatRange(min=0),
+    default=32.0,
+    show_default=True,
+    help="Icechunk materialized encoded-range cache, in MiB (0 disables); "
+    "separate from decode limits.",
+)
+@click.option(
+    "--max-source-chunk-mb",
+    type=click.FloatRange(min=0, min_open=True),
+    default=128.0,
+    show_default=True,
+    help="Icechunk decoded source chunk limit, in MiB; small windows still read whole chunks.",
+)
+@click.option(
     "--variable",
     default=None,
     help="Variable to convert from a Zarr or NetCDF source (also from every file of a NetCDF "
@@ -1037,6 +1086,16 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
 def convert_command(
     source: str,
     out: Path,
+    icechunk: bool,
+    icechunk_branch: str | None,
+    icechunk_tag: str | None,
+    icechunk_snapshot: str | None,
+    isel: tuple[str, ...],
+    virtual_prefix: tuple[str, ...],
+    cast_float32: bool,
+    max_import_mb: float,
+    max_source_chunk_mb: float,
+    source_cache_mb: float,
     variable: str | None,
     dims: str | None,
     crs: str | None,
@@ -1115,8 +1174,38 @@ def convert_command(
             click.echo(f"{label}: {done}/{total}", err=True)
 
     with _command_errors():
+        input_source: str | IcechunkInput = source
+        if icechunk:
+            input_source = IcechunkInput(
+                source,
+                parse_indexers(isel),
+                branch=icechunk_branch,
+                tag=icechunk_tag,
+                snapshot=icechunk_snapshot,
+                virtual_prefixes=virtual_prefix,
+                cast_float32=cast_float32,
+                max_output_bytes=int(max_import_mb * 1024**2),
+                max_chunk_bytes=int(max_source_chunk_mb * 1024**2),
+                encoded_cache_bytes=int(source_cache_mb * 1024**2),
+            )
+        elif (
+            any(
+                (
+                    icechunk_branch,
+                    icechunk_tag,
+                    icechunk_snapshot,
+                    isel,
+                    virtual_prefix,
+                    cast_float32,
+                )
+            )
+            or max_import_mb != 512.0
+            or max_source_chunk_mb != 128.0
+            or source_cache_mb != 32.0
+        ):
+            raise ValueError("Icechunk version, selection and limit options require --icechunk")
         report = convert(
-            source,
+            input_source,
             out,
             variable=variable,
             dims=dims,

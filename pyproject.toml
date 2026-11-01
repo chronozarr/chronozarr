@@ -59,6 +59,8 @@ dask = ["dask>=2024.1"]
 # h5netcdf and h5py: NetCDF input for `convert` and `encode`. cftime: climate-model files
 # (CMIP6) are NetCDF files on 360_day or noleap calendars, so the NetCDF route installs it too.
 netcdf = ["h5netcdf>=1.3", "h5py>=3.10", "cftime>=1.6"]
+# Explicit snapshot-pinned conversion of anonymous Icechunk repositories (Python 3.12+).
+icechunk = ["icechunk>=2.1.1,<3; python_version >= '3.12'", "gribberish>=1.8.4,<2; python_version >= '3.12'"]
 # cftime alone: a Zarr store on a 360_day, noleap, all_leap or julian calendar needs no NetCDF reader.
 cftime = ["cftime>=1.6"]
 # boto3: `convert` lists an s3:// prefix of GeoTIFFs with the caller's AWS credential chain.
