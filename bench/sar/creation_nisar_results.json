@@ -1,0 +1,378 @@
+{
+  "scope": "Full spatial first/middle/last cached NISAR windows; warm local filesystem, cache write plus encoder frame/mask reads; excludes remote HDF5 extraction and Zarr encode; no production change",
+  "provenance": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "python": "3.13.11 (main, Dec  5 2025, 16:06:33) [Clang 17.0.0 (clang-1700.4.4.1)]",
+    "numpy": "2.4.4",
+    "git_head": "ca799a1b985fb6b4090131632f7574508440d84e",
+    "production_source_sha256": "0bfe7a807ede50402b3a9ce3a9278bcebfc3d3fdc4622f3f134df6afba61ee48",
+    "inputs_sha256": {
+      "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_004_005_A_018_4005_DHDH_A_20251029T125111_20251029T125131_P05023_N_P_J_001.npz": "ec33e452d87429ca9f137944180615ae7d2d0ac4bd369802eacad90a5856ce38",
+      "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_019_005_A_018_4005_DHDH_A_20260427T125116_20260427T125151_P05023_N_F_J_001.npz": "ce36baaa941a0873cce02380877565fff7393310d34f5da2d0b139658f36afd2",
+      "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_033_005_A_018_4005_DHDH_A_20261012T125110_20261012T125145_P05023_N_F_J_001.npz": "4f97841adf6150e0b2909b273750bb002dad92998f7678cb60b1d6a96e409cbb"
+    }
+  },
+  "results": [
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_004_005_A_018_4005_DHDH_A_20251029T125111_20251029T125131_P05023_N_P_J_001.npz",
+      "valid_fraction": 0.4811439843138522,
+      "start": "2025-10-29T12:51:11Z",
+      "repeat": 0,
+      "mode": "compressed",
+      "write_seconds": 1.5315755838528275,
+      "encode_read_seconds": 0.12928070779889822,
+      "bytes": 27153354,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "a51f44ed27c34dcdcd17a5d21dc2ed1e5b373206216332c8d343365509d2ab08",
+        "HV": "f6b41aeb702f8935f6c8e251a09113217f8d1321c2bcf051e175a3f14505c5ad",
+        "mask": "3f9db500996fe2407621a709a4d09e11e83c64818b8d0192af56d13caf7ec562"
+      },
+      "peak_rss_bytes": 329924608
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_004_005_A_018_4005_DHDH_A_20251029T125111_20251029T125131_P05023_N_P_J_001.npz",
+      "valid_fraction": 0.4811439843138522,
+      "start": "2025-10-29T12:51:11Z",
+      "repeat": 0,
+      "mode": "uncompressed",
+      "write_seconds": 0.022471332922577858,
+      "encode_read_seconds": 0.02144587505608797,
+      "bytes": 89129054,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "a51f44ed27c34dcdcd17a5d21dc2ed1e5b373206216332c8d343365509d2ab08",
+        "HV": "f6b41aeb702f8935f6c8e251a09113217f8d1321c2bcf051e175a3f14505c5ad",
+        "mask": "3f9db500996fe2407621a709a4d09e11e83c64818b8d0192af56d13caf7ec562"
+      },
+      "peak_rss_bytes": 305463296
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_004_005_A_018_4005_DHDH_A_20251029T125111_20251029T125131_P05023_N_P_J_001.npz",
+      "valid_fraction": 0.4811439843138522,
+      "start": "2025-10-29T12:51:11Z",
+      "repeat": 1,
+      "mode": "compressed",
+      "write_seconds": 1.5354413748718798,
+      "encode_read_seconds": 0.12881966680288315,
+      "bytes": 27153354,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "a51f44ed27c34dcdcd17a5d21dc2ed1e5b373206216332c8d343365509d2ab08",
+        "HV": "f6b41aeb702f8935f6c8e251a09113217f8d1321c2bcf051e175a3f14505c5ad",
+        "mask": "3f9db500996fe2407621a709a4d09e11e83c64818b8d0192af56d13caf7ec562"
+      },
+      "peak_rss_bytes": 330465280
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_004_005_A_018_4005_DHDH_A_20251029T125111_20251029T125131_P05023_N_P_J_001.npz",
+      "valid_fraction": 0.4811439843138522,
+      "start": "2025-10-29T12:51:11Z",
+      "repeat": 1,
+      "mode": "uncompressed",
+      "write_seconds": 0.024652583990246058,
+      "encode_read_seconds": 0.021750458981841803,
+      "bytes": 89129054,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "a51f44ed27c34dcdcd17a5d21dc2ed1e5b373206216332c8d343365509d2ab08",
+        "HV": "f6b41aeb702f8935f6c8e251a09113217f8d1321c2bcf051e175a3f14505c5ad",
+        "mask": "3f9db500996fe2407621a709a4d09e11e83c64818b8d0192af56d13caf7ec562"
+      },
+      "peak_rss_bytes": 305250304
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_004_005_A_018_4005_DHDH_A_20251029T125111_20251029T125131_P05023_N_P_J_001.npz",
+      "valid_fraction": 0.4811439843138522,
+      "start": "2025-10-29T12:51:11Z",
+      "repeat": 2,
+      "mode": "compressed",
+      "write_seconds": 1.5209142500534654,
+      "encode_read_seconds": 0.12827729200944304,
+      "bytes": 27153354,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "a51f44ed27c34dcdcd17a5d21dc2ed1e5b373206216332c8d343365509d2ab08",
+        "HV": "f6b41aeb702f8935f6c8e251a09113217f8d1321c2bcf051e175a3f14505c5ad",
+        "mask": "3f9db500996fe2407621a709a4d09e11e83c64818b8d0192af56d13caf7ec562"
+      },
+      "peak_rss_bytes": 330350592
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_004_005_A_018_4005_DHDH_A_20251029T125111_20251029T125131_P05023_N_P_J_001.npz",
+      "valid_fraction": 0.4811439843138522,
+      "start": "2025-10-29T12:51:11Z",
+      "repeat": 2,
+      "mode": "uncompressed",
+      "write_seconds": 0.02548441616818309,
+      "encode_read_seconds": 0.022136792074888945,
+      "bytes": 89129054,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "a51f44ed27c34dcdcd17a5d21dc2ed1e5b373206216332c8d343365509d2ab08",
+        "HV": "f6b41aeb702f8935f6c8e251a09113217f8d1321c2bcf051e175a3f14505c5ad",
+        "mask": "3f9db500996fe2407621a709a4d09e11e83c64818b8d0192af56d13caf7ec562"
+      },
+      "peak_rss_bytes": 306249728
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_019_005_A_018_4005_DHDH_A_20260427T125116_20260427T125151_P05023_N_F_J_001.npz",
+      "valid_fraction": 0.9999902387927877,
+      "start": "2026-04-27T12:51:16Z",
+      "repeat": 0,
+      "mode": "compressed",
+      "write_seconds": 2.9584206249564886,
+      "encode_read_seconds": 0.22826208267360926,
+      "bytes": 56400473,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "881c92c7e28af405138416cc510ba344fbac1c30d9525690ddb7cb8996197bcc",
+        "HV": "85b8c93325f6fd52bec31d14f58015f8affd4e1fc45c4116e76fb4ad6c6545f8",
+        "mask": "80adf33f595ecf4e32f61bdbf6ec40f5cb8a4586d08814beca4938c6f8e3b89d"
+      },
+      "peak_rss_bytes": 347684864
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_019_005_A_018_4005_DHDH_A_20260427T125116_20260427T125151_P05023_N_F_J_001.npz",
+      "valid_fraction": 0.9999902387927877,
+      "start": "2026-04-27T12:51:16Z",
+      "repeat": 0,
+      "mode": "uncompressed",
+      "write_seconds": 0.029276249930262566,
+      "encode_read_seconds": 0.021072625182569027,
+      "bytes": 89129054,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "881c92c7e28af405138416cc510ba344fbac1c30d9525690ddb7cb8996197bcc",
+        "HV": "85b8c93325f6fd52bec31d14f58015f8affd4e1fc45c4116e76fb4ad6c6545f8",
+        "mask": "80adf33f595ecf4e32f61bdbf6ec40f5cb8a4586d08814beca4938c6f8e3b89d"
+      },
+      "peak_rss_bytes": 304332800
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_019_005_A_018_4005_DHDH_A_20260427T125116_20260427T125151_P05023_N_F_J_001.npz",
+      "valid_fraction": 0.9999902387927877,
+      "start": "2026-04-27T12:51:16Z",
+      "repeat": 1,
+      "mode": "compressed",
+      "write_seconds": 2.979220500215888,
+      "encode_read_seconds": 0.2302453750744462,
+      "bytes": 56400473,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "881c92c7e28af405138416cc510ba344fbac1c30d9525690ddb7cb8996197bcc",
+        "HV": "85b8c93325f6fd52bec31d14f58015f8affd4e1fc45c4116e76fb4ad6c6545f8",
+        "mask": "80adf33f595ecf4e32f61bdbf6ec40f5cb8a4586d08814beca4938c6f8e3b89d"
+      },
+      "peak_rss_bytes": 347193344
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_019_005_A_018_4005_DHDH_A_20260427T125116_20260427T125151_P05023_N_F_J_001.npz",
+      "valid_fraction": 0.9999902387927877,
+      "start": "2026-04-27T12:51:16Z",
+      "repeat": 1,
+      "mode": "uncompressed",
+      "write_seconds": 0.023230083752423525,
+      "encode_read_seconds": 0.02070108288899064,
+      "bytes": 89129054,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "881c92c7e28af405138416cc510ba344fbac1c30d9525690ddb7cb8996197bcc",
+        "HV": "85b8c93325f6fd52bec31d14f58015f8affd4e1fc45c4116e76fb4ad6c6545f8",
+        "mask": "80adf33f595ecf4e32f61bdbf6ec40f5cb8a4586d08814beca4938c6f8e3b89d"
+      },
+      "peak_rss_bytes": 304431104
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_019_005_A_018_4005_DHDH_A_20260427T125116_20260427T125151_P05023_N_F_J_001.npz",
+      "valid_fraction": 0.9999902387927877,
+      "start": "2026-04-27T12:51:16Z",
+      "repeat": 2,
+      "mode": "compressed",
+      "write_seconds": 2.973795333877206,
+      "encode_read_seconds": 0.2257674583233893,
+      "bytes": 56400473,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "881c92c7e28af405138416cc510ba344fbac1c30d9525690ddb7cb8996197bcc",
+        "HV": "85b8c93325f6fd52bec31d14f58015f8affd4e1fc45c4116e76fb4ad6c6545f8",
+        "mask": "80adf33f595ecf4e32f61bdbf6ec40f5cb8a4586d08814beca4938c6f8e3b89d"
+      },
+      "peak_rss_bytes": 346587136
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_019_005_A_018_4005_DHDH_A_20260427T125116_20260427T125151_P05023_N_F_J_001.npz",
+      "valid_fraction": 0.9999902387927877,
+      "start": "2026-04-27T12:51:16Z",
+      "repeat": 2,
+      "mode": "uncompressed",
+      "write_seconds": 0.026568708010017872,
+      "encode_read_seconds": 0.021243624854832888,
+      "bytes": 89129054,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "881c92c7e28af405138416cc510ba344fbac1c30d9525690ddb7cb8996197bcc",
+        "HV": "85b8c93325f6fd52bec31d14f58015f8affd4e1fc45c4116e76fb4ad6c6545f8",
+        "mask": "80adf33f595ecf4e32f61bdbf6ec40f5cb8a4586d08814beca4938c6f8e3b89d"
+      },
+      "peak_rss_bytes": 303300608
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_033_005_A_018_4005_DHDH_A_20261012T125110_20261012T125145_P05023_N_F_J_001.npz",
+      "valid_fraction": 0.9999910802761681,
+      "start": "2026-10-12T12:51:10Z",
+      "repeat": 0,
+      "mode": "compressed",
+      "write_seconds": 2.9834149586968124,
+      "encode_read_seconds": 0.23135379189625382,
+      "bytes": 56396017,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "67a970f647416bb725646594d6a261d6fcf3065693b8df4457a962da06ef7450",
+        "HV": "ca810a7de6073f972794d7fb548564b15b48b9eb28189ed2f29214d7ae89026c",
+        "mask": "951696c9f94882d1c84d89d09b9869f10bf6e7d9ba55f39a7285c26963cc3af7"
+      },
+      "peak_rss_bytes": 348176384
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_033_005_A_018_4005_DHDH_A_20261012T125110_20261012T125145_P05023_N_F_J_001.npz",
+      "valid_fraction": 0.9999910802761681,
+      "start": "2026-10-12T12:51:10Z",
+      "repeat": 0,
+      "mode": "uncompressed",
+      "write_seconds": 0.025846957694739103,
+      "encode_read_seconds": 0.02156037511304021,
+      "bytes": 89129054,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "67a970f647416bb725646594d6a261d6fcf3065693b8df4457a962da06ef7450",
+        "HV": "ca810a7de6073f972794d7fb548564b15b48b9eb28189ed2f29214d7ae89026c",
+        "mask": "951696c9f94882d1c84d89d09b9869f10bf6e7d9ba55f39a7285c26963cc3af7"
+      },
+      "peak_rss_bytes": 304431104
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_033_005_A_018_4005_DHDH_A_20261012T125110_20261012T125145_P05023_N_F_J_001.npz",
+      "valid_fraction": 0.9999910802761681,
+      "start": "2026-10-12T12:51:10Z",
+      "repeat": 1,
+      "mode": "compressed",
+      "write_seconds": 3.0041224588640034,
+      "encode_read_seconds": 0.22913670865818858,
+      "bytes": 56396017,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "67a970f647416bb725646594d6a261d6fcf3065693b8df4457a962da06ef7450",
+        "HV": "ca810a7de6073f972794d7fb548564b15b48b9eb28189ed2f29214d7ae89026c",
+        "mask": "951696c9f94882d1c84d89d09b9869f10bf6e7d9ba55f39a7285c26963cc3af7"
+      },
+      "peak_rss_bytes": 346669056
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_033_005_A_018_4005_DHDH_A_20261012T125110_20261012T125145_P05023_N_F_J_001.npz",
+      "valid_fraction": 0.9999910802761681,
+      "start": "2026-10-12T12:51:10Z",
+      "repeat": 1,
+      "mode": "uncompressed",
+      "write_seconds": 0.022098541725426912,
+      "encode_read_seconds": 0.022856540977954865,
+      "bytes": 89129054,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "67a970f647416bb725646594d6a261d6fcf3065693b8df4457a962da06ef7450",
+        "HV": "ca810a7de6073f972794d7fb548564b15b48b9eb28189ed2f29214d7ae89026c",
+        "mask": "951696c9f94882d1c84d89d09b9869f10bf6e7d9ba55f39a7285c26963cc3af7"
+      },
+      "peak_rss_bytes": 303841280
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_033_005_A_018_4005_DHDH_A_20261012T125110_20261012T125145_P05023_N_F_J_001.npz",
+      "valid_fraction": 0.9999910802761681,
+      "start": "2026-10-12T12:51:10Z",
+      "repeat": 2,
+      "mode": "compressed",
+      "write_seconds": 2.938737124670297,
+      "encode_read_seconds": 0.2234981250949204,
+      "bytes": 56396017,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "67a970f647416bb725646594d6a261d6fcf3065693b8df4457a962da06ef7450",
+        "HV": "ca810a7de6073f972794d7fb548564b15b48b9eb28189ed2f29214d7ae89026c",
+        "mask": "951696c9f94882d1c84d89d09b9869f10bf6e7d9ba55f39a7285c26963cc3af7"
+      },
+      "peak_rss_bytes": 346882048
+    },
+    {
+      "source": "data/cache/nisar/colorado_yuma/NISAR_L2_PR_GCOV_033_005_A_018_4005_DHDH_A_20261012T125110_20261012T125145_P05023_N_F_J_001.npz",
+      "valid_fraction": 0.9999910802761681,
+      "start": "2026-10-12T12:51:10Z",
+      "repeat": 2,
+      "mode": "uncompressed",
+      "write_seconds": 0.019629749935120344,
+      "encode_read_seconds": 0.024461292196065187,
+      "bytes": 89129054,
+      "shape": [
+        4566,
+        3904
+      ],
+      "arrays_sha256": {
+        "HH": "67a970f647416bb725646594d6a261d6fcf3065693b8df4457a962da06ef7450",
+        "HV": "ca810a7de6073f972794d7fb548564b15b48b9eb28189ed2f29214d7ae89026c",
+        "mask": "951696c9f94882d1c84d89d09b9869f10bf6e7d9ba55f39a7285c26963cc3af7"
+      },
+      "peak_rss_bytes": 303153152
+    }
+  ]
+}

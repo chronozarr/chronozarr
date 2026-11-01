@@ -1,0 +1,460 @@
+{
+  "file": "bench/sar/results/full-resolution-after-3gib.jsonl",
+  "errors": [],
+  "results": [
+    {
+      "sensor": "nisar",
+      "view": "full",
+      "phase": "cold",
+      "runs": 3,
+      "elapsedMs": 234,
+      "firstCompleteLod0Ms": 233.5,
+      "achievedStepsPerSecond": null,
+      "finished": [
+        null,
+        null,
+        null
+      ],
+      "steps": [
+        null,
+        null,
+        null
+      ],
+      "readerRequests": [
+        145,
+        145,
+        145
+      ],
+      "readerBytes": [
+        55005477,
+        55005477,
+        55005477
+      ],
+      "pageMaskRequests": [
+        {
+          "requests": 72,
+          "bytes": 29377,
+          "uniquePaths": 72,
+          "duplicateRequests": 0,
+          "maxRequestsPerPath": 1
+        },
+        {
+          "requests": 72,
+          "bytes": 29377,
+          "uniquePaths": 72,
+          "duplicateRequests": 0,
+          "maxRequestsPerPath": 1
+        },
+        {
+          "requests": 72,
+          "bytes": 29377,
+          "uniquePaths": 72,
+          "duplicateRequests": 0,
+          "maxRequestsPerPath": 1
+        }
+      ],
+      "cells": [
+        [
+          72
+        ],
+        [
+          72
+        ],
+        [
+          72
+        ]
+      ],
+      "paintLevels": [
+        [
+          0
+        ],
+        [
+          0
+        ],
+        [
+          0
+        ]
+      ],
+      "completePaints": [
+        1,
+        1,
+        1
+      ],
+      "partialPaints": [
+        0,
+        0,
+        0
+      ],
+      "switchComplete": null,
+      "switchCount": null,
+      "switchMedianMs": null,
+      "switchP95Ms": null,
+      "switchMaxMs": null,
+      "switchRequests": null,
+      "budgets": {
+        "totalBytes": 1610612736,
+        "decodedBytes": 1610612736,
+        "compressedBytes": 1610612736,
+        "auxBytes": 161061274,
+        "speculativeBytesInitial": 16777216
+      },
+      "gpuSlots": 307,
+      "cache": {
+        "entries": 72,
+        "bytes": 75497472,
+        "compressedEntries": 72,
+        "compressedBytes": 54917304
+      }
+    },
+    {
+      "sensor": "nisar",
+      "view": "full",
+      "phase": "prefetch",
+      "runs": 3,
+      "elapsedMs": 5097.5,
+      "firstCompleteLod0Ms": null,
+      "achievedStepsPerSecond": null,
+      "finished": [
+        null,
+        null,
+        null
+      ],
+      "steps": [
+        null,
+        null,
+        null
+      ],
+      "readerRequests": [
+        3600,
+        3600,
+        3600
+      ],
+      "readerBytes": [
+        1369755959,
+        1369755959,
+        1369755959
+      ],
+      "pageMaskRequests": [
+        {
+          "requests": 1800,
+          "bytes": 734957,
+          "uniquePaths": 1800,
+          "duplicateRequests": 0,
+          "maxRequestsPerPath": 1
+        },
+        {
+          "requests": 1800,
+          "bytes": 734957,
+          "uniquePaths": 1800,
+          "duplicateRequests": 0,
+          "maxRequestsPerPath": 1
+        },
+        {
+          "requests": 1800,
+          "bytes": 734957,
+          "uniquePaths": 1800,
+          "duplicateRequests": 0,
+          "maxRequestsPerPath": 1
+        }
+      ],
+      "cells": [
+        [],
+        [],
+        []
+      ],
+      "paintLevels": [
+        [],
+        [],
+        []
+      ],
+      "completePaints": [
+        0,
+        0,
+        0
+      ],
+      "partialPaints": [
+        0,
+        0,
+        0
+      ],
+      "switchComplete": null,
+      "switchCount": null,
+      "switchMedianMs": null,
+      "switchP95Ms": null,
+      "switchMaxMs": null,
+      "switchRequests": null,
+      "budgets": {
+        "totalBytes": 3221225472,
+        "decodedBytes": 3221225472,
+        "compressedBytes": 3221225472,
+        "auxBytes": 322122547,
+        "speculativeBytesInitial": 16777216
+      },
+      "gpuSlots": 307,
+      "cache": {
+        "entries": 1872,
+        "bytes": 1962934272,
+        "compressedEntries": 1654,
+        "compressedBytes": 1258252601
+      }
+    },
+    {
+      "sensor": "nisar",
+      "view": "full",
+      "phase": "play30",
+      "runs": 3,
+      "elapsedMs": 1715.4000000953674,
+      "firstCompleteLod0Ms": 4.199999809265137,
+      "achievedStepsPerSecond": 29.975314445245875,
+      "finished": [
+        true,
+        true,
+        true
+      ],
+      "steps": [
+        52,
+        52,
+        52
+      ],
+      "readerRequests": [
+        0,
+        0,
+        0
+      ],
+      "readerBytes": [
+        0,
+        0,
+        0
+      ],
+      "pageMaskRequests": [
+        null,
+        null,
+        null
+      ],
+      "cells": [
+        [
+          72
+        ],
+        [
+          72
+        ],
+        [
+          72
+        ]
+      ],
+      "paintLevels": [
+        [
+          0
+        ],
+        [
+          0
+        ],
+        [
+          0
+        ]
+      ],
+      "completePaints": [
+        52,
+        52,
+        52
+      ],
+      "partialPaints": [
+        0,
+        0,
+        0
+      ],
+      "switchComplete": null,
+      "switchCount": null,
+      "switchMedianMs": null,
+      "switchP95Ms": null,
+      "switchMaxMs": null,
+      "switchRequests": null,
+      "budgets": {
+        "totalBytes": 3221225472,
+        "decodedBytes": 3221225472,
+        "compressedBytes": 3221225472,
+        "auxBytes": 322122547,
+        "speculativeBytesInitial": 16777216
+      },
+      "gpuSlots": 307,
+      "cache": {
+        "entries": 1872,
+        "bytes": 1962934272,
+        "compressedEntries": 1654,
+        "compressedBytes": 1258252601
+      }
+    },
+    {
+      "sensor": "nisar",
+      "view": "full",
+      "phase": "play60",
+      "runs": 3,
+      "elapsedMs": 956.8000001907349,
+      "firstCompleteLod0Ms": 2.799999713897705,
+      "achievedStepsPerSecond": 54.785691260903675,
+      "finished": [
+        true,
+        true,
+        true
+      ],
+      "steps": [
+        52,
+        53,
+        52
+      ],
+      "readerRequests": [
+        0,
+        0,
+        0
+      ],
+      "readerBytes": [
+        0,
+        0,
+        0
+      ],
+      "pageMaskRequests": [
+        null,
+        null,
+        null
+      ],
+      "cells": [
+        [
+          72
+        ],
+        [
+          72
+        ],
+        [
+          72
+        ]
+      ],
+      "paintLevels": [
+        [
+          0
+        ],
+        [
+          0
+        ],
+        [
+          0
+        ]
+      ],
+      "completePaints": [
+        52,
+        53,
+        52
+      ],
+      "partialPaints": [
+        0,
+        0,
+        0
+      ],
+      "switchComplete": null,
+      "switchCount": null,
+      "switchMedianMs": null,
+      "switchP95Ms": null,
+      "switchMaxMs": null,
+      "switchRequests": null,
+      "budgets": {
+        "totalBytes": 3221225472,
+        "decodedBytes": 3221225472,
+        "compressedBytes": 3221225472,
+        "auxBytes": 322122547,
+        "speculativeBytesInitial": 16777216
+      },
+      "gpuSlots": 307,
+      "cache": {
+        "entries": 1872,
+        "bytes": 1962934272,
+        "compressedEntries": 1654,
+        "compressedBytes": 1258252601
+      }
+    },
+    {
+      "sensor": "nisar",
+      "view": "full",
+      "phase": "switch",
+      "runs": 3,
+      "elapsedMs": 740.6999998092651,
+      "firstCompleteLod0Ms": 10.299999713897705,
+      "achievedStepsPerSecond": null,
+      "finished": [
+        null,
+        null,
+        null
+      ],
+      "steps": [
+        null,
+        null,
+        null
+      ],
+      "readerRequests": [
+        0,
+        0,
+        0
+      ],
+      "readerBytes": [
+        0,
+        0,
+        0
+      ],
+      "pageMaskRequests": [
+        null,
+        null,
+        null
+      ],
+      "cells": [
+        [
+          72
+        ],
+        [
+          72
+        ],
+        [
+          72
+        ]
+      ],
+      "paintLevels": [
+        [
+          0
+        ],
+        [
+          0
+        ],
+        [
+          0
+        ]
+      ],
+      "completePaints": [
+        20,
+        20,
+        20
+      ],
+      "partialPaints": [
+        0,
+        0,
+        0
+      ],
+      "switchComplete": 60,
+      "switchCount": 60,
+      "switchMedianMs": 5.5,
+      "switchP95Ms": 8.800000190734863,
+      "switchMaxMs": 16.899999618530273,
+      "switchRequests": 0,
+      "budgets": {
+        "totalBytes": 3221225472,
+        "decodedBytes": 3221225472,
+        "compressedBytes": 3221225472,
+        "auxBytes": 322122547,
+        "speculativeBytesInitial": 16777216
+      },
+      "gpuSlots": 307,
+      "cache": {
+        "entries": 1872,
+        "bytes": 1962934272,
+        "compressedEntries": 1654,
+        "compressedBytes": 1258252601
+      }
+    }
+  ]
+}

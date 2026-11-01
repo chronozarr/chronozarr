@@ -1,6 +1,6 @@
 // WebGL2 renderer for chronozarr cells.
 //
-// All chunks live as raw values of the store's data type in one TEXTURE_2D_ARRAY (R8UI, R16UI, R16I or R32F,
+// Ordinary chunks live as raw values of the store's data type in one TEXTURE_2D_ARRAY (R8UI, R16UI, R16I or R32F,
 // see TEXTURE_FORMATS). A chunk (band, y, x) occupies n_band consecutive layers ("slot"), so uploading one is a
 // single texSubImage3D from the decoded array. The fragment shader reads one true-value slot,
 // so switching timesteps or products never runs a CPU loop
@@ -11,6 +11,9 @@
 // the mask is 0 the shader writes the background color (opaque, so painting over the previous frame cannot leave
 // the previous timestep's pixel behind), and the store's nodata value is not compared (spec 2.3).
 
+// Oversized uint16 timelines can instead use lossless block-packed words plus metadata.
+// The shader extracts the original value directly; both textures count against the same pool budget.
+
 import { channelBounds } from '../shared/products.js';
 import { PRODUCT_GLSL } from '../shared/products-glsl.js';
 import { TEXTURE_FORMATS } from '../shared/texture-formats.js';
@@ -19,7 +22,28 @@ export { TEXTURE_FORMATS } from '../shared/texture-formats.js';
 
 const BACKGROUND = [0.035, 0.047, 0.071];
 
-function valueGlsl() {
+function valueGlsl(compact) {
+  if (compact) return `
+float value(ivec2 texel, int band) {
+  if (band < 0) return 0.0;
+  uint index = uint(band * u_chunkShape.x * u_chunkShape.y + texel.y * u_chunkShape.x + texel.x);
+  uint block = index >> 7u;
+  uvec2 meta = texelFetch(u_blocks, ivec3(int(block % uint(u_blockWidth)), int(block / uint(u_blockWidth)), u_dataBase), 0).rg;
+  uint minimum = meta.y & 65535u;
+  uint bits = meta.y >> 16u;
+  if (bits == 0u) return float(minimum);
+  uint bit = (index & 127u) * bits;
+  uint word = meta.x + (bit >> 5u);
+  uint shift = bit & 31u;
+  uint low = texelFetch(u_data, ivec3(int(word % uint(u_wordWidth)), int(word / uint(u_wordWidth)), u_dataBase), 0).r;
+  uint residual = low >> shift;
+  if (shift + bits > 32u) {
+    word += 1u;
+    uint high = texelFetch(u_data, ivec3(int(word % uint(u_wordWidth)), int(word / uint(u_wordWidth)), u_dataBase), 0).r;
+    residual |= high << (32u - shift);
+  }
+  return float(minimum + (residual & ((1u << bits) - 1u)));
+}`;
   return `
 float value(ivec2 texel, int band) {
   if (band < 0) return 0.0;
@@ -42,7 +66,7 @@ void main() {
 }`;
 
 /** Fragment shader for one data type; `hasMask` adds the validity mask texture (see the top of this file). */
-export function fragmentShader(dtype, hasMask = false) {
+export function fragmentShader(dtype, hasMask = false, compact = false) {
   const format = TEXTURE_FORMATS[dtype];
   const isFloat = dtype === 'float32';
   return `#version 300 es
@@ -52,6 +76,7 @@ precision highp ${format.sampler};
 precision highp usampler2DArray;
 in vec2 v_texel;
 uniform ${format.sampler} u_data;
+${compact ? 'uniform usampler2DArray u_blocks;\nuniform ivec2 u_chunkShape;\nuniform int u_wordWidth;\nuniform int u_blockWidth;' : ''}
 ${hasMask ? 'uniform usampler2DArray u_mask;   // validity mask, one layer per slot: 1 = valid\nuniform int u_maskLayer;        // layer of the slot that holds the mask of the timestep on screen' : ''}
 uniform vec2 u_extent;
 uniform int u_dataBase;     // first layer of the true-value data slot
@@ -70,7 +95,7 @@ uniform vec3 u_offset;
 out vec4 outColor;
 
 const vec3 BG = vec3(${BACKGROUND.join(', ')});
-${valueGlsl()}
+${valueGlsl(compact)}
 
 bool isNodata(float v) {
   return (u_hasNodata != 0 && v == u_nodata)${isFloat ? ' || isnan(v)' : ''};
@@ -116,7 +141,7 @@ function compile(gl, type, source) {
   return shader;
 }
 
-const UNIFORM_NAMES = ['u_canvas', 'u_view', 'u_cell', 'u_extent', 'u_data', 'u_mask', 'u_maskLayer', 'u_dataBase', 'u_inputs', 'u_product', 'u_display', 'u_colormap', 'u_rangeLo', 'u_rangeHi', 'u_stretch_lo', 'u_hasNodata', 'u_nodata', 'u_scale', 'u_divisor', 'u_offset'];
+const UNIFORM_NAMES = ['u_canvas', 'u_view', 'u_cell', 'u_extent', 'u_data', 'u_mask', 'u_maskLayer', 'u_dataBase', 'u_inputs', 'u_product', 'u_display', 'u_colormap', 'u_rangeLo', 'u_rangeHi', 'u_stretch_lo', 'u_hasNodata', 'u_nodata', 'u_scale', 'u_divisor', 'u_offset', 'u_blocks', 'u_chunkShape', 'u_wordWidth', 'u_blockWidth'];
 
 export class Renderer {
   #gl;
@@ -124,6 +149,7 @@ export class Renderer {
   #uniforms = {};
   #texture = null;
   #maskTexture = null;
+  #blockTexture = null;
   #pool = null;
   #frame = 0;
   #dtype = 'uint16';
@@ -142,15 +168,15 @@ export class Renderer {
   }
 
   /** Select (compiling on first use) the shader program that reads textures of this data type, with the mask texture if `hasMask`. */
-  #useProgram(dtype, hasMask) {
+  #useProgram(dtype, hasMask, compact = false) {
     const gl = this.#gl;
     if (!TEXTURE_FORMATS[dtype]) throw new Error(`Unsupported data type ${dtype}; the viewer shows ${Object.keys(TEXTURE_FORMATS).join(', ')}.`);
-    const programKey = `${dtype}${hasMask ? '+mask' : ''}`;
+    const programKey = `${dtype}${hasMask ? '+mask' : ''}${compact ? '+compact' : ''}`;
     let entry = this.#programs.get(programKey);
     if (!entry) {
       const program = gl.createProgram();
       const vs = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-      const fs = compile(gl, gl.FRAGMENT_SHADER, fragmentShader(dtype, hasMask));
+      const fs = compile(gl, gl.FRAGMENT_SHADER, fragmentShader(dtype, hasMask, compact));
       gl.attachShader(program, vs);
       gl.attachShader(program, fs);
       gl.linkProgram(program);
@@ -163,6 +189,7 @@ export class Renderer {
       const uniforms = Object.fromEntries(UNIFORM_NAMES.map((name) => [name, gl.getUniformLocation(program, name)]));
       gl.uniform1i(uniforms.u_data, 0);
       gl.uniform1i(uniforms.u_mask, 1);
+      gl.uniform1i(uniforms.u_blocks, 2);
       entry = { program, uniforms };
       this.#programs.set(programKey, entry);
     }
@@ -185,23 +212,42 @@ export class Renderer {
     return this.#pool?.slots ?? 0;
   }
 
+  /** Exact storage allocated for imagery, packing metadata and validity textures. */
+  get allocatedBytes() {
+    const p = this.#pool;
+    if (!p) return 0;
+    const dataBytes = p.compact
+      ? p.chunkWidth * Math.ceil(Math.ceil(p.elements / 2) / p.chunkWidth) * 4 + p.blockWidth * p.blockHeight * 8
+      : p.elements * TEXTURE_FORMATS[p.dtype].Array.BYTES_PER_ELEMENT;
+    return p.slots * (dataBytes + (this.#hasMask ? p.chunkWidth * p.chunkHeight : 0));
+  }
+
   /**
    * Number of slots that fit `budgetBytes` and the driver's layer limit (`bytesPerSample`: 1, 2 or 4 by data type).
    * With `hasMask` each slot also carries one byte per pixel of mask.
    */
-  planSlots(nBand, chunkWidth, chunkHeight, budgetBytes, wanted, bytesPerSample = 2, hasMask = false) {
+  planSlots(nBand, chunkWidth, chunkHeight, budgetBytes, wanted, bytesPerSample = 2, hasMask = false, compact = false) {
     const byLayers = Math.floor(this.limits.maxLayers / nBand);
-    const slotBytes = nBand * chunkWidth * chunkHeight * bytesPerSample + (hasMask ? chunkWidth * chunkHeight : 0);
+    const elements = nBand * chunkWidth * chunkHeight;
+    const blocks = Math.ceil(elements / 128), blockWidth = Math.min(256, blocks);
+    const dataBytes = compact ? chunkWidth * Math.ceil(Math.ceil(elements / 2) / chunkWidth) * 4 + blockWidth * Math.ceil(blocks / blockWidth) * 8 : elements * bytesPerSample;
+    const slotBytes = dataBytes + (hasMask ? chunkWidth * chunkHeight : 0);
     return Math.max(0, Math.min(wanted, byLayers, Math.floor(budgetBytes / slotBytes)));
   }
 
   /** (Re)allocate the texture pool for a data type (default uint16), with a mask layer per slot if `hasMask`. Drops every resident chunk. */
-  configure({ dtype = 'uint16', nBand, chunkWidth, chunkHeight, slots, hasMask = false }) {
+  configure({ dtype = 'uint16', nBand, chunkWidth, chunkHeight, slots, hasMask = false, compact = false }) {
     const gl = this.#gl;
-    this.#useProgram(dtype, hasMask);
+    if (compact && dtype !== 'uint16') throw new Error('Compact textures require uint16 data.');
+    this.#useProgram(dtype, hasMask, compact);
     const format = TEXTURE_FORMATS[dtype];
+    const elements = nBand * chunkWidth * chunkHeight;
+    const wordHeight = Math.ceil(Math.ceil(elements / 2) / chunkWidth);
+    const blockCount = Math.ceil(elements / 128);
+    const blockWidth = Math.min(256, blockCount);
+    const blockHeight = Math.ceil(blockCount / blockWidth);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, format.Array.BYTES_PER_ELEMENT);
-    if (chunkWidth > this.limits.maxSize || chunkHeight > this.limits.maxSize) {
+    if (chunkWidth > this.limits.maxSize || chunkHeight > this.limits.maxSize || (compact && Math.max(wordHeight, blockWidth, blockHeight) > this.limits.maxSize)) {
       throw new Error(`Chunk ${chunkWidth}x${chunkHeight} exceeds MAX_TEXTURE_SIZE ${this.limits.maxSize}.`);
     }
     if (slots < 1) throw new Error(`Texture pool has ${slots} slots; at least 1 is needed.`);
@@ -209,11 +255,28 @@ export class Renderer {
     this.#texture = gl.createTexture();
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.#texture);
-    gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl[format.internal], chunkWidth, chunkHeight, slots * nBand);
+    gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, compact ? gl.R32UI : gl[format.internal], chunkWidth, compact ? wordHeight : chunkHeight, compact ? slots : slots * nBand);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    if (this.#blockTexture) gl.deleteTexture(this.#blockTexture);
+    this.#blockTexture = null;
+    if (compact) {
+      this.#blockTexture = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.#blockTexture);
+      gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RG32UI, blockWidth, blockHeight, slots);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.uniform2i(this.#uniforms.u_chunkShape, chunkWidth, chunkHeight);
+      gl.uniform1i(this.#uniforms.u_wordWidth, chunkWidth);
+      gl.uniform1i(this.#uniforms.u_blockWidth, blockWidth);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.#texture);
+    }
     if (this.#maskTexture) gl.deleteTexture(this.#maskTexture);
     this.#maskTexture = null;
     if (hasMask) {
@@ -229,6 +292,10 @@ export class Renderer {
     }
     this.#pool = {
       dtype,
+      compact,
+      elements,
+      blockWidth,
+      blockHeight,
       nBand,
       chunkWidth,
       chunkHeight,
@@ -300,7 +367,7 @@ export class Renderer {
     // One byte per texel: rows are not padded to the data type's alignment.
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, slot, pool.chunkWidth, pool.chunkHeight, 1, gl.RED_INTEGER, gl.UNSIGNED_BYTE, data);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, TEXTURE_FORMATS[pool.dtype].Array.BYTES_PER_ELEMENT);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, pool.compact ? 4 : TEXTURE_FORMATS[pool.dtype].Array.BYTES_PER_ELEMENT);
     gl.activeTexture(gl.TEXTURE0);
     this.stats.uploads++;
     this.stats.uploadMs += performance.now() - started;
@@ -337,11 +404,38 @@ export class Renderer {
     }
     const gl = this.#gl;
     const format = TEXTURE_FORMATS[pool.dtype];
-    // The reader may hand over the bits of a signed type as unsigned (or the reverse); a view keeps the same buffer.
-    const typed = data instanceof format.Array ? data : new format.Array(data.buffer, data.byteOffset, data.byteLength / format.Array.BYTES_PER_ELEMENT);
     const started = performance.now();
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.#texture);
-    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, slot * pool.nBand, pool.chunkWidth, pool.chunkHeight, pool.nBand, gl[format.format], gl[format.type], typed);
+    if (pool.compact) {
+      let packed = data;
+      if (!data.words) {
+        const words = new Uint32Array(Math.ceil(data.length / 2));
+        for (let i = 0; i < data.length; i++) words[i >> 1] |= data[i] << ((i & 1) * 16);
+        const blocks = new Uint32Array(Math.ceil(data.length / 128) * 2);
+        for (let b = 0; b < blocks.length / 2; b++) {
+          blocks[b * 2] = b * 64;
+          blocks[b * 2 + 1] = 16 << 16;
+        }
+        packed = { words, blocks };
+      }
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+      const uploadRows = (values, width, channels, format) => {
+        const count = values.length / channels;
+        const rows = Math.floor(count / width), remainder = count % width;
+        if (rows) gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, slot, width, rows, 1, format, gl.UNSIGNED_INT, values.subarray(0, rows * width * channels));
+        if (remainder) gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, rows, slot, remainder, 1, 1, format, gl.UNSIGNED_INT, values.subarray(rows * width * channels));
+      };
+      uploadRows(packed.words, pool.chunkWidth, 1, gl.RED_INTEGER);
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.#blockTexture);
+      uploadRows(packed.blocks, pool.blockWidth, 2, gl.RG_INTEGER);
+      gl.activeTexture(gl.TEXTURE0);
+    } else {
+      // Signed and unsigned views preserve the reader's original bits.
+      const typed = data instanceof format.Array ? data : new format.Array(data.buffer, data.byteOffset, data.byteLength / format.Array.BYTES_PER_ELEMENT);
+      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, slot * pool.nBand, pool.chunkWidth, pool.chunkHeight, pool.nBand, gl[format.format], gl[format.type], typed);
+    }
     this.stats.uploads++;
     this.stats.uploadMs += performance.now() - started;
     pool.meta[slot] = { key, ...meta };
@@ -385,7 +479,7 @@ export class Renderer {
     const nBand = this.#pool.nBand;
     gl.uniform4f(this.#uniforms.u_cell, world.x, world.y, world.w, world.h);
     gl.uniform2f(this.#uniforms.u_extent, extent.w, extent.h);
-    gl.uniform1i(this.#uniforms.u_dataBase, dataSlot * nBand);
+    gl.uniform1i(this.#uniforms.u_dataBase, this.#pool.compact ? dataSlot : dataSlot * nBand);
     if (this.#hasMask) {
       if (maskSlot < 0 || !this.hasMaskAt(maskSlot)) throw new Error(`drawCell: slot ${maskSlot} holds no validity mask; upload it with uploadMask first.`);
       gl.uniform1i(this.#uniforms.u_maskLayer, maskSlot);

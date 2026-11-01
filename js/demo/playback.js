@@ -50,6 +50,7 @@ export class Playback {
   #isReady;
   #linkSteps;
   #prepare;
+  #maxAhead;
   #now;
   #requestFrame;
   #cancelFrame;
@@ -91,6 +92,7 @@ export class Playback {
    * @param {() => number} [options.linkSteps]  steps per second the link can feed for the frames that are not in memory yet (Infinity: no limit); asked on every frame, so keep it cheap
    * @param {(indices: number[]) => void} [options.prepare]  asks for these timesteps (the next ones, nearest first) to be loaded; called on entering
    *   a buffering pause, while one lasts about every 250 ms, and when fewer than a second of frames are ready ahead
+   * @param {() => number} [options.maxAhead]  number of future frames the current view's cache can retain; read again each frame
    * @param {() => void} [options.onChange]     called when playing, buffering, the buffered count, the speed or the effective speed changes
    * @param {boolean} [options.wrap=true]       loop from the last timestep to the first; false stops playback at the last timestep
    * @param {number} [options.startSeconds]     frames to have ready before starting or resuming (default START_BUFFER_SECONDS)
@@ -107,6 +109,7 @@ export class Playback {
     isReady,
     linkSteps,
     prepare,
+    maxAhead = () => Infinity,
     onChange,
     wrap = true,
     startSeconds = START_BUFFER_SECONDS,
@@ -122,6 +125,7 @@ export class Playback {
     this.#isReady = isReady;
     this.#linkSteps = linkSteps;
     this.#prepare = prepare;
+    this.#maxAhead = maxAhead;
     this.#onChange = onChange;
     this.#wrap = wrap;
     this.#startSeconds = startSeconds;
@@ -212,7 +216,8 @@ export class Playback {
   /** How many frames `seconds` of playback is, at least one, and no more than there are ahead to show. */
   #needed(seconds) {
     const room = this.#wrap ? this.#count - 1 : this.#count - 1 - this.#getIndex();
-    return Math.max(0, Math.min(room, Math.ceil(seconds * this.effectiveStepsPerSecond)));
+    const capacity = Math.max(1, Math.floor(this.#maxAhead()));
+    return Math.max(0, Math.min(room, capacity, Math.ceil(seconds * this.effectiveStepsPerSecond)));
   }
 
   /** The number of consecutive ready frames after the one on screen, up to `limit`. */
@@ -231,7 +236,9 @@ export class Playback {
 
   /** Ask for the frames to be loaded, at most every FILL_REQUEST_MS unless `force`. */
   #requestFill(now, force = false) {
-    if (!force && now - this.#lastFillAt < FILL_REQUEST_MS) return;
+    // A small rolling buffer can drain in less than 250 ms at high playback speeds.
+    const refillMs = Math.min(FILL_REQUEST_MS, this.#needed(this.#startSeconds) * this.#interval / 4);
+    if (!force && now - this.#lastFillAt < refillMs) return;
     this.#lastFillAt = now;
     this.#prepare?.(this.#wanted());
   }
@@ -307,7 +314,7 @@ export class Playback {
     }
     if (this.#buffering) this.#whileBuffering(frameTime);
     else {
-      const low = this.#needed(this.#lowSeconds);
+      const low = Math.min(this.#needed(this.#lowSeconds), Math.max(1, Math.ceil(this.#needed(this.#startSeconds) * 0.75)));
       if (this.#readyAhead(low) < low) this.#requestFill(frameTime);
       this.#step(frameTime);
     }
