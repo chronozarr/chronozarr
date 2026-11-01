@@ -131,6 +131,21 @@ export function chooseScrubLevel({ levels, held = null, need, ready }) {
 }
 
 /**
+ * The level for the next step of a scrub going at `speed` timesteps per second, with the levels it chose among and
+ * the timesteps ahead it needed (the viewer's decision per step, #scrubLod): chooseScrubLevel over scrubLevels, or, when
+ * the browser asks to save data (`saving`), the deepest level whatever is in memory, so that the pumps load nothing
+ * sharper (`ready` is not asked about).
+ * @param {{speed: number, t: number, direction: 1 | -1, count: number, baseLod: number, deepestLod: number,
+ *   cellCount: (lod: number) => number, saving: boolean, held?: number | null, ready: (lod: number, need: number) => number}} options
+ */
+export function chooseScrub({ speed, t, direction, count, baseLod, deepestLod, cellCount, saving, held = null, ready }) {
+  const levels = scrubLevels({ baseLod, deepestLod, cellCount });
+  const need = scrubNeed({ speed, t, direction, count });
+  const lod = saving ? levels.at(-1) : chooseScrubLevel({ levels, held, need, ready: (candidate) => ready(candidate, need) });
+  return { lod, levels, need };
+}
+
+/**
  * A scrub that needs more timesteps ahead than this is faster than the viewer can load ahead of it at any level but
  * the coarse loop (the reader's idle prefetch horizon is 12 timesteps either side of t, decoder.js). It does not probe:
  * a sharper level that cannot get ahead of the scrub is bytes for frames nobody sees.
@@ -154,6 +169,32 @@ export function planScrubLoads({ t, direction, count, levels, lod, need, isReady
     primary: { lod, steps: [t, ...ahead] },
     probe: sharper !== undefined && full && need > 0 && need <= PROBE_MAX_NEED ? { lod: sharper, steps: ahead.slice(0, need) } : null,
   };
+}
+
+/**
+ * What the two buffer pumps of a scrub are asked to load (the viewer's #loadAheadOfScrub): `fill`, the timesteps for the
+ * pump that loads at the level in use, and `probe`, the next sharper level and its timesteps for the second pump, or null
+ * to stop it. Null altogether for a scrub with one level to choose from: it is left to the prefetch window. A scrub that
+ * saves data never probes, however much capacity it leaves.
+ * @param {{saving: boolean} & Parameters<typeof planScrubLoads>[0]} options
+ * @returns {{fill: number[], probe: {lod: number, steps: number[]} | null} | null}
+ */
+export function scrubPumpRequests({ saving, ...plan }) {
+  if (plan.levels.length < 2) return null;
+  const { primary, probe } = planScrubLoads(plan);
+  return { fill: primary.steps, probe: saving ? null : probe };
+}
+
+/**
+ * The next batch a buffer pump loads: the first `size` of the `wanted` timesteps (nearest first) that are not ready, so
+ * a list replaced mid-run is followed from where the scrub is. `done` when nothing is left to load, or when the batch
+ * is the one just loaded (`previous`: the cache cannot keep what was loaded, so loading it again would never end).
+ * @returns {{batch: number[], key: string, done: boolean}}
+ */
+export function nextPumpBatch({ wanted, isReady, previous, size }) {
+  const batch = wanted.filter((step) => !isReady(step)).slice(0, size);
+  const key = batch.join(',');
+  return { batch, key, done: batch.length === 0 || key === previous };
 }
 
 /** The `effectiveType` values (navigator.connection) of a link too slow to load a sharp scrub ahead of the user. */
