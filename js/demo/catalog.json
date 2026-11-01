@@ -14,5 +14,9 @@
   {
     "name": "NISAR L-band backscatter, Lower Colorado at Yuma (HH, HV, 2025\u20132026)",
     "url": "https://data.chronozarr.org/colorado_yuma/nisar-gcov-v2"
+  },
+  {
+    "name": "Lake Mead, USA (Sentinel-2 imagery, 2015\u20132026)",
+    "url": "https://data.chronozarr.org/lake_mead/imagery-recovered-20261101"
   }
 ]
