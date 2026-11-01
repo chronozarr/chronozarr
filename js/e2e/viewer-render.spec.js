@@ -64,9 +64,9 @@ for (const storeName of ['u16_sharded', 'u16_plain']) {
 }
 
 // The viewer draws the native grid, so a store whose CRS has no EPSG code (spec 0.4, proj:wkt2 only) opens like any
-// other, shows the same sidebar, and never loads proj4.
+// other and loads proj4 only when the inspector requests geographic coordinates.
 for (const storeName of ['u16_lcc', 'u16_sinusoidal']) {
-  test(`${storeName}: a store with no EPSG code opens, draws its native grid equal to the CPU render, and loads no proj4`, async ({ page, servers, storeUrl }) => {
+  test(`${storeName}: a store with no EPSG code draws natively and loads proj4 only for coordinates`, async ({ page, servers, storeUrl }) => {
     const proj4Requests = [];
     page.on('request', (request) => {
       // js/vendor/proj4 in the sources, demo/chunks/proj4-<hash>.js in the built viewer.
@@ -75,11 +75,13 @@ for (const storeName of ['u16_lcc', 'u16_sinusoidal']) {
     await openViewer(page, servers, await storeUrl(storeName));
     expect(await page.evaluate(() => ({ crs: window.chronozarr.viewer.store.crs, wkt2: typeof window.chronozarr.viewer.store.wkt2 }))).toEqual({ crs: null, wkt2: 'string' });
     expectFrameMatchesStore(await captureFrame(page), storeName, 0);
+    expect(proj4Requests).toEqual([]);
     await clickAndExpectSidebar(page, storeName, 0, 50, 40);
+    await expect(page.locator('#coordinate-tuple')).not.toHaveText('Loading coordinates…');
     await page.keyboard.press('ArrowRight');
     await waitForPaintedTime(page, 1);
     expectFrameMatchesStore(await captureFrame(page), storeName, 1);
-    expect(proj4Requests).toEqual([]);
+    expect(proj4Requests.length).toBeGreaterThan(0);
   });
 }
 

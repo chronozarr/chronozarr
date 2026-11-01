@@ -20,7 +20,7 @@ import { FrameMonitor, formatBytes, formatMs, formatRate, hitRate, readStats } f
 import { Renderer } from './renderer.js';
 import { prepareMovieCache } from './cache-policy.js';
 import { MAX_SCALE, bindViewerInput } from './input.js';
-import { formatValue, sidebarHtml } from './inspector.js';
+import { formatValue, pixelLocation, sidebarHtml } from './inspector.js';
 import { COLORMAPS, colormapGradient, colormapIndex } from '../shared/colormaps.js';
 import {
   computeStretchLo,
@@ -2412,8 +2412,33 @@ class Viewer {
     const content = $('sidebar-content');
     empty.style.display = info ? 'none' : 'flex';
     content.style.display = info ? 'block' : 'none';
-    if (!info) return;
+    if (!info) {
+      content.replaceChildren();
+      return;
+    }
     content.innerHTML = sidebarHtml(info, this.#formatTime(info.t));
+    const store = this.store;
+    const tuple = content.querySelector('#coordinate-tuple');
+    const copy = content.querySelector('#copy-coordinates');
+    pixelLocation(info.pixel, store).then((location) => {
+      if (store !== this.store || !content.contains(tuple)) return;
+      tuple.textContent = location ? `(${location.lat.toFixed(6)}, ${location.lon.toFixed(6)})` : 'Unavailable';
+      copy.hidden = !location;
+    });
+    if (copy) copy.addEventListener('click', async () => {
+      const status = content.querySelector('#coordinate-copy-status');
+      try {
+        await navigator.clipboard.writeText(tuple.textContent);
+        status.textContent = 'Copied';
+      } catch {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(tuple);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        status.textContent = 'Select and copy the coordinates manually.';
+      }
+    });
     this.#renderChart();
   }
 }
