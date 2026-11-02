@@ -1,20 +1,20 @@
 # Convert an Icechunk selection
 
-The repository checkout can convert a selected variable from an anonymous HTTPS or local
-Icechunk repository into a chronozarr store. Icechunk resolves one snapshot; xarray and Zarr
-read its declared codecs. The existing converter stages one selected timestep at a time and
-writes the playback pyramid. There is no intermediate GeoTIFF or Zarr copy.
+Chronozarr 0.5.2 converts a selected variable from an anonymous HTTPS or local
+Icechunk repository. Icechunk resolves the snapshot, and xarray and Zarr decode the arrays.
+The converter reads one selected timestep at a time and writes the playback pyramid
+without an intermediate GeoTIFF or Zarr copy.
 
-This route needs Python 3.12 or newer and the `geo` and `icechunk` extras. These commands are
-for this checkout; this feature has not been published as a package release:
+Use Python 3.12 or newer and install chronozarr with the `geo` and `icechunk` extras.
+Icechunk conversion is included in 0.5.2 and is not available in 0.5.1:
 
 ```bash
-uv sync --locked --extra geo --extra icechunk
+uv tool install --python 3.13 'chronozarr[geo,icechunk]==0.5.2'
 ```
 
 ## One materialized GFS selection
 
-This recorded snapshot contains the requested two times, 2026-10-25 00:00 and 01:00 UTC.
+The snapshot below contains two times, 2026-10-25 00:00 and 01:00 UTC.
 The window covers latitude 34 and 33.75 degrees and longitude -101 and -100.75 degrees.
 `--isel` uses integer indexes and an exclusive stop. Give an index or finite slice for
 every dimension of the chosen variable, including ensemble member or level where present.
@@ -23,7 +23,7 @@ An integer time selection such as `--isel time=48072` imports one timestep, equi
 `--isel lead_time=0` (or another lead index).
 
 ```bash
-uv run --no-sync chronozarr convert \
+chronozarr convert \
   https://dynamical-noaa-gfs.s3.us-west-2.amazonaws.com/noaa-gfs-analysis/v0.1.0.icechunk \
   gfs-playback \
   --icechunk --icechunk-snapshot 6K6H23PYR6QXA9VM0C6G \
@@ -36,19 +36,17 @@ Run the same command without `--dry-run` to write a new store. `--nodata nan` ex
 NaN as invalid; the converter writes a separate mask and preserves valid zeros. The existing
 `preview`, `share` and `publish` commands apply to the resulting `gfs-playback` store.
 
-The source's Celsius values, native WMO sphere CRS (radius 6,371,229 m), grid and CF scale and
-offset are retained. The source latitude order is normalized to the converter's north-up grid.
-No reprojection, temporal compositing or unit conversion is performed. A viewer reads the
-converted store using its existing reader and renderer.
+The converter retains the Celsius values, native WMO sphere CRS (radius 6,371,229 m),
+grid and CF scale and offset. It orders latitude north-up without reprojection,
+temporal compositing or unit conversion. Open the resulting store in the ordinary viewer.
 
 `--icechunk-branch NAME` defaults to `main`. A branch or tag is resolved once, before opening
 arrays; all later reads use that snapshot. `--icechunk-tag NAME` and
 `--icechunk-snapshot ID` select alternatives. Give only one version selector.
-The dry run prints the resolved snapshot and integer selection. Source identity, snapshot,
-selection, data types, original chunk shape and any explicit rounding go in output provenance.
-For materialized sources, they also bind staged data to the resume fingerprint. If a branch
-advances, a resumed materialized import refuses the changed source; pass the original snapshot
-ID to reuse its staging safely.
+The dry run prints the resolved snapshot and integer selection. Output provenance records
+the source identity, snapshot, selection, data types, original chunk shape and any rounding.
+Materialized imports also use these fields to check staged data when resuming. If the branch
+advances, resume rejects the changed source. Pass the original snapshot ID to reuse its staging.
 
 A dry run samples up to three selected timesteps to estimate conversion, as ordinary
 `convert` does. It can download source chunks but writes no store or staging directory.
@@ -60,7 +58,7 @@ Gribberish's maintained Zarr codec. Each external prefix must be authorized expl
 anonymous reading:
 
 ```bash
-uv run --no-sync chronozarr convert \
+chronozarr convert \
   https://dynamical-noaa-gfs.s3.us-west-2.amazonaws.com/noaa-gfs-analysis-virtual/v0.1.0.icechunk \
   gfs-virtual-playback \
   --icechunk --icechunk-snapshot SJSV5KG1GSWR2XQD2SW0 \
@@ -82,14 +80,14 @@ Gribberish decode and a storage scale/offset yield Celsius). Xarray's CF `mask_a
 is disabled: CF scale and offset are recorded for the resulting band, without applying them
 again to the stored values.
 
-An Icechunk snapshot pins the reference mapping. External GRIB files can still change;
-this importer does not record their object identities, and the qualified virtual references
-supply no ETag or modification-time binding. Source I/O and any checks on referenced objects
-belong to the maintained Icechunk reader. `--resume` is therefore refused for imports that
-authorize virtual prefixes, before reading data, to avoid mixing staged old values with newly
-changed external bytes. Start a fresh import after a failure. Output provenance discloses this
-external-identity limitation. An uninterrupted virtual import also has no archive-wide external
-snapshot guarantee.
+An Icechunk snapshot fixes the reference mapping, but external GRIB files can still change.
+The importer does not record their object identities, and the tested virtual references supply
+no ETag or modification time to check. Icechunk handles reads and any checks on those objects.
+
+To avoid mixing staged values with changed external bytes, the importer rejects `--resume`
+before reading data whenever virtual prefixes are authorized. Start a fresh import after a
+failure. Provenance records this limitation. Even an uninterrupted import cannot guarantee
+that all external files belong to one archive snapshot.
 
 The materialized and virtual GFS products are different scientific inputs. At the recorded
 window their values differ by about 0.051 degrees Celsius at most. Selecting the virtual
@@ -109,10 +107,10 @@ choose a run rather than flattening overlapping forecasts. Other dimensions stil
 explicit selections. This time conversion has synthetic regression coverage; the live
 qualification below is for analysis products with a `time` axis.
 
-The default admission limits are 512 MiB of selected decoded data (including an explicitly
+The default size limits are 512 MiB of selected decoded data (including an explicitly
 selected source mask) and 128 MiB for any decoded source data or mask chunk. Change them with
 `--max-import-mb` and `--max-source-chunk-mb`. They use MiB (1,048,576 bytes). Metadata and
-coordinate reads happen before admission. These limits do not cap total downloaded bytes,
+coordinate reads happen before the size check. These limits do not cap total downloaded bytes,
 the output pyramid, codec scratch, read-ahead memory or process RSS.
 
 Materialized imports also use Icechunk's maintained encoded-range cache, with a separate
@@ -140,10 +138,10 @@ variable has an 8,305,920-byte decoded whole-grid chunk per time. Source shards 
 objects; Icechunk and Zarr handle the ranges needed inside them. Neither route is promised
 to be faster for every selection. The import adapter retains the source read granularity.
 
-This is a conversion route. The published browser viewer does not open arbitrary Icechunk
-repositories directly. Arbitrary codecs, curvilinear grids, variables outside Chronozarr's
-type and grid rules, authenticated repositories and automatic catalog routing remain outside
-this qualification.
+The browser viewer opens the converted chronozarr store. It cannot open an arbitrary
+Icechunk repository directly. These checks do not cover arbitrary codecs, curvilinear grids,
+variables outside Chronozarr's type and grid rules, authenticated repositories or automatic
+catalog routing.
 
 ## Reproduce the live checks
 
@@ -155,8 +153,8 @@ The script compares each import with its own snapshot read directly by Icechunk/
 checks exact Float32 output (explicitly rounded for the virtual source), CRS and units, then
 reads the resulting files over HTTP with the existing JavaScript reader and verifies a cached
 timestep needs no request. It records elapsed import time but has no wire-byte counter and
-makes no renderer-speed claim. Both paths use the same underlying maintained source reader;
-this is a conversion round-trip check, not an independent codec implementation comparison.
+makes no renderer-speed claim. Both paths use the same underlying source reader, so the
+comparison checks the conversion round trip rather than independently validating the codec.
 
 To also check first-frame drawing and time switching in headless Chromium, install the
 checkout's JavaScript test dependencies and run:

@@ -1,21 +1,19 @@
 # chronozarr
 
-This page documents npm **0.5.1**, paired with Python **0.5.1**. It includes spec 0.4 CRS support, the relaxed reader contract, bandwidth-aware prefetching and the production viewer bundle. See the [release notes](https://chronozarr.org/reference/release-0.5.1) and [source installation](https://chronozarr.org/guides/development). Package installation and deployment of the hosted viewer are separate.
-
-Browser and Node reader for [chronozarr](https://github.com/chronozarr/chronozarr) stores. The package also has a MapLibre GL JS custom layer that draws a store.
+The npm package provides a browser and Node reader for [chronozarr](https://github.com/chronozarr/chronozarr) stores, a MapLibre GL JS layer and a self-hosted viewer. This guide uses npm **0.5.2**, paired with Python **0.5.2**. See the [release notes](https://chronozarr.org/reference/release-0.5.2) for changes and [source installation](https://chronozarr.org/guides/development) for development. Installing the package does not update the hosted viewer.
 
 A chronozarr store is a Zarr v3 time series of rasters with a multiscale pyramid. The writer makes one object per chunk by default and can shard the chunks. A client reads one timestep of one map cell with one HTTP request. For an unsharded store that request is a plain `GET` of one chunk. For a sharded store it is one range read of a shard, once the shard index is cached.
 
 The reader turns `(lod, row, col, t)` into a typed array. It caches the shard indexes of sharded stores, decodes in a worker pool and prefetches a window of the time axis around the current timestep. It reads spec 0.3 and 0.4 stores ([spec](https://github.com/chronozarr/chronozarr/blob/main/spec/CHRONOZARR.md)). The Python package `chronozarr` writes them.
 
-The reader and the map layer are plain ES modules with no build step and no runtime dependency, because zarrita and numcodecs are vendored (see [Licenses](#licenses)). The viewer that `chronozarr-viewer` copies is built when the package is packed (`js/support/build-viewer.mjs`, esbuild): one script instead of the 61 modules it is written in.
+The reader and map layer are ES modules that need no build step or runtime dependency installation. zarrita and numcodecs are vendored (see [Licenses](#licenses)). `chronozarr-viewer` copies the viewer bundle built during packaging by `js/support/build-viewer.mjs` and esbuild.
 
 The viewer loads nothing from a third-party host at runtime and uses no web font. The MapLibre demo page, `js/maplibre/index.html`, loads a pinned version of maplibre-gl from a CDN.
 
 ## Install
 
 ```bash
-npm install chronozarr@0.5.1
+npm install chronozarr@0.5.2
 ```
 
 ```js
@@ -45,13 +43,13 @@ Without a bundler, map the names in an import map. For a released installation, 
 </script>
 ```
 
-or use the pinned 0.5.1 reader from a CDN:
+or use the pinned 0.5.2 reader from a CDN:
 
 ```html
 <script type="importmap">
 { "imports": {
-  "chronozarr": "https://cdn.jsdelivr.net/npm/chronozarr@0.5.1/chronozarr/decoder.js",
-  "chronozarr/maplibre": "https://cdn.jsdelivr.net/npm/chronozarr@0.5.1/maplibre/layer.js"
+  "chronozarr": "https://cdn.jsdelivr.net/npm/chronozarr@0.5.2/chronozarr/decoder.js",
+  "chronozarr/maplibre": "https://cdn.jsdelivr.net/npm/chronozarr@0.5.2/maplibre/layer.js"
 } }
 </script>
 ```

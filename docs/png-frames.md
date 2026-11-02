@@ -1,10 +1,10 @@
 # PNG frames to a store
 
-`chronozarr convert` turns a sequence of georeferenced PNGs, one per date, into a scrubbable chronozarr store. There is no GeoTIFF step. Exporters hand over such frames: Earth Engine thumbnails, QGIS "Save as image" with its world file option, matplotlib figures, and drone and orthomosaic pipelines.
+`chronozarr convert` reads georeferenced PNGs, one per date, directly into a chronozarr store. Suitable inputs include Earth Engine thumbnails, QGIS "Save as image" exports with world files, matplotlib figures, and frames from drone or orthomosaic pipelines.
 
 `convert` reads the frames with GDAL, so everything it does for COGs applies. That covers the manifest, time order, `--dry-run`, `--resume`, the validity rules and the pyramid.
 
-The store holds exactly the values in the PNGs. A rendered image holds display values, so no value in the store is a measurement. Read [Limits](#limits) before you use a store for anything but looking.
+The store keeps the PNG values unchanged. For rendered frames, these are display colors; conversion cannot recover the underlying measurements. Use the original rasters for scientific analysis, and check the [limits](#limits) before converting rendered images.
 
 ## Locating the frames
 
@@ -74,7 +74,7 @@ A manifest can name the bands in a `bands` column or key. Those names replace `r
 
 ### Alpha
 
-Alpha wins over everything else, as in GDAL. A pixel is valid where alpha is nonzero. A partly transparent pixel (alpha 128) is valid and is drawn fully opaque, because the mask is 0 or 1. The store keeps the RGB values under alpha 0, and the mask hides them.
+Alpha determines validity, as in GDAL. A nonzero alpha marks a valid pixel. Because the mask is binary, a partly transparent pixel (alpha 128) is drawn fully opaque. The store keeps the RGB values under alpha 0, and the mask hides them.
 
 Without an alpha channel the store has no mask and no nodata. Every pixel is valid, and a stored 0 is data.
 

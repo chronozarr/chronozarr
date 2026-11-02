@@ -19,6 +19,11 @@ on:
   push:
     branches: ["trial/**"]
   workflow_dispatch:
+    inputs:
+      candidate:
+        description: "Qualify this revision before creating its release tag"
+        type: boolean
+        default: false
   schedule:
     - cron: "23 6 * * 1"
 
@@ -81,10 +86,14 @@ jobs:
             --out "$RUNNER_TEMP/quickstart/steps.json"
       - name: Install the pinned cloudflared
         run: '"$PY" scripts/trial/runner_setup.py cloudflared --dest "$RUNNER_TEMP/cloudflared" --github-actions'
-      - name: Build the documented chronozarr version from its git tag
+      - name: Build the documented chronozarr version
+        env:
+          CANDIDATE: ${{ inputs.candidate }}
         run: |
+          source_args=()
+          if [ "$CANDIDATE" = true ]; then source_args=(--source-ref "$GITHUB_SHA"); fi
           "$PY" scripts/trial/runner_setup.py wheel --steps "$RUNNER_TEMP/quickstart/steps.json" \
-            --out "$RUNNER_TEMP/quickstart/wheelhouse" --github-actions
+            --out "$RUNNER_TEMP/quickstart/wheelhouse" "${source_args[@]}" --github-actions
       - name: Run the quickstart
         run: |
           "$PY" scripts/trial/run_quickstart.py "$RUNNER_TEMP/quickstart/steps.json" \
@@ -112,5 +121,6 @@ jobs:
             ${{ runner.temp }}/quickstart/out
             ${{ runner.temp }}/quickstart/steps.json
             ${{ runner.temp }}/quickstart/uv-receipt.toml
+            ${{ runner.temp }}/quickstart/wheelhouse/*.whl
           if-no-files-found: warn
           retention-days: 14

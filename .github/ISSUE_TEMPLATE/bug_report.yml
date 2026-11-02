@@ -8,7 +8,7 @@ body:
     attributes:
       label: chronozarr version
       description: Output of `chronozarr --version`.
-      placeholder: "chronozarr, version 0.5.1"
+      placeholder: "chronozarr, version 0.5.2"
     validations:
       required: true
   - type: input

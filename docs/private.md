@@ -1,8 +1,8 @@
 # Viewing a private store
 
-A viewer link on `chronozarr.org` shows a store only if the browser can read the store's files. The viewer has no login and no server. This page explains what that means for data that must not be public. It lists the access paths that work with static hosting.
+A viewer link on `chronozarr.org` works only if the browser can read the store's files. Access control belongs to the host serving those files; the viewer has no login or server to authenticate requests.
 
-Statements about hosts describe general provider behaviour. Check your provider's documentation. This repository tested none of the auth products named here. Statements about chronozarr come from the code and say where.
+The host authentication products named here have not been tested against live accounts. Check your provider's documentation when configuring them. The chronozarr behavior described below is checked against the code.
 
 The command examples assume the standalone CLI is installed with
 `uv tool install chronozarr`. For a one-off command, use
@@ -15,10 +15,10 @@ from a Python project, add it with `uv add chronozarr` (or install with
 
 `https://chronozarr.org/demo/?store=<url>` loads the viewer page from chronozarr.org. The page then reads the store directly from `<url>` in the viewer's browser. chronozarr.org does not host, copy or proxy the data.
 
-Three facts follow:
+Access works as follows:
 
-- The store URL is the access control. Anyone who can fetch `<url>` can read every object, with or without the viewer.
-- The viewer is not a gate. A public store stays public if you never share the viewer link.
+- The host controls access to the store. Anyone authorized to fetch `<url>` can read its objects with or without the viewer.
+- A publicly readable store stays public even if you never share the viewer link.
 - Credentials in the Python kernel do not reach the browser. A notebook that reads a bucket with your AWS keys does not let the viewer read the bucket.
 
 The browser request for the viewer page includes the query string, so `?store=` reaches the host of chronozarr.org. `site/worker.js` does not read or log it. This repository cannot show what Cloudflare logs at the edge. The viewer page runs no analytics script: `site/worker.js` sends it with `Cache-Control: no-transform`, so Cloudflare does not add its Web Analytics beacon.
@@ -108,7 +108,7 @@ The limits:
 
 If the host accepts one query token for the whole prefix, put the signed URL in `store=`. [embedding.md](embedding.md#6-stores-and-access) lists the token types.
 
-This path works with the hosted viewer and any page. It has the widest leaks, because the token is part of the link. Section 4 lists where the token appears.
+This path works with the hosted viewer and any page. Because the token is part of the link, it can appear in browser history, notebook output and page requests. Section 4 lists these locations.
 
 Use a short lifetime and a read-only token scoped to the store prefix. When the token expires, the host refuses new requests and the link stops working. The viewer does not check the token or its expiry.
 
@@ -140,7 +140,7 @@ The CORS settings in the [hosting recipes](hosting-providers.md) use `*` and no 
 
 ## 4. Keeping credentials out of links, notebooks and logs
 
-The viewer never needs an AWS key, a password or a bucket policy. A browser cannot use them. Do not paste a key into a URL, a notebook or a chat.
+The viewer has no mechanism for using an AWS key, password or bucket policy to authorize store reads. Keep keys out of URLs, notebook output and chats.
 
 A URL with a user name and password, such as `https://user:pass@host/store`, fails. The browser refuses to build a request from it.
 
@@ -165,4 +165,4 @@ Check a link before you share it:
 2. Confirm that the viewer opens the store only when the link is valid.
 3. Wait for the token to expire and confirm that the store stops loading.
 
-Expiry and access checks happen at the host. The viewer does none.
+The host checks access and token expiry.

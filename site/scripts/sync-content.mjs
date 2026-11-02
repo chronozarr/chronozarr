@@ -13,7 +13,8 @@ const sources = {
   'docs/viewer.md': { route: 'viewer', description: 'The chronozarr viewer: playback, products, pixel time series, video export and links to a view.' },
   // Create and share
   'docs/convert.md': { route: 'guides/convert', description: 'Convert dated GeoTIFFs, COG manifests, NetCDF, Zarr or an xarray DataArray into a chronozarr store.' },
-  'docs/tile-ripper.md': { route: 'guides/tile-ripper', description: 'Convert completed Tile-Ripper observations through the unreleased Python bridge, preserving science, selected QA and source provenance.' },
+  'docs/icechunk.md': { route: 'guides/icechunk', description: 'Convert a bounded, snapshot-pinned Icechunk variable into a chronozarr store, including materialized arrays and qualified virtual GRIB.' },
+  'docs/tile-ripper.md': { route: 'guides/tile-ripper', description: 'Convert completed Tile-Ripper observations through the Python bridge, preserving science, selected QA and source provenance.' },
   'docs/preview.md': { route: 'guides/preview', description: 'Open a local chronozarr store in the viewer with chronozarr preview. The data stays on your computer.' },
   'docs/share.md': { route: 'guides/share', description: 'Send a temporary link to a store on your computer with chronozarr share: what the recipient needs, and the limits.' },
   'docs/publish.md': { route: 'guides/publish', description: 'Publish a store to Amazon S3, Cloudflare R2, Google Cloud Storage or Azure with chronozarr publish, for a link that lasts.' },
@@ -40,6 +41,7 @@ const sources = {
   'docs/how-it-works.md': { route: 'how-it-works', description: 'How a chronozarr store is laid out, how the browser reads it, and how to read it without chronozarr.' },
   'docs/performance.md': { route: 'performance', description: 'Measured viewer speed, value correctness, Sentinel-2 ingest speed and memory, with methods, hardware and limits.' },
   'docs/evidence.md': { route: 'reference/evidence', title: 'Measurement log', description: 'Dated measurements, tested reader versions and observations behind the chronozarr documentation.' },
+  'docs/release-0.5.2.md': { route: 'reference/release-0.5.2', description: 'chronozarr 0.5.2: clean preview shutdown, viewer safeguards, coordinate copying, Icechunk selections and the Tile-Ripper bridge.' },
   'docs/release-0.5.1.md': { route: 'reference/release-0.5.1', description: 'chronozarr 0.5.1: conversion, coordinate systems, viewer distribution, sixteen review repairs and store compatibility.' },
   'docs/release-0.5.1-review.md': { route: 'reference/release-0.5.1-review', description: 'The 0.5.1 documentation and examples review: coverage, corrected findings, validation and limits.' },
   'docs/release-0.5.0rc1.md': { route: 'reference/release-0.5.0rc1', description: 'The unpublished local 0.5.0rc1 candidate: changes since 0.4.1, sixteen review repairs and store compatibility.' },
@@ -66,7 +68,7 @@ if (archived.length !== archivedRoutes.length) {
 // not archived appears once; the build fails otherwise. Agents may skip the "Optional" section.
 const llmsSections = [
   ['Start here', ['docs/what-is.md', 'docs/quickstart.md', 'docs/development.md', 'docs/viewer.md']],
-  ['Create and share', ['docs/convert.md', 'docs/tile-ripper.md', 'docs/preview.md', 'docs/share.md', 'docs/publish.md', 'docs/analyze.md']],
+  ['Create and share', ['docs/convert.md', 'docs/icechunk.md', 'docs/tile-ripper.md', 'docs/preview.md', 'docs/share.md', 'docs/publish.md', 'docs/analyze.md']],
   ['Guides and examples', [
     'docs/sentinel2.md', 'examples/bring_your_data/README.md', 'docs/examples.md', 'docs/png-frames.md', 'docs/append.md',
     'docs/embedding.md', 'docs/notebooks.md', 'docs/private.md', 'docs/hosting.md', 'docs/hosting-providers.md',
@@ -74,7 +76,7 @@ const llmsSections = [
   ]],
   ['Reference', [
     'docs/cli.md', 'docs/python.md', 'js/README.md', 'js/maplibre/README.md', 'spec/CHRONOZARR.md', 'docs/how-it-works.md',
-    'docs/performance.md', 'docs/troubleshooting.md', 'docs/release-0.5.1.md',
+    'docs/performance.md', 'docs/troubleshooting.md', 'docs/release-0.5.2.md', 'docs/release-0.5.1.md',
   ]],
   ['Optional', ['docs/evidence.md', 'docs/format-comparison.md']],
 ];

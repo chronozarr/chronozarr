@@ -10,11 +10,11 @@ export const plateView = 'https://chronozarr.org/demo/?t=110&p=false_color'
 <div className="cz-home">
 
 <header className="cz-grid cz-hero">
-  <p className="cz-label">chronozarr 0.5.1 · store formats v0.3 / v0.4</p>
+  <p className="cz-label">chronozarr 0.5.2 · store formats v0.3 / v0.4</p>
 
   <h1>Raster time series anyone can explore from a link.</h1>
 
-  <p className="cz-intro">chronozarr converts dated GeoTIFFs, Zarr or NetCDF into a folder of static files. In a web browser the series plays like a video. You zoom, pan and click a pixel to see its values over time. In Python the same files return the exact numbers you stored. No tile server runs anywhere.</p>
+  <p className="cz-intro">chronozarr converts dated GeoTIFFs, Zarr or NetCDF into an interactive map that you can share with a link. Play through the dates, zoom in and click a pixel to see its values over time. The browser reads directly from static files, and Python can read the same stored values for analysis.</p>
 
   <nav className="cz-actions" aria-label="Start">
     <a className="cz-cta cz-cta-primary" href={demo}>Open the live demo</a>
@@ -51,7 +51,7 @@ export const plateView = 'https://chronozarr.org/demo/?t=110&p=false_color'
     <li><h2>Shows pixel values</h2><p>Click a pixel to chart its values over time, in physical units. Products such as NDVI are computed from the stored bands.</p></li>
     <li><h2>Shares the view</h2><p>A link holds the date, the product, the display range, the zoom and the map centre. The recipient needs only a browser.</p></li>
     <li><h2>Keeps the numbers</h2><p>xarray, zarr-python and GDAL read the same files and return the stored values. The viewer draws the same values.</p></li>
-    <li><h2>Needs no server</h2><p>A store is static files. Serve it from your computer for a temporary link, or from your own cloud storage for a permanent one.</p></li>
+    <li><h2>Uses static hosting</h2><p>Serve the files from your computer for a temporary link, or from your own cloud storage for a permanent one.</p></li>
   </ol>
 </section>
 
@@ -71,7 +71,7 @@ chronozarr preview my_store`}</code></pre>
 <section className="cz-grid cz-routes cz-rule" aria-label="Two ways to share">
   <p className="cz-label">Two ways to share</p>
   <div className="cz-route cz-route-wide"><h2>Temporary link</h2><p><code>chronozarr share</code> serves the store from your computer through a Cloudflare quick tunnel. The link works while the command runs and your computer is on. Each view is sent over your upload connection. Anyone with the link can read the store. No account is needed.</p><a href="/guides/share">Share a temporary link</a></div>
-  <div className="cz-route cz-route-wide"><h2>Permanent link</h2><p><code>chronozarr publish</code> uploads the store to Amazon S3, Cloudflare R2, Google Cloud Storage or Azure, in your own account. It checks the hosted copy and prints the link. You pay your provider for storage and downloads. chronozarr.org serves the viewer page and stores no data.</p><a href="/guides/publish">Publish a permanent link</a></div>
+  <div className="cz-route cz-route-wide"><h2>Permanent link</h2><p><code>chronozarr publish</code> uploads the store to your own Amazon S3, Cloudflare R2, Google Cloud Storage or Azure account, checks the hosted copy and prints the link. Storage, request and transfer charges depend on your provider and plan. chronozarr.org serves the viewer page and stores no data.</p><a href="/guides/publish">Publish a permanent link</a></div>
 </section>
 
 <section className="cz-grid cz-section cz-rule" aria-label="Measured">
@@ -79,12 +79,12 @@ chronozarr preview my_store`}</code></pre>
   <div className="cz-specs">
     <div className="cz-spec"><p className="cz-num">0.48<small>s</small></p><p className="cz-what">Viewer: first whole frame</p><p className="cz-note">The public demo in a new browser, from the start of the open, with the CDN warm. Page, script and codec load are not included. Median of 10; with a cold CDN, 0.66 s.</p></div>
     <div className="cz-spec"><p className="cz-num">117<small>/117</small></p><p className="cz-what">Values: months identical</p><p className="cz-note">Every level-0 value of the demo store equals the composite it was written from. Checked before upload; uploads matched by checksum.</p></div>
-    <div className="cz-spec"><p className="cz-num">1.9–4.7<small>×</small></p><p className="cz-what">Ingest: faster than before</p><p className="cz-note">The repository's Sentinel-2 example against its own previous pipeline, not another tool, on five Planetary Computer workloads.</p></div>
+    <div className="cz-spec"><p className="cz-num">1.9–4.7<small>×</small></p><p className="cz-what">Ingest: faster than before</p><p className="cz-note">The repository's Sentinel-2 example compared with its previous pipeline on five Planetary Computer workloads.</p></div>
     <div className="cz-spec"><p className="cz-num">1.5<small>GB</small></p><p className="cz-what">Memory: one container</p><p className="cz-note">The repository's Sentinel-2 example composited a 20-scene month in strips with 1 CPU and 1.5 GB. 0.74 GiB peak.</p></div>
   </div>
   <p className="cz-measured-note">Measured on one Apple M3 Max laptop and one home connection, October 2026. <a href="/performance">Methods, conditions and limits</a>.</p>
 </section>
 
-<p className="cz-colophon cz-rule">chronozarr is an open format and open-source software under the Apache-2.0 license. Python and npm packages 0.5.1. Store format specifications v0.3 and v0.4, drafts: Zarr v3 with the zarr-conventions multiscales, proj and spatial v0.1. A package upgrade leaves existing v0.3 stores unchanged.</p>
+<p className="cz-colophon cz-rule">chronozarr is an open format and open-source software under the Apache-2.0 license. Python and npm packages 0.5.2. Store format specifications v0.3 and v0.4, drafts: Zarr v3 with the zarr-conventions multiscales, proj and spatial v0.1. A package upgrade leaves existing v0.3 stores unchanged.</p>
 
 </div>

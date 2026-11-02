@@ -1,6 +1,6 @@
 # Analyze a store in Python
 
-A store holds the values you converted, unchanged. This page reads them with xarray for analysis. The [Python API](python.md) lists every function.
+A store keeps the values that you converted. Use xarray to select pixels, calculate indices and export results; the [Python API](python.md) lists the available functions.
 
 Install the package where your notebook or script runs:
 
@@ -19,7 +19,7 @@ ds = xr.open_dataset("my_store", engine="chronozarr")
 
 The path can be a local folder or the `https://` address of a published store. Use the store address. In a viewer link, it is the value after `store=`.
 
-The dataset is lazy. Nothing is read until you compute a value. For a remote store, each read downloads only the cells it needs.
+The dataset loads pixel values when you compute them. Remote reads download the cells needed for the selection; opening the dataset reads metadata first.
 
 ```text
 <xarray.Dataset> Size: 92MB
@@ -57,7 +57,7 @@ raw = xr.open_dataset("my_store", engine="chronozarr", physical=False)
 
 ## Common tasks
 
-A pixel's values over time. Select the band by name first, then the pixel by its nearest coordinates. `method="nearest"` applies to every selector in the call, and a band name is text, so a call that gives it both a band and `x` and `y` raises `TypeError`:
+To read a pixel's history, select the band by name first, then select the nearest spatial coordinates. `method="nearest"` applies to every selector in a call. Combining the text band name with `x` and `y` in that call raises `TypeError`:
 
 ```python
 series = ds["data"].sel(band="B08").sel(x=496000, y=9160000, method="nearest")
@@ -73,7 +73,7 @@ ndvi = (nir - red) / (nir + red)
 ndvi.mean(dim=("y", "x")).to_series()
 ```
 
-A coarser level, for a quick look at a large store. Level 0 has the original resolution. Each level halves it. This store has levels 0 and 1; `chronozarr info my_store` lists the levels of yours, and `lod` beyond the last raises `IndexError`:
+Use a coarser level for a quick look at a large store. Level 0 has the original resolution, and each subsequent level has half as many pixels along each axis. This store has levels 0 and 1. Run `chronozarr info my_store` to list the levels in yours; a `lod` beyond the last raises `IndexError`:
 
 ```python
 overview = xr.open_dataset("my_store", engine="chronozarr", lod=1)

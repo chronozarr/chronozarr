@@ -1,6 +1,6 @@
 # Sentinel-2 time series for your area
 
-You have a bounding box or a GeoJSON polygon and a range of dates. This guide takes you from there to a chronozarr store of monthly Sentinel-2 composites that you can preview in your browser, share and publish. It uses the Sentinel-2 example in `examples/sentinel2_pc/`, which searches Microsoft Planetary Computer. You need no account and no API key.
+Build monthly Sentinel-2 composites for a bounding box or GeoJSON polygon and a date range, then preview, share or publish the store. The scripts in `examples/sentinel2_pc/` read Microsoft Planetary Computer without an account or API key.
 
 The [example README](../examples/sentinel2_pc/README.md) is the full option reference. This page needs a checkout of the repository; [Convert your data](convert.md) is the route for imagery that you already have.
 
@@ -13,11 +13,11 @@ One chronozarr store for your area:
 - A multiscale pyramid (10 m, 20 m, and coarser levels for larger areas), a `coverage` plane that counts the valid scenes behind every pixel, and a `provenance` record that states how the composite was made.
 - The monthly GeoTIFFs the store was encoded from, one file per month. QGIS and GDAL read them.
 
-What this is not:
+The pipeline has the following limits:
 
-- It is not a general remote-sensing processor. It builds one product: a monthly median composite of four Sentinel-2 L2A bands. It has no other sensors, no other Sentinel-2 bands (B05 to B07, B8A, B11, B12), no other composite (no mean, no least-cloudy pixel), no sub-monthly steps and no atmospheric correction of its own. The L2A surface reflectance comes from the catalogue.
-- The cloud mask is the Sentinel-2 Scene Classification Layer (SCL). It does not exist for Landsat or Sentinel-1, and the mask cannot be swapped for another one.
-- Your area is its bounding box. A polygon is reduced to the box around it, and pixels of the box outside the polygon are kept.
+- It produces monthly median composites of four Sentinel-2 L2A bands. Other sensors, other Sentinel-2 bands (B05 to B07, B8A, B11, B12), mean or least-cloudy-pixel composites and sub-monthly steps are not supported. Atmospheric correction is already part of the catalog's L2A surface reflectance.
+- Cloud masking uses the Sentinel-2 Scene Classification Layer (SCL). You cannot substitute another mask or apply this one to Landsat or Sentinel-1.
+- A polygon selects its bounding box. Pixels outside the polygon but inside that box are retained.
 - It does not clip, mosaic by tile or choose a projection for you beyond the UTM zone of the box centre.
 
 ## Prerequisites

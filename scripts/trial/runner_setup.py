@@ -1,7 +1,8 @@
 """Install what the quickstart clean-room job needs beyond the commands on the page.
 
     runner_setup.py cloudflared --dest DIR [--github-actions]
-    runner_setup.py wheel --steps STEPS.json --out DIR [--repo .] [--github-actions]
+    runner_setup.py wheel --steps STEPS.json --out DIR [--repo .]
+                          [--source-ref REF] [--github-actions]
 
 --github-actions makes the next workflow steps see the result: DIR goes on $GITHUB_PATH
 (cloudflared), or UV_FIND_LINKS=DIR goes to $GITHUB_ENV (wheel). Python writes the path, so a
@@ -14,13 +15,13 @@ newest release. The job installs the pinned release below instead, for every OS,
 the digest GitHub shows for the asset (a macOS tgz is also checked after unpacking, against the
 checksum in the release notes, which covers the binary inside the tgz).
 
-wheel: chronozarr 0.4.1 was published on 2026-10-13, so PyPI's file is inside the quarantine and
-uv's exclude-newer hides it. The page pins the version, so this builds the wheel from that
-version's git tag (docs/release-0.4.1.md records the tag build as byte-identical to PyPI's file)
-into a folder that holds nothing else. The job then sets UV_FIND_LINKS to the folder and keeps
+wheel: build the page's version from its release tag, or use an explicit --source-ref to
+qualify a candidate before creating a release tag. The selected candidate must name the same
+version as the page. The folder holds that one wheel only. The job sets UV_FIND_LINKS and keeps
 UV_EXCLUDE_NEWER: uv does not apply exclude-newer to a --find-links file (it has no upload
 time), so the page's install command runs unchanged, and every dependency still comes from PyPI
 under the cutoff. That exemption is why the folder must hold exactly one chronozarr wheel.
+This qualifies a built artifact; an ordinary registry installation is a separate check.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import tomllib
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -142,9 +144,9 @@ def install_cloudflared(
     return target
 
 
-def build_tag_wheel(version: str, out: Path, repo: Path) -> Path:
-    """Build chronozarr's wheel from the git tag ``v<version>`` into an otherwise empty ``out``."""
-    tag = f"v{version}"
+def build_tag_wheel(version: str, out: Path, repo: Path, *, source_ref: str | None = None) -> Path:
+    """Build the documented tag or an explicitly selected candidate revision."""
+    tag = source_ref or f"v{version}"
     if out.exists() and any(out.iterdir()):
         raise SetupError(f"{out} is not empty; the wheel folder must hold the one wheel only")
     known = subprocess.run(
@@ -157,8 +159,21 @@ def build_tag_wheel(version: str, out: Path, repo: Path) -> Path:
             f"tag {tag} is not in the checkout at {repo}; check out with fetch-depth 0 and "
             "fetch-tags, and make sure the docs pin a released version"
         )
+    commit = known.stdout.strip()
+    if source_ref is not None:
+        project = subprocess.run(
+            ["git", "-C", str(repo), "show", f"{commit}:pyproject.toml"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        actual = tomllib.loads(project.stdout)["project"]["version"]
+        if actual != version:
+            raise SetupError(f"candidate {commit} names {actual}, but the page requires {version}")
     archive = subprocess.run(
-        ["git", "-C", str(repo), "archive", "--format=tar", tag], capture_output=True, check=True
+        ["git", "-c", "core.autocrlf=false", "-C", str(repo), "archive", "--format=tar", commit],
+        capture_output=True,
+        check=True,
     )
     out.mkdir(parents=True, exist_ok=True)
     # The build must leave nothing behind that the page's install would find already there: the tag
@@ -212,6 +227,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     wheel.add_argument("--out", type=Path, required=True)
     wheel.add_argument("--repo", type=Path, default=Path.cwd())
+    wheel.add_argument(
+        "--source-ref", help="build this candidate Git revision instead of a published tag"
+    )
     wheel.add_argument("--github-actions", action="store_true")
     args = parser.parse_args(argv)
     try:
@@ -225,7 +243,9 @@ def main(argv: list[str] | None = None) -> int:
                 append_github_file("GITHUB_PATH", str(args.dest.resolve()))
         else:
             plan = json.loads(args.steps.read_text(encoding="utf-8"))
-            built = build_tag_wheel(plan["chronozarr_version"], args.out, args.repo)
+            built = build_tag_wheel(
+                plan["chronozarr_version"], args.out, args.repo, source_ref=args.source_ref
+            )
             print(f"{built}\nsha256 {hashlib.sha256(built.read_bytes()).hexdigest()}")
             if args.github_actions:
                 append_github_file("GITHUB_ENV", f"UV_FIND_LINKS={args.out.resolve()}")

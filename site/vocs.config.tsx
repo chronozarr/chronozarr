@@ -117,7 +117,8 @@ export default defineConfig({
     ] },
     { text: 'Create and share', items: [
       { text: 'Convert your data', link: '/guides/convert' },
-      { text: 'Tile-Ripper bridge (checkout)', link: '/guides/tile-ripper' },
+      { text: 'Convert an Icechunk selection', link: '/guides/icechunk' },
+      { text: 'Tile-Ripper bridge', link: '/guides/tile-ripper' },
       { text: 'Preview on your computer', link: '/guides/preview' },
       { text: 'Share a temporary link', link: '/guides/share' },
       { text: 'Publish a permanent link', link: '/guides/publish' },
@@ -148,6 +149,7 @@ export default defineConfig({
       { text: 'How it works', link: '/how-it-works' },
       { text: 'Performance and evidence', link: '/performance' },
       { text: 'Measurement log', link: '/reference/evidence' },
+      { text: '0.5.2 release notes', link: '/reference/release-0.5.2' },
       { text: '0.5.1 release notes', link: '/reference/release-0.5.1' },
       { text: 'Troubleshooting', link: '/troubleshooting' },
       { text: 'Format comparison', link: '/guides/format-comparison' },

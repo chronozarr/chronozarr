@@ -1,25 +1,25 @@
 # Quickstart
 
-**Package version — 0.5.1.** These commands use the same version as the converter, Python API and viewer guides. See the [release notes](release-0.5.1.md), or [install from source](development.md) for local development.
+**Package version — 0.5.2.** These commands use the same version as the converter, Python API and viewer guides. See the [release notes](release-0.5.2.md), or [install from source](development.md) for local development.
 
-This page takes a folder of dated GeoTIFFs to a link that a colleague can open, and to an interactive viewer on your computer. You need [uv](https://docs.astral.sh/uv/getting-started/installation/) and a web browser. You need no account, no cloud storage and no server.
+Convert a folder of dated GeoTIFFs, explore the result in your browser and send a temporary link to a colleague. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and use a web browser. Temporary sharing needs no account or cloud storage.
 
 ## 1. Install
 
 ```bash
-uv tool install --python 3.13 'chronozarr[geo]==0.5.1'
+uv tool install --python 3.13 'chronozarr[geo]==0.5.2'
 chronozarr --version
 ```
 
-The first command puts the `chronozarr` command on your `PATH`. `--python 3.13` makes uv use Python 3.13 even when an older Python comes first on your computer. uv downloads Python 3.13 if it is not installed. The second command prints `chronozarr, version 0.5.1`. On macOS the first command after an install can take 10 to 25 seconds while the system checks the new files; later commands start in about a second.
+uv installs the `chronozarr` command on your `PATH` and uses Python 3.13, downloading it if needed. This avoids selecting an older Python already on your computer. The second command prints `chronozarr, version 0.5.2`. On macOS the first command after an install can take 10 to 25 seconds while the system checks the new files; later commands start in about a second.
 
 chronozarr supports Python 3.11 and newer; this page uses 3.13. The `geo` extra adds GeoTIFF support. NetCDF files need the `netcdf` extra as well; see the [NetCDF guide](convert.md#from-netcdf-or-zarr). To install with pip instead, use an environment with Python 3.11 or newer, such as a virtual environment or a conda environment:
 
 ```bash
-python -m pip install 'chronozarr[geo]==0.5.1'
+python -m pip install 'chronozarr[geo]==0.5.2'
 ```
 
-To use chronozarr from Python in a uv project, run `uv add 'chronozarr[geo]==0.5.1'` in the project. Then put `uv run` in front of each command on this page.
+To use chronozarr from Python in a uv project, run `uv add 'chronozarr[geo]==0.5.2'` in the project. Then put `uv run` in front of each command on this page.
 
 ## 2. Get a dated raster series
 
@@ -67,7 +67,7 @@ time:       read about 0.03 s per timestep (0.3 s sequential, less with --read-a
 dry run: nothing was written
 ```
 
-Check the dates, the grid, the bands and the scaling. They become the store.
+Check that the dates, grid, bands and scaling match your inputs before converting.
 
 If a file has no date, another grid or other band metadata, the dry run lists every problem by file, with a fix for each. See the [conversion guide](convert.md) and [troubleshooting guide](troubleshooting.md#conversion).
 
@@ -88,7 +88,7 @@ preview it here: chronozarr preview my_store  (this computer only)
 
 ## 4. Share a temporary link
 
-`share` makes your store reachable through a temporary public address, so the link works on any computer, a colleague's included. It needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/), a free program from Cloudflare. It needs no Cloudflare account. On macOS, install it with `brew install cloudflared`. Without `cloudflared`, go to step 5.
+`share` makes your store reachable through a temporary public address that a colleague can open in a browser. Install [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/), a free program that runs the tunnel without a Cloudflare account. On macOS, use `brew install cloudflared`. Without `cloudflared`, go to step 5.
 
 ```bash
 chronozarr share my_store
@@ -104,7 +104,7 @@ Try these in the viewer:
 
 Choose the date, product and view that you want to show. Click Copy link and send the link. The recipient needs only a web browser. The [viewer guide](viewer.md) lists its controls; the hosted viewer can change independently when the site is deployed.
 
-Before you send the link, know these limits:
+While sharing:
 
 - The link works only while the command runs. Ctrl-C stops sharing, and the link stops working.
 - Your computer must stay on and connected. Every view that the recipient loads is sent from your computer, over your upload connection.
@@ -128,11 +128,11 @@ this link opens only on this computer; for a link others can open, run `chronoza
 press Ctrl-C to stop
 ```
 
-Your browser opens the viewer. The viewer page comes from chronozarr.org. The store is read from your computer and is not uploaded. Press Ctrl-C in the terminal to stop the preview. Use Chrome or Firefox: Safari can block a page on the internet from reading `127.0.0.1`.
+The viewer page loads from chronozarr.org and reads the store directly from your computer, without uploading it. Press Ctrl-C in the terminal to stop the preview. Use Chrome or Firefox for this step because Safari can block an internet page from reading `127.0.0.1`.
 
 ## 6. Publish a permanent link
 
-For a link that keeps working when your computer is off, upload the store to cloud storage that you control: Amazon S3, Cloudflare R2, Google Cloud Storage or Azure. `chronozarr publish` uploads it, checks it and prints the viewer link. You pay your provider for storage and downloads. chronozarr.org does not store your data. See [Publish a permanent link](publish.md).
+For a link that keeps working when your computer is off, use storage in your own Amazon S3, Cloudflare R2, Google Cloud Storage or Azure account. `chronozarr publish` uploads the store, checks it and prints the viewer link. Storage, request and transfer charges depend on your provider and plan. chronozarr.org does not store your data. See [Publish a permanent link](publish.md).
 
 ## 7. Read the values in Python
 
@@ -143,7 +143,7 @@ ds = xr.open_dataset("my_store", engine="chronozarr")
 ds["data"].sel(band="B08").isel(time=0, x=100, y=80).item()
 ```
 
-The dataset holds the values that you converted, with the scale applied. The `chronozarr` command from step 1 lives in its own environment, so install the same version where your notebook runs: `pip install chronozarr==0.5.1` or `uv add chronozarr==0.5.1`. See [Analyze a store in Python](analyze.md).
+The dataset holds the values that you converted, with the scale applied. The `chronozarr` command from step 1 lives in its own environment, so install the same version where your notebook runs: `pip install chronozarr==0.5.2` or `uv add chronozarr==0.5.2`. See [Analyze a store in Python](analyze.md).
 
 ## Next steps
 

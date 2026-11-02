@@ -796,35 +796,43 @@ def preview(
     )
     server = access.server
     target = viewer_url(access.store_url, access.viewer_url)
-    echo(f"serving {server.store} at {access.store_url} (byte ranges and CORS, 127.0.0.1 only)")
-    if port != 0:
-        echo(
-            f"port {server.port} is bound to this store (checked with a local request); aim a "
-            f"tunnel or port forward at http://127.0.0.1:{server.port}"
-        )
-    if base_url is not None:
-        echo(f"anyone who can open {access.store_url} can read this store; stop sharing when done")
-    if access.viewer_source == "hosted":
-        echo(
-            f"viewer: {access.viewer_url} (loaded from the internet; the store itself is read "
-            "from this machine). For offline use see --viewer-dir and "
-            "https://chronozarr.org/guides/viewer-distribution."
-        )
-    elif access.viewer_source == "served":
-        echo(f"viewer: {server.viewer_dir} (served locally, no internet needed)")
-    else:
-        echo(f"viewer: {access.viewer_url}")
-    echo(f"open: {target}")
-    if access.route == "loopback":
-        echo(
-            "this link opens only on this computer; for a link others can open, run "
-            f"`{share_command(store)}`"
-        )
-    if open_browser and not webbrowser.open(target):
-        echo("could not open a browser here; open the URL above in one.")
-    echo("press Ctrl-C to stop")
     try:
         with contextlib.suppress(KeyboardInterrupt):
+            echo(
+                f"serving {server.store} at {access.store_url} "
+                "(byte ranges and CORS, 127.0.0.1 only)"
+            )
+            if port != 0:
+                echo(
+                    f"port {server.port} is bound to this store (checked with a local request); "
+                    "aim a "
+                    f"tunnel or port forward at http://127.0.0.1:{server.port}"
+                )
+            if base_url is not None:
+                echo(
+                    f"anyone who can open {access.store_url} can read this store; "
+                    "stop sharing when done"
+                )
+            if access.viewer_source == "hosted":
+                echo(
+                    f"viewer: {access.viewer_url} (loaded from the internet; "
+                    "the store itself is read from this machine). "
+                    "For offline use see --viewer-dir and "
+                    "https://chronozarr.org/guides/viewer-distribution."
+                )
+            elif access.viewer_source == "served":
+                echo(f"viewer: {server.viewer_dir} (served locally, no internet needed)")
+            else:
+                echo(f"viewer: {access.viewer_url}")
+            echo(f"open: {target}")
+            if access.route == "loopback":
+                echo(
+                    "this link opens only on this computer; for a link others can open, run "
+                    f"`{share_command(store)}`"
+                )
+            if open_browser and not webbrowser.open(target):
+                echo("could not open a browser here; open the URL above in one.")
+            echo("press Ctrl-C to stop")
             _block()
     finally:
         server.close()

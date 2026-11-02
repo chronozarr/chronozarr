@@ -103,8 +103,8 @@ Verified 2026-10-02 (America/New_York):
 - Unknown live paths return 404; www returns 301 to the apex while preserving path.
 - The package versions recorded by this historical deployment check were PyPI and npm chronozarr 0.2.1.
 
-Release materials target Python and npm package 0.5.1; see
-[`docs/release-0.5.1.md`](../docs/release-0.5.1.md) for changes and publication status.
+Release materials target Python and npm package 0.5.2; see
+[`docs/release-0.5.2.md`](../docs/release-0.5.2.md) for changes and publication status.
 The deployment tooling is pinned to Wrangler 4.151.1; the site workflow audits its
 dependencies as well as the site dependencies. The root package overrides Miniflare's Undici
 dependency to 7.30.1 for [GHSA-4qv8-2p9j-2685](https://github.com/advisories/GHSA-4qv8-2p9j-2685)

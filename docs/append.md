@@ -42,7 +42,7 @@ chronozarr publish my_store \
   --update --dry-run     # drop --dry-run to upload
 ```
 
-`--update` takes the options of a first `chronozarr publish`, except `--overwrite`. The steps to follow are in [the procedure below](#publishing-an-append). This section states what the command guarantees and what it does not.
+`--update` accepts the options of a first `chronozarr publish`, except `--overwrite`. Follow [the procedure below](#publishing-an-append) to publish an append. The checks and intermediate states are described here.
 
 ### What it does
 
@@ -73,11 +73,11 @@ The command stops before it writes, and lists every reason, in these cases.
 - The prefix is empty, or holds an upload that stopped before the root `zarr.json`. Use `chronozarr publish` without `--update`.
 - The adapter cannot read an object back. The AWS S3, R2, GCS and Azure adapters can.
 
-Sharded stores: an append rewrites the shard that receives the new timestep. A shard is a chunk, and a first `chronozarr publish` marks it `immutable`. Browsers and CDNs can keep it for a year. A new root next to an old shard gives wrong index reads, so `--update` refuses to replace a shard. Publish that store to a new prefix. An append that opens a new shard rewrites none, and `--update` publishes it. Keep a store that will grow unsharded, which is the encoder default.
+An append to a sharded store rewrites the shard that receives the new timestep. The first `chronozarr publish` marks shards `immutable`, so browsers and CDNs may keep them for a year. Reading a new root with an old shard can give wrong index reads. `--update` therefore rejects shard replacements; publish that store to a new prefix. It accepts an append that opens a new shard without rewriting an old one. For a store that will grow, use the default unsharded layout.
 
 ### What a reader sees
 
-The upload is not atomic. Several objects never change together. One property holds: a chunk or shard that a published root refers to keeps its key and its bytes. Only the objects of phases 2 to 4 are rewritten. The table lists the state between two puts.
+The upload changes one object at a time. Chunks and shards referenced by a published root keep their keys and bytes; only the objects in phases 2 to 4 are rewritten. The table shows what readers can see between uploads.
 
 | State | A reader that loads the store now |
 |---|---|
@@ -221,7 +221,7 @@ The [Cache Rule](hosting-providers.md#cache-rule) follows the headers in the tab
 
 ### Open viewers
 
-A viewer keeps the root `zarr.json` it loaded until the page reloads. It shows the old timesteps until then. Reload the page to see the new timesteps. The shared link does not change.
+A viewer keeps its loaded root `zarr.json` and shows the old timesteps until you reload the page. The shared link stays the same.
 
 A stale viewer of a sharded store can fail to read a shard index. Reloading fixes it. An unsharded store has no shard index, so it has no such failure. Details: [evidence.md](evidence.md#open-viewers-after-an-append).
 

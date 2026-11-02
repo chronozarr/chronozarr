@@ -1,6 +1,6 @@
 # Advanced hosting
 
-To put a store online, most people need only [Publish a permanent link](publish.md): `chronozarr publish` uploads the store, checks it and prints the viewer link. The pages below are for setting up a host by hand, for hosts that `publish` does not cover, and for checking and tuning a host.
+Use [`chronozarr publish`](publish.md) to upload a store, check the hosted files and get a viewer link. To set up a host by hand, use a provider that `publish` does not cover, or tune an existing host, choose a guide below.
 
 | I want to | Page |
 |---|---|
@@ -14,7 +14,7 @@ To put a store online, most people need only [Publish a permanent link](publish.
 
 ## What a host must do
 
-A store is a folder of static files. Any host that serves files can serve it, with no server code, if it does these things:
+A store needs static file hosting with the following behavior:
 
 1. It returns each file at its path, and `404` for a file that does not exist.
 2. It sends `Access-Control-Allow-Origin: *`, or the address of the viewer, so that the browser may read the files.

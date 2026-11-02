@@ -9,7 +9,7 @@ You need four things:
 3. A public address for it: the bucket itself, readable by anyone, or a CDN or custom domain in front of it.
 4. A CORS rule that lets the viewer page read it. `--apply-cors` adds the rule.
 
-Anyone who has the link can read the store. Your provider charges you for the storage and for each download, and every view downloads part of the store. chronozarr.org serves the viewer page and stores no data. For data that must stay private, see [Private stores](private.md). For a link that lasts only while your computer is on, see [Share a temporary link](share.md).
+Anyone with the link can read the store, and each view downloads the data it needs. Storage, request and transfer charges depend on your provider and plan. chronozarr.org serves the viewer page and stores no data. See [Private stores](private.md) for restricted access, or [Share a temporary link](share.md) for a link served from your computer.
 
 ## Choose a provider
 
@@ -27,7 +27,7 @@ For another static host, such as Source Cooperative or a university web server, 
 1. Install the extra for your provider. With `uv tool install`, list every extra that you use:
 
    ```bash
-   uv tool install --python 3.13 'chronozarr[geo,publish]==0.5.1'
+   uv tool install --python 3.13 'chronozarr[geo,publish]==0.5.2'
    ```
 
 2. Sign in to the provider. The command uses the provider's usual credentials:
@@ -57,7 +57,7 @@ Use a new prefix, such as `my_store-v2`, for every new version of a store. A pre
 
 ## What you see
 
-The command prints the plan, uploads, checks the public address as a browser would, and prints the link. A shortened run:
+After uploading, the command checks the public address as a browser would and prints the viewer link. A shortened run:
 
 ```text
 store        my_store (conforms to chronozarr 0.3.0)
@@ -117,7 +117,7 @@ A published store has two addresses:
 
 The bucket's own address serves objects only when the bucket allows anonymous reads. For a private bucket behind a CDN, pass the CDN's address as `--public-url`. R2 has no default: its storage endpoint needs credentials, so give the custom domain or the `r2.dev` address. The command never uses `storage.cloud.google.com`, because that host needs a Google sign-in and does not answer CORS.
 
-A public URL that is an `s3://` address, or that holds a login, a signed query or a fragment, is refused. It ends up in a link that other people open.
+The public URL must be suitable for a shared link. The command rejects `s3://` addresses and URLs containing a login, signed query or fragment.
 
 ## When a check fails
 

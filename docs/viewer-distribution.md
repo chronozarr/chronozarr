@@ -1,15 +1,15 @@
 # Self-host the viewer
 
-**Package version — 0.5.1.** The npm package contains the production viewer bundle. You can copy that bundle with `chronozarr-viewer`, or build the same viewer from a [source checkout](development.md).
+**Package version — 0.5.2.** The npm package contains the production viewer bundle. You can copy that bundle with `chronozarr-viewer`, or build the same viewer from a [source checkout](development.md).
 
-The viewer folder contains the page, one script for the viewer and reader, one for the decode worker, the codecs and their licenses. The viewer runs in the browser. The host only serves files. Node.js copies the files once and is not needed on the host.
+The viewer folder contains the page, scripts for the viewer and decode worker, codecs and licenses. Node.js copies these files once; the host serves them as static files, and the viewer runs in the browser.
 
 ## Copy the viewer
 
 1. Install the npm package in a JavaScript project:
 
    ```sh
-   npm install chronozarr@0.5.1
+   npm install chronozarr@0.5.2
    ```
 
 2. Copy the viewer into a new folder, `published/`.
@@ -78,5 +78,4 @@ This builds the viewer before copying it. Use a new output folder for each build
 
 ## Test the package
 
-Run `npm run test:package` from `js/`. The test packs the package and installs it in a new temporary folder. It checks that the copy command refuses to overwrite. It then renders a synthetic store from the copied viewer under a URL subpath. It checks the time controls, the pixel inspector and embedded rendering. It also checks that the page makes no outside requests and logs no browser errors.
-The test uses the development Playwright installation.
+Run `npm run test:package` from `js/` using the development Playwright installation. It packs and installs the package in a temporary folder, verifies that the copy command refuses to overwrite, and renders a synthetic store from the copied viewer under a URL subpath. The browser checks cover time controls, pixel inspection and embedding, with no outside requests or browser errors.

@@ -1,12 +1,11 @@
 # Tile-Ripper observation outputs
 
-This is a checkout-only Python bridge. It is not included in the published
-Chronozarr 0.5.1 packages.
+This Python bridge is included in Chronozarr 0.5.2. It is not available in the
+0.5.1 packages.
 
-`convert_tile_ripper` reads a completed Tile-Ripper scientific COG fetch output
-and feeds the existing Chronozarr encoder. It writes the playback store directly,
-without first writing a stacked Zarr copy. No Rust Chronozarr encoder or new
-Python dependency is required.
+`convert_tile_ripper` reads a completed Tile-Ripper COG acquisition and passes its
+observations to the Chronozarr encoder. It writes a playback store directly, without
+an intermediate stacked Zarr copy or an additional Python dependency.
 
 ```python
 from chronozarr import convert_tile_ripper
@@ -59,13 +58,12 @@ deduplication or implicit choice between overlapping scenes. Use `groups=[...]`
 to explicitly select observation groups when a fetch contains other grids or
 series; include the matching QA groups too.
 
-`max_timestep_bytes` limits admitted timestep payload work (default 128 MiB).
-It is not a process RSS limit; the existing encoder also has its own working
-buffers and temporary spill files. The bridge never holds the entire time
-series in memory and does not create another persistent cube. Metadata is
-checked before encoding; payload masks, AOI consistency and input changes are
-checked while reading into the encoder's temporary spill, before final store
-data is written.
+`max_timestep_bytes` limits the payload processed for one timestep (default 128 MiB).
+The encoder's working buffers and temporary spill files use additional resources, so
+this is not a process RSS limit. The bridge processes the series without holding it
+all in memory or creating another persistent cube. It checks metadata before encoding,
+then checks masks, AOI consistency and input changes while reading into temporary spill
+files, before writing the final store data.
 
 Provenance retains the source descriptors, including Earth Search
 `object_identity` and product `object_version` pins, the chosen bands and quality
@@ -88,11 +86,11 @@ All nine timed outputs preserved stored values, masks, calibration, coordinates,
 analysis and provenance. Browser queries passed all eight dates on both paths.
 Tile-Ripper retained lower sampled peak process-tree RSS (209 versus 278 MiB)
 and an extra raw archive of about 36 MiB. The direct Python path feeds the same
-encoder without that archive. A persistent archive or bounded acquisition can
-be useful requirements; the conversion path alone is not an independent user
-adoption result. Use `tile-ripper stack` only when a scientific cube is required.
+encoder without that archive. A persistent archive and bounded acquisition are reasons to choose Tile-Ripper;
+this benchmark did not evaluate user adoption. Use `tile-ripper stack` when you
+need a scientific cube as a separate output.
 
-[Full experiment, request traces and receipts](https://github.com/chronozarr/tile-ripper/blob/codex/hls-benchmark-evidence/docs/stack-review/hls-river-parallel16.md)
-are proposed in Tile-Ripper's separate evidence branch. The earlier native speed
-lead used a Python recipe with less metadata/acquisition parallelism; it is not
-the current comparison. Neither project is released or deployed by this work.
+[Full experiment, request traces and receipts](https://github.com/chronozarr/tile-ripper/blob/036bc62bf38e64ac88e509103e859e754053c4bc/docs/stack-review/hls-river-parallel16.md)
+were merged in [Tile-Ripper PR #9](https://github.com/chronozarr/tile-ripper/pull/9).
+The earlier native speed lead used a Python recipe with less metadata and
+acquisition parallelism. The matched comparison above uses the later Python recipe.

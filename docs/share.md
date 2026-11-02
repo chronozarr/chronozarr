@@ -4,9 +4,9 @@
 chronozarr share my_store
 ```
 
-The command makes a store on your computer reachable through a temporary public address, checks that a browser can read it there, and prints a viewer link. The person who gets the link needs a web browser. They need no Python, no chronozarr and no account.
+The command gives a store on your computer a temporary public address. After checking that a browser can read it, it prints a viewer link. Your recipient needs only a web browser.
 
-Use `share` whenever someone other than you has to open the store. `encode` and `convert` print it first when they finish. The other way to look at a local store, [`chronozarr preview`](preview.md), opens only on your computer.
+Use `share` to send a temporary link to someone else. `encode` and `convert` print the command when they finish. For a view that opens only on your computer, use [`chronozarr preview`](preview.md).
 
 ## Temporary or permanent
 
@@ -22,7 +22,7 @@ For a link that lasts, see [Publish a permanent link](publish.md). To look at a 
 
 ## Before you start
 
-Install [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) once. It is a free program from Cloudflare that makes the temporary address. It needs no Cloudflare account and no configuration. On macOS:
+Install [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/), the free Cloudflare program that runs the tunnel. It needs no account or configuration. On macOS:
 
 ```bash
 brew install cloudflared
@@ -53,7 +53,7 @@ chronozarr does not install it for you. If it is missing, `share` says so and st
    anyone who can open this link can read this store; press Ctrl-C to stop sharing
    ```
 
-   The `tunnel throughput` line times one chunk through the tunnel. It shows how fast a recipient's views will load. Package 0.4.0 prints the address only when it works and takes about a minute and a half ([measurement](evidence.md#time-to-a-link-2026-10-12)).
+   The `tunnel throughput` line measures one chunk through the tunnel and estimates the time to load a view. For comparison, package 0.4.0 took about a minute and a half to print a working address ([measurement](evidence.md#time-to-a-link-2026-10-12)).
 
 2. The viewer opens. Choose the date, the product and the part of the map that you want to show.
 
@@ -71,7 +71,7 @@ Each run makes a new address. A link from an earlier run does not work again.
 2. `cloudflared` gives that server a public https address on `trycloudflare.com`.
 3. `share` reads the store through that address, as a browser would, and prints the link only when the read works.
 
-The viewer page comes from chronozarr.org. The data does not: the viewer reads the store through the tunnel, directly from your computer. chronozarr.org holds no copy of your dataset.
+The viewer page loads from chronozarr.org and reads the store through the tunnel, directly from your computer. chronozarr.org holds no copy of your dataset.
 
 ## Limits
 
@@ -79,6 +79,7 @@ The viewer page comes from chronozarr.org. The data does not: the viewer reads t
 - Every view and every timestep that the recipient loads travels over your upload connection. A few viewers are fine. For many viewers, or fast playback of a large area, [publish](publish.md) the store.
 - If your computer sleeps, loses its network or stops the command, the link stops working.
 - A quick tunnel is a free Cloudflare service for testing, with no uptime guarantee.
+- The network must allow the Cloudflare tunnel API and the assigned `trycloudflare.com` address. If a campus or workplace DNS filter blocks them, use [local preview](preview.md) or [publish](publish.md) the store to static storage.
 
 ## Options
 

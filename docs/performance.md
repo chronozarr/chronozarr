@@ -1,6 +1,6 @@
 # Performance and evidence
 
-This page lists what was measured, how, on what, and what the measurements do not show. It has four parts: viewer speed on the published store, correctness of stored values, ingestion speed, and memory. They are kept apart because they rest on different data and different machines. Raw tables and dated observations are in [evidence.md](evidence.md).
+The measurements below cover viewer speed on the public store, stored-value correctness, Sentinel-2 ingest speed and memory use. Each section gives its data, method and limits. Raw tables and dated observations are in [evidence.md](evidence.md).
 
 All timings were taken on one computer, an Apple M3 Max laptop (16 CPUs, 128 GB, macOS 26.6.2), on a home connection. No other machine, browser vendor, operating system or network has been measured. Where a run was not repeated, the text says so.
 
