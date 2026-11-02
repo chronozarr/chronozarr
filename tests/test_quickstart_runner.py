@@ -548,6 +548,26 @@ def test_candidate_wheel_refuses_a_version_different_from_the_page(tmp_path, tag
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_release_archive_uses_lf_even_when_git_converts_working_files_to_crlf(
+    tmp_path, tagged_repo, monkeypatch
+):
+    git(tagged_repo, "config", "core.autocrlf", "true")
+    fake_uv_build(monkeypatch, ["chronozarr-1.2.3-py3-none-any.whl"], [])
+    build = setup.subprocess.run
+    archived = []
+
+    def record(command, *args, **kwargs):
+        if command[0] == "uv":
+            archived.append((Path(kwargs["cwd"]) / "pyproject.toml").read_bytes())
+        return build(command, *args, **kwargs)
+
+    monkeypatch.setattr(setup.subprocess, "run", record)
+    setup.build_tag_wheel("1.2.3", tmp_path / "wheels", tagged_repo)
+
+    assert archived and b"\r\n" not in archived[0]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 @pytest.mark.parametrize(
     "wheels",
     [

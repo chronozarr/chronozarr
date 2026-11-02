@@ -171,7 +171,7 @@ def build_tag_wheel(version: str, out: Path, repo: Path, *, source_ref: str | No
         if actual != version:
             raise SetupError(f"candidate {commit} names {actual}, but the page requires {version}")
     archive = subprocess.run(
-        ["git", "-C", str(repo), "archive", "--format=tar", commit],
+        ["git", "-c", "core.autocrlf=false", "-C", str(repo), "archive", "--format=tar", commit],
         capture_output=True,
         check=True,
     )

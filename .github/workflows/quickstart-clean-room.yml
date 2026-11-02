@@ -121,5 +121,6 @@ jobs:
             ${{ runner.temp }}/quickstart/out
             ${{ runner.temp }}/quickstart/steps.json
             ${{ runner.temp }}/quickstart/uv-receipt.toml
+            ${{ runner.temp }}/quickstart/wheelhouse/*.whl
           if-no-files-found: warn
           retention-days: 14
