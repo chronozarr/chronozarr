@@ -16,15 +16,23 @@ Depth: https://chronozarr.org/llms.txt lists every page, https://chronozarr.org/
 
 ## Install
 
-The PyPI package is `chronozarr`. Python 3.11+. Prefer uv.
+These instructions target package 0.5.2, which requires Python 3.11+. Choose the installation for the user's task.
+
+For terminal commands only:
 
 ```bash
-uv tool install --python 3.13 'chronozarr[geo]'   # CLI only; --python 3.13 skips an older Python on PATH
-uv add 'chronozarr[geo]'                          # in a project: library and CLI; `uv run chronozarr ...`
-uvx --from 'chronozarr[geo]' chronozarr --help    # one-off
+uv tool install --python 3.13 'chronozarr[geo]==0.5.2'
 ```
 
-Extras: `geo` (rasterio: GeoTIFF/COG input, `export-cog`, `stac`; pyproj: `link --lonlat` for a projected store), `netcdf` (with cftime), `cftime` (a Zarr store on a `360_day`, `noleap`, `all_leap` or `julian` calendar), `s3` (list an `s3://` prefix in `convert`), `dask` (`chunks=` in xarray), `notebook` (`chronozarr.view`, `chronozarr.player`), `publish` (`chronozarr publish` to S3, R2 and other S3-compatible hosts), `publish-gcs` (`gs://`), `publish-azure` (`az://`), `leafmap` (`chronozarr.add_chronozarr`, a layer on a leafmap map), `geemap` (the same on a geemap map), `ingest` (the Sentinel-2 example in a repository checkout). With pip: `pip install 'chronozarr[geo]'`. Run `chronozarr <command> --help` for exact options.
+For a script or notebook in a uv project:
+
+```bash
+uv add 'chronozarr[geo]==0.5.2'
+```
+
+Use `uv run python` for the script or Python session and `uv run chronozarr ...` for commands in that project. A notebook must use the project's environment as its kernel. A tool install does not make the package importable in a separate script or notebook. In an existing Python 3.11+ environment, use `python -m pip install 'chronozarr[geo]==0.5.2'` instead. For a one-off command, use `uvx --from 'chronozarr[geo]==0.5.2' chronozarr --help`.
+
+Extras: `geo` (rasterio: GeoTIFF/COG input, `export-cog`, `stac`; pyproj: `link --lonlat` for a projected store), `netcdf` (with cftime), `cftime` (a Zarr store on a `360_day`, `noleap`, `all_leap` or `julian` calendar), `s3` (list an `s3://` prefix in `convert`), `dask` (`chunks=` in xarray), `notebook` (`chronozarr.view`, `chronozarr.player`), `publish` (`chronozarr publish` to S3, R2 and other S3-compatible hosts), `publish-gcs` (`gs://`), `publish-azure` (`az://`), `leafmap` (`chronozarr.add_chronozarr`, a layer on a leafmap map), `geemap` (the same on a geemap map), `ingest` (the Sentinel-2 example in a repository checkout). Run `chronozarr <command> --help` for exact options.
 
 ## Which command
 
@@ -55,13 +63,15 @@ Extras: `geo` (rasterio: GeoTIFF/COG input, `export-cog`, `stac`; pyproj: `link 
 
 ## Read in Python
 
+Use the project or notebook installation above. This example uses the quickstart's `my_store`, which has levels 0 and 1. For another store, run `chronozarr info STORE` and choose one of its listed levels. A local path in these calls can also be an `https://` store URL.
+
 ```python
 import xarray as xr
 import chronozarr
 
 ds = xr.open_dataset("my_store", engine="chronozarr")                   # float32 physical values, NaN where invalid
-raw = xr.open_dataset("https://host/my_store", engine="chronozarr", physical=False)  # stored values, stored dtype
-ds0 = xr.open_dataset("my_store", engine="chronozarr", lod=2)           # a coarser pyramid level
+raw = xr.open_dataset("my_store", engine="chronozarr", physical=False)  # stored values, stored dtype
+overview = xr.open_dataset("my_store", engine="chronozarr", lod=1)      # the quickstart store's coarser level
 ds.data.sel(band="B08").isel(time=0)                                    # lazy; reads only the chunks it needs
 
 store = chronozarr.open_store("my_store")      # path or http(s) URL
@@ -98,8 +108,25 @@ Each is confirmed in the source or docs.
 chronozarr convert scenes/ my_store --dry-run     # check every file, print size estimate
 chronozarr convert scenes/ my_store
 chronozarr validate my_store && chronozarr info my_store
-chronozarr share my_store                         # temporary public link, needs cloudflared; Ctrl-C stops it
-chronozarr preview my_store                       # or: this computer only, no tunnel
+```
+
+For a temporary public link, install `cloudflared` first, then run:
+
+```bash
+chronozarr share my_store
+```
+
+Keep it running while the recipient uses the link. Ctrl-C stops the server and tunnel. Stop it before running another command in the same terminal.
+
+For a view on this computer only, use this instead; it needs no `cloudflared`:
+
+```bash
+chronozarr preview my_store
+```
+
+Preview also runs until Ctrl-C. If the user wants a permanent link and has chosen their cloud storage, check the destination before uploading:
+
+```bash
 chronozarr publish my_store --destination s3://BUCKET/aoi/store-v1 --dry-run
 ```
 

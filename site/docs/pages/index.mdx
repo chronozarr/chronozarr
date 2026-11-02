@@ -58,12 +58,12 @@ export const plateView = 'https://chronozarr.org/demo/?t=110&p=false_color'
 <section className="cz-grid cz-section cz-rule" aria-label="Three commands">
   <p className="cz-label">Three commands</p>
   <div className="cz-commands">
-    <pre><code>{`chronozarr convert rasters/ my_store
-chronozarr share my_store
-chronozarr preview my_store`}</code></pre>
+    <pre><code>chronozarr convert rasters/ my_store</code></pre>
+    <pre><code>chronozarr share my_store</code></pre>
+    <pre><code>chronozarr preview my_store</code></pre>
   </div>
   <div className="cz-commands-notes">
-    <p><code>convert</code> reads one GeoTIFF per date and checks every file before it writes. <code>share</code> prints a temporary link that a colleague can open. <code>preview</code> opens the store in your browser, on this computer only.</p>
+    <p>Run <code>convert</code>, then choose <code>share</code> for a temporary public link or <code>preview</code> for this computer only. Sharing needs <code>cloudflared</code>; preview does not. Both commands keep running until you press Ctrl-C.</p>
     <a href="/quickstart">Quickstart, with a sample dataset</a>
   </div>
 </section>

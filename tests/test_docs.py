@@ -286,3 +286,24 @@ def test_the_quickstart_python_example_runs(tmp_path, monkeypatch) -> None:
         truth[0, 3, 80, 100] * 0.0001,
         rtol=1e-5,
     )
+
+
+def test_the_agent_skill_python_example_runs_on_the_quickstart_store(
+    tmp_path, monkeypatch
+) -> None:
+    """The agent's complete example must work on the store its quickstart creates."""
+    truth = _guide_store(tmp_path / "my_store", units="reflectance")
+    monkeypatch.chdir(tmp_path)
+    skill = REPO / "skills" / "chronozarr" / "SKILL.md"
+    blocks = _python_blocks(skill.read_text(encoding="utf-8"))
+    assert blocks, "the agent skill has no Python examples"
+    scope: dict[str, object] = {}
+    for block in blocks:
+        exec(compile(block, str(skill), "exec"), scope)
+    raw, physical, overview = scope["raw"], scope["ds"], scope["overview"]
+    assert isinstance(raw, xr.Dataset)
+    assert isinstance(physical, xr.Dataset)
+    assert isinstance(overview, xr.Dataset)
+    np.testing.assert_array_equal(raw["data"].isel(time=0).values, truth[0])
+    np.testing.assert_allclose(physical["data"].isel(time=0).values, truth[0] * 0.0001, rtol=1e-5)
+    assert overview.attrs["lod"] == 1
