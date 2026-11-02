@@ -2,12 +2,21 @@
 
 A store keeps the values that you converted. Use xarray to select pixels, calculate indices and export results; the [Python API](python.md) lists the available functions.
 
-Install the package where your notebook or script runs:
+Install the package where your notebook or script runs. A standalone CLI installed with `uv tool install` has its own environment and does not install the library here.
+
+In a uv project:
 
 ```bash
-uv add chronozarr        # in a uv project
-pip install chronozarr   # in a pip environment
+uv add 'chronozarr==0.5.2'
 ```
+
+Run your script or Python session with `uv run python`. To use an existing Python 3.11+ environment instead:
+
+```bash
+python -m pip install 'chronozarr==0.5.2'
+```
+
+A notebook must use the environment where you installed the package as its kernel.
 
 ## Open a store
 

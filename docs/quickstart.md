@@ -136,6 +136,8 @@ For a link that keeps working when your computer is off, use storage in your own
 
 ## 7. Read the values in Python
 
+The `chronozarr` command from step 1 lives in its own environment. Install the library in the environment used by your script or notebook before running this code. In a uv project, run `uv add 'chronozarr==0.5.2'` and use `uv run python` for your script or Python session. In an existing Python 3.11+ environment, run `python -m pip install 'chronozarr==0.5.2'`. A notebook must use that environment as its kernel.
+
 ```python
 import xarray as xr
 
@@ -143,7 +145,7 @@ ds = xr.open_dataset("my_store", engine="chronozarr")
 ds["data"].sel(band="B08").isel(time=0, x=100, y=80).item()
 ```
 
-The dataset holds the values that you converted, with the scale applied. The `chronozarr` command from step 1 lives in its own environment, so install the same version where your notebook runs: `pip install chronozarr==0.5.2` or `uv add chronozarr==0.5.2`. See [Analyze a store in Python](analyze.md).
+The dataset holds the values that you converted, with the scale applied. See [Analyze a store in Python](analyze.md).
 
 ## Next steps
 

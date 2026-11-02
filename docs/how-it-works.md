@@ -26,6 +26,14 @@ To publish a store, upload it to a static host that sends CORS headers. A sharde
 
 ## Write a store from Python
 
+Install the library in the Python 3.11+ environment that will run the script. An earlier `uv tool install` installed only the command in its own environment; it does not make the library available to this script.
+
+```bash
+python -m pip install 'chronozarr==0.5.2'
+```
+
+In a uv project, use `uv add 'chronozarr==0.5.2'` instead, then put `uv run` before each Python and chronozarr command below.
+
 1. Save this script as `quickstart.py`. It writes a store of three synthetic timesteps and reads one back. The pixels are 10 m in UTM zone 31N.
 
    ```python

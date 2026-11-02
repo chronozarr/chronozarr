@@ -30,16 +30,30 @@ Use a folder with one GeoTIFF per date, with the date in each file name, such as
 chronozarr export-cog https://data.chronozarr.org/ucayali_santa_maria_v03 sample --level 2 --times 2024-01..2024-12
 ```
 
-Then convert the folder and share it:
+Check and convert the folder:
 
 ```bash
 chronozarr convert sample my_store --dry-run
 chronozarr convert sample my_store
-chronozarr share my_store      # a temporary public link that any computer can open
-chronozarr preview my_store    # or: private, opens on this computer only
 ```
 
-The dry run checks every file before `convert` writes the store. `share` uses [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) to make a temporary public link. Keep the command running and your computer on while a colleague uses it. Anyone with the link can read the store. For a view that opens only on your computer, use `preview`.
+The dry run checks every file before `convert` writes the store.
+
+To send a temporary public link to a colleague, install [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/), then run:
+
+```bash
+chronozarr share my_store
+```
+
+Keep this command running and your computer on while the colleague uses the link. Anyone with the link can read the store. Press Ctrl-C to stop sharing before running another command in the same terminal.
+
+For a view that opens only on your computer, use this instead. It needs no `cloudflared`:
+
+```bash
+chronozarr preview my_store
+```
+
+Preview also keeps running until you press Ctrl-C.
 
 The [full quickstart](https://chronozarr.org/quickstart) has a sample dataset, the expected output of each command and the pip route.
 
@@ -61,6 +75,16 @@ identities. It does not need an intermediate stacked store.
 The recipient needs only a web browser. chronozarr.org serves the viewer page and stores no data. See [Share a temporary link](https://chronozarr.org/guides/share) and [Publish a permanent link](https://chronozarr.org/guides/publish).
 
 ## Read the values
+
+The tool installation above installs the `chronozarr` command in its own environment. To read the data from Python, install the library in the environment used by your script or notebook.
+
+In a uv project, run `uv add 'chronozarr==0.5.2'` and use `uv run python` for your script or Python session. In an existing Python 3.11+ environment, install it with:
+
+```bash
+python -m pip install 'chronozarr==0.5.2'
+```
+
+A notebook must use that environment as its kernel. Then run:
 
 ```python
 import xarray as xr
