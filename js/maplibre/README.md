@@ -2,9 +2,9 @@
 
 This page describes npm **0.5.2**, paired with Python **0.5.2**. Install it with `npm install chronozarr@0.5.2`, or use a [source checkout](../../docs/development.md). It reads supported spec 0.3 and 0.4 stores, including supported non-EPSG CRS definitions. Package installation and deployment of the hosted viewer are separate.
 
-`ChronozarrLayer` draws a chronozarr store on a MapLibre GL JS map as a custom layer. It opens the store with `js/chronozarr/decoder.js` and picks the pyramid level from the map zoom. It uploads the raw chunks of the visible cells as integer or float textures. It runs the product band math in the fragment shader.
+`ChronozarrLayer` draws a store as a MapLibre GL JS custom layer. It uses `js/chronozarr/decoder.js` to open the store and chooses a pyramid level from the map zoom. Visible chunks become integer or float textures, and the fragment shader computes products from their bands.
 
-Each cell is a small mesh. Its vertices were projected from the store's CRS to Web Mercator, so the raster lands on the basemap with no resampling step. The layer has no dependencies: MapLibre belongs to the host page.
+Each cell is a small mesh whose vertices are projected from the store's CRS to Web Mercator. This places the raster on the basemap without resampling the stored data. The host page supplies MapLibre.
 
 ## Demo
 

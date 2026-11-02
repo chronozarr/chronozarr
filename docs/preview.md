@@ -4,9 +4,9 @@
 chronozarr preview my_store
 ```
 
-The command serves the store on `127.0.0.1`, prints the address and opens the viewer in your browser. Ctrl-C stops the server. `encode` and `convert` print this command after `chronozarr share` when they finish. It serves a local directory; it does not use your cloud credentials to proxy an `s3://` or other private bucket.
+The command serves a local store on `127.0.0.1` and opens it in your browser. Press Ctrl-C to stop the server. `encode` and `convert` print this command after `chronozarr share` when they finish. Preview serves a local directory; it cannot proxy an `s3://` or other private bucket using your cloud credentials.
 
-The link that `preview` prints opens only on this computer, and so does a link that the viewer's Copy link copies from it. For a link that another person can open, use [`chronozarr share`](share.md): it needs `cloudflared` and makes a temporary public link.
+Preview links, including those made with Copy link, open only on this computer. Use [`chronozarr share`](share.md) for a temporary public link that another person can open; it requires `cloudflared`.
 
 ## Options
 
@@ -21,5 +21,3 @@ The link that `preview` prints opens only on this computer, and so does a link t
 By default the viewer loads from `https://chronozarr.org/demo/`. That needs internet access. The store data stays on your machine and goes straight from the server to your browser. For offline use, make a viewer folder (see [viewer-distribution.md](viewer-distribution.md)) and pass `--viewer-dir`.
 
 The server answers byte ranges and CORS. It sends `Cache-Control: no-cache` and answers a revalidation with `304`, so a reload re-reads only the objects that changed. `chronozarr doctor` warns on `no-cache`. The warning does not apply to a preview, where you may re-encode the store in place.
-
-To show the store to anyone on another machine, use `chronozarr share`; see [Share a temporary link](share.md).

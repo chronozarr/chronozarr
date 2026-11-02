@@ -4,7 +4,7 @@
 chronozarr.view("my_store")
 ```
 
-Install `chronozarr[notebook]`. For a local store, `view` starts a server on `127.0.0.1` that answers byte-range requests. It then shows the hosted viewer in an iframe. The viewer loads from the internet. The store is read from the machine that runs the kernel.
+Install `chronozarr[notebook]` in the kernel's environment. For a local store, `view` starts a byte-range server on `127.0.0.1` and shows the hosted viewer in an iframe. The viewer loads from the internet and reads the store from the machine running the kernel.
 
 This works in local Jupyter and VS Code sessions. The browser must reach `127.0.0.1` on the machine that runs the kernel. Chrome asks for permission before a public page reaches a local address. Allow it, or use the "open in a tab" link under the frame. Safari can block an https page from loading `http://127.0.0.1`. Use Chrome or Firefox, or a self-hosted viewer.
 
@@ -12,7 +12,7 @@ If the frame stays empty, run `chronozarr.diagnose_view("my_store")`. It prints 
 
 ## Remote notebooks
 
-The server listens on `127.0.0.1` of the machine that runs the kernel, and it never listens on another address. On JupyterHub, over SSH or in a container, your browser runs elsewhere. Pick the route that matches your setup.
+The server listens only on the kernel machine's `127.0.0.1`. If your browser runs elsewhere, as on JupyterHub, over SSH or in a container, forward or proxy that address using the route for your setup.
 
 | Setup | Route | Status |
 |-------|-------|--------|

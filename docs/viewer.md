@@ -8,7 +8,7 @@
 
 The viewer opened without a selected store or view starts its catalog's default store at the latest well-covered timestep. Among the newest 24 timesteps, that is the latest in which at least half of the pixels are observed, according to the store's coverage plane, or valid, according to its mask. A store with neither plane starts at its last timestep. The public Ucayali store has neither, so it starts at its last month. A copied viewer has an empty catalog until you supply a store.
 
-Any other address starts where it says. A link with a timestep (`t`) opens at that timestep. A link with a store, a product, a zoom or a centre but no `t` opens at the first timestep, as such links always have. A store that you preview, share or publish opens at its first timestep unless its link says otherwise.
+A link with a timestep (`t`) opens at that timestep. If it specifies a store, product, zoom or centre but omits `t`, it opens at the first timestep. Preview, share and publish links follow the same rule.
 
 ## Controls
 
@@ -32,7 +32,7 @@ Any other address starts where it says. A link with a timestep (`t`) opens at th
 | Save the loop as a video | Click Export, choose MP4, WebM or GIF and the range, click Export, then click the Download link. Firefox records WebM and GIF only. Embedded viewers have Export too |
 | Show load and decode statistics | Press D |
 
-Playback buffers two seconds of frames before it starts. On a link that cannot carry the speed you chose, it plays at the speed the link can feed instead of pausing again and again. It measures the link as the store loads, and counts only the frames ahead that are not in memory yet. The speed label then shows both speeds (`4 /s → 0.7`) and a hint says why (`0.7 step/s: link too slow for 4`). Playback speeds up over frames that are already loaded, and returns to your speed once the loop is in memory.
+Playback buffers two seconds of frames before starting. As the store loads, the viewer measures the link and counts the upcoming frames that still need to be downloaded. If the link cannot sustain your chosen speed, playback slows to match it. The label shows both speeds (`4 /s → 0.7`) with an explanation (`0.7 step/s: link too slow for 4`). Cached frames play faster, and playback returns to your chosen speed once the loop is in memory.
 
 At level 0, zero coverage means that no observation was recorded for that pixel. Overview coverage is a rounded mean and can become zero even when part of the block was observed. Zoom to native resolution before interpreting a hatch as an observation gap.
 

@@ -2,7 +2,7 @@
 
 **Package version — 0.5.2.** Follow the [installation guide](quickstart.md#1-install) before using this reference. The [release notes](release-0.5.2.md) describe compatibility and changes since 0.5.1.
 
-`chronozarr convert SOURCE OUT` writes a store from rasters that you already have. It reads one timestep at a time and encodes a few 512 by 512 cells at a time, so the files never have to fit in memory together. Since 0.4.1 the memory of the encode step stays nearly flat as the number of timesteps grows ([memory](performance.md#encoder-time-slabs)); in 0.4.0 it grew with them.
+`chronozarr convert SOURCE OUT` writes a store from rasters that you already have. It reads one timestep at a time and encodes a few 512 by 512 cells at once, so the whole series need not fit in memory. Since 0.4.1, encoding memory stays nearly flat as the number of timesteps grows; in 0.4.0 it grew with them ([memory measurements](performance.md#encoder-time-slabs)).
 
 | Your data | Section |
 |---|---|
@@ -14,8 +14,8 @@
 | A NetCDF file or a Zarr store with a time axis | [From NetCDF or Zarr](#from-netcdf-or-zarr) |
 | A folder or glob of NetCDF files, one per day or month | [A series of NetCDF files](#a-series-of-netcdf-files) |
 | An xarray `DataArray` in Python | [From xarray](#from-xarray) |
-| Icechunk repositories (checkout, Python 3.12+) | [Pinned Icechunk selections](icechunk.md) |
-| Completed Tile-Ripper COG observation outputs (checkout, Python API) | [Direct observation conversion](tile-ripper.md) |
+| Icechunk repositories (Python 3.12+, optional `icechunk` extra) | [Pinned Icechunk selections](icechunk.md) |
+| Completed Tile-Ripper COG observation outputs (Python API) | [Direct observation conversion](tile-ripper.md) |
 | Rendered PNG frames | [PNG frames](png-frames.md) |
 
 Each route checks input metadata before encoding. Payload checks continue as data is read; temporary spill may be written during those checks. Nothing is resampled or rescaled unless you ask.
@@ -29,9 +29,13 @@ chronozarr convert "scenes/*.tif" my_store --dry-run   # check every file, write
 chronozarr convert "scenes/*.tif" my_store
 ```
 
-The dry run runs the same discovery and checks as conversion. It prints each file with its date, the grid, the bands, the scaling, the validity rule and the expected size. The pixel size is in the unit of the CRS: `m`, `degree` or `US survey foot`. A geographic grid whose longitudes run outside -180 to 180, such as 0 to 360, gets a `longitude:` line. The store keeps those values, so a lookup in xarray must use the same convention. A directory or `s3://` prefix is not searched recursively; use a glob such as `"scenes/**/*.tif"` for subdirectories. Listing an S3 prefix needs the `s3` extra in the [development installation](development.md#install-the-command-line-tool) and uses your AWS credentials.
+The dry run discovers files and checks them as conversion does. It prints the dates, grid, bands, scaling, validity rule and expected size. Pixel size uses the CRS unit, such as `m`, `degree` or `US survey foot`. A geographic grid with longitudes outside -180 to 180, such as 0 to 360, gets a `longitude:` line. The store keeps that convention, so use it for xarray lookups too.
 
-A date is read from a name only when the name holds exactly one. A name with no date, with several (`20240215_2024-03`), or two files with the same date are reported, never guessed. When the files that share a date are tiles of one image, the report says so and names `--mosaic-tiles` ([exports split into tiles](#exports-split-into-tiles)). `--date-pattern` says where the date is, for example `--date-pattern "ndvi_%Y%m%d"`. `--write-manifest found.csv` saves discovered files and dates as a manifest that `convert` reads back; it is the one output allowed with `--dry-run`. The manifest is written even when the checks find problems, and the problems are reported after it. A file whose date was not found gets a row with an empty `datetime`, and the report says which rows; fill them in or delete them, then convert the manifest. When the files name their bands, the manifest has a `bands` column with those names to edit.
+A directory or `s3://` prefix is not searched recursively; use a glob such as `"scenes/**/*.tif"` for subdirectories. Listing an S3 prefix uses your AWS credentials and needs the `s3` extra. Add it to the [package installation](quickstart.md#1-install), or to your [development installation](development.md#install-the-command-line-tool) when working from source.
+
+A file name must contain exactly one date. The report lists names with no date, names with several dates (`20240215_2024-03`) and files that share a date. If those files tile one image, it recommends `--mosaic-tiles` ([exports split into tiles](#exports-split-into-tiles)). Use `--date-pattern` to choose the date in a name, for example `--date-pattern "ndvi_%Y%m%d"`.
+
+`--write-manifest found.csv` saves the discovered files and dates in a manifest that `convert` can read back. It is the one output allowed with `--dry-run`, and it is written even if checks find problems. A file without a recognized date gets an empty `datetime` entry; fill it in or remove the row before converting the manifest. When the files name their bands, a `bands` column lets you edit those names too. The command reports the remaining problems after writing the manifest.
 
 MODIS and HLS name a file by year and day of year. `MOD13A1.A2020001.h12v04.061.2020326023424_500m_16_days_NDVI.tif` is 1 January 2020, and `HLS.S30.T17SQV.2020061T155151.v2.0.B04.tif` is 1 March 2020 at 15:51:51. `%j` reads the three-digit day of year, 001 to 366, and goes with `%Y`, alone or with `%H%M%S`:
 
@@ -130,7 +134,7 @@ The MODIS names carry a year and day of year, so the GeoTIFFs convert with `--da
 
 `ee.ImageCollection.toBands()` stacks a collection into one image, and exporting it gives one GeoTIFF whose bands are the dates. Each band is named `<image id>_<band>`. For a collection of dated composites the image id is the date, so a year of MODIS NDVI has bands `2020_01_01_NDVI`, `2020_01_17_NDVI` and so on. GDAL keeps the names as band descriptions.
 
-A file with several bands is normally several bands, not several dates, so `convert` does not assume the second. Without an option it stops at the file name, and when the descriptions would make a series it names the option and what it would read:
+A multi-band file may contain several variables or several dates. `convert` requires an explicit choice to read its bands as dates. When the file name has no date but the band descriptions describe a series, the error shows the option and the dates it would read:
 
 ```text
 /data/modis_ndvi_2020.tif
@@ -194,7 +198,7 @@ Files that share a date can also be copies, so `convert` does not join them by i
     fix: pass --mosaic-tiles to join the tiles of each date into one timestep; keeping one file per date would store only part of the area
 ```
 
-Do not leave files out to get one per date: the store would hold a quarter of the area. `--mosaic-tiles` joins the tiles of each date into one timestep:
+Keep all four tiles for each date to retain the whole area. `--mosaic-tiles` joins them into one timestep:
 
 ```bash
 chronozarr convert raw ndvi_store --mosaic-tiles --nodata -3000 --dry-run
@@ -252,7 +256,7 @@ chronozarr convert model.nc my_store --variable tas
 chronozarr convert data.zarr my_store --variable ndvi --crs EPSG:32618
 ```
 
-Reading a NetCDF4 file needs the `netcdf` extra, which adds h5netcdf, h5py and cftime. Install it in the environment that runs the command: `uv tool install --python 3.13 --force 'chronozarr[geo,netcdf]==0.5.2'` for the standalone tool, or `uv add 'chronozarr[geo,netcdf]==0.5.2'` for a Python project. Without it, `convert` stops with `reading a NetCDF4 file needs h5netcdf and h5py`. A Zarr store needs no NetCDF reader. A classic NetCDF3 file, which starts with the bytes `CDF`, needs `scipy` instead: add `--with scipy` to the checkout's tool install, or add scipy to your analysis environment.
+Reading a NetCDF4 file needs the `netcdf` extra, which adds h5netcdf, h5py and cftime. Install it in the environment that runs the command: `uv tool install --python 3.13 --force 'chronozarr[geo,netcdf]==0.5.2'` for the standalone tool, or `uv add 'chronozarr[geo,netcdf]==0.5.2'` for a Python project. Without it, `convert` stops with `reading a NetCDF4 file needs h5netcdf and h5py`. A Zarr store needs no NetCDF reader. A classic NetCDF3 file, which starts with the bytes `CDF`, needs `scipy` instead: add `--with scipy` to the tool installation, or add scipy to your analysis environment.
 
 `--variable` names the array to convert. Its dimensions must be time, y and x, with an optional band dimension. `--dims time=NAME,y=NAME,x=NAME[,band=NAME]` names them when they are not `time`, `y`, `x` or common aliases such as `lat` and `lon`. The coordinate system comes from a `crs`, `crs_wkt` or `spatial_ref` attribute, or from the CF grid mapping variable that the variable names in `grid_mapping`; reading a grid mapping needs pyproj. `--crs` gives it, as an EPSG code or WKT2 text, when the file does not declare it. A CRS with no EPSG code, such as Daymet's Lambert conformal conic, is stored as it is and is never reprojected. The CF `scale_factor`, `add_offset` and `units` of the variable apply to every band. `--mask-var` names a variable whose nonzero values mark valid pixels.
 

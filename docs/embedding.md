@@ -1,6 +1,6 @@
 # Embedding the viewer
 
-`https://chronozarr.org/demo/?store=<url>` opens any chronozarr store. Add `embed=1` and the same page becomes a compact viewer for an `<iframe>`. A small `postMessage` contract lets the host page move the viewer in time, read what the user clicks and follow the camera.
+Add `embed=1` to `https://chronozarr.org/demo/?store=<url>` to show the viewer in an `<iframe>`. The host page can use `postMessage` to change the timestep, receive pixel clicks and follow the camera.
 
 The host page needs nothing installed: it sends messages with `contentWindow.postMessage` and receives them with a `message` event listener.
 
@@ -213,7 +213,7 @@ The viewer sends `view` when the camera has been still for 120 ms after a pan, z
 | `playback_failed` | Playback paused because the loop could not be buffered. |
 | `internal` | A command failed unexpectedly. The browser console has the stack. |
 
-A wrong or missing `origin` is not reported by message, because the viewer has nobody it may tell. The console says why (section 3).
+A wrong or missing `origin` leaves no authorized message recipient. The viewer reports the problem in the console (section 3).
 
 ## 5. Size
 

@@ -1,6 +1,6 @@
 # Develop from source
 
-This checkout targets Python and npm **0.5.2**. Use these instructions to run local source or qualify local artifacts. For a registry installation, start with the [quickstart](quickstart.md). The [release notes](release-0.5.2.md) describe changes and store compatibility.
+This checkout targets Python and npm **0.5.2**. Use it to develop from source or install locally built artifacts. For a registry installation, follow the [quickstart](quickstart.md). The [release notes](release-0.5.2.md) describe changes and store compatibility.
 
 ## Install the command line tool
 
@@ -30,7 +30,7 @@ The editable dependency uses this checkout when you change its Python source. A 
 
 ## Install local artifacts
 
-After building or receiving the release artifacts, replace `/absolute/path/to/release-artifacts` with the folder that holds them. These commands install local files. Installing a local artifact does not publish it. Install either the source above or a wheel below in each environment.
+To install built artifacts, replace `/absolute/path/to/release-artifacts` with their folder. Choose either the source installation above or a wheel below for each environment. Installing a local artifact does not publish it.
 
 For the standalone CLI:
 

@@ -4,7 +4,7 @@
 [![PyPI](https://img.shields.io/pypi/v/chronozarr)](https://pypi.org/project/chronozarr/)
 [![npm](https://img.shields.io/npm/v/chronozarr)](https://www.npmjs.com/package/chronozarr)
 
-chronozarr turns a georeferenced raster time series into an interactive dataset that anyone can open with a link. In a web browser, the series plays or scrubs like a video. You zoom and pan the map, and a click on a pixel shows its values over time. In Python, the same files return the exact numbers you stored. No tile server runs anywhere.
+chronozarr lets you share a georeferenced raster time series as an interactive map. A recipient can open a link, play or scrub through the dates, zoom in and click a pixel to see its values over time. The browser reads the stored bands directly from static files, and Python can read the same values for analysis.
 
 [Live demo](https://chronozarr.org/demo/): 117 monthly Sentinel-2 composites of the Ucayali River in Peru, read directly from a storage bucket. Documentation: [chronozarr.org](https://chronozarr.org).
 
@@ -39,16 +39,17 @@ chronozarr share my_store      # a temporary public link that any computer can o
 chronozarr preview my_store    # or: private, opens on this computer only
 ```
 
-The dry run checks every file and writes nothing. `convert` writes the store. `share` prints a temporary link that you or a colleague open in a browser. It needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/), works only while the command runs and your computer is on, and anyone with the link can read the store. `preview` opens the store in your browser through a local server. Its link opens only on this computer.
+The dry run checks every file before `convert` writes the store. `share` uses [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) to make a temporary public link. Keep the command running and your computer on while a colleague uses it. Anyone with the link can read the store. For a view that opens only on your computer, use `preview`.
 
 The [full quickstart](https://chronozarr.org/quickstart) has a sample dataset, the expected output of each command and the pip route.
 
-Chronozarr also converts [explicit, snapshot-pinned Icechunk selections](docs/icechunk.md),
-including a qualified materialized GFS window and virtual GRIB with explicit Float64 rounding.
+For [Icechunk](docs/icechunk.md), choose the variable, region and snapshot to convert.
+The tested examples cover a materialized GFS window and virtual GRIB; converting
+Float64 values requires an explicit choice to round to Float32.
 
-The [Tile-Ripper Python bridge](docs/tile-ripper.md) converts completed
-COG observation outputs directly, joining a selected quality mask to its science
-scene and retaining source identities without an intermediate stacked store.
+The [Tile-Ripper Python bridge](docs/tile-ripper.md) reads completed COG
+observations, joins each scene to its selected quality mask and retains source
+identities. It does not need an intermediate stacked store.
 
 ## Share a store
 
@@ -96,7 +97,7 @@ Python and npm package **0.5.2** read both draft store formats: **v0.3.0** for C
 | Problems and fixes | [Troubleshooting](https://chronozarr.org/troubleshooting) |
 | Instructions for coding agents, and these docs as plain text | [Agent skill](https://github.com/chronozarr/chronozarr/blob/main/skills/chronozarr/SKILL.md), [llms.txt](https://chronozarr.org/llms.txt) |
 
-The pages are written in [`docs/`](https://github.com/chronozarr/chronozarr/tree/main/docs) for chronozarr.org. Use the [source installation guide](https://chronozarr.org/guides/development) when developing from a checkout. Package publication and site deployment are separate steps. To contribute, see [CONTRIBUTING.md](https://github.com/chronozarr/chronozarr/blob/main/CONTRIBUTING.md).
+The source for chronozarr.org is in [`docs/`](https://github.com/chronozarr/chronozarr/tree/main/docs). Use the [source installation guide](https://chronozarr.org/guides/development) when developing from a checkout, or see [CONTRIBUTING.md](https://github.com/chronozarr/chronozarr/blob/main/CONTRIBUTING.md) to contribute. Packages and the hosted site are released separately.
 
 ## License
 

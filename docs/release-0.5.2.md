@@ -15,8 +15,8 @@ or sharing setup. Preview also closes its local server when browser launch
 raises an error. This repairs a shutdown race reproduced by the macOS
 quickstart check.
 
-Temporary sharing still requires a network that permits Cloudflare quick
-tunnels. A DNS or firewall block cannot be repaired by the package. Use
+Temporary sharing requires a network that permits Cloudflare quick
+tunnels. If DNS or a firewall blocks the tunnel API or address, use
 [local preview](preview.md) when sharing is unavailable, or
 [publish to static storage](publish.md) for a permanent link.
 
@@ -30,8 +30,8 @@ tunnels. A DNS or firewall block cannot be repaired by the package. Use
   including their masks. CPU reads and pixel queries still return the stored
   values. The viewer keeps ordinary textures when a packed texture would exceed
   the GPU's texture-size limit.
-- Scrub level selection and buffer planning use tested helpers while preserving
-  adaptive batch sizes and the existing complete-frame behavior.
+- Scrub level selection and buffer planning now use shared helpers. Adaptive
+  batch sizes and complete-frame behavior are unchanged.
 - The public catalog adds the recovered four-band Lake Mead imagery. Existing
   catalog entries and the default selection are retained.
 
@@ -45,11 +45,11 @@ npm package to obtain these changes on your own host.
   This optional route requires Python 3.12 or newer and the `geo` and `icechunk`
   extras. Scalar selections retain the time and other required dimensions.
   Virtual GRIB Float64 data require an explicit Float32 rounding choice.
-- The [Tile-Ripper bridge](tile-ripper.md) converts qualified completed COG
-  observation outputs directly. It preserves source identities, calibration and
-  selected quality masks on one exact native grid; it does not resample or
-  silently choose among overlapping observations. It needs no new Python
-  dependency.
+- The [Tile-Ripper bridge](tile-ripper.md) converts completed COG observation
+  outputs from the tested writer. It preserves source identities, calibration
+  and selected quality masks on one exact native grid. Inputs must have unique
+  times, and the bridge does not resample or choose among conflicting
+  observations. It needs no new Python dependency.
 - The Sentinel-1 example streams acquisitions into monthly means while retaining
   its existing mask and provenance checks.
 - The water-stack checker accepts `--data-root` so a candidate can be checked

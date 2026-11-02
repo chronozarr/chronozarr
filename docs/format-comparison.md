@@ -1,10 +1,10 @@
 # chronozarr compared with other formats
 
-This page compares chronozarr with other ways to serve raster data to a web map. Each tool answers a different question, so each section ends with the case for choosing that tool instead.
+Choose a raster format and viewer based on the values you need to preserve, the map interaction and the hosting you can provide. The sections below compare those requirements across chronozarr and other tools.
 
 Statements about chronozarr come from [spec/CHRONOZARR.md](../spec/CHRONOZARR.md), the tests in this repository and the measurements in [evidence.md](evidence.md). Statements about the other tools come from their documentation and source. The zarr-layer, topozarr, ndpyramid, titiler-multidim and GeoZarr statements, and those about the other GeoZarr readers, were read on 2026-10-19. The PMTiles, Mapbox raster-array and COG + TiTiler statements were last read on 2026-09-30. [evidence.md](evidence.md#comparison-notes) lists the versions and what was read.
 
-Comparisons that were measured come from the [GeoZarr review](../spec/review-2026-10-geozarr.md): one Apple M3 Max with other work running, on 2026-10-18 and 2026-10-19. They show how the tools behaved on that machine and link, not a ranking.
+The measured comparisons come from the [GeoZarr review](../spec/review-2026-10-geozarr.md), run on one Apple M3 Max with other work running on 2026-10-18 and 2026-10-19. The results apply to that machine, workload and link.
 
 ## Summary
 
@@ -18,7 +18,7 @@ Comparisons that were measured come from the [GeoZarr review](../spec/review-202
 | titiler-multidim | Zarr or NetCDF | A `sel` on any dimension, time included | Whatever the array holds | Yes |
 | GeoZarr | Conventions for Zarr | The dimensions of the dataset | Whatever the array holds | No |
 
-The time axis is not a difference in kind between chronozarr and zarr-layer: both select a timestep on a time dimension. The measured difference is in the client. On a fast link, chronozarr's viewer, its MapLibre layer and zarr-layer each drew 239 or 240 of the 240 steps of a 60 s scrub. With the link limited to 12 MB/s and 30 ms, the viewer drew 240 of 240 by dropping to coarser levels, chronozarr's MapLibre layer drew 128, and zarr-layer drew 45. See [zarr-layer](#zarr-layer-topozarr-and-ndpyramid) and the [review](../spec/review-2026-10-geozarr.md).
+Both chronozarr and zarr-layer select a timestep on a time dimension. Their clients handled buffering and level selection differently in the measured workload. On a fast link, chronozarr's viewer, its MapLibre layer and zarr-layer each drew 239 or 240 of the 240 steps of a 60 s scrub. With the link limited to 12 MB/s and 30 ms, the viewer drew 240 of 240 by dropping to coarser levels, chronozarr's MapLibre layer drew 128, and zarr-layer drew 45. See [zarr-layer](#zarr-layer-topozarr-and-ndpyramid) and the [review](../spec/review-2026-10-geozarr.md).
 
 ## chronozarr
 

@@ -2,9 +2,9 @@
 
 **Package version — 0.5.2.** Follow the [installation guide](quickstart.md#1-install) before using this reference. The [release notes](release-0.5.2.md) describe compatibility and changes since 0.5.1.
 
-The `chronozarr` package writes a store, reads it and opens it in xarray. The [quickstart](quickstart.md) has a first run, and [Analyze a store in Python](analyze.md) has common tasks. This page lists the functions. The docstring of `chronozarr.encode` lists every option of `encode`.
+The `chronozarr` package writes stores and reads them directly or through xarray. Start with the [quickstart](quickstart.md) or [analysis examples](analyze.md), then use this reference for function details. The `chronozarr.encode` docstring lists all encoder options.
 
-For a project that imports the library, use the [local-checkout dependency](development.md#python-projects-and-notebooks) in that project's environment, then run scripts with `uv run python script.py`. Use the same environment as your notebook kernel. The shell examples below assume the [development CLI](development.md#install-the-command-line-tool) is installed; its isolated tool environment does not install the library into your project.
+Install the library in the environment where your script or notebook runs, for example with `uv add 'chronozarr[geo]==0.5.2'`. In a uv project, run scripts with `uv run python script.py` and select that environment as your notebook kernel. Installing the standalone CLI does not install the library into your project. For source changes, use the [local-checkout dependency](development.md#python-projects-and-notebooks); the [development CLI](development.md#install-the-command-line-tool) has its own environment too.
 
 ## Write a store
 
@@ -38,7 +38,7 @@ da = store.to_xarray(lod=0, times=[0], physical=False)
 
 `to_xarray` loads the requested level into memory.
 
-`store.notes` lists what the store leaves out or spells otherwise and the reader read through, such as an absent `levels` mirror or a registration with other URLs. It is empty for a store that conforms. A store can open with notes and still fail `chronozarr validate`: the reader decodes what it can read as declared, and `validate` checks the spec's rules for writers.
+`store.notes` records metadata omissions or differences that the reader accepts, such as an absent `levels` mirror or a registration with other URLs. It is empty for a conforming store. A store can open with notes and still fail `chronozarr validate`, which checks the writer requirements in the specification.
 
 `store.crs` is the CRS the store declares: an authority code, WKT2 text, PROJJSON, or several of them. WKT2 takes precedence over PROJJSON, which takes precedence over the code. `store.crs.to_string()` returns that definition, shortened to the code only when equivalence is proved; pyproj and rasterio accept the resulting text. Without pyproj, an unverified code cannot replace a stored WKT2 or PROJJSON definition. A proven disagreement produces a warning. For `link --lonlat`, interpreting a full definition needs the `geo` extra even for a geographic store; a code-only `EPSG:4326` store needs no projection library. `--xy` remains usable without it.
 
@@ -64,7 +64,7 @@ raw = xr.open_dataset("my_store", engine="chronozarr", physical=False)
 
 The backend reads lazily. It returns physical values unless you pass `physical=False`. The `lod` argument selects the level, and the default is 0. When the store has notes, `ds.attrs["chronozarr_notes"]` lists them.
 
-Include `dask` in the [local-checkout dependency](development.md#python-projects-and-notebooks) to pass `chunks=` and get dask arrays.
+Install the `dask` extra to pass `chunks=` and get dask arrays, for example with `uv add 'chronozarr[geo,dask]==0.5.2'`. When working from source, include it in the [local-checkout dependency](development.md#python-projects-and-notebooks).
 
 A plain Zarr reader opens a level without chronozarr and returns the stored values. See [Read a store without chronozarr](how-it-works.md#read-a-store-without-chronozarr).
 
