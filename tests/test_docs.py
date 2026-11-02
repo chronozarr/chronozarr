@@ -300,8 +300,10 @@ def test_the_agent_skill_python_example_runs_on_the_quickstart_store(
     scope: dict[str, object] = {}
     for block in blocks:
         exec(compile(block, str(skill), "exec"), scope)
-    np.testing.assert_array_equal(scope["raw"]["data"].isel(time=0).values, truth[0])
-    np.testing.assert_allclose(
-        scope["ds"]["data"].isel(time=0).values, truth[0] * 0.0001, rtol=1e-5
-    )
-    assert scope["overview"].attrs["lod"] == 1
+    raw, physical, overview = scope["raw"], scope["ds"], scope["overview"]
+    assert isinstance(raw, xr.Dataset)
+    assert isinstance(physical, xr.Dataset)
+    assert isinstance(overview, xr.Dataset)
+    np.testing.assert_array_equal(raw["data"].isel(time=0).values, truth[0])
+    np.testing.assert_allclose(physical["data"].isel(time=0).values, truth[0] * 0.0001, rtol=1e-5)
+    assert overview.attrs["lod"] == 1
