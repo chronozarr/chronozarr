@@ -116,6 +116,26 @@ def test_share_prints_only_a_verified_public_viewer_link_and_cleans_up(store, mo
     assert not view_module._servers
 
 
+@pytest.mark.parametrize("stage", ["tunnel startup", "browser launch"])
+def test_share_ctrl_c_during_startup_or_browser_launch_stops_cleanly(store, monkeypatch, stage):
+    process = FakeProcess()
+    _ready_share(monkeypatch, process)
+    if stage == "tunnel startup":
+        monkeypatch.setattr(share_module, "_tunnel_url", _interrupt)
+    else:
+        monkeypatch.setattr(share_module.webbrowser, "open", _interrupt)
+    monkeypatch.setattr(
+        share_module, "_wait_for_tunnel", lambda _: pytest.fail("interrupt was ignored")
+    )
+
+    result = CliRunner().invoke(main, ["share", str(store)])
+
+    assert result.exit_code == 0, result.output
+    assert result.output.rstrip().endswith("stopped")
+    assert process.terminated
+    assert not view_module._servers
+
+
 def test_share_reports_stages_before_their_corresponding_work(store, monkeypatch):
     process = FakeProcess()
     _ready_share(monkeypatch, process)

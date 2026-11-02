@@ -542,6 +542,31 @@ def test_preview_stops_the_server_when_waiting_fails(store, monkeypatch):
     assert not view_module._servers
 
 
+@pytest.mark.parametrize("error", [KeyboardInterrupt, RuntimeError])
+def test_preview_closes_the_server_when_browser_launch_is_interrupted_or_fails(
+    store, monkeypatch, error
+):
+    urls = []
+
+    def open_browser(_):
+        server = next(iter(view_module._servers.values()))
+        urls.append(f"{server.url}/zarr.json")
+        assert get(urls[-1])[0] == 200
+        raise error("browser launch stopped")
+
+    monkeypatch.setattr(view_module.webbrowser, "open", open_browser)
+    result = CliRunner().invoke(main, ["preview", str(store)])
+    if error is KeyboardInterrupt:
+        assert result.exit_code == 0, result.output
+        assert result.output.rstrip().endswith("stopped")
+    else:
+        assert result.exit_code == 1
+        assert isinstance(result.exception, RuntimeError)
+    assert not view_module._servers
+    with pytest.raises(urllib.error.URLError):
+        get(urls[0])
+
+
 def test_preview_with_base_url_opens_that_address(store, monkeypatch):
     browser = Browser()
     run_preview(store, monkeypatch, browser, base_url="http://localhost:9000")

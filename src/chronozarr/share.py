@@ -406,12 +406,10 @@ def share(
         echo("anyone who can open this link can read this store; press Ctrl-C to stop sharing")
         if open_browser and not webbrowser.open(target):
             echo("could not open a browser here; open the URL above in one.")
-        try:
-            status = _wait_for_tunnel(tunnel)
-        except KeyboardInterrupt:
-            stopped_by_user = True
-        else:
-            raise OSError(f"cloudflared stopped unexpectedly (exit {status}); sharing ended.")
+        status = _wait_for_tunnel(tunnel)
+        raise OSError(f"cloudflared stopped unexpectedly (exit {status}); sharing ended.")
+    except KeyboardInterrupt:
+        stopped_by_user = True
     finally:
         if tunnel is not None:
             tunnel.close()
