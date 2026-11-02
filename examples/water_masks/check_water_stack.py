@@ -83,6 +83,9 @@ def next_overview(values: np.ndarray, valid: np.ndarray) -> tuple[np.ndarray, np
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--aoi", required=True)
+    parser.add_argument(
+        "--data-root", type=Path, default=DATA, help="root containing mosaics/ and stores/"
+    )
     parser.add_argument("--store-name", default="water-1")
     parser.add_argument(
         "--boa-offset-from",
@@ -94,7 +97,7 @@ def main() -> None:
         "--month", help="month to recompute (default: wettest with 90 %% valid pixels)"
     )
     args = parser.parse_args()
-    store = DATA / "stores" / args.aoi / args.store_name
+    store = args.data_root / "stores" / args.aoi / args.store_name
     with (store.parent / f"{args.store_name}.months.csv").open() as handle:
         rows = {r["month"]: r for r in csv.DictReader(handle) if r["status"] == "written"}
 
@@ -124,9 +127,9 @@ def main() -> None:
     )
     t = list(stored["time"].dt.strftime("%Y-%m").values).index(month)
     threshold = round(float(rows[month]["threshold"]) * 1e4)
-    path = month_path(DATA / "mosaics" / args.aoi, month)
+    path = month_path(args.data_root / "mosaics" / args.aoi, month)
     if path is None:
-        raise SystemExit(f"no mosaic for {month} in {DATA / 'mosaics' / args.aoi}")
+        raise SystemExit(f"no mosaic for {month} in {args.data_root / 'mosaics' / args.aoi}")
     ndwi, water, valid = recompute(path, args.boa_offset_from, threshold)
     print(f"month {month} (t={t}): threshold {threshold} stored units, {valid.sum()} valid pixels")
 

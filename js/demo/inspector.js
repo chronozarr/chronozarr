@@ -1,4 +1,18 @@
 // Pure formatting of decoded pixel values for the inspector.
+/** WGS84 coordinates at the center of the selected level-0 pixel. */
+export async function pixelLocation(pixel, store) {
+  if (!store?.transform) return null;
+  try {
+    // Reuse the lazy projection adapter, keeping it off the initial-view load path.
+    const { createProjection, pixelToCrs } = await import('../maplibre/projection.js');
+    const projection = await createProjection(store);
+    const [lon, lat] = projection.toLonLat(...pixelToCrs(store.transform, pixel.x + 0.5, pixel.y + 0.5));
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90) return null;
+    return { lat, lon: ((lon + 180) % 360 + 360) % 360 - 180 };
+  } catch {
+    return null;
+  }
+}
 const ndviColor = (v) => (v === null ? 'var(--text-3)' : v > 0.3 ? 'var(--green)' : v > 0 ? 'var(--amber)' : 'var(--red)');
 const ndwiColor = (v) => (v === null ? 'var(--text-3)' : v > 0 ? 'var(--accent)' : 'var(--text-2)');
 
@@ -49,6 +63,11 @@ export function sidebarHtml(info, timeLabel) {
       <div class="section-label">Location</div>
       <div class="meta-row"><span class="label">Time</span><span class="value">${timeLabel}</span></div>
       ${row('Pixel (x, y)', `${info.pixel.x}, ${info.pixel.y}`)}
+      <div class="coordinate-location">
+        <div class="coordinate-heading"><span>Latitude, longitude</span><button type="button" id="copy-coordinates" aria-label="Copy latitude and longitude" hidden>Copy</button></div>
+        <div class="mono coordinate-tuple" id="coordinate-tuple">Loading coordinates…</div>
+      </div>
+      <div id="coordinate-copy-status" class="coordinate-copy-status" role="status"></div>
       ${row('Level', info.lod === 0 ? '0 (full resolution)' : `${info.lod} (${2 ** info.lod}× coarser)`)}
       ${status}
       ${observed}

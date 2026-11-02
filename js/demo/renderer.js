@@ -22,6 +22,15 @@ export { TEXTURE_FORMATS } from '../shared/texture-formats.js';
 
 const BACKGROUND = [0.035, 0.047, 0.071];
 
+/** Texture dimensions for packed data and its block metadata, including partial rows. */
+export function compactTextureShape(nBand, chunkWidth, chunkHeight) {
+  const elements = nBand * chunkWidth * chunkHeight;
+  const wordHeight = Math.ceil(Math.ceil(elements / 2) / chunkWidth);
+  const blocks = Math.ceil(elements / 128);
+  const blockWidth = Math.min(256, blocks);
+  return { elements, wordHeight, blockWidth, blockHeight: Math.ceil(blocks / blockWidth) };
+}
+
 function valueGlsl(compact) {
   if (compact) return `
 float value(ivec2 texel, int band) {
@@ -228,9 +237,8 @@ export class Renderer {
    */
   planSlots(nBand, chunkWidth, chunkHeight, budgetBytes, wanted, bytesPerSample = 2, hasMask = false, compact = false) {
     const byLayers = Math.floor(this.limits.maxLayers / nBand);
-    const elements = nBand * chunkWidth * chunkHeight;
-    const blocks = Math.ceil(elements / 128), blockWidth = Math.min(256, blocks);
-    const dataBytes = compact ? chunkWidth * Math.ceil(Math.ceil(elements / 2) / chunkWidth) * 4 + blockWidth * Math.ceil(blocks / blockWidth) * 8 : elements * bytesPerSample;
+    const { elements, wordHeight, blockWidth, blockHeight } = compactTextureShape(nBand, chunkWidth, chunkHeight);
+    const dataBytes = compact ? chunkWidth * wordHeight * 4 + blockWidth * blockHeight * 8 : elements * bytesPerSample;
     const slotBytes = dataBytes + (hasMask ? chunkWidth * chunkHeight : 0);
     return Math.max(0, Math.min(wanted, byLayers, Math.floor(budgetBytes / slotBytes)));
   }
@@ -241,11 +249,7 @@ export class Renderer {
     if (compact && dtype !== 'uint16') throw new Error('Compact textures require uint16 data.');
     this.#useProgram(dtype, hasMask, compact);
     const format = TEXTURE_FORMATS[dtype];
-    const elements = nBand * chunkWidth * chunkHeight;
-    const wordHeight = Math.ceil(Math.ceil(elements / 2) / chunkWidth);
-    const blockCount = Math.ceil(elements / 128);
-    const blockWidth = Math.min(256, blockCount);
-    const blockHeight = Math.ceil(blockCount / blockWidth);
+    const { elements, wordHeight, blockWidth, blockHeight } = compactTextureShape(nBand, chunkWidth, chunkHeight);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, format.Array.BYTES_PER_ELEMENT);
     if (chunkWidth > this.limits.maxSize || chunkHeight > this.limits.maxSize || (compact && Math.max(wordHeight, blockWidth, blockHeight) > this.limits.maxSize)) {
       throw new Error(`Chunk ${chunkWidth}x${chunkHeight} exceeds MAX_TEXTURE_SIZE ${this.limits.maxSize}.`);

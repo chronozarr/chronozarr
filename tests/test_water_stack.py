@@ -51,7 +51,10 @@ def test_overview_reference_replicates_odd_edges_and_zeros_empty_blocks():
     np.testing.assert_array_equal(mask, [[False, True], [True, True]])
 
 
-def test_checker_accepts_real_pyramid_with_nonconserved_water_share(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("explicit_root", [False, True])
+def test_checker_accepts_real_pyramid_with_nonconserved_water_share(
+    tmp_path, monkeypatch, capsys, explicit_root
+):
     checker = load_checker()
     valid = np.ones((4, 4), dtype=np.uint8)
     valid[:2, :2] = 0
@@ -95,10 +98,12 @@ def test_checker_accepts_real_pyramid_with_nonconserved_water_share(tmp_path, mo
     (store.parent / "water-1.months.csv").write_text(
         "month,status,threshold,valid_frac,water_frac\n2024-01,written,0,0.8125,0.076923\n"
     )
-    monkeypatch.setattr(checker, "DATA", tmp_path)
-    monkeypatch.setattr(
-        sys, "argv", ["check_water_stack.py", "--aoi", "synthetic", "--month", "2024-01"]
-    )
+    arguments = ["check_water_stack.py", "--aoi", "synthetic", "--month", "2024-01"]
+    if explicit_root:
+        arguments += ["--data-root", str(tmp_path)]
+    else:
+        monkeypatch.setattr(checker, "DATA", tmp_path)
+    monkeypatch.setattr(sys, "argv", arguments)
     checker.main()
     output = capsys.readouterr().out
     assert "lod 2: 0.25000" in output and "all checks passed" in output

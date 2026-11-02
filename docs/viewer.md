@@ -22,6 +22,7 @@ Any other address starts where it says. A link with a timestep (`t`) opens at th
 | Zoom | Scroll, or pinch on a touch screen |
 | Pan | Drag the map |
 | See a pixel's values over time | Click the map. The inspector shows the values and a chart. Press Escape to close it |
+| Copy a pixel's location | Click the map, then Copy beside Latitude, longitude. Coordinates are WGS84 degrees at the selected native pixel's centre, latitude first |
 | Change the product | Choose it in the product list, or press 1 to 9 |
 | Change the display range of one band | Choose Single band, then set the minimum and maximum. Auto fits the range to the pixels on the screen |
 | Color one band | Choose Single band, then pick Viridis, Magma or Turbo in the colormap list. The bar between the minimum and maximum shows the colors |
