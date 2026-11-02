@@ -1,6 +1,6 @@
 # Explore the viewer
 
-**Package version — 0.5.1.** This guide describes the viewer included in the npm package and built from the same source for chronozarr.org. See [self-host the viewer](viewer-distribution.md) to copy it to your own host.
+**Package version — 0.5.2.** This guide describes the viewer included in the npm package and built from the same source for chronozarr.org. See [self-host the viewer](viewer-distribution.md) to copy it to your own host.
 
 [The live demo](https://chronozarr.org/demo/) loads 117 monthly Sentinel-2 composites of the Ucayali River in Peru, November 2015 to February 2026, from a public storage bucket. Package publication and deployment of the hosted viewer are separate steps. Installing the Python package does not update the hosted demo.
 

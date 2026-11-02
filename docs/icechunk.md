@@ -1,15 +1,15 @@
 # Convert an Icechunk selection
 
-The repository checkout can convert a selected variable from an anonymous HTTPS or local
+Chronozarr 0.5.2 can convert a selected variable from an anonymous HTTPS or local
 Icechunk repository into a chronozarr store. Icechunk resolves one snapshot; xarray and Zarr
 read its declared codecs. The existing converter stages one selected timestep at a time and
 writes the playback pyramid. There is no intermediate GeoTIFF or Zarr copy.
 
 This route needs Python 3.12 or newer and the `geo` and `icechunk` extras. These commands are
-for this checkout; this feature has not been published as a package release:
+for a package installation; this route is not available in 0.5.1:
 
 ```bash
-uv sync --locked --extra geo --extra icechunk
+uv tool install --python 3.13 'chronozarr[geo,icechunk]==0.5.2'
 ```
 
 ## One materialized GFS selection
@@ -23,7 +23,7 @@ An integer time selection such as `--isel time=48072` imports one timestep, equi
 `--isel lead_time=0` (or another lead index).
 
 ```bash
-uv run --no-sync chronozarr convert \
+chronozarr convert \
   https://dynamical-noaa-gfs.s3.us-west-2.amazonaws.com/noaa-gfs-analysis/v0.1.0.icechunk \
   gfs-playback \
   --icechunk --icechunk-snapshot 6K6H23PYR6QXA9VM0C6G \
@@ -60,7 +60,7 @@ Gribberish's maintained Zarr codec. Each external prefix must be authorized expl
 anonymous reading:
 
 ```bash
-uv run --no-sync chronozarr convert \
+chronozarr convert \
   https://dynamical-noaa-gfs.s3.us-west-2.amazonaws.com/noaa-gfs-analysis-virtual/v0.1.0.icechunk \
   gfs-virtual-playback \
   --icechunk --icechunk-snapshot SJSV5KG1GSWR2XQD2SW0 \

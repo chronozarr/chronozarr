@@ -1,6 +1,6 @@
 [project]
 name = "chronozarr"
-version = "0.5.1"
+version = "0.5.2"
 description = "Turn a raster time series into static files that a browser plays and Python reads with the stored values"
 readme = "README.md"
 license = "Apache-2.0"
@@ -119,7 +119,7 @@ packages = ["src/chronozarr"]
 # so dependency trees and generated builds cannot contribute their README or tests files.
 only-include = [
     "src/chronozarr", "tests", "spec", "docs", "examples", "scripts", "js",
-    "README.md", "CONTRIBUTING.md", "LICENSE", "pyproject.toml", "uv.lock",
+    "README.md", "CONTRIBUTING.md", "CITATION.cff", "LICENSE", "pyproject.toml", "uv.lock",
     ".gitignore", ".sentrux/rules.toml", "skills/chronozarr/SKILL.md",
     "site/scripts/sync-content.mjs", "site/redirects.json", "site/vocs.config.tsx",
     "site/README.md", "site/docs/pages/index.mdx",

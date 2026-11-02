@@ -11,7 +11,7 @@
 //   viewer.js                   the viewer and the reader, one file with no static imports
 //   decode-worker.js            the decode worker with zarrita's codec registry inside it
 //   bench.js                    `chronozarr.bench()` and the other console benchmarks (loaded only when one is called)
-//   projection.js               embed lon/lat adapter (loaded only for an embed)
+//   projection.js               lon/lat adapter (loaded for embeds or inspected pixel coordinates)
 //   codecs/{zstd,blosc,lz4}.js  the WebAssembly codecs, one copy that the viewer and the worker both load, when a store needs it
 //   chunks/*.js                 loaded only for a store whose CRS needs proj4
 //

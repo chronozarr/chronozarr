@@ -112,12 +112,16 @@ def test_artifact_instructions_install_exact_local_versions():
     assert f"`npm ls` must show version `{npm}`" in text
 
 
-def test_release_notes_record_the_scope_and_all_sixteen_repairs():
+def test_current_release_notes_name_both_package_versions():
     version = tomllib.loads((REPO / "pyproject.toml").read_text())["project"]["version"]
     npm = json.loads((REPO / "js/package.json").read_text())["version"]
     text = (REPO / f"docs/release-{version}.md").read_text()
     assert version == npm
     assert f"Python and npm **{version}**" in text
+
+
+def test_051_release_notes_keep_the_scope_and_all_sixteen_repairs():
+    text = (REPO / "docs/release-0.5.1.md").read_text()
     assert "63610f8" in text
     assert set(re.findall(r"^\| (\d+) \|", text, re.MULTILINE)) == {str(n) for n in range(1, 17)}
     for feature in (

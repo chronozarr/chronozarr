@@ -1,6 +1,6 @@
 # Troubleshooting
 
-**Package version — 0.5.1.** Follow the [installation guide](quickstart.md#1-install) before using this reference. The [release notes](release-0.5.1.md) describe compatibility and changes since 0.4.1.
+**Package version — 0.5.2.** Follow the [installation guide](quickstart.md#1-install) before using this reference. The [release notes](release-0.5.2.md) describe compatibility and changes since 0.5.1.
 
 Find the step where the problem appears. Each row gives the message or symptom, its cause and the fix.
 
@@ -54,8 +54,8 @@ A store whose CRS has no EPSG code, such as a Lambert conformal conic or a sinus
 
 | Message | Cause and fix |
 |---|---|
-| `chronozarr.spec_version: unsupported or missing version '0.4.0'; expected 0.3.0; use chronozarr convert before opening with a v0.3 reader` | The installed chronozarr is 0.4.1 or older and cannot read this custom-CRS store. Install 0.5.1 with the [installation guide](quickstart.md#1-install), then check that `chronozarr --version` reports `0.5.1`. Keep the existing store; it needs no conversion |
-| `not a valid chronozarr store: unsupported spec_version 0.4.0; use chronozarr convert to convert this store to v0.3` in the viewer or the JavaScript package | Install the npm 0.5.1 [viewer bundle](viewer-distribution.md). The hosted viewer changes when the site is deployed; a Python package install does not update it. An npm 0.4.1 viewer needs a package upgrade to read this store |
+| `chronozarr.spec_version: unsupported or missing version '0.4.0'; expected 0.3.0; use chronozarr convert before opening with a v0.3 reader` | The installed chronozarr is 0.4.1 or older and cannot read this custom-CRS store. Install 0.5.2 with the [installation guide](quickstart.md#1-install), then check that `chronozarr --version` reports `0.5.2`. Keep the existing store; it needs no conversion |
+| `not a valid chronozarr store: unsupported spec_version 0.4.0; use chronozarr convert to convert this store to v0.3` in the viewer or the JavaScript package | Install the npm 0.5.2 [viewer bundle](viewer-distribution.md). The hosted viewer changes when the site is deployed; a Python package install does not update it. An npm 0.4.1 viewer needs a package upgrade to read this store |
 | `unsupported or missing version '0.2.0'` | The store is v0.2. `chronozarr convert OLD NEW` writes a v0.3 store from it |
 | `unsupported or missing version` with a version later than 0.4.0 | The store was written by a newer chronozarr. Upgrade chronozarr |
 | `cannot read the CRS ... Pass an authority code such as EPSG:32631 or WKT2 text` | `encode` was given a CRS it could not parse. Pass `EPSG:xxxxx`, or WKT2 text. WKT1, PROJJSON and PROJ strings need pyproj to be converted: install it, or convert the CRS to WKT2 yourself |

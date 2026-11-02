@@ -1,6 +1,6 @@
 # Self-host the viewer
 
-**Package version — 0.5.1.** The npm package contains the production viewer bundle. You can copy that bundle with `chronozarr-viewer`, or build the same viewer from a [source checkout](development.md).
+**Package version — 0.5.2.** The npm package contains the production viewer bundle. You can copy that bundle with `chronozarr-viewer`, or build the same viewer from a [source checkout](development.md).
 
 The viewer folder contains the page, one script for the viewer and reader, one for the decode worker, the codecs and their licenses. The viewer runs in the browser. The host only serves files. Node.js copies the files once and is not needed on the host.
 
@@ -9,7 +9,7 @@ The viewer folder contains the page, one script for the viewer and reader, one f
 1. Install the npm package in a JavaScript project:
 
    ```sh
-   npm install chronozarr@0.5.1
+   npm install chronozarr@0.5.2
    ```
 
 2. Copy the viewer into a new folder, `published/`.

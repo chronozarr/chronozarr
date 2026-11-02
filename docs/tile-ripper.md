@@ -1,7 +1,7 @@
 # Tile-Ripper observation outputs
 
-This is a checkout-only Python bridge. It is not included in the published
-Chronozarr 0.5.1 packages.
+This Python bridge is included in Chronozarr 0.5.2. It is not available in the
+0.5.1 packages.
 
 `convert_tile_ripper` reads a completed Tile-Ripper scientific COG fetch output
 and feeds the existing Chronozarr encoder. It writes the playback store directly,

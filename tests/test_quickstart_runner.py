@@ -506,7 +506,7 @@ def tagged_repo(tmp_path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init", "-q")
-    (repo / "pyproject.toml").write_text("[project]\nname = 'chronozarr'\n")
+    (repo / "pyproject.toml").write_text("[project]\nname = 'chronozarr'\nversion = '1.2.3'\n")
     (repo / ".python-version").write_text("3.13\n")
     git(repo, "add", ".")
     git(repo, "commit", "-q", "-m", "release")
@@ -529,6 +529,22 @@ def test_the_wheel_is_built_from_the_tag_with_this_interpreter_and_a_private_cac
     assert command[command.index("--python") + 1] == sys.executable
     assert Path(kwargs["cwd"]).name != "repo"  # built from the extracted tag, not the checkout
     assert kwargs["env"]["UV_CACHE_DIR"] != os.environ.get("UV_CACHE_DIR")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_candidate_wheel_needs_no_release_tag(tmp_path, tagged_repo, monkeypatch):
+    git(tagged_repo, "tag", "-d", "v1.2.3")
+    fake_uv_build(monkeypatch, ["chronozarr-1.2.3-py3-none-any.whl"], [])
+
+    built = setup.build_tag_wheel("1.2.3", tmp_path / "wheels", tagged_repo, source_ref="HEAD")
+
+    assert built.name == "chronozarr-1.2.3-py3-none-any.whl"
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_candidate_wheel_refuses_a_version_different_from_the_page(tmp_path, tagged_repo):
+    with pytest.raises(setup.SetupError, match=r"page requires 9\.9\.9"):
+        setup.build_tag_wheel("9.9.9", tmp_path / "wheels", tagged_repo, source_ref="HEAD")
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
