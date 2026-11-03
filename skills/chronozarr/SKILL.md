@@ -24,13 +24,19 @@ For terminal commands only:
 uv tool install --python 3.13 'chronozarr[geo]==0.5.2'
 ```
 
-For a script or notebook in a uv project:
+For a script or notebook, use a uv project in the working folder. For the quickstart, this is the folder containing `my_store`. If that folder is not already a project, create one there:
+
+```bash
+uv init --bare --python 3.13
+```
+
+Then install the library in that project:
 
 ```bash
 uv add 'chronozarr[geo]==0.5.2'
 ```
 
-Use `uv run python` for the script or Python session and `uv run chronozarr ...` for commands in that project. A notebook must use the project's environment as its kernel. A tool install does not make the package importable in a separate script or notebook. In an existing Python 3.11+ environment, use `python -m pip install 'chronozarr[geo]==0.5.2'` instead. For a one-off command, use `uvx --from 'chronozarr[geo]==0.5.2' chronozarr --help`.
+Use `uv run python` to start Python in that folder, `uv run python your_script.py` to run a script, and `uv run chronozarr ...` for commands in the project. Relative paths such as `"my_store"` are resolved from the working folder; use the store's actual path if it is elsewhere. A notebook must use the project's environment as its kernel. A tool install does not make the package importable in a separate script or notebook. In an existing Python 3.11+ environment, use `python -m pip install 'chronozarr[geo]==0.5.2'` instead. For a one-off command, use `uvx --from 'chronozarr[geo]==0.5.2' chronozarr --help`.
 
 Extras: `geo` (rasterio: GeoTIFF/COG input, `export-cog`, `stac`; pyproj: `link --lonlat` for a projected store), `netcdf` (with cftime), `cftime` (a Zarr store on a `360_day`, `noleap`, `all_leap` or `julian` calendar), `s3` (list an `s3://` prefix in `convert`), `dask` (`chunks=` in xarray), `notebook` (`chronozarr.view`, `chronozarr.player`), `publish` (`chronozarr publish` to S3, R2 and other S3-compatible hosts), `publish-gcs` (`gs://`), `publish-azure` (`az://`), `leafmap` (`chronozarr.add_chronozarr`, a layer on a leafmap map), `geemap` (the same on a geemap map), `ingest` (the Sentinel-2 example in a repository checkout). Run `chronozarr <command> --help` for exact options.
 

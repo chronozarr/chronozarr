@@ -19,7 +19,7 @@ chronozarr supports Python 3.11 and newer; this page uses 3.13. The `geo` extra 
 python -m pip install 'chronozarr[geo]==0.5.2'
 ```
 
-To use chronozarr from Python in a uv project, run `uv add 'chronozarr[geo]==0.5.2'` in the project. Then put `uv run` in front of each command on this page.
+If you already use a uv project, run `uv add 'chronozarr[geo]==0.5.2'` in the project. Then put `uv run` in front of each `chronozarr` command on this page.
 
 ## 2. Get a dated raster series
 
@@ -136,7 +136,21 @@ For a link that keeps working when your computer is off, use storage in your own
 
 ## 7. Read the values in Python
 
-The `chronozarr` command from step 1 lives in its own environment. Install the library in the environment used by your script or notebook before running this code. In a uv project, run `uv add 'chronozarr==0.5.2'` and use `uv run python` for your script or Python session. In an existing Python 3.11+ environment, run `python -m pip install 'chronozarr==0.5.2'`. A notebook must use that environment as its kernel.
+The `chronozarr` command from step 1 lives in its own environment. Install the library in the environment used by your script or notebook before running this code.
+
+Stay in the folder where you ran `convert`, which contains `my_store`. If that folder is not already a uv project, create one there:
+
+```bash
+uv init --bare --python 3.13
+```
+
+Then install the library in that project:
+
+```bash
+uv add 'chronozarr==0.5.2'
+```
+
+Use `uv run python` to start Python in the same folder, or `uv run python your_script.py` to run a script. The `"my_store"` path below is relative to that folder. To use an existing Python 3.11+ environment instead, run `python -m pip install 'chronozarr==0.5.2'` there. A notebook must use that environment as its kernel.
 
 ```python
 import xarray as xr
