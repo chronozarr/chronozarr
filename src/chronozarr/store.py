@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 from collections.abc import AsyncIterator, Iterable
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -247,6 +248,30 @@ class HttpStore(Store):
     async def list_dir(self, prefix: str) -> AsyncIterator[str]:
         raise NotImplementedError("HttpStore cannot list keys")
         yield ""  # pragma: no cover
+
+
+def missing_local_path_message(path_or_url: Any) -> str | None:
+    """A useful missing-folder error, checked only after opening a store has failed."""
+    if isinstance(path_or_url, LocalStore):
+        path = path_or_url.root
+    elif isinstance(path_or_url, str | Path) and "://" not in str(path_or_url):
+        path = Path(path_or_url)
+    else:
+        return None
+    try:
+        path.stat()
+    except FileNotFoundError:
+        message = f"{redact_url(str(path))}: store path does not exist."
+        if not path.is_absolute():
+            return (
+                f"{message} Relative paths start from {Path.cwd()}. "
+                "Use an absolute path, or change to the folder containing the store."
+            )
+        return f"{message} Check the path to the store folder."
+    except OSError:
+        # An unreadable path is not evidence that it is missing.
+        return None
+    return None
 
 
 def as_store(path_or_url: Any) -> Any:

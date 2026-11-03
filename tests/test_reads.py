@@ -148,8 +148,8 @@ def test_to_xarray_subset_and_coordinates(synthetic):
     assert np.array_equal(da.x.values, x)
 
 
-def test_open_store_rejects_non_stores(tmp_path):
-    with pytest.raises(schema.SchemaError, match="no Zarr v3 group"):
+def test_open_store_rejects_missing_paths(tmp_path):
+    with pytest.raises(schema.SchemaError, match="store path does not exist"):
         chronozarr.open_store(tmp_path / "missing")
 
 

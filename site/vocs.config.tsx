@@ -145,7 +145,7 @@ export default defineConfig({
       { text: 'Python API', link: '/reference/python' },
       { text: 'JavaScript reader', link: '/reference/javascript' },
       { text: 'MapLibre layer', link: '/reference/maplibre' },
-      { text: 'Specification v0.3 (draft)', link: '/specification' },
+      { text: 'Store specs v0.3 / v0.4 (draft)', link: '/specification' },
       { text: 'How it works', link: '/how-it-works' },
       { text: 'Performance and evidence', link: '/performance' },
       { text: 'Measurement log', link: '/reference/evidence' },

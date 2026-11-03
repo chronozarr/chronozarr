@@ -600,7 +600,8 @@ def test_stac_writes_collection_and_item(tmp_path, zarr_input):
 
     missing = CliRunner().invoke(main, ["stac", str(tmp_path / "nope"), "--out", str(out)])
     assert missing.exit_code == 1
-    assert "no Zarr v3 group found" in missing.output
+    assert "store path does not exist" in missing.output
+    assert str(tmp_path / "nope") in missing.output
 
 
 def _write_manifest(tmp_path, truth):

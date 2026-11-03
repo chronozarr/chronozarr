@@ -37,6 +37,7 @@ from chronozarr.store import (
     MetadataCache,
     as_store,
     check_extensions,
+    missing_local_path_message,
 )
 
 SPEC_VERSION = "0.3.0"
@@ -1645,7 +1646,10 @@ def _validate_into(store: Any, problems: list[str], notes: list[str]) -> str | N
     try:
         root = zarr.open_group(store, mode="r", zarr_format=3, use_consolidated=False)
     except (GroupNotFoundError, FileNotFoundError):
-        problems.append(f"{source}: no Zarr v3 group found (is this a chronozarr store?)")
+        problems.append(
+            missing_local_path_message(source)
+            or f"{source}: no Zarr v3 group found (is this a chronozarr store?)"
+        )
         return None
     except ValueError as exc:
         problems.append(str(exc))
