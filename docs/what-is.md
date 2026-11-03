@@ -15,6 +15,16 @@ chronozarr lets you share a georeferenced raster time series as an interactive m
 
 A store is a [Zarr v3](https://zarr.dev) group. It holds your values at full resolution and a pyramid of coarser levels for zoomed-out views. The browser downloads only the parts of the map that are on the screen, at the current date. [How it works](how-it-works.md) explains the layout.
 
+## Terms used in these guides
+
+| Term | Meaning |
+|---|---|
+| Raster | A grid of pixels, each holding one or more measurements |
+| COG | Cloud Optimized GeoTIFF: a GeoTIFF arranged so a reader can fetch part of the image without downloading the whole file |
+| CRS and EPSG | The coordinate reference system (CRS) defines where coordinates fall on Earth. An EPSG code, such as `EPSG:32718`, identifies a particular CRS |
+| Nodata | Missing or invalid data, marked by a special value or a separate validity mask |
+| Pyramid and LOD | A pyramid holds the full-resolution image and coarser copies. Level of detail (LOD) selects a level: level 0 is the finest, and each next level has pixels twice as wide and tall |
+
 ## Compared with other ways to share a time series
 
 | Option | What the recipient can do | What it needs |
@@ -40,9 +50,11 @@ There are two version numbers:
 | Item | Version | Meaning |
 |---|---|---|
 | Python package and npm package `chronozarr` | 0.5.2 | The software that writes, checks, serves and reads stores |
-| Store format specification | v0.4.0, draft | The layout of the files in a store. A store whose CRS has an EPSG code declares `0.3.0`. A store whose CRS has none declares `0.4.0` |
+| Store format specifications | v0.3.0 and v0.4.0, drafts | The layout of the files in a store. A store whose CRS has an EPSG code declares `0.3.0`. A store whose CRS has none declares `0.4.0` |
 
-A package release does not change the stores that you already wrote. Package 0.5.1 reads and writes both v0.3 and v0.4 stores. A reader from package 0.4.1 or earlier refuses a v0.4 store; upgrade the reader and keep the store. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. The [release notes](release-0.5.2.md) list the changes in 0.5.2.
+Use `chronozarr --version` to check the installed software. `chronozarr info my_store` reports the store's format version, which can be older than the software reading it.
+
+A package release does not change the stores that you already wrote. Package 0.5.2 reads and writes both v0.3 and v0.4 stores. A reader from package 0.4.1 or earlier refuses a v0.4 store; upgrade the reader and keep the store. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. The [release notes](release-0.5.2.md) list the changes in 0.5.2.
 
 ## Next steps
 

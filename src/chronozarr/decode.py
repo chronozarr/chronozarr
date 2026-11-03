@@ -20,7 +20,7 @@ from chronozarr.crs import Crs, same_crs
 from chronozarr.level import Level, LevelData
 from chronozarr.schema import Chronozarr, SchemaError
 from chronozarr.store import HttpStore as HttpStore
-from chronozarr.store import IndexStore, redact_url
+from chronozarr.store import IndexStore, missing_local_path_message, redact_url
 from chronozarr.store import as_store as as_store
 
 
@@ -410,7 +410,8 @@ def open_store(path_or_url: Any) -> ChronoStore:
         group = zarr.open_group(IndexStore(transport), mode="r", zarr_format=3)
     except (GroupNotFoundError, FileNotFoundError) as exc:
         raise SchemaError(
-            f"{_shown(path_or_url)}: no Zarr v3 group found; is this a chronozarr store?"
+            missing_local_path_message(path_or_url)
+            or f"{_shown(path_or_url)}: no Zarr v3 group found; is this a chronozarr store?"
         ) from exc
     try:
         return ChronoStore(group, str(path_or_url))

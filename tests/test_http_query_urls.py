@@ -115,6 +115,8 @@ def test_open_store_failure_hides_the_token(token_store):
     with serving(TokenHandler, token_store) as url, pytest.raises(SchemaError) as caught:
         open_store(f"{url}/missing?token={TOKEN}")
     assert TOKEN not in str(caught.value)
+    assert "does not exist" not in str(caught.value)
+    assert "Relative paths" not in str(caught.value)
 
 
 def test_doctor_passes_on_a_token_url_and_hides_the_token(token_store):

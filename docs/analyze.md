@@ -34,7 +34,11 @@ ds = xr.open_dataset("my_store", engine="chronozarr")
 
 The path can be a local folder or the `https://` address of a published store. Use the store address. In a viewer link, it is the value after `store=`.
 
+If a local path is missing, the error identifies it. For a relative path such as `"my_store"`, it also shows the working folder. Use the correct path, or return to the folder where you created the store.
+
 The dataset loads pixel values when you compute them. Remote reads download the cells needed for the selection; opening the dataset reads metadata first.
+
+For the quickstart store, the dataset looks like this, with the CRS shortened to its EPSG code:
 
 ```text
 <xarray.Dataset> Size: 92MB
@@ -55,6 +59,8 @@ Attributes:
     chronozarr_spec_version:  0.3.0
     nodata:                   0
 ```
+
+Without the optional `geo` dependencies, `crs` may print as a full Well-Known Text (WKT) definition of the same coordinate system. Its meaning and the pixel coordinates are the same as for the EPSG code above.
 
 This is the store from the [quickstart](quickstart.md), whose bands declare units. `band_units` exists only when the source declares units. A store without units has no `band_units` coordinate, and `ds.band_units` raises `AttributeError`. `chronozarr bands my_store` prints the units of each band, or `-` where there are none. `x` and `y` are the centres of the pixels, in the coordinate system named by `crs`.
 

@@ -4,6 +4,8 @@
 
 Convert a folder of dated GeoTIFFs, explore the result in your browser and send a temporary link to a colleague. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and use a web browser. Temporary sharing needs no account or cloud storage.
 
+The [overview defines COG, CRS, nodata and pyramid levels](what-is.md#terms-used-in-these-guides).
+
 ## 1. Install
 
 ```bash
@@ -40,7 +42,7 @@ If you have no files at hand, export twelve months of the public demo as GeoTIFF
 chronozarr export-cog https://data.chronozarr.org/ucayali_santa_maria_v03 sample --level 2 --times 2024-01..2024-12
 ```
 
-This downloads about 40 MB and writes twelve files, `sample/L2_2024-01-01.tif` to `sample/L2_2024-12-01.tif`. Each has four Sentinel-2 bands at 40 m. The rest of this page uses `sample`. Replace it with your own folder.
+This downloads about 40 MB and writes twelve files, `sample/L2_2024-01-01.tif` to `sample/L2_2024-12-01.tif`. Each has four Sentinel-2 bands from the public store's 40 m level-2 overview. Converting these files makes 40 m the new store's level 0, with an 80 m level 1. The rest of this page uses `sample`. Replace it with your own folder.
 
 ## 3. Convert
 

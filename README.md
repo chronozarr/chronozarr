@@ -57,11 +57,11 @@ Preview also keeps running until you press Ctrl-C.
 
 The [full quickstart](https://chronozarr.org/quickstart) has a sample dataset, the expected output of each command and the pip route.
 
-For [Icechunk](docs/icechunk.md), choose the variable, region and snapshot to convert.
+For [Icechunk](https://github.com/chronozarr/chronozarr/blob/main/docs/icechunk.md), choose the variable, region and snapshot to convert.
 The tested examples cover a materialized GFS window and virtual GRIB; converting
 Float64 values requires an explicit choice to round to Float32.
 
-The [Tile-Ripper Python bridge](docs/tile-ripper.md) reads completed COG
+The [Tile-Ripper Python bridge](https://github.com/chronozarr/chronozarr/blob/main/docs/tile-ripper.md) reads completed COG
 observations, joins each scene to its selected quality mask and retains source
 identities. It does not need an intermediate stacked store.
 
@@ -117,6 +117,8 @@ The npm package has a DOM-free reader, a MapLibre layer, a GeoLibre plugin and t
 ## Versions
 
 Python and npm package **0.5.2** read both draft store formats: **v0.3.0** for CRSs with an EPSG code and **v0.4.0** for other CRSs. Package versions and store specification versions are independent. Existing v0.3 stores need no conversion. Readers from package 0.4.1 and earlier cannot open v0.4 stores; upgrade the reader to 0.5.2. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. See the [0.5.2 release notes](https://chronozarr.org/reference/release-0.5.2).
+
+Use `chronozarr --version` for the installed package version. `chronozarr info my_store` reports the store's format version.
 
 ## Documentation
 
