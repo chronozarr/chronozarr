@@ -4,13 +4,19 @@ A store keeps the values that you converted. Use xarray to select pixels, calcul
 
 Install the package where your notebook or script runs. A standalone CLI installed with `uv tool install` has its own environment and does not install the library here.
 
-In a uv project:
+For the [quickstart](quickstart.md) examples below, work in the folder that contains `my_store`. If that folder is not already a uv project, create one there:
+
+```bash
+uv init --bare --python 3.13
+```
+
+Then install the library in that project:
 
 ```bash
 uv add 'chronozarr==0.5.2'
 ```
 
-Run your script or Python session with `uv run python`. To use an existing Python 3.11+ environment instead:
+Use `uv run python` to start Python in that folder, or `uv run python your_script.py` to run a script. The `"my_store"` paths below are relative to that folder; use the store's actual path if it is elsewhere. To use an existing Python 3.11+ environment instead:
 
 ```bash
 python -m pip install 'chronozarr==0.5.2'

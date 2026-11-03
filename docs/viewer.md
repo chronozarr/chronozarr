@@ -21,11 +21,11 @@ A link with a timestep (`t`) opens at that timestep. If it specifies a store, pr
 | Change the playback speed | Drag the speed slider |
 | Zoom | Scroll, or pinch on a touch screen |
 | Pan | Drag the map |
-| See a pixel's values over time | Click the map. The inspector shows the values and a chart. Press Escape to close it |
+| See a pixel's values over time | Click the map. The inspector shows the values and a chart. In a narrow or embedded view, Escape closes the inspector drawer. The desktop side panel stays visible |
 | Copy a pixel's location | Click the map, then Copy beside Latitude, longitude. Coordinates are WGS84 degrees at the selected native pixel's centre, latitude first |
 | Change the product | Choose it in the product list, or press 1 to 9 |
-| Change the display range of one band | Choose Single band, then set the minimum and maximum. Auto fits the range to the pixels on the screen |
-| Color one band | Choose Single band, then pick Viridis, Magma or Turbo in the colormap list. The bar between the minimum and maximum shows the colors |
+| Change the display range of one band | Choose Single band. For a band with adjustable limits, set the minimum and maximum, or use Auto to fit the pixels on the screen. Bands shown as reflectance, including the quickstart sample, use fixed limits and show no range or Auto controls |
+| Color one band | Choose Single band, then pick Viridis, Magma or Turbo in the colormap list. When range controls are available, the bar between the minimum and maximum shows the colors |
 | Show zero coverage | Click Gaps. It hatches pixels whose coverage is 0. It needs a store with a coverage plane |
 | Copy a link to this view | Click Copy link |
 | Open another store | Paste its URL in the store field and click Open |
@@ -66,7 +66,7 @@ The address uses these parameters:
 | `t` | Timestep index, from 0 | `t=71` |
 | `p` | Product | `p=ndvi` |
 | `b` | Band, for Single band | `b=B08` |
-| `r` | Display range low,high in physical units, for Single band | `r=0,0.4` |
+| `r` | Display range low,high in physical units, for Single band with adjustable limits; ignored for bands shown as reflectance | `r=0,100` |
 | `cm` | Colormap for Single band: `gray`, `viridis`, `magma` or `turbo` | `cm=viridis` |
 | `z` | Zoom, in screen pixels per stored pixel | `z=2.5` |
 | `c` | Map centre x,y in the store's coordinate system | `c=684500,9123350` |

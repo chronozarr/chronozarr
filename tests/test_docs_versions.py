@@ -157,8 +157,10 @@ def test_quickstart_builds_the_matching_clean_room_plan():
     version = tomllib.loads((REPO / "pyproject.toml").read_text())["project"]["version"]
     assert plan["chronozarr_version"] == version
     assert f"Package version — {version}." in text
-    assert len(plan["steps"]) == 6
-    assert [step["long_running"] for step in plan["steps"]] == [False] * 4 + [True] * 2
+    assert len(plan["steps"]) == 8
+    assert [step["long_running"] for step in plan["steps"]] == (
+        [False] * 4 + [True] * 2 + [False] * 2
+    )
 
 
 def test_viewer_instructions_copy_the_package_and_preserve_the_source_build_route():

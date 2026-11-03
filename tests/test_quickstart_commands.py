@@ -111,9 +111,13 @@ def test_real_page_gives_the_documented_steps_in_order():
         ["chronozarr", "convert"],
         ["chronozarr", "share"],
         ["chronozarr", "preview"],
+        ["uv", "init"],
+        ["uv", "add"],
     ]
     assert plan["steps"][0]["text"].splitlines()[1] == "chronozarr --version"
-    assert [step["long_running"] for step in plan["steps"]] == [False] * 4 + [True, True]
+    assert [step["long_running"] for step in plan["steps"]] == (
+        [False] * 4 + [True, True] + [False, False]
+    )
     assert plan["chronozarr_version"] in plan["steps"][0]["text"]
     assert [item["text"].split()[:3] for item in plan["skipped"]] == [["python", "-m", "pip"]]
     assert [item["language"] for item in plan["not_run"]] == ["python"]

@@ -78,7 +78,19 @@ The recipient needs only a web browser. chronozarr.org serves the viewer page an
 
 The tool installation above installs the `chronozarr` command in its own environment. To read the data from Python, install the library in the environment used by your script or notebook.
 
-In a uv project, run `uv add 'chronozarr==0.5.2'` and use `uv run python` for your script or Python session. In an existing Python 3.11+ environment, install it with:
+Work in the folder that contains `my_store`. If that folder is not already a uv project, create one there:
+
+```bash
+uv init --bare --python 3.13
+```
+
+Then install the library in that project:
+
+```bash
+uv add 'chronozarr==0.5.2'
+```
+
+Use `uv run python` to start Python in that folder, or `uv run python your_script.py` to run a script. The `"my_store"` path below is relative to that folder. To use an existing Python 3.11+ environment instead, install the library with:
 
 ```bash
 python -m pip install 'chronozarr==0.5.2'
