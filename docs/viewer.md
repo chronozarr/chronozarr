@@ -32,6 +32,8 @@ A link with a timestep (`t`) opens at that timestep. If it specifies a store, pr
 | Save the loop as a video | Click Export, choose MP4, WebM or GIF and the range, click Export, then click the Download link. Firefox records WebM and GIF only. Embedded viewers have Export too |
 | Show load and decode statistics | Press D |
 
+The date between the step buttons is the date of the image on the map. If the selected date is still loading or could not be loaded, a notice names it and the date still on screen.
+
 Playback buffers two seconds of frames before starting. As the store loads, the viewer measures the link and counts the upcoming frames that still need to be downloaded. If the link cannot sustain your chosen speed, playback slows to match it. The label shows both speeds (`4 /s → 0.7`) with an explanation (`0.7 step/s: link too slow for 4`). Cached frames play faster, and playback returns to your chosen speed once the loop is in memory.
 
 At level 0, zero coverage means that no observation was recorded for that pixel. Overview coverage is a rounded mean and can become zero even when part of the block was observed. Zoom to native resolution before interpreting a hatch as an observation gap.

@@ -65,6 +65,38 @@ def test_downsample_excludes_nodata_and_keeps_all_nodata_blocks():
     assert np.array_equal(out[None], reference_downsample(level))
 
 
+@pytest.mark.parametrize(
+    ("dtype", "nodata", "block"),
+    [
+        ("int16", 0, [[-1, 1], [-1, 1]]),
+        ("uint16", 2, [[1, 3], [1, 3]]),
+        # The float64 mean differs from 1, then rounds to the sentinel in float32.
+        ("float32", 1.0, [[1 - 2**-24, 1 + 2**-23], [1 - 2**-24, 1 - 2**-24]]),
+    ],
+)
+def test_encode_rejects_valid_overview_equal_to_nodata(tmp_path, dtype, nodata, block):
+    values = make_da(np.array(block, dtype=dtype)[None, None])
+    store = tmp_path / "s"
+    with pytest.raises(ValueError, match=r"pyramid level 1.*nodata sentinel"):
+        chronozarr.encode(values, store, nodata=nodata, n_lods=2, chunk_size=2)
+    assert not store.exists()
+
+
+def test_explicit_mask_preserves_valid_overview_equal_to_nodata(tmp_path):
+    values = make_da(
+        np.array(
+            [[-1, 1, 8, 8], [-1, 1, 8, 8], [12, 12, 0, 0], [12, 12, 0, 0]],
+            dtype="int16",
+        )[None, None]
+    )
+    mask = values.isel(band=0, drop=True) != 0
+    store = tmp_path / "s"
+    chronozarr.encode(values, store, mask=mask, nodata=0, n_lods=3, chunk_size=2)
+    opened = chronozarr.open_store(store)
+    np.testing.assert_array_equal(opened.physical(0, lod=1)[0], [[0, 8], [12, np.nan]])
+    assert opened.physical(0, lod=2).item() == 6
+
+
 def test_encode_accepts_transform_from_coordinates(tmp_path):
     truth = make_truth(2, 1, 6, 8)
     da = make_da(truth)

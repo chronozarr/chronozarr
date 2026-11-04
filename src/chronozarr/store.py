@@ -201,10 +201,12 @@ class HttpStore(Store):
             except urllib.error.HTTPError as error:
                 code, reason = error.code, error.reason
                 error.close()  # an HTTPError owns the response socket
-                if code in (404, 416):
+                if code == 404:
                     return None
                 transient = code == 429 or code >= 500
                 if not transient or attempt == len(_RETRY_DELAYS_S):
+                    if code == 416 and byte_range is not None:
+                        reason = f"for Range {_range_header(byte_range)}"
                     message = f"{method} {shown}: HTTP {code} {reason}"
                     raise HttpStatusError(message, code) from None
             except (urllib.error.URLError, TimeoutError, ConnectionError) as error:

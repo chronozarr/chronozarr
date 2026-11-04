@@ -12,7 +12,7 @@ import { createProjection } from '../maplibre/projection.js';
 import { DAYMET_LCC } from '../support/crs-fixtures.js';
 import { STORES, storedValue } from './stores.js';
 import { expect, test as base } from './fixtures.js';
-import { captureFrame, expectFrameMatchesStore } from './viewer-helpers.js';
+import { captureFrame, expectFrameMatchesStore, openViewer } from './viewer-helpers.js';
 
 // The fixtures fail a test on any console error. The test about a store that is not there is about a failure the
 // browser itself reports as errors; it lists the ones it expects.
@@ -246,6 +246,71 @@ test.describe('controls=0', () => {
     await send(page, { v: 1, type: 'chronozarr:set', t: 2 });
     await expect(frame.locator('#time-label')).toHaveText('2024-01-03');
   });
+
+  test('the readout keeps the date of the displayed frame until the next date paints', async ({ page, servers, stores, storeUrl }) => {
+    const store = await storeUrl('u16_plain');
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route(/\/u16_plain\/\d+\/data\/c\/2\//, async (route) => {
+      await held;
+      await route.continue();
+    });
+    try {
+      const frame = await openHost(page, servers, stores, viewerUrl(servers, store, { controls: '0', origin: hostOf(servers) }));
+      const label = frame.locator('#time-label');
+      await expect(label).toHaveText('2024-01-01');
+      await send(page, { v: 1, type: 'chronozarr:set', t: 2 });
+      await expect(frame.locator('#timeline-track')).toHaveClass(/loading/);
+      await expect(label).toHaveText('2024-01-01');
+      await expect(frame.locator('#frame-date-status')).toBeHidden();
+      release();
+      await expect(label).toHaveText('2024-01-03');
+    } finally {
+      release();
+    }
+  });
+});
+
+test.describe('frame date after a failed step', () => {
+  test.use({
+    expectedErrors: /Failed to load resource: .*503|request failed, giving up|chunk load failed .*timestep 1|prefetch failed for chunk .*\/1: FetchError: GET .*\/u16_plain\/\d+\/data\/c\/1\/.*HTTP 503/,
+  });
+
+  test('the full viewer keeps the displayed date and an unavailable status after the error toast fades', async ({ page, servers, storeUrl }) => {
+    test.setTimeout(90_000);
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route(/\/u16_plain\/\d+\/data\/c\/1\//, async (route) => {
+      await held;
+      await route.fulfill({ status: 503, headers: { 'Access-Control-Allow-Origin': '*' } });
+    });
+    try {
+      await openViewer(page, servers, await storeUrl('u16_plain'));
+      const label = page.locator('#time-label');
+      const track = page.locator('#timeline-track');
+      const status = page.locator('#frame-date-status');
+      await page.locator('#next-btn').click();
+      await expect(status).toHaveText('Loading 2024-01-02. Showing 2024-01-01.');
+      await expect(label).toHaveText('2024-01-01');
+      await expect(track).toHaveAttribute('aria-valuenow', '1');
+      await expect(track).toHaveAttribute('aria-valuetext', '2024-01-02');
+      await expect(track).toHaveAccessibleDescription('Loading 2024-01-02. Showing 2024-01-01.');
+
+      release();
+      await expect(status).toHaveText('Unavailable 2024-01-02. Showing 2024-01-01.', { timeout: 60_000 });
+      await expect(page.locator('#error-overlay')).toBeHidden({ timeout: 20_000 });
+      await expect(status).toBeVisible();
+      await expect(label).toHaveText('2024-01-01');
+      await expect(track).toHaveAccessibleDescription('Unavailable 2024-01-02. Showing 2024-01-01.');
+
+      await page.locator('#next-btn').click();
+      await expect(label).toHaveText('2024-01-03');
+      await expect(status).toBeEmpty();
+      await expect(track).toHaveAttribute('aria-valuetext', '2024-01-03');
+    } finally {
+      release();
+    }
+  });
 });
 
 // ---- theme ----
@@ -449,6 +514,7 @@ test.describe('postMessage', () => {
       return shown?.t === 2 && shown.lod === 1;
     });
     expect(await frame.evaluate(() => window.chronozarr.viewer.paintedT), 'the level-1 frame of t=2 does not count as painted').not.toBe(2);
+    await expect(frame.locator('#time-label')).toHaveText('2024-01-03');
 
     await clickPixel(page, frame, 50, 40);
     const coarse = await waitForMessage(page, 'chronozarr:click', { level: 1 });

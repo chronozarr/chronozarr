@@ -1,5 +1,5 @@
 import { expect, test } from './fixtures.js';
-import { openViewer } from './viewer-helpers.js';
+import { openViewer, waitForPaintedTime } from './viewer-helpers.js';
 
 const timeIndex = (page) => page.evaluate(() => window.chronozarr.viewer.t);
 
@@ -29,6 +29,7 @@ test.describe('keyboard', () => {
     expect(await timeIndex(page)).toBe(0);
 
     await page.keyboard.press('End');
+    await waitForPaintedTime(page, last);
     const label = (await page.locator('#time-label').textContent()).trim();
     await expect(track, 'a screen reader reads the date, not the index').toHaveAttribute('aria-valuetext', label);
   });

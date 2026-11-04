@@ -346,7 +346,7 @@ test('the embed layout drops the catalog selector but keeps Export, and has a wo
 });
 
 test('controls=0 hides the header, the inspector and every control but the time label', () => {
-  assert.match(css, /html\[data-controls="0"\] nav,\s*html\[data-controls="0"\] \.sidebar,\s*html\[data-controls="0"\] \.click-hint \{ display: none; \}/);
+  assert.match(css, /html\[data-controls="0"\] nav,\s*html\[data-controls="0"\] \.sidebar,\s*html\[data-controls="0"\] \.frame-date-status,\s*html\[data-controls="0"\] \.click-hint \{ display: none; \}/);
   assert.match(css, /html\[data-controls="0"\] \.timeline-bar > :not\(\.month-nav\) \{ display: none; \}/);
   assert.match(css, /html\[data-controls="0"\] \.month-nav button \{ display: none; \}/);
 });

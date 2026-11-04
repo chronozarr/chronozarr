@@ -442,7 +442,8 @@ def encode(
         codec: "zstd" (default) or "blosc-zstd-shuffle" (blosc, zstd inside, byte shuffle).
         level: Compression level. Default 5 for zstd (1..22), 1 for blosc (0..9).
         nodata: Value marking invalid pixels, or None for none. "default" is 0 for uint8 and
-            uint16 and None for int16 and float32, and None whenever `mask` is given.
+            uint16 and None for int16 and float32, and None whenever `mask` is given. If a valid
+            overview mean equals the nodata sentinel, encoding requires a mask or `n_lods=1`.
         mask: Optional uint8 validity plane (1 = valid), (time, y, x) DataArray, or an iterable
             of per-timestep (y, x) arrays when `data` is an iterable. Overrides nodata for
             pyramid means and readers.

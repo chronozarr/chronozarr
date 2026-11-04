@@ -114,6 +114,33 @@ def test_iterable_input_is_appended_like_a_dataarray(tmp_path, truth):
     assert not list(tmp_path.glob(".store-spill-*"))
 
 
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_append_leaves_store_unchanged_on_overview_nodata_collision(tmp_path, layout):
+    store = tmp_path / "store"
+    values = np.array([[[[8, 8], [8, 8]]], [[[-1, 1], [-1, 1]]]], dtype="int16")
+    series = make_da(values)
+    options = LAYOUTS[layout]
+    chronozarr.encode(
+        series.isel(time=slice(0, 1)),
+        store,
+        nodata=0,
+        n_lods=2,
+        chunk_size=2,
+        shard=bool(options.get("shard")),
+        shard_time=options.get("shard_time"),
+    )
+    before = digests(store)
+
+    with pytest.raises(ValueError, match=r"pyramid level 1.*nodata sentinel"):
+        append(store, series.isel(time=slice(1, 2)))
+
+    assert digests(store) == before
+    assert not list(tmp_path.glob(".store-append-*"))
+    corrected = series.isel(time=slice(1, 2)) + 2
+    assert append(store, corrected).n_time == 2
+    assert chronozarr.validate(store) == []
+
+
 def test_one_timestep_store_with_a_long_shard_takes_appends_in_the_same_shard(tmp_path, truth):
     store, fresh = tmp_path / "store", tmp_path / "fresh"
     encode_head(truth, store, 1, shard=True, shard_time=12)  # shard_time > n_time

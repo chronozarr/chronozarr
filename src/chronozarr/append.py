@@ -481,14 +481,7 @@ def _append_in_place(
                 has_coverage=target.meta.coverage_variable is not None,
             )
         before = _snapshot(target.path)
-        try:
-            _write(target, plan, prepared, source, times_iso, times_ms, cells_in_flight)
-        except BaseException as exc:
-            exc.add_note(
-                f"{target.path} may be partly modified; restore it from its published copy "
-                "before appending again"
-            )
-            raise
+        _write(target, plan, prepared, source, times_iso, times_ms, cells_in_flight)
     finally:
         if spill is not None:
             shutil.rmtree(spill, ignore_errors=True)

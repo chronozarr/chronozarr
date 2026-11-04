@@ -121,7 +121,21 @@ def downsample_2x(
         np.floor_divide(total, count, out=mean, where=has_valid)
     if nodata:
         mean[~has_valid] = nodata
-    return mean.astype(values.dtype)
+    stored = mean.astype(values.dtype)
+    # Unsigned nonzero inputs cannot average to zero. Other sentinels may also
+    # be valid means, including after rounding a float64 mean to float32.
+    if (
+        valid is None
+        and nodata is not None
+        and not zero_is_nodata
+        and np.any(has_valid & (stored == nodata))
+    ):
+        raise ValueError(
+            f"an overview mean matches nodata sentinel {nodata!r} and would be read as missing. "
+            "Create or rebuild the store with an explicit validity mask or only level 0 "
+            "(n_lods=1 in Python or --lods 1 on the CLI)."
+        )
+    return stored
 
 
 def _downsample_plane_pair(
@@ -546,7 +560,10 @@ class _Pyramid:
                     continue
                 child = self._produce(k - 1, child_row, child_col, submit, t0, t1)
                 started = time.perf_counter()
-                small = downsample_block(child, self.nodata, self.compute)
+                try:
+                    small = downsample_block(child, self.nodata, self.compute)
+                except ValueError as exc:
+                    raise ValueError(f"cannot build pyramid level {k}. {exc}") from exc
                 ys = slice(i * half, i * half + small.height)
                 xs = slice(j * half, j * half + small.width)
                 if parent.mask is None and small.mask is not None:

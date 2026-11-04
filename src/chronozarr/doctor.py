@@ -27,7 +27,7 @@ from zarr.abc.store import RangeByteRequest, SuffixByteRequest
 
 from chronozarr.decode import ChronoStore, as_store, open_store
 from chronozarr.schema import parse_root_attrs, validate
-from chronozarr.store import object_url, partial_response_problem, redact_url
+from chronozarr.store import HttpStatusError, object_url, partial_response_problem, redact_url
 
 DEFAULT_ORIGIN = "https://chronozarr.org"
 USER_AGENT = "chronozarr-doctor"
@@ -538,6 +538,15 @@ def _decode_level(source: Any, store: ChronoStore, lod: int, full_read_limit: in
     return Check(name, "ok", "; ".join(notes))
 
 
+def _decode_error_detail(error: Exception) -> str:
+    if isinstance(error, ExceptionGroup):
+        # Zarr 3.4 groups failed coalesced reads. Surface the rejected range in the diagnosis.
+        ranges = error.subgroup(lambda exc: isinstance(exc, HttpStatusError) and exc.status == 416)
+        if ranges is not None:
+            return "; ".join(_decode_error_detail(exc) for exc in ranges.exceptions)
+    return f"{type(error).__name__}: {error}"
+
+
 def _decode_checks(
     source: Any, full_read_limit: int, local_copy: Path | None = None
 ) -> list[Check]:
@@ -588,7 +597,7 @@ def _decode_checks(
             return Check(
                 f"decode level {lod}",
                 "fail",
-                f"{type(exc).__name__}: {exc}",
+                _decode_error_detail(exc),
                 "A chunk could not be read or decoded. For a remote store check the shard "
                 "object exists and Range requests work (see the HTTP checks above).",
             )

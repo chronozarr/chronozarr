@@ -98,6 +98,28 @@ def stored(store_path: Path) -> np.ndarray:
     return chronozarr.open_store(store_path).to_xarray().values
 
 
+def test_convert_can_resume_at_native_resolution_after_overview_nodata_collision(tmp_path):
+    source = tmp_path / "input"
+    source.mkdir()
+    values = np.array([[[-1, 1], [-1, 1]]], dtype="int16")
+    write_tif(source / "anomaly_2024-01-01.tif", values)
+    store = tmp_path / "s"
+    args = ["convert", str(source), str(store), "--chunk-size", "2"]
+
+    rejected = CliRunner().invoke(main, [*args, "--lods", "2"])
+    assert rejected.exit_code == 1, rejected.output
+    assert "pyramid level 1" in rejected.output
+    assert "nodata sentinel 0" in rejected.output
+    assert "--lods 1" in rejected.output
+    assert not store.exists()
+
+    resumed = CliRunner().invoke(main, [*args, "--lods", "1", "--resume"])
+    assert resumed.exit_code == 0, resumed.output
+    opened = chronozarr.open_store(store)
+    assert len(opened.levels) == 1
+    np.testing.assert_array_equal(opened.read(0), values)
+
+
 # --- manifest parsing -----------------------------------------------------------------------
 
 

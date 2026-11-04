@@ -336,6 +336,7 @@ class Viewer {
     this.#buildProducts();
     this.#buildTimeline();
     this.#updateTimeUi();
+    this.#updateFrameDate([]);
     this.#updatePlayUi();
     this.#updateMeta();
     this.#updateSidebar(null);
@@ -813,6 +814,7 @@ class Viewer {
         this.#schedulePrefetch();
       }
     }
+    this.#updateFrameDate(missing);
     if (this.#gaps.visible) this.#drawGapOverlay();
     const ms = performance.now() - started;
     if (showing) {
@@ -1746,7 +1748,10 @@ class Viewer {
       { toast: true, code: 'chunk_load_failed' },
     );
     this.#setProgress(0);
-    if (failures > MAX_CELL_RETRIES) return;
+    if (failures > MAX_CELL_RETRIES) {
+      this.requestRender();
+      return;
+    }
     setTimeout(() => {
       if (this.#wave !== wave) return;
       wave.cells.delete(cell);
@@ -2300,6 +2305,7 @@ class Viewer {
     const track = $('timeline-track');
     track.querySelectorAll('.timeline-tick').forEach((tick) => tick.remove());
     const n = this.store.times.length;
+    track.setAttribute('aria-valuemax', String(n - 1));
     this.#tickElements = this.store.times.map((_, i) => {
       const tick = document.createElement('div');
       tick.className = 'timeline-tick';
@@ -2367,12 +2373,32 @@ class Viewer {
 
   #updateTimeUi() {
     this.#updateChartMarker();
-    $('time-label').textContent = this.#formatTime(this.t);
+    const track = $('timeline-track');
+    track.setAttribute('aria-valuenow', String(this.t));
+    track.setAttribute('aria-valuetext', this.#formatTime(this.t));
     this.#tickElements.forEach((tick, i) => {
       tick.classList.toggle('active', i === this.t);
       tick.classList.toggle('loading', i === this.t && this.#loading);
     });
-    $('timeline-track').classList.toggle('loading', this.#loading);
+    track.classList.toggle('loading', this.#loading);
+  }
+
+  /** Date of the canvas image, independent of the timeline's selected date and the target resolution. */
+  #updateFrameDate(missing) {
+    const label = $('time-label');
+    const status = $('frame-date-status');
+    const shown = this.#shown?.t;
+    const date = shown === undefined ? '—' : this.#formatTime(shown);
+    if (label.textContent !== date) label.textContent = date;
+
+    let message = '';
+    if (shown !== this.t) {
+      const failures = this.#wave?.failures;
+      const unavailable = failures && missing.some(([row, col]) => failures.get(`${row}/${col}`) > MAX_CELL_RETRIES);
+      message = `${unavailable ? 'Unavailable' : 'Loading'} ${this.#formatTime(this.t)}.`;
+      if (shown !== undefined) message += ` Showing ${date}.`;
+    }
+    if (status.textContent !== message) status.textContent = message;
   }
 
   /** What the performance overlay says about the store: its name, bands, timesteps and size (kept out of the header). */

@@ -279,6 +279,23 @@
     width: 0;
     opacity: 0;
   }
+  .frame-date-status {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    max-width: calc(100% - 24px);
+    margin: 0;
+    z-index: 5;
+    pointer-events: none;
+  }
+  .frame-date-status:not(:empty) {
+    padding: 6px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 12px;
+    color: var(--text);
+  }
   .click-hint {
     position: absolute;
     bottom: 24px;
@@ -915,6 +932,7 @@
   /* &controls=0: the canvas and a thin strip with the time of the frame. No wordmark, header, inspector or transport controls. */
   html[data-controls="0"] nav,
   html[data-controls="0"] .sidebar,
+  html[data-controls="0"] .frame-date-status,
   html[data-controls="0"] .click-hint { display: none; }
   html[data-controls="0"] .timeline-bar { min-height: 0; padding: 3px 10px; }
   html[data-controls="0"] .timeline-bar > :not(.month-nav) { display: none; }
@@ -1029,6 +1047,7 @@
     <pre class="perf-overlay" id="perf-overlay" hidden aria-label="Performance overlay"></pre>
     <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
     <div class="click-hint" id="click-hint"><span class="hint-pointer">Click anywhere to inspect · scroll to zoom · drag to pan</span><span class="hint-touch">Tap anywhere to inspect · drag to pan</span></div>
+    <p class="frame-date-status" id="frame-date-status" role="status"></p>
     <div class="error-overlay" id="error-overlay" role="alert">
       <h2 id="error-title">Error</h2>
       <p id="error-message">Something went wrong</p>
@@ -1064,7 +1083,7 @@
     <span id="time-label">&mdash;</span>
     <button id="next-btn" title="Next timestep" aria-label="Next timestep">&#8250;</button>
   </div>
-  <div class="timeline-track" id="timeline-track" role="slider" tabindex="0" aria-label="Timestep" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+  <div class="timeline-track" id="timeline-track" role="slider" tabindex="0" aria-label="Timestep" aria-describedby="frame-date-status" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
     <div class="timeline-line"></div>
   </div>
   <div class="speed">
