@@ -386,13 +386,12 @@ def _later_files(tmp_path, frames, **declared):
 
 @pytest.fixture
 def no_append(monkeypatch):
-    """`append()` copies the whole store before it compares anything, so a refusal that is meant
-    to cost nothing has to come before the call."""
+    """A validity mismatch must be refused before the working copy is made."""
 
     def refuse_to_run(*args, **kwargs):
         raise AssertionError("append() was called, so the store was copied before the refusal")
 
-    monkeypatch.setattr("chronozarr.cli.append", refuse_to_run)
+    monkeypatch.setattr("chronozarr.cli._append_working_copy", refuse_to_run)
 
 
 def _assert_append_refused(out, later, *fragments):

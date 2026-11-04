@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
+import sys
 import tempfile
 import time
 import warnings
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -43,6 +46,11 @@ from chronozarr._writer import (
 from chronozarr.crs import Crs, same_crs
 from chronozarr.decode import ChronoStore, open_store
 from chronozarr.schema import Band, Chronozarr, LevelRef, SchemaError, Transform
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 # A `none` store does not record the nominal schedule its volatility was computed against
 # (spec 5); appended timesteps use the writer default.
@@ -554,9 +562,54 @@ def append(
 ) -> AppendReport:
     """Validate append in a working copy, then publish only changed objects, root last.
 
-    Publication is metadata-last but not transactional across multiple objects.
+    A concurrent append to the same store raises BlockingIOError. Publication writes the
+    root last and can expose intermediate states to readers.
     """
-    original = Path(store)
+    with _append_lock(store) as original:
+        return _append_working_copy(original, data, **options)
+
+
+@contextmanager
+def _append_lock(store: str | Path) -> Iterator[Path]:
+    original = Path(store).resolve()
+    if not original.is_dir():
+        raise ValueError(f"{store} is not a local directory; append works on a local store")
+    # Leave the sibling file in place so every writer locks the same file, even while
+    # another process opens it. The OS releases the lock when the writer exits.
+    lock_path = original.with_name(f".{original.name}.append.lock")
+    with lock_path.open("a+b") as lock:
+        fd = lock.fileno()
+        contention = (
+            (errno.EACCES,) if sys.platform == "win32" else (errno.EAGAIN, errno.EWOULDBLOCK)
+        )
+        try:
+            if sys.platform == "win32":
+                lock.seek(0)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno not in contention:
+                raise
+            raise BlockingIOError(
+                f"cannot append to {store}: another append is already running. "
+                "Retry after it finishes."
+            ) from exc
+        try:
+            yield original
+        finally:
+            if sys.platform == "win32":
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def _append_working_copy(
+    original: Path,
+    data: xr.DataArray | Iterable[np.ndarray] | str | Path | ChronoStore,
+    **options: Any,
+) -> AppendReport:
+    """Stage and publish an append while the caller holds the store lock."""
     _open_target(original)
     working = Path(tempfile.mkdtemp(prefix=f".{original.name}-append-", dir=original.parent))
     try:

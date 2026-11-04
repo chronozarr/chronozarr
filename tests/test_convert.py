@@ -9,8 +9,11 @@ from typing import Any
 import numpy as np
 import pytest
 import xarray as xr
+import zarr
+from click.testing import CliRunner
 
 import chronozarr
+from chronozarr.cli import main
 from chronozarr.convert import (
     CogManifestSource,
     PreflightError,
@@ -768,6 +771,49 @@ def test_zarr_source_with_band_dimension(tmp_path, truth):
     assert store.attrs.bands[0].units == "1"
     assert store.levels[0].transform == TRANSFORM
     assert report.plan.source.kind == "Zarr store"
+
+
+@pytest.mark.parametrize("zarr_format", [2, 3])
+def test_zarr_resume_refuses_a_store_with_changed_chunks(tmp_path, truth, zarr_format):
+    source = tmp_path / "in.zarr"
+    dataset_from(truth).to_zarr(source, zarr_format=zarr_format, consolidated=False)
+    out = tmp_path / "store"
+    work = tmp_path / "store.convert-work"
+    options: dict[str, Any] = {**OPTIONS, "crs": CRS, "read_ahead": 1}
+
+    def interrupt(done, _total):
+        if done == 1:
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt) as error:
+        convert(source, out, progress=interrupt, **options)
+    assert "fresh work directory with --work-dir" in " ".join(error.value.__notes__)
+    assert not out.exists()
+    staged = {p.name: p.read_bytes() for p in work.iterdir()}
+    assert set(staged) == {"plan.json", "t000000.npy"}
+
+    metadata_name = ".zarray" if zarr_format == 2 else "zarr.json"
+    metadata = source / "reflectance" / metadata_name
+    original_metadata = metadata.read_bytes()
+    changed = truth.copy()
+    changed[:2] += 1
+    raster = zarr.open_group(source, mode="r+")["reflectance"]
+    assert isinstance(raster, zarr.Array)
+    raster[:2] = changed[:2]
+    assert metadata.read_bytes() == original_metadata
+
+    result = CliRunner().invoke(main, ["convert", str(source), str(out), "--crs", CRS, "--resume"])
+    assert result.exit_code == 1
+    assert "resume is unsupported for ordinary Zarr inputs" in result.output
+    assert "--work-dir" in result.output
+    assert not out.exists()
+    assert {p.name: p.read_bytes() for p in work.iterdir()} == staged
+
+    with pytest.raises(FileExistsError, match="fresh work directory with --work-dir") as error:
+        convert(source, out, **options)
+    assert "--resume" not in str(error.value)
+    convert(source, out, work_dir=tmp_path / "fresh-work", **options)
+    np.testing.assert_array_equal(stored(out), changed)
 
 
 def test_zarr_source_without_band_dimension_flipped_y_and_crs_flag(tmp_path, truth):

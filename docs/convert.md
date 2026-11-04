@@ -33,7 +33,7 @@ The dry run discovers files and checks them as conversion does. It prints the da
 
 A directory or `s3://` prefix is not searched recursively; use a glob such as `"scenes/**/*.tif"` for subdirectories. Listing an S3 prefix uses your AWS credentials and needs the `s3` extra. Add it to the [package installation](quickstart.md#1-install), or to your [development installation](development.md#install-the-command-line-tool) when working from source.
 
-A file name must contain exactly one date. The report lists names with no date, names with several dates (`20240215_2024-03`) and files that share a date. If those files tile one image, it recommends `--mosaic-tiles` ([exports split into tiles](#exports-split-into-tiles)). Use `--date-pattern` to choose the date in a name, for example `--date-pattern "ndvi_%Y%m%d"`.
+A file name must contain exactly one date. The report lists names with no date, names with several dates (`20240215_2024-03`), impossible dates such as `2023-02-29` and files that share a date. If those files tile one image, it recommends `--mosaic-tiles` ([exports split into tiles](#exports-split-into-tiles)). Use `--date-pattern` to choose the date in a name, for example `--date-pattern "ndvi_%Y%m%d"`.
 
 `--write-manifest found.csv` saves the discovered files and dates in a manifest that `convert` can read back. It is the one output allowed with `--dry-run`, and it is written even if checks find problems. A file without a recognized date gets an empty `datetime` entry; fill it in or remove the row before converting the manifest. When the files name their bands, a `bands` column lets you edit those names too. The command reports the remaining problems after writing the manifest.
 
@@ -262,6 +262,11 @@ Reading a NetCDF4 file needs the `netcdf` extra, which adds h5netcdf, h5py and c
 
 Use `convert` for NetCDF and Zarr variables. `chronozarr encode --help` describes the
 separate in-memory interface.
+
+After an interrupted conversion from an ordinary Zarr store, start again with a fresh
+`--work-dir`. The old staged timesteps are kept for inspection. Chunks at the same
+Zarr path can change while the metadata stays the same, so `--resume` refuses them.
+[Materialized Icechunk snapshots](icechunk.md) support resume against the original snapshot.
 
 ### Dimensions of length 1
 

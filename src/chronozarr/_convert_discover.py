@@ -319,11 +319,9 @@ def _compile_pattern(date_pattern: str) -> re.Pattern[str]:
 def _date_spans(
     text: str, pattern: re.Pattern[str] | None
 ) -> tuple[list[tuple[int, int, np.datetime64]], list[str]]:
-    """Where `text` holds a date, as (start, end, moment), and the texts that matched `pattern` but
-    are not real dates (a month 13, a day 366 in a common year). Without `pattern`, the default
-    rules: YYYYMMDD, YYYY-MM-DD, YYYY_MM_DD (day) and YYYY-MM, YYYY_MM (first of the month)."""
+    """Where `text` holds a date, as (start, end, moment), and invalid date tokens."""
     if pattern is None:
-        return _default_date_spans(text), []
+        return _default_date_spans(text)
     spans: list[tuple[int, int, np.datetime64]] = []
     invalid: list[str] = []
     for match in pattern.finditer(text):
@@ -355,8 +353,9 @@ def find_dates(
     that matched but are not real dates.
 
     Without `pattern`: YYYYMMDD, YYYY-MM-DD, YYYY_MM_DD (day) and YYYY-MM, YYYY_MM (first of the
-    month); numbers that are no calendar date are not dates. With `pattern`: what it matches, and a
-    match that is no calendar date (or no such day of year) is reported as invalid.
+    month). A separated full date with a plausible year and impossible month or day is invalid.
+    With `pattern`: what it matches, and a match that is no calendar date (or no such day of year)
+    is reported as invalid.
     """
     spans, invalid = _date_spans(stem, pattern)
     found: dict[np.datetime64, str] = {}
@@ -365,17 +364,22 @@ def find_dates(
     return found, invalid
 
 
-def _default_date_spans(text: str) -> list[tuple[int, int, np.datetime64]]:
-    """Where `text` holds a date by the default rules: (start, end, moment), days before months."""
+def _default_date_spans(text: str) -> tuple[list[tuple[int, int, np.datetime64]], list[str]]:
+    """Find full dates before months and report impossible separated full dates."""
     spans: list[tuple[int, int, np.datetime64]] = []
+    invalid: list[str] = []
     covered: list[tuple[int, int]] = []
     for match in _DAY.finditer(text):
-        year, _, month, day = match.groups()
+        year, separator, month, day = match.groups()
+        # An impossible day still claims the whole token. Its month is not a separate date.
+        covered.append(match.span())
         try:
             moment = _moment(int(year), int(month), int(day), 0, 0, 0)
         except ValueError:
+            # Compact digit sequences can be identifiers.
+            if separator and int(year) in _YEARS:
+                invalid.append(match.group(0))
             continue
-        covered.append(match.span())
         spans.append((*match.span(), moment))
     for match in _MONTH.finditer(text):
         if any(start < match.end() and match.start() < end for start, end in covered):
@@ -385,7 +389,7 @@ def _default_date_spans(text: str) -> list[tuple[int, int, np.datetime64]]:
         except ValueError:
             continue
         spans.append((*match.span(), moment))
-    return spans
+    return spans, invalid
 
 
 DATE_MARK = "\x00"
@@ -485,16 +489,18 @@ def discover(spec: str, date_pattern: str | None = None) -> Discovery:
     problems: list[Problem] = []
     for uri in list_rasters(spec):
         zipped = uri.lower().endswith(ZIP_SUFFIX)
+        where = "the file name"
         found, invalid = find_dates(_file_name_stem(uri), pattern)
         if zipped and not found and not invalid:
             found, invalid = _dates_in_zipped_raster(uri, pattern)
+            where = "the name of the raster inside the zip"
         if invalid:
             undated.append(uri)
+            matched = f" matches --date-pattern '{date_pattern}' but" if pattern else ""
             problems.append(
                 Problem(
                     uri,
-                    f"'{invalid[0]}' in the file name matches --date-pattern '{date_pattern}' but "
-                    "is not a real date",
+                    f"'{invalid[0]}' in {where}{matched} is not a real date",
                     "rename the file, or exclude it by narrowing the glob",
                 )
             )

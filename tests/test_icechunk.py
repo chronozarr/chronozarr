@@ -220,6 +220,27 @@ def test_branch_advancement_does_not_change_open_plan_or_reuse_staging(tmp_path:
     _check_work_dir(work, pinned, True)
 
 
+def test_pinned_materialized_snapshot_reuses_staged_timestep(tmp_path: Path) -> None:
+    original = _dataset()
+    path, _, snapshot = _repo(tmp_path, original)
+    source = IcechunkInput(path, _indexes(), snapshot=snapshot)
+    out = tmp_path / "out"
+
+    def interrupt(done: int, _total: int) -> None:
+        if done == 1:
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        convert(source, out, variable="temp", nodata=None, progress=interrupt, read_ahead=1)
+    assert not out.exists()
+
+    report = convert(source, out, variable="temp", nodata=None, resume=True)
+    assert (report.n_reused, report.n_staged) == (1, 1)
+    np.testing.assert_array_equal(
+        open_store(out).to_xarray().values[:, 0], original.temp.values[:2]
+    )
+
+
 def test_bounds_and_chunk_budget_fail_before_pixel_sampling(tmp_path: Path) -> None:
     path, _, _ = _repo(tmp_path, _dataset())
     cases: list[tuple[dict[str, int | slice], dict[str, Any], str]] = [

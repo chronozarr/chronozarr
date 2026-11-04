@@ -12,6 +12,7 @@ from typing import Any, cast
 import numpy as np
 import xarray as xr
 import zarr
+from xarray.coding.times import CFDatetimeCoder
 from zarr.errors import GroupNotFoundError
 from zarr.storage import LocalStore
 
@@ -22,6 +23,22 @@ from chronozarr.schema import Chronozarr, SchemaError
 from chronozarr.store import HttpStore as HttpStore
 from chronozarr.store import IndexStore, missing_local_path_message, redact_url
 from chronozarr.store import as_store as as_store
+
+# First and last whole millisecond representable as datetime64[ns].
+_FIRST_NS_MILLISECOND = np.datetime64("1677-09-21T00:12:43.146", "ms")
+_LAST_NS_MILLISECOND = np.datetime64("2262-04-11T23:47:16.854", "ms")
+
+
+def _xarray_times(times: np.ndarray) -> np.ndarray:
+    """Keep the historical nanosecond dtype where it can represent the store's dates."""
+    if not ((times < _FIRST_NS_MILLISECOND) | (times > _LAST_NS_MILLISECOND)).any():
+        return times.astype("datetime64[ns]")
+    if not hasattr(CFDatetimeCoder(), "time_unit"):
+        raise ValueError(
+            "these timestamps require millisecond resolution in xarray. "
+            "Install xarray 2025.01.2 or newer, or use open_store().times to read them directly."
+        )
+    return times
 
 
 class ChronoStore:
@@ -359,13 +376,14 @@ class ChronoStore:
         selected = (
             list(range(len(self.times))) if times is None else [self._check_time(t) for t in times]
         )
+        time_coord = _xarray_times(self.times[selected])
         window = slice(None)
         read = self._physical_region if physical else self._read_region
         values = read(level, selected, window, window)
         y, x = schema.pixel_centers(level.transform, level.shape[2], level.shape[3])
         attrs: dict[str, Any] = {"crs": self.crs.to_string(), "transform": list(level.transform)}
         coords: dict[str, Any] = {
-            "time": self.times[selected].astype("datetime64[ns]"),
+            "time": time_coord,
             "band": list(self.bands),
             "y": y,
             "x": x,

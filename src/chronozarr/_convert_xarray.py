@@ -603,6 +603,7 @@ class XarraySource(Source):
         *,
         scale: float | None = None,
         offset: float | None = None,
+        resume: bool = False,
     ) -> None:
         """`source` is a NetCDF file or a Zarr store; `files` instead is a series of NetCDF
         files, found by `find_netcdf_files` for the folder or glob `source`. `scale` and `offset`
@@ -626,6 +627,12 @@ class XarraySource(Source):
             self.kind = "NetCDF files"
         else:
             self.kind = "NetCDF file" if source.lower().endswith(NETCDF_SUFFIXES) else "Zarr store"
+        if resume and icechunk_source is None and self.kind == "Zarr store":
+            raise ValueError(
+                "resume is unsupported for ordinary Zarr inputs because their chunks can "
+                "change without changing the metadata. Run without --resume and choose a "
+                "fresh work directory with --work-dir."
+            )
         self._dataset: xr.Dataset | None = None
         self._open = _OpenFiles(self.files)
         dataset = (
