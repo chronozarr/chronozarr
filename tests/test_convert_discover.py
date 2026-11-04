@@ -52,6 +52,7 @@ def day(text: str) -> np.datetime64:
         ("ndvi_20210102", ["2021-01-02"]),
         ("ndvi_2021-01-02", ["2021-01-02"]),
         ("ndvi_2021_01_02", ["2021-01-02"]),
+        ("ndvi_2024-02-29", ["2024-02-29"]),
         ("ndvi_2021-01", ["2021-01-01"]),
         ("ndvi_2021_01_v2", ["2021-01-01"]),
         ("S2_20210102T103000", ["2021-01-02"]),
@@ -78,6 +79,12 @@ def test_default_date_rules_read_a_date_only_when_there_is_one(stem, expected):
 def test_a_month_inside_a_day_is_not_a_second_date():
     found, _ = find_dates("scene_2021-01-02", None)
     assert list(found) == [day("2021-01-02")]
+
+
+def test_a_month_inside_an_impossible_day_is_not_a_date():
+    found, invalid = find_dates("scene_2024_02_30_2024-03", None)
+    assert found == {day("2024-03-01"): "2024-03"}
+    assert invalid == ["2024_02_30"]
 
 
 @pytest.mark.parametrize(
@@ -784,6 +791,25 @@ def test_cli_dry_run_reports_all_problems_and_exits_1(tmp_path, series, truth):
     assert not out.exists()
 
 
+@pytest.mark.parametrize("flags", [(), ("--dry-run",)])
+def test_cli_refuses_impossible_days_without_writing_a_store(tmp_path, truth, flags):
+    folder = tmp_path / "series"
+    write_tif(folder / "scene_2023-02-29.tif", truth[0])
+    write_tif(folder / "scene_2024-02-30.tif", truth[1])
+    write_tif(folder / "scene_2024-02-29.tif", truth[2])
+    write_tif(folder / "scene_2024-03.tif", truth[3])
+    out = tmp_path / "store"
+
+    result = run("convert", str(folder), str(out), *flags)
+
+    assert result.exit_code == 1, result.output
+    assert "2 problem(s) in 2 of 4 source file(s)" in result.output
+    assert "'2023-02-29' in the file name is not a real date" in result.output
+    assert "'2024-02-30' in the file name is not a real date" in result.output
+    assert not out.exists()
+    assert not (tmp_path / "store.convert-work").exists()
+
+
 def test_cli_date_pattern_and_help(tmp_path, series):
     result = run("convert", str(series / "*.tif"), str(tmp_path / "o"), "--date-pattern", "%Y")
     assert result.exit_code == 1
@@ -885,6 +911,7 @@ def labelled_series(folder: Path, truth: np.ndarray, label: Any) -> Path:
         ("tile_123456", "tile_123456"),
         ("v202101", "v202101"),
         ("scene_20211340", "scene_20211340"),
+        ("scene_2024-02-30", "scene_2024-02-30"),
     ],
 )
 def test_mask_dates_replaces_the_dates_file_names_are_read_for(text, masked):

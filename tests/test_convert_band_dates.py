@@ -273,6 +273,16 @@ def test_a_date_pattern_reports_a_match_that_is_not_a_real_date(tmp_path, truth)
         plan_conversion(path, bands_are_dates=True, date_pattern="A%Y%j", sample=False)
 
 
+def test_an_impossible_day_in_a_band_description_is_refused(tmp_path, truth):
+    descriptions = ["2024-02-29_NDVI", "2024-02-30_NDVI", "2024-03-01_NDVI", "2024-03-02_NDVI"]
+    path = write_bands(tmp_path / "bad.tif", truth[:, 0], descriptions)
+    with pytest.raises(PreflightError) as error:
+        plan_conversion(path, bands_are_dates=True, sample=False)
+    text = text_of(error.value)
+    assert "band 2" in text and "2024-02-30" in text and "not a real date" in text
+    assert "--date-pattern 'None'" not in text
+
+
 # --- what is refused, and how it says so ------------------------------------------------------
 
 

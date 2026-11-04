@@ -33,7 +33,7 @@ from chronozarr._convert_tiles import OPTION as MOSAIC_TILES
 from chronozarr._convert_tiles import SameDateFixes
 from chronozarr._convert_xarray import open_netcdf, open_zarr
 from chronozarr._install import extra_hint
-from chronozarr.append import append, is_store
+from chronozarr.append import _append_lock, _append_working_copy, append, is_store
 from chronozarr.bands import (
     assign_roles,
     display_limits_apply,
@@ -519,8 +519,9 @@ def append_command(
 
     Only the shards (or chunks, for an unsharded store) that gain a timestep are written, plus
     the metadata; every other object keeps its bytes. An unsharded store (the encoder default)
-    writes only new chunk objects; a sharded one rewrites the shard that grows. Appending is not
-    atomic: run it on a working copy and publish after `chronozarr validate`.
+    writes only new chunk objects; a sharded one rewrites the shard that grows. Only one writer can
+    append to STORE at a time. Readers can see an append in progress, so run it on a working copy
+    and publish after `chronozarr validate`.
     """
     with _command_errors():
         if is_store(input):
@@ -536,8 +537,11 @@ def append_command(
                 f"{shlex.quote(str(store))} NEW_STORE`"
             )
             stack = _read_geotiffs(input, crs, join)
-            _check_validity_matches_store(store, stack)
-            report = append(store, stack.data, workers=workers, bands=stack.bands, mask=stack.mask)
+            with _append_lock(store) as target:
+                _check_validity_matches_store(target, stack)
+                report = _append_working_copy(
+                    target, stack.data, workers=workers, bands=stack.bands, mask=stack.mask
+                )
         else:
             da, _ = _read_xarray(input, variable, can_choose=False)
             report = append(store, da, crs=crs, workers=workers)
@@ -1031,7 +1035,12 @@ def _parse_nodata(text: str | None) -> float | int | str | None:
     default=None,
     help="Where timesteps are staged (default: OUT.convert-work beside OUT).",
 )
-@click.option("--resume", is_flag=True, help="Reuse timesteps staged by an interrupted run.")
+@click.option(
+    "--resume",
+    is_flag=True,
+    help="Reuse staged timesteps from an interrupted run. For ordinary Zarr inputs, "
+    "start again with a fresh --work-dir.",
+)
 @click.option(
     "--date-pattern",
     default=None,

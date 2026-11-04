@@ -3,8 +3,8 @@
 The source is read one timestep at a time and staged as a raw `.npy` per timestep in a work
 directory, then handed to `encode()` as an iterable of timesteps, which spills and encodes cell
 by cell. Peak memory is about one timestep times `read_ahead`; disk is the raw stack once in the
-work directory, once more in `encode`'s cell-major spill, plus the output. Staged timesteps are
-the unit of `resume`: an interrupted run keeps them, and a rerun reads only the missing ones.
+work directory, once more in `encode`'s cell-major spill, plus the output. An interrupted run
+keeps its staged timesteps. Where resume is supported, a rerun reads only the missing ones.
 
 Five input kinds are recognised from SOURCE:
 
@@ -510,6 +510,7 @@ def plan_conversion(
     calendar_to_gregorian: str | None = None,
     bands_are_dates: bool = False,
     mosaic_tiles: bool = False,
+    resume: bool = False,
 ) -> Plan:
     """Open the source, check it is consistent and estimate the conversion.
 
@@ -517,6 +518,7 @@ def plan_conversion(
     Raises `PreflightError` with every problem found in the files (and, for a discovered series,
     in their dated names) when the sources cannot be one series, and `ValueError` when the sampled
     pixels hold an undeclared fill or a divisor scale that `nodata` or `scale` has not answered.
+    With `resume`, ordinary Zarr inputs are refused before opening the source arrays.
     """
     check_rule(calendar_to_gregorian)
     text = str(source_path)
@@ -662,6 +664,7 @@ def plan_conversion(
                 files=netcdf_files,
                 scale=scale,
                 offset=offset,
+                resume=resume,
             )
 
     if not isinstance(source, XarraySource) and (scale is not None or offset is not None):
@@ -821,6 +824,11 @@ def _check_work_dir(work: Path, plan: Plan, resume: bool) -> None:
     digest = hashlib.sha256(fingerprint.encode()).hexdigest()
     if work.exists() and any(work.iterdir()):
         if not resume:
+            if plan.source.kind == "Zarr store":
+                raise FileExistsError(
+                    f"{work} holds timesteps staged by an earlier run. Choose a fresh work "
+                    "directory with --work-dir."
+                )
             raise FileExistsError(
                 f"{work} holds timesteps staged by an earlier run. Pass --resume to reuse them, "
                 "or delete the directory to start over"
@@ -1006,7 +1014,8 @@ def convert(
 
     `on_plan` receives the `Plan` (sizes, estimates) before any data is staged; `dry_run` stops
     there. Timesteps are staged under `work_dir` (default `<out>.convert-work` beside `out`):
-    it is removed on success and kept on failure, and `resume=True` reuses its timesteps.
+    it is removed on success and kept on failure. `resume=True` reuses its timesteps for
+    supported sources. For an ordinary Zarr input, choose a fresh work directory after a failure.
     `encode_options` go to `chronozarr.encode`: chunk_size, codec, level, volatility,
     shard, shard_time, n_lods, workers, provenance.
     """
@@ -1061,6 +1070,7 @@ def convert(
             calendar_to_gregorian=calendar_to_gregorian,
             bands_are_dates=bands_are_dates,
             mosaic_tiles=mosaic_tiles,
+            resume=resume,
         )
     except PreflightError as exc:
         if write_manifest_to is not None and exc.draft is not None:
@@ -1146,7 +1156,12 @@ def convert(
         )
         encode_s = time.perf_counter() - started
     except BaseException as exc:
-        if isinstance(source, IcechunkInput) and source.virtual_prefixes:
+        if plan.source.kind == "Zarr store":
+            exc.add_note(
+                f"staged timesteps are kept in {work} for inspection. Choose a fresh work "
+                "directory with --work-dir."
+            )
+        elif isinstance(source, IcechunkInput) and source.virtual_prefixes:
             exc.add_note(
                 f"staged timesteps are kept in {work} for inspection; virtual-source resume "
                 "is unsupported without external object identities, so start a fresh import"

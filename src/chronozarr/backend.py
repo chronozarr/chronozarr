@@ -27,7 +27,7 @@ from xarray.backends import BackendArray, BackendEntrypoint
 from xarray.core import indexing
 
 from chronozarr import schema
-from chronozarr.decode import ChronoStore, open_store
+from chronozarr.decode import ChronoStore, _xarray_times, open_store
 from chronozarr.level import Level
 
 
@@ -126,7 +126,7 @@ def open_dataset(
     level = store._level(lod)
     y, x = schema.pixel_centers(level.transform, level.shape[2], level.shape[3])
     coords: dict[str, Any] = {
-        "time": store.times.astype("datetime64[ns]"),
+        "time": _xarray_times(store.times),
         "band": list(store.bands),
         "y": y,
         "x": x,

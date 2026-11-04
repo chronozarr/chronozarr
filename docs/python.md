@@ -64,6 +64,8 @@ raw = xr.open_dataset("my_store", engine="chronozarr", physical=False)
 
 The backend reads lazily. It returns physical values unless you pass `physical=False`. The `lod` argument selects the level, and the default is 0. When the store has notes, `ds.attrs["chronozarr_notes"]` lists them.
 
+Both the backend and `store.to_xarray()` use nanosecond time coordinates where all selected dates fit. Wider date ranges use millisecond coordinates and require xarray 2025.01.2 or newer. `store.times` provides the millisecond coordinates directly.
+
 Install the `dask` extra to pass `chunks=` and get dask arrays, for example with `uv add 'chronozarr[geo,dask]==0.5.2'`. When working from source, include it in the [local-checkout dependency](development.md#python-projects-and-notebooks).
 
 A plain Zarr reader opens a level without chronozarr and returns the stored values. See [Read a store without chronozarr](how-it-works.md#read-a-store-without-chronozarr).

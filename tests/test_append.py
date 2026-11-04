@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -213,6 +215,61 @@ def test_unsharded_append_writes_only_the_new_chunks(tmp_path, truth):
     assert all(mtimes(store)[k] == stamps[k] for k in old_chunks)
     assert all(key in after for key in before)
     assert all(after[k] == before[k] for k in before if not is_metadata(k))
+
+
+@pytest.mark.parametrize("use_alias", [False, True], ids=["same-path", "symlink"])
+def test_concurrent_append_is_refused_through_root_publication(tmp_path, monkeypatch, use_alias):
+    data = make_truth(3, 1, 5, 7)
+    store, later = tmp_path / "store", tmp_path / "later"
+    da = make_da(data)
+    chronozarr.encode(da.isel(time=slice(1)), store, chunk_size=CHUNK)
+    chronozarr.encode(da.isel(time=slice(2, 3)), later, chunk_size=CHUNK)
+    contender = store
+    if use_alias:
+        contender = tmp_path / "alias"
+        try:
+            contender.symlink_to(store, target_is_directory=True)
+        except OSError as exc:
+            pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    attempts: list[subprocess.CompletedProcess[str]] = []
+    original_replace = Path.replace
+
+    def try_second_writer(path, target):
+        result = original_replace(path, target)
+        if target == store.resolve() / "0/data/c/1/0/0/0":
+            # The new pixels are visible while the root still names the old time axis.
+            attempts.append(
+                subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        "from chronozarr.cli import main; main()",
+                        "append",
+                        str(contender),
+                        str(later),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+            )
+        return result
+
+    monkeypatch.setattr(Path, "replace", try_second_writer)
+    assert append(store, da.isel(time=slice(1, 2))).n_time == 2
+    assert len(attempts) == 1
+    assert attempts[0].returncode == 1, attempts[0].stdout + attempts[0].stderr
+    assert "another append is already running" in attempts[0].stderr
+    assert chronozarr.validate(store) == []
+    np.testing.assert_array_equal(chronozarr.open_store(store).times, da.time.values[:2])
+    np.testing.assert_array_equal(decoded(store), data[:2])
+
+    assert append(contender, later).n_time == 3
+    assert chronozarr.validate(store) == []
+    np.testing.assert_array_equal(chronozarr.open_store(store).times, da.time.values)
+    np.testing.assert_array_equal(decoded(store), data)
 
 
 def test_shard_bytes_describe_the_shards_after_an_append(tmp_path, truth):

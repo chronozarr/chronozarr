@@ -22,6 +22,8 @@ The grid, bands, dtype, CRS and nodata of `INPUT` must match `STORE`. For GeoTIF
 
 The append writes the objects that gain a timestep, plus the metadata. Every other object keeps its bytes.
 
+Only one append can write a local store at a time. If another append holds the lock, wait for it to finish and retry. Append keeps a hidden `.STORE.append.lock` file beside the store. Leave it in place. The operating system releases the lock when the writer exits. The lock coordinates appends on the same filesystem. Readers can still see an append in progress, so follow the working-copy procedure below.
+
 - An unsharded store writes new chunk objects. This is the encoder default.
 - A sharded store rewrites the shard that receives each new timestep, whole.
 

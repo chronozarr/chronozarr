@@ -81,6 +81,44 @@ def test_dataset_structure(store_path):
     assert np.array_equal(ds["x"].values, x)
 
 
+def test_xarray_keeps_times_outside_the_nanosecond_range(tmp_path):
+    path = tmp_path / "millisecond-store"
+    times = np.array(
+        [
+            "1677-09-21T00:12:43.145",
+            "1677-09-21T00:12:43.146",
+            "2262-04-11T23:47:16.854",
+            "2262-04-11T23:47:16.855",
+            "2300-01-02T03:04:05.123",
+        ],
+        dtype="datetime64[ms]",
+    )
+    truth = make_truth(len(times), 1, 2, 2)
+    chronozarr.encode(
+        iter(truth),
+        path,
+        times=times,
+        crs="EPSG:32631",
+        transform=(30, 0, 500000, 0, -30, 4500000),
+        bands=["test"],
+    )
+    assert chronozarr.validate(path) == []
+
+    with xr.open_dataset(path, engine="chronozarr", physical=False) as ds:
+        assert ds.time.dtype == times.dtype
+        np.testing.assert_array_equal(ds.time.values, times)
+        np.testing.assert_array_equal(ds.data.values, truth)
+        np.testing.assert_array_equal(ds.data.sel(time=times[3]).values, truth[3])
+
+    store = chronozarr.open_store(path)
+    subset = store.to_xarray(times=[4, 0])
+    assert subset.time.dtype == times.dtype
+    np.testing.assert_array_equal(subset.time.values, times[[4, 0]])
+    np.testing.assert_array_equal(subset.values, truth[[4, 0]])
+    # Keep the original dtype for selections within the nanosecond range.
+    assert store.to_xarray(times=[1, 2]).time.dtype == np.dtype("datetime64[ns]")
+
+
 def test_physical_values_match_the_reader(store_path):
     path, truth, mask, coverage = store_path
     ds = _open(path)

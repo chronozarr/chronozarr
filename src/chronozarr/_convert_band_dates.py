@@ -287,11 +287,15 @@ def _date_problems(
             )
         )
     if unreal:
+        what = (
+            f"--date-pattern '{date_pattern}' matches text that is not a real date"
+            if date_pattern is not None
+            else "text in the band descriptions is not a real date"
+        )
         problems.append(
             Problem(
                 uri,
-                f"--date-pattern '{date_pattern}' matches text that is not a real date: "
-                f"{_list(unreal)}",
+                f"{what}: {_list(unreal)}",
                 "correct the descriptions, or take those bands out of the file with "
                 "gdal_translate -b",
             )
