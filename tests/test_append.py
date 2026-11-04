@@ -562,6 +562,20 @@ def test_transform_mismatch(base_store, truth):
     refuse(base_store, other, "transform: the input's is")
 
 
+def test_encode_and_append_refuse_a_slice_with_a_stale_transform(tmp_path, truth):
+    source, west = tmp_path / "source", tmp_path / "west"
+    encode_head(truth, source, 2)
+    da = chronozarr.open_store(source).to_xarray()
+    chronozarr.encode(da.isel(time=slice(0, 1), x=slice(0, 2)), west, n_lods=1)
+    east = da.isel(time=slice(1, 2), x=slice(2, 4))
+    message = "the transform attribute disagrees with the x pixel centres"
+    with pytest.raises(ValueError, match=message):
+        chronozarr.encode(east, tmp_path / "east", n_lods=1)
+    refuse(west, east, message)
+    append(west, da.isel(time=slice(1, 2), x=slice(0, 2)))
+    np.testing.assert_array_equal(decoded(west), truth[:2, :, :, :2])
+
+
 def test_times_must_follow_the_store(base_store, truth):
     refuse(base_store, window(truth, 7, 9), "times: the input starts at 2024-08-01.*not after")
     refuse(base_store, window(truth, 0, 2), "not after the store's last time")

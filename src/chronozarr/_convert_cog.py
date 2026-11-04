@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import math
 import re
 import warnings
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from functools import wraps
+from pathlib import Path
 from typing import Any, NoReturn, ParamSpec, TypeVar
 
 import numpy as np
@@ -129,10 +129,9 @@ class _CogHeader:
     own_grid: bool  # the file carries its own CRS and geotransform (else `grid` came from options)
     data_indexes: tuple[int, ...]  # 1-based indexes of the data bands, the alpha band excluded
     alpha: int | None  # 1-based index of the alpha band
-    internal_mask: bool  # the data bands share an internal or per-dataset mask (no alpha)
+    dataset_mask: bool  # the data bands share a per-dataset mask (no alpha)
     dtype: np.dtype
     nodata: tuple[float | int | str | None, ...]  # declared token per data band
-    warp_nodata: float | int | None  # first data band's nodata, for the warper
     descriptions: tuple[str | None, ...]
     colors: tuple[str | None, ...]  # "red", "green" or "blue" for a band of that colour
     scales: tuple[float, ...]
@@ -145,10 +144,20 @@ class _CogHeader:
         return len(self.data_indexes)
 
 
+def _has_local_tiff_mask(uri: str) -> bool:
+    return (
+        "://" not in uri
+        and not uri.startswith("/vsi")
+        and uri.lower().endswith((".tif", ".tiff"))
+        and Path(f"{uri}.msk").is_file()
+    )
+
+
 def _gdal_env(uri: str) -> dict[str, str]:
     """GDAL options for opening `uri`: no directory listing or sidecar probes, which cost a
-    request each over HTTP, except for formats that keep their georeferencing in sidecar files."""
-    if uri.split("?", 1)[0].lower().endswith(SIDECAR_SUFFIXES):
+    request each over HTTP, except for formats that keep georeferencing in sidecars. A local
+    GeoTIFF with a mask sidecar needs sidecar probes too."""
+    if uri.split("?", 1)[0].lower().endswith(SIDECAR_SUFFIXES) or _has_local_tiff_mask(uri):
         return {**GDAL_ENV, "GDAL_DISABLE_READDIR_ON_OPEN": "TRUE"}
     return GDAL_ENV
 
@@ -173,12 +182,6 @@ def _tolerate_unlocated_frames(func: Callable[_P, _R]) -> Callable[_P, _R]:
 
 
 _COLOR_NAMES = ("red", "green", "blue")
-
-
-def _warp_nodata(tokens: tuple[float | int | str | None, ...]) -> float | int | None:
-    """The nodata value the warper is given for bands with these declared tokens: the first
-    band's, NaN for a token that is the text 'nan'."""
-    return math.nan if isinstance(tokens[0], str) else tokens[0]
 
 
 def _read_header(
@@ -207,14 +210,13 @@ def _read_header(
             if len(dtypes) > 1:
                 raise ValueError(f"its data bands have different dtypes {sorted(dtypes)}")
             dtype = np.dtype(dtypes.pop())
-            internal_mask = alpha is None and any(
+            dataset_mask = alpha is None and any(
                 MaskFlags.per_dataset in src.mask_flag_enums[i - 1] for i in indexes
             )
             descriptions = tuple(src.descriptions[i - 1] or None for i in indexes)
             if subdataset is not None and len(indexes) == 1 and descriptions[0] is None:
                 descriptions = (subdataset,)  # the one band of a chosen variable is that variable
             tokens = tuple(_declared_nodata(src.nodatavals[i - 1], dtype) for i in indexes)
-            warp_nodata = _warp_nodata(tokens)
             scaling = [
                 _scaling(float(src.scales[i - 1]), float(src.offsets[i - 1]), f"band {i}")
                 for i in indexes
@@ -226,10 +228,9 @@ def _read_header(
                 own_grid=src.crs is not None and not src.transform.is_identity,
                 data_indexes=indexes,
                 alpha=alpha,
-                internal_mask=internal_mask,
+                dataset_mask=dataset_mask,
                 dtype=dtype,
                 nodata=tokens,
-                warp_nodata=warp_nodata,
                 descriptions=descriptions,
                 colors=tuple(
                     c if (c := src.colorinterp[i - 1].name) in _COLOR_NAMES else None
@@ -353,7 +354,6 @@ def _timestep_header(header: _CogHeader, numbers: tuple[int, ...]) -> _CogHeader
         header,
         data_indexes=numbers,
         nodata=nodata,
-        warp_nodata=_warp_nodata(nodata),
         descriptions=tuple(header.descriptions[i] for i in positions),
         colors=tuple(header.colors[i] for i in positions),
         scales=tuple(header.scales[i] for i in positions),
@@ -566,18 +566,20 @@ class CogManifestSource(Source):
         explicit = []
         if any(h.alpha is not None for h in headers):
             explicit.append("alpha band")
-        if any(h.internal_mask for h in headers):
-            explicit.append("internal mask")
+        if any(h.dataset_mask for h in headers):
+            explicit.append(
+                "GeoTIFF .msk sidecar"
+                if any(_has_local_tiff_mask(h.dataset) for h in headers)
+                else "internal mask"
+            )
         if self.warped:
-            footprint = "warped timesteps leave pixels outside the source footprint"
-        else:
-            footprint = None if self._layout is None else self._layout.footprint()
+            explicit.append("warped timesteps leave pixels outside the source footprint")
         validity = _decide_validity(
             first.dtype,
             {token for h in headers for token in h.nodata},
             override=nodata,
             explicit=explicit,
-            footprint=footprint,
+            footprint=None if self._layout is None else self._layout.footprint(),
         )
         self.notes = (
             *(() if band_series is None else (f"bands:      {band_series.dates.note()}",)),
@@ -873,6 +875,8 @@ class CogManifestSource(Source):
             "validity": self.info.validity,
             "resampling": self.resampling if self.warped else None,
             "warped": sorted(self.warped),
+            # Stages made by the old warp may already have lost valid values.
+            **({"warp_validity": "resampled-mask"} if self.warped else {}),
         }
 
     def read(self, t: int) -> Step:
@@ -887,6 +891,7 @@ class CogManifestSource(Source):
         try:
             with rasterio.Env(**_gdal_env(header.dataset)), rasterio.open(header.dataset) as src:
                 if t in self.warped:
+                    assert valid is not None
                     self._read_warped(src, header, data, valid)
                 else:
                     for top in range(0, grid.height, self.chunk_size):
@@ -944,12 +949,12 @@ class CogManifestSource(Source):
     ) -> np.ndarray:
         """(rows, cols) bool of what the source itself declares valid.
 
-        Its alpha band if it has one (nonzero), else its internal or per-dataset mask, else, with
+        Its alpha band if it has one (nonzero), else its per-dataset mask, else, with
         an automatic nodata, GDAL's band masks from the nodata value; valid in every data band.
         """
         if header.alpha is not None:
             return src.read(header.alpha, window=window) != 0
-        if header.internal_mask or (
+        if header.dataset_mask or (
             self._auto_nodata and any(token is not None for token in header.nodata)
         ):
             masks = src.read_masks(list(header.data_indexes), window=window)
@@ -969,49 +974,48 @@ class CogManifestSource(Source):
         return {"src_transform": Affine(*header.grid.transform), "src_crs": header.grid.crs}
 
     def _read_warped(
-        self, src: Any, header: _CogHeader, data: np.ndarray, valid: np.ndarray | None
+        self, src: Any, header: _CogHeader, data: np.ndarray, valid: np.ndarray
     ) -> None:
-        import rasterio
-        from rasterio.enums import Resampling
         from rasterio.transform import Affine
         from rasterio.warp import reproject
 
         assert self.resampling is not None
         grid = self.grid
         fill = 0 if self.info.nodata is None else self.info.nodata
-        data[:] = fill
-        if self._auto_nodata:
-            src_nodata = header.warp_nodata
-        else:
-            src_nodata = self._sentinels[0] if self._sentinels else None
-        # A frame whose CRS or transform came from --crs, a world file or --bounds has them only in
-        # `header.grid`, so its pixels are handed over with that grid instead of as a dataset band.
-        source_grid = self._source_grid(src, header)
-        if header.own_grid:
-            source, source_options = rasterio.band(src, list(header.data_indexes)), {}
-        else:
-            source, source_options = src.read(list(header.data_indexes)), source_grid
-        reproject(
-            source=source,
-            destination=data,
-            src_nodata=src_nodata,
-            **source_options,
-            dst_transform=Affine(*grid.transform),
-            dst_crs=grid.crs,
-            dst_nodata=fill,
-            resampling=_parse_resampling(self.resampling),
-        )
-        if valid is not None:
-            # Validity is resampled by nearest neighbour; outside the footprint stays 0.
-            warped = np.zeros(valid.shape, dtype=np.uint8)
+        source_invalid = ~self._declared_valid(src, header, None)
+        if self._sentinels or data.dtype.kind == "f":
+            for top in range(0, src.height, self.chunk_size):
+                bottom = min(top + self.chunk_size, src.height)
+                block = src.read(list(header.data_indexes), window=((top, bottom), (0, src.width)))
+                source_invalid[top:bottom] |= ~_value_valid(block, self._sentinels)
+
+        # GDAL can nudge an integer result away from dst_nodata. Use a marker outside the
+        # stored values, and derive validity from the same kernel that produced the data.
+        # Int32 keeps GDAL's integer rounding while leaving room for cubic overshoot.
+        integer = data.dtype.kind in "iu"
+        working_dtype = np.dtype("int32") if integer else data.dtype
+        marker = int(np.iinfo("int32").min) if integer else float("nan")
+        limits = np.iinfo(data.dtype) if integer else None
+        warped = np.empty(valid.shape, dtype=working_dtype)
+        valid.fill(1)
+        warp_options = {
+            **self._source_grid(src, header),
+            "dst_transform": Affine(*grid.transform),
+            "dst_crs": grid.crs,
+            "resampling": _parse_resampling(self.resampling),
+        }
+        for output, band in zip(data, header.data_indexes, strict=True):
+            source = src.read(band, out_dtype=working_dtype.name)
+            source[source_invalid] = marker
             reproject(
-                source=self._declared_valid(src, header, None).astype(np.uint8),
+                source=source,
                 destination=warped,
-                **source_grid,
-                src_nodata=None,
-                dst_transform=Affine(*grid.transform),
-                dst_crs=grid.crs,
-                dst_nodata=0,
-                resampling=Resampling.nearest,
+                src_nodata=marker,
+                dst_nodata=marker,
+                **warp_options,
             )
-            valid[:] = (warped != 0) & _value_valid(data, self._sentinels)
+            valid &= warped != marker if integer else ~np.isnan(warped)
+            if limits is not None:
+                np.clip(warped, limits.min, limits.max, out=warped)
+            output[:] = warped
+        data[:, valid == 0] = fill

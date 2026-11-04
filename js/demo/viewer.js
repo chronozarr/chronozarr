@@ -11,7 +11,7 @@ import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js
 import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrub, nextPumpBatch, readyRun, savesData, scrubPumpRequests, stepsAhead } from './scrub.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
-import { bindOpenStoreForm, checkUniformChunks, explainOpenError, fallsBackToCatalog } from './open-store.js';
+import { bindOpenStoreForm, checkUniformChunks, explainOpenError, parseStoreUrl } from './open-store.js';
 import { bindCopyLink } from './copy-link.js';
 import { isBareVisit, latestCoveredTime } from './start-time.js';
 import { redactText, redactUrl } from '../chronozarr/redact.js';
@@ -20,7 +20,7 @@ import { FrameMonitor, formatBytes, formatMs, formatRate, hitRate, readStats } f
 import { Renderer } from './renderer.js';
 import { prepareMovieCache } from './cache-policy.js';
 import { MAX_SCALE, bindViewerInput } from './input.js';
-import { formatValue, pixelLocation, sidebarHtml } from './inspector.js';
+import { escapeHtml, formatValue, pixelLocation, sidebarHtml } from './inspector.js';
 import { COLORMAPS, colormapGradient, colormapIndex } from '../shared/colormaps.js';
 import {
   computeStretchLo,
@@ -168,6 +168,7 @@ class Viewer {
   #dirty = true;
   /** The frame on the canvas: {lod, t, cells (a Set of "row/col"), kind}; null until the first one. */
   #shown = null;
+  #inspectRequest = 0;
   /** Whether the frame at the level and timestep that were asked for is not the one on screen yet. */
   #loading = false;
   #keptKey = null;
@@ -253,6 +254,7 @@ class Viewer {
    *   `startTime`: where to start in time when `viewSearch` names no timestep (start-time.js); without it, the first timestep.
    */
   async loadStore(url, options = {}) {
+    ++this.#inspectRequest;
     this.#playback?.pause();
     this.#clearChart();
     this.#abortBackground();
@@ -267,8 +269,10 @@ class Viewer {
       checkUniformChunks(store);
     } catch (error) {
       const failure = await explainOpenError(error, { url });
-      if (generation === this.#storeGeneration) this.#showError('Could not open store', failure.text, { code: 'store_open_failed' });
-      this.#setProgress(0);
+      if (generation === this.#storeGeneration) {
+        this.reportStoreOpenError(failure);
+        this.#setProgress(0);
+      }
       throw error;
     }
     if (generation !== this.#storeGeneration) {
@@ -614,6 +618,11 @@ class Viewer {
    */
   createExportSession({ scale = 1, timesteps = this.store.times.length } = {}) {
     const { store } = this;
+    const generation = this.#storeGeneration;
+    const isStartingStore = () => this.#storeGeneration === generation;
+    const requireStartingStore = () => {
+      if (!isStartingStore()) throw new Error('The dataset changed during export. Start the export again.');
+    };
     const baseLod = this.#normalLod();
     const deepestLod = Math.max(baseLod, this.#lodForScale(this.camera.scale / 4));
     const lod = this.lodOverride ?? chooseMovieLevel({ baseLod, deepestLod, fits: (candidate) => store.loopFits(candidate, this.#visibleCells(candidate).length, timesteps) }).lod;
@@ -633,7 +642,15 @@ class Viewer {
     const bytesPerSample = first.chunkBytes / (first.nBand * first.chunkWidth * first.chunkHeight);
     const slots = renderer.planSlots(first.nBand, first.chunkWidth, first.chunkHeight, POOL_BUDGET_BYTES, Math.max(4, 2 * cells.length + 4), bytesPerSample, store.hasMask, store.compactCacheEnabled);
     renderer.configure({ dtype: this.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots, hasMask: store.hasMask, compact: store.compactCacheEnabled });
-    const camera = { ...this.camera, scale: this.camera.scale * scale };
+    const frame = {
+      width: canvas.width,
+      height: canvas.height,
+      ...this.camera,
+      scale: this.camera.scale * scale,
+      ...this.#productUniforms(),
+      stretchLo: this.#stretchLo ?? 0,
+      nodata: this.#nodata,
+    };
     const chunksFor = (t) => cells.flatMap(([row, col]) => [t].map((ct) => [row, col, ct]));
     const masksReady = (t) => !store.hasMask || cells.every(([row, col]) => store.hasCachedMask(lod, row, col, t));
     return {
@@ -641,12 +658,20 @@ class Viewer {
       lod,
       cellCount: cells.length,
       fits: (timesteps) => store.loopFits(lod, cells.length, timesteps),
-      isReady: (t) => chunksFor(t).every(([row, col, ct]) => store.hasCachedRaw(lod, row, col, ct)) && masksReady(t),
+      isReady: (t) => isStartingStore() && chunksFor(t).every(([row, col, ct]) => store.hasCachedRaw(lod, row, col, ct)) && masksReady(t),
       /** Fetch timestep t for every cell, with its validity mask, at demand priority. */
-      prepare: (t, signal) =>
-        Promise.all([...chunksFor(t).map(([row, col, ct]) => store.getRaw(lod, row, col, ct, { signal })), ...cells.map(([row, col]) => this.#maskRead(lod, row, col, t, signal))]),
+      prepare: async (t, signal) => {
+        requireStartingStore();
+        try {
+          return await Promise.all([...chunksFor(t).map(([row, col, ct]) => store.getRaw(lod, row, col, ct, { signal })), ...cells.map(([row, col]) => this.#maskRead(lod, row, col, t, signal))]);
+        } catch (error) {
+          requireStartingStore();
+          throw error;
+        }
+      },
       /** Draw timestep t; false if some cell's chunks or masks are not in the cache (that cell is left empty). */
       render: (t) => {
+        requireStartingStore();
         renderer.newFrame();
         const drawable = [];
         let complete = true;
@@ -655,7 +680,7 @@ class Viewer {
           if (slots) drawable.push({ row, col, slots });
           else complete = false;
         }
-        renderer.beginPaint({ width: canvas.width, height: canvas.height, ...camera, ...this.#productUniforms(), stretchLo: this.#stretchLo ?? 0, nodata: this.#nodata }, { clear: true });
+        renderer.beginPaint(frame, { clear: true });
         for (const { row, col, slots } of drawable) this.#drawCell(lod, row, col, slots, renderer);
         return complete;
       },
@@ -976,7 +1001,7 @@ class Viewer {
         },
       })
       .then((result) => {
-        for (const { key, error } of result.errors) console.error(`prefetch failed for chunk ${key}:`, error);
+        for (const { key, error } of result.errors) console.error(`prefetch failed for chunk ${key}:`, redactText(error));
         return result;
       });
     // The new job has claimed the requests it shares with the old one (the store plans synchronously): now the old one can stop.
@@ -1027,7 +1052,7 @@ class Viewer {
         },
       })
       .then((result) => {
-        for (const { key: chunk, error } of result.errors) console.error(`coarse loop: prefetch failed for chunk ${chunk}:`, error);
+        for (const { key: chunk, error } of result.errors) console.error(`coarse loop: prefetch failed for chunk ${chunk}:`, redactText(error));
         // Chunks that failed are planned again the next time the view settles; the store leaves a failed cell alone for a while.
         if (result.errors.length > 0 && this.#coarseLoop === loop) this.#coarseLoop = null;
       });
@@ -1046,7 +1071,7 @@ class Viewer {
     this.store.getMask(lod, row, col, t, { signal }).then(
       () => this.#scheduleGpuFill(),
       (error) => {
-        if (error.name !== 'AbortError') console.error(`prefetch failed for the mask of chunk ${chunkKey(lod, row, col, t)}:`, error);
+        if (error.name !== 'AbortError') console.error(`prefetch failed for the mask of chunk ${chunkKey(lod, row, col, t)}:`, redactText(error));
       },
     );
   }
@@ -1160,7 +1185,7 @@ class Viewer {
     try {
       this.hooks[name]?.(payload);
     } catch (error) {
-      console.error(`embed hook "${name}" failed:`, error);
+      console.error(`embed hook "${name}" failed:`, redactText(error));
     }
   }
 
@@ -1666,7 +1691,7 @@ class Viewer {
     try {
       await this.#loadFrame(stage.lod, stage.cells, t, signal);
     } catch (error) {
-      if (error.name !== 'AbortError') console.warn(`coarse frame failed (level ${stage.lod}, cells ${JSON.stringify(stage.cells)}, timestep ${t}); the target level loads anyway:`, error);
+      if (error.name !== 'AbortError') console.warn(`coarse frame failed (level ${stage.lod}, cells ${JSON.stringify(stage.cells)}, timestep ${t}); the target level loads anyway:`, redactText(error));
       return;
     }
     if (signal.aborted) return;
@@ -1740,7 +1765,7 @@ class Viewer {
     const cell = `${row}/${col}`;
     const failures = (wave.failures.get(cell) ?? 0) + 1;
     wave.failures.set(cell, failures);
-    console.error(`chunk load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}, failure ${failures}):`, error);
+    console.error(`chunk load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}, failure ${failures}):`, redactText(error));
     const outcome = failures > MAX_CELL_RETRIES ? 'Giving up on it until the timestep changes.' : 'Retrying shortly.';
     this.#showError(
       'Chunk load failed',
@@ -1821,6 +1846,8 @@ class Viewer {
 
   async #inspect(clientX, clientY) {
     if (!this.store) return;
+    const request = ++this.#inspectRequest;
+    const { store } = this;
     $('click-hint').classList.add('hidden');
     const rect = this.canvas.getBoundingClientRect();
     const px = ((clientX - rect.left) * this.canvas.width) / rect.width;
@@ -1831,7 +1858,7 @@ class Viewer {
     const frame = this.#shown;
     if (!frame) return;
     const lod = frame.lod;
-    const level = this.store.levels[lod];
+    const level = store.levels[lod];
     const factor = 2 ** lod;
     const x = Math.floor(worldX / factor);
     const y = Math.floor(worldY / factor);
@@ -1848,13 +1875,17 @@ class Viewer {
     const cellY = y - row * level.chunkHeight;
     let mask = null;
     try {
-      [, mask] = await Promise.all([this.store.getRaw(lod, row, col, t), this.#maskRead(lod, row, col, t)]);
+      [, mask] = await Promise.all([store.getRaw(lod, row, col, t), this.#maskRead(lod, row, col, t)]);
     } catch (error) {
-      this.#showError('Chunk load failed', error.message, { code: 'chunk_load_failed' });
+      if (request === this.#inspectRequest) {
+        this.#showError('Chunk load failed', redactText(error?.message ?? error), { code: 'chunk_load_failed' });
+      }
       return;
     }
+    if (request !== this.#inspectRequest) return;
     const observed = await this.#observedAt(lod, row, col, t, cellX, cellY);
-    const values = this.store.samplePixel(lod, row, col, t, cellX, cellY);
+    if (request !== this.#inspectRequest) return;
+    const values = store.samplePixel(lod, row, col, t, cellX, cellY);
     const maskValue = mask ? mask[cellY * level.chunkWidth + cellX] : null;
     const info = { t, lod, pixel: { x: Math.floor(worldX), y: Math.floor(worldY) }, observed, masked: maskValue === 0, ...describePixel(values, this.bands, this.#nodata, maskValue) };
     this.#hook('click', { pixel: info.pixel, t, lod, info });
@@ -1872,7 +1903,7 @@ class Viewer {
       const coverage = await store.getCoverage(lod, row, col, t);
       return coverage ? coverage[y * store.levels[lod].chunkWidth + x] : null;
     } catch (error) {
-      console.error(`coverage load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, error);
+      console.error(`coverage load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, redactText(error));
       return null;
     }
   }
@@ -1945,7 +1976,7 @@ class Viewer {
             } catch (error) {
               if (error.name === 'AbortError') return;
               chart.failed++;
-              console.error(`chart: chunk load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, error);
+              console.error(`chart: chunk load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, redactText(error));
             }
           }
           await observed;
@@ -1967,7 +1998,7 @@ class Viewer {
     } catch (error) {
       if (error.name === 'AbortError') return;
       chart.coverage[t] = null;
-      console.error(`chart: coverage load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, error);
+      console.error(`chart: coverage load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, redactText(error));
     }
   }
 
@@ -2002,7 +2033,7 @@ class Viewer {
       .join('');
     const anyGap = chart.coverage?.some((c) => c === 0) ?? false;
     target.innerHTML = `
-      <svg class="chart-svg" viewBox="0 0 ${CHART.width} ${CHART.height}" role="img" aria-label="${chart.series.map((s) => s.label).join(', ')} over time">
+      <svg class="chart-svg" viewBox="0 0 ${CHART.width} ${CHART.height}" role="img" aria-label="${escapeHtml(chart.series.map((s) => s.label).join(', '))} over time">
         ${grid}${lines}${gaps}
         <line id="chart-marker" y1="${CHART.top}" y2="${CHART.bottom}" class="chart-marker"/>
         <line id="chart-hover" y1="${CHART.top}" y2="${CHART.bottom}" class="chart-hover" visibility="hidden"/>
@@ -2010,7 +2041,7 @@ class Viewer {
         <text x="${CHART.right}" y="${CHART.height - 4}" text-anchor="end" class="chart-axis">${this.#formatTime(n - 1)}</text>
       </svg>`;
     $('chart-legend').innerHTML =
-      chart.series.map((s) => `<span style="color:${s.color}">${s.label}</span>`).join('') +
+      chart.series.map((s) => `<span style="color:${s.color}">${escapeHtml(s.label)}</span>`).join('') +
       (anyGap ? '<span class="chart-gap-key" title="No scene observed this pixel this month; its value is carried over from another month"><i></i>gap-filled</span>' : '');
     this.#updateChartMarker();
     this.#updateChartStatus();
@@ -2189,7 +2220,7 @@ class Viewer {
             requested.delete(key);
             this.#drawGapOverlay();
           },
-          (error) => console.error(`gap overlay: coverage load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, error),
+          (error) => console.error(`gap overlay: coverage load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, redactText(error)),
         );
       }
       return null;
@@ -2439,6 +2470,11 @@ class Viewer {
 
   #hideError() {
     $('error-overlay').classList.remove('visible', 'toast');
+    $('open-default-dataset').hidden = true;
+  }
+
+  reportStoreOpenError(failure) {
+    this.#showError('Could not open store', failure.text, { code: 'store_open_failed' });
   }
 
   #updateSidebar(info) {
@@ -2493,6 +2529,7 @@ async function main() {
   const viewer = new Viewer();
   viewer.embedded = embed.embed;
   viewer.inspectorUi = embed.controls;
+  if (embed.controls) viewer.canvas.tabIndex = 0;
   viewer.extraQuery = embed.query;
   const bridge = embed.embed ? connectEmbed(viewer, embed) : null;
   window.chronozarr = {
@@ -2508,6 +2545,14 @@ async function main() {
     button: $('copy-link'),
     status: $('copy-link-status'),
     getUrl: () => viewer.shareUrl,
+    showFallback: (url) => {
+      const dialog = $('copy-link-fallback');
+      const field = $('copy-link-url');
+      field.value = url;
+      dialog.showModal();
+      field.focus();
+      field.select();
+    },
   });
 
   // The first read of catalog.json and of the store's root zarr.json is the one that index.html started before this script loaded.
@@ -2520,22 +2565,23 @@ async function main() {
         return [];
       });
   const select = $('catalog-select');
+  const openDefault = $('open-default-dataset');
   const inCatalog = (url) => catalog.some((entry) => entry.url === url);
   const initialSearch = location.search;
-  const open = (url, { fallback = true, viewSearch, store, startTime } = {}) => {
-    // A catalog store is not pinned in the URL, so an open tab follows catalog changes on reload;
-    // only an external store is shareable via ?store=. The view (t, p, z, c) in the URL is restored
-    // when the page first opens; opening another store starts from its default view.
-    viewer.pinnedStore = inCatalog(url) ? null : url;
+  const open = (url, { viewSearch, store, startTime, pin = !inCatalog(url) } = {}) => {
+    // Keep an explicit store in a link pinned, including a catalog store. The bare demo follows the catalog.
+    viewer.pinnedStore = pin ? url : null;
     viewer.resetUrl();
     select.value = url;
+    $('copy-link').disabled = true;
     // An external store earns a dropdown entry only once it has loaded, so a dead URL from an old
     // permalink never lingers as an option.
     const optionFor = (value) => [...select.options].find((option) => option.value === value);
     // Labels and logs carry the address without a login or signed query (redact.js); the option's value is the URL to read.
-    return (window.chronozarr.ready = viewer
+    const opening = viewer
       .loadStore(url, { viewSearch, store, startTime, fetch: fetchEarly })
       .then((result) => {
+        if (window.chronozarr.ready !== opening) return null;
         $('copy-link').disabled = !viewer.shareUrl;
         if (!inCatalog(url) && catalog.length > 0 && !optionFor(url)) {
           select.add(new Option(redactUrl(url).replace(/^https?:\/\//, ''), url));
@@ -2544,14 +2590,12 @@ async function main() {
         return result;
       })
       .catch((error) => {
-        $('copy-link').disabled = !viewer.shareUrl;
+        if (window.chronozarr.ready !== opening) return null;
         console.error(`loadStore(${redactUrl(url)}) failed:`, redactText(error?.message ?? error));
-        optionFor(url)?.remove();
-        if (fallback && catalog.length > 0 && catalog[0].url !== url) {
-          console.warn(`falling back to the catalog store ${catalog[0].url}`);
-          open(catalog[0].url, { fallback: false, startTime: latestCoveredTime });
-        }
-      }));
+        if (!inCatalog(url)) optionFor(url)?.remove();
+        openDefault.hidden = catalog.length === 0 || catalog[0].url === url;
+      });
+    return (window.chronozarr.ready = opening);
   };
   // "Open store URL": the store is opened and checked before open() lets go of the current one, and the address bar changes only then.
   const opener = embed.embed
@@ -2561,7 +2605,7 @@ async function main() {
         {
           load: async ({ url, store }) => {
             // undefined means the open failed after the store was checked; null, that another store took the viewer over.
-            if ((await open(url, { store, fallback: false })) === undefined) throw new Error('the viewer could not show the store');
+            if ((await open(url, { store })) === undefined) throw new Error('the viewer could not show the store');
           },
         },
       );
@@ -2572,12 +2616,22 @@ async function main() {
       opener?.cancel();
       open(select.value, { startTime: latestCoveredTime });
     });
+    openDefault.addEventListener('click', () => {
+      opener?.cancel();
+      open(catalog[0].url, { startTime: latestCoveredTime });
+    });
   }
 
   const requested = new URLSearchParams(location.search).get('store');
-  if (requested) {
-    const url = new URL(requested, location.href).href;
-    open(url, { viewSearch: initialSearch, fallback: fallsBackToCatalog(url, catalog) });
+  if (requested !== null) {
+    try {
+      const { url } = parseStoreUrl(requested, location, { trimTrailingSlash: false });
+      open(url, { viewSearch: initialSearch, pin: true });
+    } catch (error) {
+      viewer.reportStoreOpenError(error);
+      openDefault.hidden = catalog.length === 0;
+      window.chronozarr.ready = Promise.resolve();
+    }
   } else if (catalog.length > 0) {
     // The demo opened with no store and no view in the address starts at its latest well-covered timestep; any link
     // to a view (with a store, a timestep, a product, a zoom...) keeps meaning what it meant, t=0 when t is left out.

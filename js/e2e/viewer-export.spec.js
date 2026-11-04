@@ -23,6 +23,46 @@ async function exportAndDownload(page, format, { from = 0, to = 2 } = {}) {
   return { name: download.suggestedFilename(), bytes: await readFile(await download.path()) };
 }
 
+test('an export keeps its starting product even when the viewer changes products', async ({ page, servers, storeUrl }) => {
+  const store = await storeUrl('u16_plain');
+  await open(page, `${servers.appUrl}/demo/index.html?store=${encodeURIComponent(store)}`);
+  const result = await page.evaluate(async () => {
+    const { viewer } = window.chronozarr;
+    const session = viewer.createExportSession({ scale: 0.25, timesteps: 1 });
+    try {
+      await session.prepare(0);
+      const beforeComplete = session.render(0);
+      const before = session.readPixels();
+      viewer.setProduct(viewer.products.findIndex(({ id }) => id === 'ndvi'));
+      const afterComplete = session.render(0);
+      const after = session.readPixels();
+      return { beforeComplete, afterComplete, unchanged: before.every((byte, i) => byte === after[i]) };
+    } finally {
+      session.close();
+    }
+  });
+  expect(result).toEqual({ beforeComplete: true, afterComplete: true, unchanged: true });
+});
+
+test('switching datasets during recording fails the export with a visible explanation', async ({ page, servers, storeUrl, consoleErrors }) => {
+  const first = await storeUrl('u16_plain');
+  const second = await storeUrl('link_plain');
+  await page.route('**/catalog.json', (route) => route.fulfill({ json: [{ name: 'First', url: first }, { name: 'Second', url: second }] }));
+  await open(page, `${servers.appUrl}/demo/index.html`);
+  await page.evaluate(() => window.chronozarr.viewer.setSpeed(1));
+  await page.locator('#export-btn').click();
+  await page.locator('#export-size').selectOption('0.25');
+  await page.locator('#export-start').click();
+  const status = page.locator('#export-status');
+  await expect(status).toContainText('Recording: 1 of 4');
+  await page.locator('#catalog-select').selectOption(second);
+  await expect(status).toContainText('The dataset changed during export.');
+  await expect(page.locator('#export-download')).toBeHidden();
+  const error = consoleErrors.findIndex((message) => message.includes('export failed: Error: The dataset changed during export.'));
+  expect(error).toBeGreaterThanOrEqual(0);
+  consoleErrors.splice(error, 1);
+});
+
 test('video export loads uncached frames in order when only one frame fits the cache', async ({ page, servers, storeUrl }) => {
   const store = await storeUrl('link_plain');
   await open(page, `${servers.appUrl}/demo/index.html?store=${encodeURIComponent(store)}`);

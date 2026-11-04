@@ -109,14 +109,30 @@ test.describe('a ?store= link that does not open', () => {
     await expect(page.locator('#error-overlay')).toHaveClass(/visible/);
   });
 
-  test('to an old address on the catalog host still opens the catalog store', async ({ page, servers, storeUrl }) => {
+  test('to an old address on the catalog host shows the error and lets the user open the default', async ({ page, servers, storeUrl }) => {
     const demo = await storeUrl('u16_plain');
     await page.route('**/catalog.json', (route) => route.fulfill({ json: [{ name: 'Demo', url: demo }] }));
     const moved = `${servers.dataUrl}/an_old_prefix/`;
-    await page.goto(`${servers.appUrl}/demo/index.html?store=${encodeURIComponent(moved)}`);
+    await page.route(`${moved}zarr.json`, (route) => route.fulfill({ status: 404, headers: { 'Access-Control-Allow-Origin': '*' } }));
+    await page.goto(`${servers.appUrl}/demo/index.html?store=${encodeURIComponent(moved)}&t=1`);
+    await expect(page.locator('#error-message')).toContainText('Store not found');
+    expect(await page.evaluate(() => window.chronozarr.viewer.store ?? null)).toBeNull();
+    await page.getByRole('button', { name: 'Open default dataset' }).click();
     await page.waitForFunction((url) => window.chronozarr?.viewer?.store?.url === url, demo);
+    await expect(page.locator('#error-overlay')).toBeHidden();
   });
 });
+
+for (const requested of ['https://[invalid', '']) {
+  test(`a malformed or empty shared store (${JSON.stringify(requested)}) reports the form's validation error`, async ({ page, servers, storeUrl }) => {
+    const demo = await storeUrl('u16_plain');
+    await page.route('**/catalog.json', (route) => route.fulfill({ json: [{ name: 'Demo', url: demo }] }));
+    await page.goto(`${servers.appUrl}/demo/index.html?store=${encodeURIComponent(requested)}`);
+    await expect(page.getByRole('alert')).toContainText(requested ? 'Not a URL' : 'No URL');
+    expect(await page.evaluate(() => window.chronozarr.viewer.store ?? null)).toBeNull();
+    await expect(page.getByRole('button', { name: 'Open default dataset' })).toBeVisible();
+  });
+}
 
 test('a URL with a login is refused without a request, and nothing of it is shown', async ({ page, servers, storeUrl }) => {
   await openViewer(page, servers, await storeUrl('u16_sharded'));

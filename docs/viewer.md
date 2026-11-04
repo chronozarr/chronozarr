@@ -19,9 +19,9 @@ A link with a timestep (`t`) opens at that timestep. If it specifies a store, pr
 | Jump to a date | Click or drag on the timeline |
 | Go to the first or last timestep | Focus the timeline, then press Home or End |
 | Change the playback speed | Drag the speed slider |
-| Zoom | Scroll, or pinch on a touch screen |
-| Pan | Drag the map |
-| See a pixel's values over time | Click the map. The inspector shows the values and a chart. In a narrow or embedded view, Escape closes the inspector drawer. The desktop side panel stays visible |
+| Zoom | Scroll, pinch on a touch screen, or focus the map and press plus or minus. Press 0 with the map focused to fit the whole store |
+| Pan | Drag the map, or focus it and press an arrow key |
+| See a pixel's values over time | Click the map, or focus it and press Enter to inspect the centre. The inspector shows a snapshot at the displayed date and a chart across time. In a narrow or embedded view, Escape closes the inspector drawer. The desktop side panel stays visible |
 | Copy a pixel's location | Click the map, then Copy beside Latitude, longitude. Coordinates are WGS84 degrees at the selected native pixel's centre, latitude first |
 | Change the product | Choose it in the product list, or press 1 to 9 |
 | Change the display range of one band | Choose Single band. For a band with adjustable limits, set the minimum and maximum, or use Auto to fit the pixels on the screen. Bands shown as reflectance, including the quickstart sample, use fixed limits and show no range or Auto controls |
@@ -58,7 +58,9 @@ The store names these roles in its band metadata. `chronozarr bands STORE` lists
 
 ## Links to a view
 
-Copy link copies the address of the current view. It holds the store, the timestep, the product, the band with its display range and colormap, the zoom and the map centre. It does not hold the playback speed or the loop setting.
+Copy link copies the address of the current view. It holds the store, the timestep, the product, the band with its display range and colormap, the zoom and the map centre. It does not hold the playback speed or the loop setting. If your browser blocks automatic copying, copy the selected URL in the dialog.
+
+If a shared store fails to open, the viewer shows the error. Use the store field to try a corrected URL or choose Open default dataset to go to the demo.
 
 The address uses these parameters:
 

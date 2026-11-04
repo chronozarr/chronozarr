@@ -115,7 +115,9 @@ map.on('click', async (event) => {
   addRow('pixel', `col ${value.col}, row ${value.row}`);
   addRow('centre', `${value.lngLat.lng.toFixed(5)}, ${value.lngLat.lat.toFixed(5)}`);
   if (!value.valid) addRow('data', 'no observation');
-  for (const band of value.bands) addRow(band.name, `${band.stored}  (${band.value.toFixed(4)}${band.units ? ` ${band.units}` : ''})`);
+  for (const band of value.bands) {
+    addRow(band.name, band.value === null ? 'no data' : `${band.stored}  (${band.value.toFixed(4)}${band.units ? ` ${band.units}` : ''})`);
+  }
   if (value.ndvi !== null) addRow('NDVI', value.ndvi.toFixed(3));
   if (value.ndwi !== null) addRow('NDWI', `${value.ndwi.toFixed(3)}${value.isWater ? ' (water)' : ''}`);
   readout.append(table);

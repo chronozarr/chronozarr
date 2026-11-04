@@ -286,6 +286,70 @@ def test_grid_mismatch_needs_explicit_resampling_and_then_warps(tmp_path, tifs, 
     assert not result[2][:, :, :5].any()
 
 
+@pytest.mark.parametrize(("sentinel", "override"), [(0, []), (-32768, []), (0, ["--nodata", "0"])])
+def test_average_warp_keeps_a_valid_zero_and_an_empty_quadrant(tmp_path, sentinel, override):
+    source = tmp_path / "input"
+    source.mkdir()
+    coarse = (20.0, 0.0, TRANSFORM[2], 0.0, -20.0, TRANSFORM[5])
+    values = np.array(
+        [
+            [
+                [-2, 2, 8, 8],
+                [-2, 2, 8, 8],
+                [12, 12, sentinel, sentinel],
+                [12, 12, sentinel, sentinel],
+            ]
+        ],
+        dtype="int16",
+    )
+    write_tif(
+        source / "change_2024-01-01.tif",
+        np.full((1, 2, 2), 7, dtype="int16"),
+        transform=coarse,
+        nodata=sentinel,
+    )
+    write_tif(source / "change_2024-02-01.tif", values, nodata=sentinel)
+    target = tmp_path / "store"
+    result = CliRunner().invoke(
+        main,
+        ["convert", str(source), str(target), "--resampling", "average", "--lods", "1", *override],
+    )
+    assert result.exit_code == 0, result.output
+    opened = chronozarr.open_store(target)
+    np.testing.assert_array_equal(opened.read_mask(1), [[1, 1], [1, 0]])
+    np.testing.assert_allclose(
+        opened.to_xarray(physical=True).values[1, 0], [[0, 8], [12, np.nan]]
+    )
+    assert chronozarr.validate(target) == []
+
+
+def test_average_warp_uses_only_valid_contributors_to_determine_values_and_coverage(tmp_path):
+    source = tmp_path / "input"
+    source.mkdir()
+    coarse = (20.0, 0.0, TRANSFORM[2], 0.0, -20.0, TRANSFORM[5])
+    write_tif(
+        source / "masked_2024-01-01.tif",
+        np.full((1, 2, 2), 7, dtype="uint16"),
+        transform=coarse,
+        nodata=None,
+    )
+    fine = write_tif(
+        source / "masked_2024-02-01.tif",
+        np.array(
+            [[[3, 100, 2, 3], [100, 100, 2, 3], [12, 12, 100, 100], [12, 12, 100, 100]]],
+            dtype="uint16",
+        ),
+        nodata=None,
+    )
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True), rasterio.open(fine, "r+") as dst:
+        dst.write_mask(np.array([[1, 0, 1, 1], [0, 0, 1, 1], [1, 1, 0, 0], [1, 1, 0, 0]], "uint8"))
+    target = tmp_path / "store"
+    convert(source, target, resampling="average", n_lods=1, **OPTIONS)
+    opened = chronozarr.open_store(target)
+    np.testing.assert_array_equal(opened.read_mask(1), [[1, 1], [1, 0]])
+    np.testing.assert_allclose(opened.physical(1)[0], [[3, 3], [12, np.nan]])
+
+
 def test_crs_override_warps_every_timestep_into_the_new_crs(tmp_path, tifs):
     manifest = write_csv(tmp_path / "m.csv", tifs)
     out = tmp_path / "store"
@@ -620,10 +684,12 @@ def test_png_frames_on_another_grid_are_warped_like_cogs(tmp_path):
     for t in (0, 1, 3):
         assert np.array_equal(store.read(t), frames.rgb[t])
     # source column j of the shifted frame lands at column j + 5; the rest is outside its footprint
-    assert np.array_equal(store.read(2)[:, :, 5:], frames.rgb[2][:, :, :-5])
     expected = np.zeros((pf.HEIGHT, pf.WIDTH), dtype=bool)
     expected[:, 5:] = frames.alpha[2][:, :-5]
     assert np.array_equal(stored_mask(store)[2], expected)
+    moved = store.read(2)
+    assert np.array_equal(moved[:, expected], frames.rgb[2][:, :, :-5][:, expected[:, 5:]])
+    assert not moved[:, ~expected].any()
 
 
 def test_png_frames_with_their_own_crs_warp_into_another_crs(tmp_path):
@@ -659,10 +725,12 @@ def test_frames_located_by_bounds_can_be_cropped_onto_an_explicit_grid(tmp_path)
         **OPTIONS,
     )
     store = chronozarr.open_store(out)
-    assert np.array_equal(
-        np.stack([store.read(t) for t in range(pf.N_TIME)]), frames.rgb[:, :, 3:23, 4:28]
+    expected = frames.alpha[:, 3:23, 4:28]
+    np.testing.assert_array_equal(stored_mask(store), expected)
+    moved = np.stack([store.read(t) for t in range(pf.N_TIME)])
+    np.testing.assert_array_equal(
+        moved, np.where(expected[:, None], frames.rgb[:, :, 3:23, 4:28], 0)
     )
-    assert np.array_equal(stored_mask(store), frames.alpha[:, 3:23, 4:28])
 
 
 def test_bounds_apply_to_manifests_only(tmp_path, truth):
@@ -1035,6 +1103,23 @@ def physical_nan(store) -> np.ndarray:
 
 def band_attrs(store) -> list[tuple]:
     return [(b.scale, b.offset, b.units) for b in store.attrs.bands]
+
+
+def test_local_geotiff_external_mask_is_preserved(tmp_path):
+    tif = write_tif(
+        tmp_path / "mask_2024-01-01.tif",
+        np.array([[[11, 12], [13, 14]]], dtype="uint8"),
+        nodata=None,
+    )
+    mask = np.array([[255, 0], [255, 255]], dtype="uint8")
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=False), rasterio.open(tif, "r+") as dst:
+        dst.write_mask(mask)
+    assert tif.with_suffix(".tif.msk").is_file()
+    target = tmp_path / "store"
+    convert(tmp_path, target, n_lods=1, **OPTIONS)
+    opened = chronozarr.open_store(target)
+    np.testing.assert_array_equal(opened.read_mask(0), mask != 0)
+    np.testing.assert_allclose(opened.physical(0)[0], [[11, np.nan], [13, 14]])
 
 
 def test_internal_mask_and_band_scaling_survive_conversion(tmp_path):

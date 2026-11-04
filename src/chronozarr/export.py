@@ -12,11 +12,12 @@ Rules, which keep every pixel's validity and value exactly as the store reads it
 2. A store with a `mask` gets a per-dataset internal GeoTIFF mask, 255 where the mask is 1, so a
    valid pixel is valid whatever its value and an invalid pixel is invalid whatever its value.
    The store's nodata is also written, but only when no valid pixel of that timestep holds that
-   value; otherwise it is left out, because GDAL readers that look at nodata would hide valid
-   data.
+   value and averaging an overview cannot create a collision; otherwise the mask alone carries
+   validity.
 3. A store without a mask whose nodata is a number keeps nodata: the GeoTIFF nodata is that
-   value, no mask is written, and GDAL judges each band as the store does. A store with neither
-   writes neither (every pixel is valid; a stored 0 is data).
+   value, no mask is written, and GDAL judges each band as the store does. These exports omit
+   GDAL-generated overviews when a valid mean could collide with the sentinel. A store with
+   neither writes neither (every pixel is valid; a stored 0 is data).
 4. `physical`: float32 values `stored * scale + offset`, NaN where the pixel is invalid, written
    with nodata NaN. Scale and offset are not written again (the values already include them);
    `units` and `descriptions` are. A store's mask is written as in rule 2.
@@ -24,16 +25,17 @@ Rules, which keep every pixel's validity and value exactly as the store reads it
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
 from chronozarr.decode import ChronoStore, open_store
 
 _DATE_PREFIX = re.compile(r"^\d{4}-\d{2}(-\d{2}([T ][\d:.]*Z?)?)?$")
+_COG_BLOCK_SIZE = 512
 
 
 def select_times(spec: Sequence[str], times: Sequence[str]) -> list[int]:
@@ -126,6 +128,16 @@ def _nodata_tag(
     return nodata
 
 
+def _overview_can_hit_nodata(dtype: np.dtype, nodata: int | float | None) -> bool:
+    """Whether a finite sentinel could coincide with a valid GDAL average."""
+    if nodata is None or not math.isfinite(nodata):
+        return False
+    if dtype.kind in "iu":
+        limits = np.iinfo(dtype)
+        return limits.min < nodata < limits.max
+    return True
+
+
 def export_cog(
     store: ChronoStore | str | Path,
     out_dir: str | Path,
@@ -168,7 +180,7 @@ def export_cog(
 
     for t, target in zip(selected, targets, strict=True):
         plane = opened.read_mask(t, level)
-        tag: Any
+        tag: int | float | None
         if physical:
             values = np.asarray(opened.physical(t, level))
             tag = float("nan")
@@ -176,6 +188,14 @@ def export_cog(
             values = np.asarray(opened.read(t, level))
             tag = _nodata_tag(lod.nodata, values, plane)
         n_band, height, width = values.shape
+        overviews = "AUTO"
+        if max(height, width) > _COG_BLOCK_SIZE and _overview_can_hit_nodata(values.dtype, tag):
+            # GDAL changes a valid mean that equals its nodata tag. An internal mask
+            # can carry validity alone; with per-band nodata, keep the base resolution.
+            if plane is not None:
+                tag = None
+            else:
+                overviews = "NONE"
         with MemoryFile() as memory:
             with memory.open(
                 driver="GTiff",
@@ -187,8 +207,8 @@ def export_cog(
                 transform=Affine(*lod.transform),
                 nodata=tag,
                 tiled=True,
-                blockxsize=512,
-                blockysize=512,
+                blockxsize=_COG_BLOCK_SIZE,
+                blockysize=_COG_BLOCK_SIZE,
             ) as dst:
                 dst.write(values)
                 if plane is not None:
@@ -211,7 +231,8 @@ def export_cog(
                     driver="COG",
                     compress="DEFLATE",
                     predictor="YES",
-                    blocksize=512,
+                    blocksize=_COG_BLOCK_SIZE,
+                    overviews=overviews,
                     overview_resampling="AVERAGE",
                 )
     return targets

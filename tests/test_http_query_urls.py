@@ -79,12 +79,17 @@ def test_http_store_normalizes_trailing_slash_and_keeps_query():
     [
         ("https://h/p/store?token=abc", "https://h/p/store?<redacted>"),
         ("https://h/p/store/zarr.json?a=1&b=2#f", "https://h/p/store/zarr.json?<redacted>"),
+        (
+            "https://user:password@[::1]:123/p/store?token=abc",
+            "https://[::1]:123/p/store?<redacted>",
+        ),
+        ("https://user:password@h/p/store#fragment", "https://h/p/store"),
         ("https://h/p/store", "https://h/p/store"),
         ("https://h/p/store/", "https://h/p/store/"),
         ("/data/stores/what?.zarr", "/data/stores/what?.zarr"),
     ],
 )
-def test_redact_url_drops_query_only_from_http_urls(url, expected):
+def test_redact_url_drops_credentials_only_from_http_urls(url, expected):
     assert redact_url(url) == expected
 
 
@@ -146,6 +151,28 @@ def test_cli_info_and_doctor_do_not_print_the_token(token_store):
     assert f"{url}?<redacted>" in info.output
     assert f"{url}?<redacted>" in doctor.output
     assert TOKEN not in info.output + doctor.output
+
+
+@pytest.mark.parametrize(
+    ("command", "key", "detail"),
+    [("info", "zarr.json", "Error:"), ("doctor", "0/data/zarr.json", "[FAIL] validate")],
+)
+def test_cli_does_not_print_a_reflected_http_reason(token_store, command, key, detail):
+    class ReflectPath(TokenHandler):
+        def send_head(self):
+            if urllib.parse.urlsplit(self.path).path == f"/{token_store.name}/{key}":
+                self.send_error(HTTPStatus.FORBIDDEN, f"Expired {self.path}")
+                return None
+            return super().send_head()
+
+    with serving(ReflectPath, token_store) as url:
+        result = CliRunner().invoke(
+            main, [command, f"{url}?token={TOKEN}"], catch_exceptions=False
+        )
+    assert result.exit_code == 1, result.output
+    assert detail in result.output
+    assert f"GET {url}/{key}?<redacted>: HTTP 403" in result.output
+    assert TOKEN not in result.output
 
 
 @pytest.mark.parametrize(

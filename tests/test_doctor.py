@@ -17,7 +17,9 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 import warnings
 from collections import Counter
@@ -263,6 +265,67 @@ def test_doctor_and_reader_reject_an_unsatisfiable_shard_payload(tmp_path):
     assert checks["validate"].status == "ok"
     assert checks["decode level 0"].status == "fail"
     assert f"HTTP 416 for Range {payload_range}" in checks["decode level 0"].detail
+
+
+@pytest.mark.parametrize("object_kind", ["root", "shard_payload"])
+@pytest.mark.parametrize("truncated_attempts", [1, 4])
+def test_http_reader_retries_truncated_bodies(
+    tmp_path, monkeypatch, object_kind, truncated_attempts
+):
+    path = tmp_path / "store"
+    truth = make_truth(2, 1, 16, 16)
+    build_store(path, truth, shard=True, shard_time=2, chunk_size=16, n_lods=1)
+    key = "zarr.json" if object_kind == "root" else "0/data/c/0/0/0/0"
+    blob = (path / key).read_bytes()
+    payload_range = None
+    body = blob
+    if object_kind == "shard_payload":
+        offset, length = struct.unpack_from("<QQ", blob, len(blob) - 36)
+        payload_range = f"bytes={offset}-{offset + length - 1}"
+        body = blob[offset : offset + length]
+    monkeypatch.setattr(store_module, "_RETRY_DELAYS_S", (0, 0, 0))
+
+    class Truncate(StoreRequestHandler):
+        attempts = 0
+
+        def send_head(self):
+            request_path = urllib.parse.urlsplit(self.path).path
+            if (
+                self.command == "GET"
+                and request_path == f"/{path.name}/{key}"
+                and self.headers.get("Range") == payload_range
+            ):
+                Truncate.attempts += 1
+                if Truncate.attempts <= truncated_attempts:
+                    status = HTTPStatus.OK if payload_range is None else HTTPStatus.PARTIAL_CONTENT
+                    self.send_response(status)
+                    if payload_range is not None:
+                        self.send_header(
+                            "Content-Range", f"{payload_range.replace('=', ' ')}/{len(blob)}"
+                        )
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.wfile.write(body[:-1])
+                    return None
+            return super().send_head()
+
+    with serving(Truncate, path) as url:
+        target = f"{url}?token=synthetic-secret"
+        if truncated_attempts == 1:
+            store = chronozarr.open_store(target)
+            np.testing.assert_array_equal(store.read_cell(0, 0, 0), truth[0])
+            assert Truncate.attempts == 2
+        else:
+            with pytest.raises((OSError, ExceptionGroup)) as caught:
+                chronozarr.open_store(target).read_cell(0, 0, 0)
+            detail = "".join(traceback.format_exception(caught.value))
+            assert f"GET {url}/{key}?<redacted>: IncompleteRead" in detail
+            assert "after 4 attempts" in detail
+            assert "synthetic-secret" not in detail
+            if payload_range is not None:
+                assert f"for Range {payload_range}" in detail
+            assert Truncate.attempts == 4
 
 
 def test_missing_content_range_exposure_fails(sharded_store):

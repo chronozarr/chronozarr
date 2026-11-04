@@ -13,9 +13,22 @@ export function redactUrl(value) {
   return `${url.protocol}//${url.host}${url.pathname}`;
 }
 
-/** `text` with every http(s) URL in it reduced to `scheme://host/path`; a URL that cannot be parsed becomes `[url]`. */
-export function redactText(text) {
-  return String(text).replace(/https?:\/\/[^\s"'<>)\]]+/gi, (match) => {
+/** Replace the exact request URL, then redact other HTTP(S) URLs in the text. */
+export function redactText(text, requestUrl) {
+  let shown = String(text);
+  if (requestUrl) {
+    let request;
+    try { request = new URL(requestUrl, globalThis.location?.href); } catch { /* no known URL */ }
+    if (request && (request.username || request.password || request.search || request.hash)) {
+      const safe = redactUrl(request);
+      const { pathname, search } = request;
+      shown = shown.replaceAll(request.href, safe);
+      shown = shown.replaceAll(requestUrl, safe);
+      if (search) shown = shown.replaceAll(pathname + search, pathname);
+    }
+  }
+  // Keep bracketed IPv6 addresses intact. An unmatched closing bracket still delimits a URL.
+  return shown.replace(/https?:\/\/(?:[^\s"'<>()\[\]]|\[[^\s"'<>()\[\]]*\])+/gi, (match) => {
     const [, address, punctuation] = /^(.*?)([.,;:!?]*)$/.exec(match);
     return (redactUrl(address) || '[url]') + punctuation;
   });

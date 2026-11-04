@@ -39,9 +39,10 @@ function isLoopback(hostname) {
  * A relative URL resolves against the page, as ?store= does. Throws StoreOpenError; no message repeats the input.
  * @param {string} input
  * @param {{href: string, protocol: string}} [page]
+ * @param {{trimTrailingSlash?: boolean}} [options]
  * @returns {{url: string, display: string}}
  */
-export function parseStoreUrl(input, page = globalThis.location) {
+export function parseStoreUrl(input, page = globalThis.location, { trimTrailingSlash = true } = {}) {
   const text = String(input ?? '').trim();
   if (!text) throw new StoreOpenError('empty_url', 'No URL', 'Paste the URL of a chronozarr store: the directory that contains its root zarr.json.');
   let url;
@@ -60,7 +61,7 @@ export function parseStoreUrl(input, page = globalThis.location) {
     throw new StoreOpenError('mixed_content', 'Insecure address', 'This page is served over https, and a browser blocks it from reading an http: address. Use the https address of the store.');
   }
   url.hash = '';
-  url.pathname = url.pathname.replace(/\/+$/, '') || '/';
+  if (trimTrailingSlash) url.pathname = url.pathname.replace(/\/+$/, '') || '/';
   return { url: url.href, display: redactUrl(url.href) };
 }
 
@@ -92,22 +93,6 @@ export async function probeReachable(url, { fetch = globalThis.fetch, timeoutMs 
 function readsThisComputerFromAfar(url, page) {
   try {
     return isLoopback(new URL(url, page?.href).hostname) && !isLoopback(new URL(page?.href ?? '').hostname);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Whether a store that a link asked for (?store=) and that failed to open gives way to the first catalog store. Only an
- * address on the catalog's own host does: an old demo link whose prefix has moved. Any other store keeps its error on
- * screen, so a link to someone's data never shows the demo in its place.
- * @param {string} url
- * @param {{url: string}[]} catalog
- */
-export function fallsBackToCatalog(url, catalog) {
-  if (catalog.length === 0 || catalog[0].url === url) return false;
-  try {
-    return new URL(url).origin === new URL(catalog[0].url).origin;
   } catch {
     return false;
   }

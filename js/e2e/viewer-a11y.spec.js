@@ -79,6 +79,24 @@ test.describe('keyboard', () => {
       expect(stop.ring, `${stop.id} shows a focus ring`).toBe(true);
     }
   });
+
+  test('the focused map can zoom, pan, fit and inspect a dated pixel', async ({ page, servers, storeUrl }) => {
+    await openViewer(page, servers, await storeUrl('u16_plain'));
+    const map = page.getByLabel('Raster map');
+    const camera = () => page.evaluate(() => window.chronozarr.viewer.camera);
+    const initial = await camera();
+    await map.focus();
+    await page.keyboard.press('Equal');
+    expect((await camera()).scale).toBeGreaterThan(initial.scale);
+    await page.keyboard.press('ArrowRight');
+    expect((await camera()).cx).toBeGreaterThan(initial.cx);
+    expect(await timeIndex(page)).toBe(0);
+    await page.keyboard.press('0');
+    expect(await camera()).toEqual(initial);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#sidebar-content')).toContainText('Snapshot time');
+    await expect(page.locator('#sidebar-content')).toContainText(await page.locator('#time-label').innerText());
+  });
 });
 
 test.describe('a phone: 375 x 812, touch', () => {
@@ -115,5 +133,25 @@ test.describe('a phone: 375 x 812, touch', () => {
     await touch('touchEnd');
     const last = (await page.evaluate(() => window.chronozarr.viewer.store.times.length)) - 1;
     await expect.poll(() => timeIndex(page)).toBe(last);
+  });
+
+  test('spreading two touch pointers zooms about their midpoint without inspecting a pixel', async ({ page, servers, storeUrl }) => {
+    await openViewer(page, servers, await storeUrl('u16_plain'));
+    const box = await page.locator('#gl-canvas').boundingBox();
+    const x = Math.round(box.x + box.width / 2);
+    const y = Math.round(box.y + box.height / 2);
+    const cdp = await page.context().newCDPSession(page);
+    const touch = (type, touchPoints) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints });
+    const camera = () => page.evaluate(() => window.chronozarr.viewer.camera);
+    const start = await camera();
+    await touch('touchStart', [{ x: x - 35, y, id: 1 }]);
+    await touch('touchStart', [{ x: x - 35, y, id: 1 }, { x: x + 35, y, id: 2 }]);
+    await touch('touchMove', [{ x: x - 70, y, id: 1 }, { x: x + 70, y, id: 2 }]);
+    await touch('touchEnd', []);
+    const end = await camera();
+    expect(end.scale / start.scale).toBeCloseTo(2, 1);
+    expect(Math.abs(end.cx - start.cx)).toBeLessThan(1);
+    expect(Math.abs(end.cy - start.cy)).toBeLessThan(1);
+    await expect(page.locator('#sidebar-content')).toBeHidden();
   });
 });

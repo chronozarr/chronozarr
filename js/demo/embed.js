@@ -11,6 +11,7 @@
 // pixel <-> lon/lat, message shapes), so node tests cover it. EmbedBridge and connectEmbed are the thin parts that
 // touch window and the viewer.
 
+import { redactText } from '../chronozarr/redact.js';
 import { COLORMAPS, colormapIndex } from '../shared/colormaps.js';
 import { pixelToProjected, projectedToPixel } from './permalink.js';
 
@@ -354,8 +355,8 @@ export class EmbedBridge {
   /** Run `work` after the commands queued before it; a failure becomes `chronozarr:error` (an unexpected one is logged too). */
   enqueue(work) {
     this.#queue = this.#queue.then(work).catch((error) => {
-      if (!(error instanceof EmbedCommandError)) console.error('chronozarr embed: a command failed:', error);
-      this.post('error', { code: error instanceof EmbedCommandError ? error.code : 'internal', message: error.message });
+      if (!(error instanceof EmbedCommandError)) console.error('chronozarr embed: a command failed:', redactText(error));
+      this.post('error', { code: error instanceof EmbedCommandError ? error.code : 'internal', message: redactText(error.message) });
     });
   }
 }
@@ -367,7 +368,7 @@ async function loadProjection(store) {
     const { createProjection } = await import('../maplibre/projection.js');
     return await createProjection(store);
   } catch (error) {
-    console.warn(`chronozarr embed: no lon/lat for this store (${error.message})`);
+    console.warn(`chronozarr embed: no lon/lat for this store (${redactText(error.message)})`);
     return null;
   }
 }

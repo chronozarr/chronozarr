@@ -206,6 +206,7 @@ def _transform_from_coords(da: xr.DataArray) -> Transform:
 
 
 def _resolve_transform(raw: Sequence[float] | None, da: xr.DataArray | None) -> Transform:
+    from_attrs = raw is None
     if raw is None and da is not None:
         raw = da.attrs.get("transform")
     if raw is None:
@@ -222,7 +223,29 @@ def _resolve_transform(raw: Sequence[float] | None, da: xr.DataArray | None) -> 
         raise ValueError("rotated transforms are not supported; reproject to a north-up grid")
     if a <= 0 or e >= 0:
         raise ValueError(f"transform must be north-up (a > 0, e < 0), got a={a}, e={e}")
-    return (values[0], values[1], values[2], values[3], values[4], values[5])
+    transform = (values[0], values[1], values[2], values[3], values[4], values[5])
+    if from_attrs and da is not None and ("x" in da.coords or "y" in da.coords):
+        _check_transform_coords(da, transform)
+    return transform
+
+
+def _check_transform_coords(da: xr.DataArray, transform: Transform) -> None:
+    """Reject stale transform attributes on spatial slices with explicit pixel centres."""
+    y, x = schema.pixel_centers(transform, da.sizes["y"], da.sizes["x"])
+    for axis, expected, step in (("x", x, transform[0]), ("y", y, transform[4])):
+        if axis not in da.coords:
+            continue
+        coord = da.coords[axis]
+        if coord.dtype.kind == "f":
+            expected = expected.astype(coord.dtype)
+        if coord.dims != (axis,) or not np.allclose(
+            coord.values.astype(np.float64), expected, rtol=0, atol=abs(step) * 1e-6
+        ):
+            raise ValueError(
+                f"the transform attribute disagrees with the {axis} pixel centres. "
+                "Update the attribute after slicing, remove it to infer the transform from x/y, "
+                "or pass transform= explicitly for index coordinates"
+            )
 
 
 def _iso_times(times: np.ndarray) -> tuple[list[str], np.ndarray]:

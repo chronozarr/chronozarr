@@ -185,7 +185,7 @@ The values belong to the frame on screen. `t` and `time` are the timestep of tha
 
 `pixel` is the column and row of the clicked data pixel at full resolution. `lon` and `lat` are the WGS84 coordinates of the center of that pixel. They are `null` when the store is not georeferenced or its CRS is not one of those the viewer can project (see `center`).
 
-`values` holds the physical value of each band, keyed by band name. The physical value is the stored value times the band's `scale`, plus its `offset`. For Sentinel-2 bands it is reflectance. `valid` is `false`, and every value is `null`, for a pixel at the store's nodata value or masked out.
+`values` holds the physical value of each band, keyed by band name. The physical value is the stored value times the band's `scale`, plus its `offset`. For Sentinel-2 bands it is reflectance. A missing band value is `null`. A masked-out pixel or a pixel with all bands missing in a store without a mask has `valid: false` and all values set to `null`.
 
 #### `chronozarr:view`
 

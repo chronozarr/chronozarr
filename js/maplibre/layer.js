@@ -10,6 +10,7 @@
 // mercator projection.
 
 import { openStore } from '../chronozarr/decoder.js';
+import { redactText } from '../chronozarr/redact.js';
 import { COLORMAPS, colormapIndex } from '../shared/colormaps.js';
 import { channelBounds, computeStretchLo, describePixel, displayMode, dualPolRanges, findBand, inputConversion, inputIndices, nodataToCompare, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../shared/products.js';
 import { TEXTURE_FORMATS } from '../shared/texture-formats.js';
@@ -445,14 +446,14 @@ export class ChronozarrLayer {
     if (this.#disposed) return;
     this.#rejectOpened(error);
     this.#emit('error', { error });
-    console.error('ChronozarrLayer:', error);
+    console.error('ChronozarrLayer:', redactText(error));
   }
 
   #reportOnce(key, error) {
     if (this.#reported.has(key)) return;
     this.#reported.add(key);
     this.#emit('error', { error });
-    console.error('ChronozarrLayer:', error);
+    console.error('ChronozarrLayer:', redactText(error));
   }
 
   // ---- GL resources ----
@@ -564,7 +565,7 @@ export class ChronozarrLayer {
         try {
           listener({ type, target: this, ...detail });
         } catch (error) {
-          console.error(`ChronozarrLayer: a "${type}" listener threw`, error);
+          console.error(`ChronozarrLayer: a "${type}" listener threw`, redactText(error));
         }
       });
     }
@@ -752,7 +753,7 @@ export class ChronozarrLayer {
         this.#repaint();
         if (isAbort(error)) return;
         this.#emit('error', { error });
-        console.error('ChronozarrLayer: the coarse first paint failed to load', error);
+        console.error('ChronozarrLayer: the coarse first paint failed to load', redactText(error));
       },
     );
     return true;
@@ -1034,7 +1035,7 @@ export class ChronozarrLayer {
         }
         this.#failed.set(key, performance.now());
         this.#emit('error', { error, lod, row, col, t });
-        console.error(`ChronozarrLayer: cell ${key} failed to load`, error);
+        console.error(`ChronozarrLayer: cell ${key} failed to load`, redactText(error));
         this.#repaint();
       },
     );

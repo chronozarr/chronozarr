@@ -21,6 +21,8 @@ from urllib.parse import urlsplit
 import numpy as np
 import xarray as xr
 
+from chronozarr._calendar import decode_dimension_coordinates
+from chronozarr._convert_source import _logical_packed_dtype
 from chronozarr._install import extra_hint
 from chronozarr.store import redact_url
 
@@ -213,7 +215,8 @@ def open_input(source: IcechunkInput, variable: str | None, mask_var: str | None
         chunks=None,
         consolidated=False,
         mask_and_scale=False,
-        decode_timedelta=True,
+        decode_times=False,
+        decode_timedelta=False,
     )
     try:
         if variable not in dataset.data_vars:
@@ -244,7 +247,11 @@ def open_input(source: IcechunkInput, variable: str | None, mask_var: str | None
             for index in source.indexers.values()
             if isinstance(index, slice)
         ]
-        out_dtype = np.dtype("float32") if source.cast_float32 else original.dtype
+        out_dtype = (
+            np.dtype("float32")
+            if source.cast_float32
+            else _logical_packed_dtype(original.dtype, original.attrs.get("_Unsigned"))
+        )
         selected_bytes = math.prod(selected_shape) * out_dtype.itemsize
         chunks = tuple(original.encoding.get("chunks", original.shape))
         source_chunk_bytes = math.prod(chunks) * original.dtype.itemsize
@@ -286,6 +293,9 @@ def open_input(source: IcechunkInput, variable: str | None, mask_var: str | None
             for name, index in source.indexers.items()
         }
         selected = dataset[list(dict.fromkeys(names))].isel(indexers)
+        selected = decode_dimension_coordinates(
+            selected, redact_url(str(source.repository)), decode_timedelta=True
+        )
         selected, time_note = _forecast_times(selected, variable)
         identity = {
             "repository": redact_url(str(source.repository)),

@@ -46,7 +46,7 @@ test('a chunk that fails every attempt is reported with URL, status and attempts
     assert.equal(e.status, 503);
     assert.equal(e.attempts, 4);
     assert.equal(e.url, `${URL_BASE}/0/data/c/1/0/0/0`);
-    assert.match(e.message, /GET https:\/\/example\.test\/store\/0\/data\/c\/1\/0\/0\/0: HTTP 503 scripted \(4 attempts\)/);
+    assert.match(e.message, /GET https:\/\/example\.test\/store\/0\/data\/c\/1\/0\/0\/0: HTTP 503 \(4 attempts\)/);
     return true;
   });
   assert.equal(log.filter((c) => isChunk(c.key, 1)).length, 4);

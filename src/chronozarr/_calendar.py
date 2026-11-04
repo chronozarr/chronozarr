@@ -77,6 +77,25 @@ def explain_missing_cftime(exc: ValueError, reopen: Callable[[], xr.Dataset], wh
             ) from exc
 
 
+def decode_dimension_coordinates(
+    dataset: xr.Dataset, where: str, *, decode_timedelta: bool = False
+) -> xr.Dataset:
+    """Decode CF axes without scaling, masking or changing the dtype of raster variables."""
+    axes = xr.Dataset(
+        coords={name: dataset.variables[name] for name in dataset.dims if name in dataset.coords}
+    )
+    try:
+        decoded = xr.decode_cf(axes, decode_timedelta=decode_timedelta)
+        result = dataset.assign_coords(decoded.coords)
+    except BaseException as exc:
+        dataset.close()
+        if isinstance(exc, ValueError):
+            explain_missing_cftime(exc, lambda: axes, where)
+        raise
+    result.set_close(dataset.close)
+    return result
+
+
 def is_cftime(values: np.ndarray) -> bool:
     """True for the object array xarray makes of dates that numpy datetimes cannot hold."""
     return (

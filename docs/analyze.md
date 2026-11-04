@@ -119,3 +119,5 @@ chronozarr export-cog my_store out_dir --times 2024-01..2024-06
 ```
 
 This writes one Cloud Optimized GeoTIFF per timestep with the stored values, for QGIS, ArcGIS or GDAL. `--level` picks a coarser level. `--physical` writes float32 physical values instead.
+
+A raw export with per-band nodata omits generated overviews when an averaged value could equal the nodata sentinel. Use `--physical` to get averaged overviews on large rasters with NaN as the missing value.

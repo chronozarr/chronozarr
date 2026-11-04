@@ -433,8 +433,8 @@ class Plan:
                     "a selection still reads whole source chunks/messages",
                     *(
                         ["precision:  explicit float64 to float32 rounding; source validity mask"]
-                        if self.source.icechunk_identity["source_dtype"]
-                        != self.source.icechunk_identity["output_dtype"]
+                        if self.source.icechunk_identity["source_dtype"] == "float64"
+                        and self.source.icechunk_identity["output_dtype"] == "float32"
                         else []
                     ),
                     *(

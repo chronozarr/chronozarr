@@ -44,7 +44,11 @@
     }
     function readRoot(store) {
       // The address of the root metadata as the reader builds it (HttpStore): the store's folder, zarr.json, the store's query.
-      var base = new URL(store, location.href);
+      var base;
+      try { base = new URL(store, location.href); } catch (_) { return; }
+      if (!store.trim() || (base.protocol !== 'http:' && base.protocol !== 'https:') || base.username || base.password) return;
+      if (new URL(location.href).protocol === 'https:' && base.protocol === 'http:' &&
+          !/^(?:127\.0\.0\.1|\[::1\]|(?:.*\.)?localhost)$/.test(base.hostname)) return;
       if (!/\/$/.test(base.pathname)) base.pathname += '/';
       var root = new URL('zarr.json', base);
       root.search = base.search;
@@ -53,11 +57,11 @@
       read(root).then(function (r) { if (r) reads.rootMs = performance.now() - started; });
     }
     var requested = query.get('store');
-    if (requested) readRoot(requested);
+    if (requested !== null) readRoot(requested);
     if (query.get('embed') === '1') return;
     var catalog = new URL('catalog.json', location.href);
     var response = read(catalog);
-    if (requested) return;
+    if (requested !== null) return;
     response
       .then(function (r) { return r && r.ok ? r.clone().json() : null; })
       .then(function (entries) { if (entries && entries[0]) readRoot(new URL(entries[0].url, catalog).href); })
@@ -178,6 +182,27 @@
     white-space: nowrap;
     border: 0;
   }
+  #copy-link-fallback {
+    width: min(480px, calc(100% - 32px));
+    margin: auto;
+    padding: 20px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+  }
+  #copy-link-fallback::backdrop { background: rgb(0 0 0 / 0.6); }
+  #copy-link-fallback label { display: block; margin: 12px 0 4px; }
+  #copy-link-url {
+    width: 100%;
+    padding: 8px;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font: inherit;
+  }
+  #copy-link-fallback form { margin-top: 12px; }
   .nav-sep {
     width: 1px;
     height: 20px;
@@ -263,6 +288,7 @@
     cursor: crosshair;
     touch-action: none;
   }
+  #gl-canvas:focus-visible { outline-offset: -3px; }
   .progress-bar {
     position: absolute;
     top: 0;
@@ -376,6 +402,7 @@
   .error-overlay.toast p { word-break: break-word; }
   .error-overlay h2 { color: var(--red); font-size: 14px; margin-bottom: 8px; }
   .error-overlay p { font-size: 12px; color: var(--text-2); }
+  #open-default-dataset { margin-top: 12px; }
 
   /* ---- Sidebar ---- */
   .sidebar {
@@ -1040,17 +1067,31 @@
   <a id="embed-wordmark" class="embed-wordmark" href="." target="_blank" rel="noopener" title="Open this view in the full chronozarr viewer">chrono<span>zarr</span></a>
 </nav>
 
+<dialog id="copy-link-fallback" aria-labelledby="copy-link-title" aria-describedby="copy-link-instructions">
+  <h2 id="copy-link-title">Copy this view’s link</h2>
+  <p id="copy-link-instructions">The browser blocked automatic copying. Select and copy the link below.</p>
+  <label for="copy-link-url">View link</label>
+  <input id="copy-link-url" type="url" readonly>
+  <form method="dialog">
+    <button type="submit" class="export-btn">Close</button>
+  </form>
+</dialog>
+
 <main>
   <section class="viewport">
-    <canvas id="gl-canvas"></canvas>
+    <canvas id="gl-canvas" aria-label="Raster map" aria-describedby="map-keyboard-help"></canvas>
+    <span id="map-keyboard-help" class="copy-link-status">Press Enter to inspect the centre, plus or minus to zoom, arrow keys to pan, and 0 to fit the map.</span>
     <canvas id="gap-canvas"></canvas>
     <pre class="perf-overlay" id="perf-overlay" hidden aria-label="Performance overlay"></pre>
     <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-    <div class="click-hint" id="click-hint"><span class="hint-pointer">Click anywhere to inspect · scroll to zoom · drag to pan</span><span class="hint-touch">Tap anywhere to inspect · drag to pan</span></div>
+    <div class="click-hint" id="click-hint"><span class="hint-pointer">Click anywhere to inspect · scroll to zoom · drag to pan</span><span class="hint-touch">Tap anywhere to inspect · pinch to zoom · drag to pan</span></div>
     <p class="frame-date-status" id="frame-date-status" role="status"></p>
-    <div class="error-overlay" id="error-overlay" role="alert">
-      <h2 id="error-title">Error</h2>
-      <p id="error-message">Something went wrong</p>
+    <div class="error-overlay" id="error-overlay">
+      <div role="alert">
+        <h2 id="error-title">Error</h2>
+        <p id="error-message">Something went wrong</p>
+      </div>
+      <button id="open-default-dataset" class="export-btn" type="button" hidden>Open default dataset</button>
     </div>
   </section>
 

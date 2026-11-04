@@ -10,7 +10,7 @@ export const isAbort = (error) => error?.name === 'AbortError';
 /** A request to the store that failed for good: carries the URL, HTTP status (if any) and attempt count. */
 export class FetchError extends Error {
   constructor({ url, method, range, status, statusText, cause, attempts }) {
-    const what = status ? `HTTP ${status}${statusText ? ` ${redactText(statusText)}` : ''}` : redactText(`${cause.name}: ${cause.message}`);
+    const what = status ? `HTTP ${status}${statusText ? ` ${redactText(statusText, url)}` : ''}` : redactText(`${cause.name}: ${cause.message}`, url);
     super(`${method} ${redactUrl(url)}${range ? ` [${range}]` : ''}: ${what} (${attempts} attempt${attempts === 1 ? '' : 's'})`);
     this.name = 'FetchError';
     Object.assign(this, { url, method, range, status, attempts, cause });
@@ -78,6 +78,7 @@ export class HttpStore {
 
   constructor(baseUrl, { fetch, limiter, network, bandwidth, retryDelaysMs, suffixRequests }) {
     const base = new URL(baseUrl, globalThis.location?.href);
+    if (base.username || base.password) throw new TypeError(`Store URL includes credentials: ${redactUrl(base)}`);
     if (!base.pathname.endsWith('/')) base.pathname += '/';
     this.#base = base;
     this.#fetch = fetch;
@@ -89,7 +90,9 @@ export class HttpStore {
   }
 
   #url(key) {
-    const url = new URL(key.slice(1), this.#base);
+    // Keys are raw object paths, so their punctuation is never URL syntax.
+    const path = key.split('/').map(encodeURIComponent).join('/');
+    const url = new URL(`.${path}`, this.#base);
     url.search = this.#base.search;
     return url;
   }
@@ -137,7 +140,7 @@ export class HttpStore {
       const { status, statusText, cause } = outcome;
       const retryable = status === undefined || status >= 500 || status === 429;
       const delayMs = retryable && attempt <= this.#delays.length ? this.#delays[attempt - 1] * (0.7 + 0.6 * Math.random()) : null;
-      const details = { url: redactUrl(request.url), method, range, status, error: redactText(`${cause.name}: ${cause.message}`), attempt, of: this.#delays.length + 1, retryInMs: delayMs === null ? null : Math.round(delayMs) };
+      const details = { url: redactUrl(request.url), method, range, status, error: redactText(`${cause.name}: ${cause.message}`, request.url), attempt, of: this.#delays.length + 1, retryInMs: delayMs === null ? null : Math.round(delayMs) };
       if (delayMs === null) {
         console.error('chronozarr: request failed, giving up', details);
         throw new FetchError({ url: request.url, method, range, status, statusText, cause, attempts: attempt });
@@ -160,7 +163,8 @@ export class HttpStore {
       }
       if (response.status !== 200 && response.status !== 206 && response.status !== 404) {
         await response.body?.cancel();
-        return { ok: false, status: response.status, statusText: response.statusText, cause: new Error(`HTTP ${response.status}`) };
+        // A server can echo the signed request path in its reason phrase.
+        return { ok: false, status: response.status, cause: new Error(`HTTP ${response.status}`) };
       }
       if (method === 'HEAD') return { ok: true, status: response.status, headers: response.status === 404 ? undefined : response.headers };
       if (response.status === 404) {
