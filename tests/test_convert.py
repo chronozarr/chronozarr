@@ -776,7 +776,9 @@ def test_zarr_source_with_band_dimension(tmp_path, truth):
 @pytest.mark.parametrize("zarr_format", [2, 3])
 def test_zarr_resume_refuses_a_store_with_changed_chunks(tmp_path, truth, zarr_format):
     source = tmp_path / "in.zarr"
-    dataset_from(truth).to_zarr(source, zarr_format=zarr_format, consolidated=False)
+    # Numeric band labels avoid the experimental fixed-width string type in Zarr 3.1.
+    dataset = dataset_from(truth).assign_coords(band=[1, 2])
+    dataset.to_zarr(source, zarr_format=zarr_format, consolidated=False)
     out = tmp_path / "store"
     work = tmp_path / "store.convert-work"
     options: dict[str, Any] = {**OPTIONS, "crs": CRS, "read_ahead": 1}
