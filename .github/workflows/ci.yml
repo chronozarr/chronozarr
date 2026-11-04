@@ -61,6 +61,23 @@ jobs:
         if: matrix.python-version == '3.11'
         run: uv run --no-sync python scripts/check_sdist.py dist/*.tar.gz
 
+  windows-append-lock:
+    name: Windows append lock
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.13"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Exercise competing append processes
+        run: uv run --locked --no-sync pytest -v -rs tests/test_append.py::test_concurrent_append_is_refused_through_root_publication
+
   js:
     name: JavaScript
     runs-on: ubuntu-latest
