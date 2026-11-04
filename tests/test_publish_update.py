@@ -32,6 +32,7 @@ from chronozarr.publish import (
     SHORT_TTL,
     Destination,
     PublishError,
+    RemoteObject,
     plan_store,
     publish,
     upload,
@@ -548,6 +549,20 @@ def test_refuses_a_re_encode_whose_chunks_differ(stores, truth, tmp_path, bucket
     message = refusal(other, bucket)
     assert "differ from the local ones" in message
     assert "cached for a year" in message
+
+
+def test_refuses_to_update_when_an_existing_chunk_cannot_be_verified(stores, bucket, monkeypatch):
+    publish_first(stores["v1"], bucket)
+    list_objects = bucket.list_objects
+
+    def list_without_checksum(prefix):
+        objects = list_objects(prefix)
+        chunk = next(key for key in objects if "/data/c/" in key)
+        objects[chunk] = RemoteObject(objects[chunk].size, "")
+        return objects
+
+    monkeypatch.setattr(bucket, "list_objects", list_without_checksum)
+    assert "lack a verifiable MD5 checksum" in refusal(stores["v2"], bucket)
 
 
 def test_refuses_an_empty_prefix_and_names_the_plain_command(stores, bucket):

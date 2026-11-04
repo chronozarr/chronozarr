@@ -328,9 +328,10 @@ def plan_update(plan: PublishPlan, adapter: StorageAdapter) -> UpdatePlan:
     if differing_chunks:
         problems.append(
             f"{len(differing_chunks)} hosted chunk or shard object(s) differ from the local ones "
-            f"({_named(sorted(differing_chunks))}). Chunks are cached for a year and an "
-            "unsharded append never rewrites one, so this is another store, a re-encode, or a "
-            "sharded append that rewrote its trailing shard"
+            f"or lack a verifiable MD5 checksum ({_named(sorted(differing_chunks))}). "
+            "Chunks are cached for a year. An update requires every existing chunk to match. "
+            "A different store, a re-encode, or a sharded append that rewrote its trailing shard "
+            "can change existing chunks"
         )
     if problems:
         listed = "\n".join(f"  - {p}" for p in problems)

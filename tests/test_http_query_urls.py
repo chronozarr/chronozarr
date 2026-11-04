@@ -146,3 +146,16 @@ def test_cli_info_and_doctor_do_not_print_the_token(token_store):
     assert f"{url}?<redacted>" in info.output
     assert f"{url}?<redacted>" in doctor.output
     assert TOKEN not in info.output + doctor.output
+
+
+@pytest.mark.parametrize(
+    ("key", "exit_code", "summary"),
+    [("", 0, "conforms to chronozarr"), ("/missing", 1, "1 problem")],
+)
+def test_cli_validate_does_not_print_the_token(token_store, key, exit_code, summary):
+    with serving(TokenHandler, token_store) as url:
+        target = f"{url}{key}?token={TOKEN}"
+        result = CliRunner().invoke(main, ["validate", target], catch_exceptions=False)
+    assert result.exit_code == exit_code, result.output
+    assert f"{url}{key}?<redacted>: {summary}" in result.output
+    assert TOKEN not in result.output

@@ -30,6 +30,7 @@ import { ChunkCache, SpeculativeBudget } from './cache.js';
 import { packAux, unpackAux } from './aux-cache.js';
 import { packUint16, compactUint16At } from './compact.js';
 import { FetchError, HttpStore, LimitedReadable, abortError, isAbort, sleep } from './http.js';
+import { redactText } from './redact.js';
 import { RequestLimiter } from './limiter.js';
 import { DTYPES, decodeSpec, isCellStorage, normalizeBands, parseSpatial, parseRoot, parseStorage, requireStore, sameCrs } from './metadata.js';
 import { DecodePool, MainThreadDecoder, leaseDecodePool } from './pool.js';
@@ -1334,7 +1335,7 @@ export class ChronoStore {
    * of another kind (network, 5xx, a shard without hint whose checksum fails) is not a stale length and is thrown as is.
    */
   async #readShardIndex({ cacheKey, shardKey, storage, handle, hintAt }) {
-    const where = `${this.url}${shardKey}`;
+    const where = `${redactText(this.url)}${shardKey}`;
     const lookup = () => (hintAt ? this.#shardBytes?.[hintAt.path]?.[hintAt.key] : undefined);
     const rangeFor = (shardBytes) => shardIndexRange(storage.shardTime, storage.indexHasCrc, storage.indexAtStart, shardBytes);
     // Only an end-located index read with a known shard length can go stale.
@@ -1415,7 +1416,7 @@ export class ChronoStore {
         }
       } catch (error) {
         if (isAbort(error)) return;
-        console.warn(`chronozarr: ${this.url}: cannot reload zarr.json to refresh shard_bytes (${error.name}: ${error.message})`);
+        console.warn(redactText(`chronozarr: ${this.url}: cannot reload zarr.json to refresh shard_bytes (${error.name}: ${error.message})`));
       }
       this.#noNewHintsAt = this.#clock();
     })();

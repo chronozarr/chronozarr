@@ -6,6 +6,7 @@ import asyncio
 import builtins
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -92,6 +93,43 @@ def _range_header(byte_range: ByteRequest) -> str:
     return f"bytes=-{byte_range.suffix}"
 
 
+_CONTENT_RANGE = re.compile(r"bytes ([0-9]{1,20})-([0-9]{1,20})/([0-9]{1,20}|\*)", re.I)
+
+
+def partial_response_problem(
+    byte_range: ByteRequest | None, content_range: str, body_size: int
+) -> str | None:
+    """Check that a single HTTP 206 response contains the requested bytes."""
+    if byte_range is None:
+        return "unexpected HTTP 206 without a Range request"
+    if not content_range:
+        return "206 without a Content-Range header"
+    parsed = _CONTENT_RANGE.fullmatch(content_range.strip())
+    if parsed is None:
+        return "invalid Content-Range header"
+    first, last = int(parsed[1]), int(parsed[2])
+    total = None if parsed[3] == "*" else int(parsed[3])
+    if first > last or (total is not None and last >= total):
+        return "invalid Content-Range bounds"
+    if isinstance(byte_range, RangeByteRequest):
+        start = byte_range.start
+        end = byte_range.end - 1 if total is None else min(byte_range.end, total) - 1
+    else:
+        if total is None:
+            return "Content-Range must give the object size for an open-ended or suffix request"
+        start = (
+            byte_range.offset
+            if isinstance(byte_range, OffsetByteRequest)
+            else max(0, total - byte_range.suffix)
+        )
+        end = total - 1
+    if (first, last) != (start, end):
+        return f"Content-Range {parsed[0]} does not match requested {_range_header(byte_range)}"
+    if body_size != last - first + 1:
+        return "response body length does not match Content-Range"
+    return None
+
+
 def _slice_body(body: bytes, byte_range: ByteRequest | None) -> bytes:
     """Apply a byte range locally, for a server that ignored the Range header."""
     if byte_range is None:
@@ -153,6 +191,12 @@ class HttpStore(Store):
                     body = response.read() if method == "GET" else b""
                     if method == "GET" and response.status == 200:
                         body = _slice_body(body, byte_range)
+                    elif method == "GET" and response.status == 206:
+                        problem = partial_response_problem(
+                            byte_range, response.headers.get("Content-Range", ""), len(body)
+                        )
+                        if problem is not None:
+                            raise OSError(f"{method} {shown}: {problem}")
                     return body, response.headers
             except urllib.error.HTTPError as error:
                 code, reason = error.code, error.reason

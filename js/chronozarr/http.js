@@ -2,7 +2,7 @@
 // accounting the decoder needs. A request holds a concurrency slot only while it is on the wire: the wait
 // between retries happens outside the limiter, so a failing shard never occupies slots.
 
-import { redactUrl } from './redact.js';
+import { redactText, redactUrl } from './redact.js';
 
 export const abortError = () => new DOMException('Aborted', 'AbortError');
 export const isAbort = (error) => error?.name === 'AbortError';
@@ -10,7 +10,7 @@ export const isAbort = (error) => error?.name === 'AbortError';
 /** A request to the store that failed for good: carries the URL, HTTP status (if any) and attempt count. */
 export class FetchError extends Error {
   constructor({ url, method, range, status, statusText, cause, attempts }) {
-    const what = status ? `HTTP ${status}${statusText ? ` ${statusText}` : ''}` : `${cause.name}: ${cause.message}`;
+    const what = status ? `HTTP ${status}${statusText ? ` ${redactText(statusText)}` : ''}` : redactText(`${cause.name}: ${cause.message}`);
     super(`${method} ${redactUrl(url)}${range ? ` [${range}]` : ''}: ${what} (${attempts} attempt${attempts === 1 ? '' : 's'})`);
     this.name = 'FetchError';
     Object.assign(this, { url, method, range, status, attempts, cause });
@@ -31,6 +31,28 @@ export function sleep(ms, signal) {
     }, ms);
     signal?.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+function partialResponseProblem(range, contentRange, size) {
+  if (!range) return 'unexpected partial response without a Range request';
+  if (!contentRange) return 'missing Content-Range (for cross-origin stores, expose it with CORS)';
+  const match = /^bytes ([0-9]+)-([0-9]+)\/([0-9]+|\*)$/i.exec(contentRange);
+  if (!match) return 'invalid Content-Range header';
+  const first = Number(match[1]);
+  const last = Number(match[2]);
+  const total = match[3] === '*' ? null : Number(match[3]);
+  if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || first > last ||
+      (total !== null && (!Number.isSafeInteger(total) || last >= total))) {
+    return 'invalid Content-Range bounds';
+  }
+  const [start, end] = range.slice('bytes='.length).split('-');
+  const suffix = start === '';
+  if (suffix && total === null) return 'Content-Range must give the object size for a suffix request';
+  const expectedStart = suffix ? Math.max(0, total - Number(end)) : Number(start);
+  const expectedEnd = total === null ? Number(end) : suffix ? total - 1 : Math.min(Number(end), total - 1);
+  if (first !== expectedStart || last !== expectedEnd) return `Content-Range ${contentRange} does not match requested ${range}`;
+  if (size !== last - first + 1) return 'response body length does not match Content-Range';
+  return null;
 }
 
 /**
@@ -92,7 +114,7 @@ export class HttpStore {
       const contentLength = headers.get('Content-Length');
       const size = Number(contentLength);
       if (contentLength === null || !/^\d+$/.test(contentLength) || !Number.isSafeInteger(size)) {
-        throw new Error(`HEAD ${url}: missing or invalid Content-Length, cannot read the last ${range.suffixLength} bytes`);
+        throw new Error(`HEAD ${redactUrl(url)}: missing or invalid Content-Length, cannot read the last ${range.suffixLength} bytes`);
       }
       if (size === 0) return new Uint8Array(0);
       start = Math.max(0, size - range.suffixLength);
@@ -110,12 +132,12 @@ export class HttpStore {
   async #send(url, method, range, signal, priority, { reload = false, rangeMiss = false } = {}) {
     const request = new Request(url, { method, signal, headers: range ? { Range: range } : undefined, ...(reload ? { cache: 'reload' } : {}) });
     for (let attempt = 1; ; attempt++) {
-      const outcome = await this.#limiter.run(priority, signal, () => this.#attempt(request, method, rangeMiss));
+      const outcome = await this.#limiter.run(priority, signal, () => this.#attempt(request, method, range, rangeMiss));
       if (outcome.ok) return outcome;
       const { status, statusText, cause } = outcome;
       const retryable = status === undefined || status >= 500 || status === 429;
       const delayMs = retryable && attempt <= this.#delays.length ? this.#delays[attempt - 1] * (0.7 + 0.6 * Math.random()) : null;
-      const details = { url: redactUrl(request.url), method, range, status, error: `${cause.name}: ${cause.message}`, attempt, of: this.#delays.length + 1, retryInMs: delayMs === null ? null : Math.round(delayMs) };
+      const details = { url: redactUrl(request.url), method, range, status, error: redactText(`${cause.name}: ${cause.message}`), attempt, of: this.#delays.length + 1, retryInMs: delayMs === null ? null : Math.round(delayMs) };
       if (delayMs === null) {
         console.error('chronozarr: request failed, giving up', details);
         throw new FetchError({ url: request.url, method, range, status, statusText, cause, attempts: attempt });
@@ -126,7 +148,7 @@ export class HttpStore {
   }
 
   /** One trip to the server, inside a limiter slot. Never throws except on abort: failures come back as data. */
-  async #attempt(request, method, rangeMiss) {
+  async #attempt(request, method, range, rangeMiss) {
     this.#network.requests++;
     this.#bandwidth.begin();
     let received = 0;
@@ -148,6 +170,10 @@ export class HttpStore {
       const bytes = new Uint8Array(await response.arrayBuffer());
       received = bytes.length;
       this.#network.bytes += received;
+      if (response.status === 206) {
+        const problem = partialResponseProblem(range, response.headers.get('Content-Range'), received);
+        if (problem) return { ok: false, status: 206, statusText: problem, cause: new Error(problem) };
+      }
       return { ok: true, status: response.status, bytes };
     } catch (error) {
       if (isAbort(error)) throw error;
