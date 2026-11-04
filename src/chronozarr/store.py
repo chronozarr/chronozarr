@@ -60,6 +60,10 @@ class HttpStatusError(OSError):
         self.status = status
 
 
+class HttpIncompleteReadError(OSError):
+    """An HTTP response body still ended early after the transport retries."""
+
+
 def _base_url(url: str) -> str:
     """`url` minus trailing slashes on the path and any fragment; the query stays."""
     parts = urlsplit(url)
@@ -217,7 +221,7 @@ class HttpStore(Store):
                     ranged = (
                         "" if byte_range is None else f" for Range {_range_header(byte_range)}"
                     )
-                    raise OSError(
+                    raise HttpIncompleteReadError(
                         f"{method} {shown}: {error}{ranged} after {attempt + 1} attempts"
                     ) from None
             except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
