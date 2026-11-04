@@ -166,8 +166,8 @@ export function isReflectance(band) {
  * Sidebar model for one pixel: per band the stored and physical values, plus indices when their bands exist.
  * `mask` is the pixel's validity mask value (1 valid, 0 invalid) for a store that has a mask, else null. A mask decides
  * and `nodata` is then not compared (spec §4.1); a masked-out pixel has no stored or physical values and no indices.
- * Without a mask, a band at `nodata` has no stored or physical observation. `valid` is false for a masked-out
- * pixel and, without a mask, for one whose every band is missing.
+ * Without a mask, a band at `nodata` retains its stored number but has no physical value. `valid` is false for a
+ * masked-out pixel and, without a mask, for one whose every band is missing.
  */
 export function describePixel(values, rawBands, nodata = null, mask = null) {
   const bands = normalizeBands(rawBands);
@@ -187,13 +187,13 @@ export function describePixel(values, rawBands, nodata = null, mask = null) {
   return {
     valid,
     bands: bands.map((band, i) => {
-      const stored = hasValue(values[i]) ? values[i] : null;
+      const stored = masked ? null : values[i];
       return {
         name: band.name,
         units: band.units ?? null,
         reflectance: isReflectance(band),
         stored,
-        value: stored === null ? null : toPhysical(stored, band),
+        value: hasValue(stored) ? toPhysical(stored, band) : null,
       };
     }),
     ndvi: ndviValue,

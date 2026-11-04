@@ -127,7 +127,7 @@ test('describePixel reports indices from physical values, only when their bands 
   const empty = describePixel(Uint16Array.of(0, 2303), ['B04', 'B08'], 0);
   assert.equal(empty.ndvi, null, 'a band at nodata leaves no index');
   assert.equal(empty.valid, true, 'the other band is valid');
-  assert.deepEqual(empty.bands.map(({ stored, value }) => [stored, value]), [[null, null], [2303, 0.2303]]);
+  assert.deepEqual(empty.bands.map(({ stored, value }) => [stored, value]), [[0, null], [2303, 0.2303]]);
   assert.equal(describePixel(Uint16Array.of(0, 2303), ['B04', 'B08']).ndvi, 1, 'without a nodata value a zero is a value: red 0');
 });
 

@@ -61,7 +61,7 @@ export function sidebarHtml(info, timeLabel) {
   const reflectance = info.bands.every((b) => b.reflectance);
   const physical = (b) => (reflectance ? b.value.toFixed(4) : `${formatValue(b.value)}${b.units && b.units !== 'reflectance' ? ` ${escapeHtml(b.units)}` : ''}`);
   const noData = '<span class="no-data">no data</span>';
-  const scaled = info.valid && info.bands.some((b) => b.value !== b.stored);
+  const scaled = info.bands.some((b) => b.value !== null && b.value !== b.stored);
   const status = info.valid ? '' : row('Status', `<span class="no-data">No data</span> · ${info.masked ? 'masked out' : 'at the nodata value'}`);
   const observed = info.observed === null || info.observed === undefined ? '' : row('Observed by', info.observed === 0 ? 'no scene (gap-filled)' : `${info.observed} scene${info.observed === 1 ? '' : 's'}`);
   return `
@@ -94,7 +94,7 @@ export function sidebarHtml(info, timeLabel) {
         ? `<div class="sidebar-section">
       <div class="section-label">Stored value</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 16px;">
-        ${info.bands.map((b) => row(escapeHtml(b.name), b.stored ?? noData)).join('')}
+        ${info.bands.map((b) => row(escapeHtml(b.name), b.value === null ? noData : b.stored)).join('')}
       </div>
     </div>`
         : ''
