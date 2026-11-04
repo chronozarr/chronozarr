@@ -347,17 +347,21 @@ test('a root that brought nothing new is not asked again by other shards for a m
 
 test('an unreadable root costs one attempt per minute and the index is still read', async (t) => {
   const warn = quiet(t);
+  const url = 'https://example.test/unreadable?token=fixture-secret';
   const readable = buildSyntheticStore({ ...OLD });
-  const broken = { get: async (key, options) => (key === '/zarr.json' && readable.log.some((c) => c.key === key) ? Promise.reject(new TypeError('Failed to fetch')) : readable.get(key, options)), getRange: (...args) => readable.getRange(...args) };
+  const broken = { get: async (key, options) => (key === '/zarr.json' && readable.log.some((c) => c.key === key) ? Promise.reject(new TypeError(`Failed to fetch ${url}`)) : readable.get(key, options)), getRange: (...args) => readable.getRange(...args) };
   const length = readable.files.get(shardKey(0, 0)).length;
   const root = readJson(readable.files, '/zarr.json');
   root.attributes.chronozarr.shard_bytes['0']['1/0/0'] = length - 100;
   readable.files.set('/zarr.json', enc(root));
   let now = 0;
-  const store = await openStore('memory://unreadable', { store: broken, workers: 0, clock: () => now });
+  const store = await openStore(url, { store: broken, workers: 0, clock: () => now });
   await assertCell(store, 0, 0, 5);
   assert.deepEqual(store.stats.recoveries, { rootRefetches: 1, retried: 0, suffixFallbacks: 1, suppressed: 0 });
-  assert.ok(warn.mock.calls.some((c) => /cannot reload zarr\.json.*Failed to fetch/.test(c.arguments[0])));
+  const messages = warn.mock.calls.map((c) => c.arguments[0]).join('\n');
+  assert.match(messages, /cannot reload zarr\.json.*Failed to fetch https:\/\/example\.test\/unreadable/);
+  assert.match(messages, /https:\/\/example\.test\/unreadable\/0\/data\/.*reading its index with a suffix range/);
+  assert.doesNotMatch(messages, /fixture-secret/);
 });
 
 // ---- what does not start a recovery ----

@@ -82,6 +82,15 @@ class IgnoreRangeHandler(StoreRequestHandler):
         return super().send_head()
 
 
+class WrongRangeHandler(StoreRequestHandler):
+    """Serves a valid range of the same length, shifted one byte into the object."""
+
+    def send_head(self):
+        if self.headers.get("Range") == "bytes=0-99":
+            self.headers.replace_header("Range", "bytes=1-100")
+        return super().send_head()
+
+
 class FlakyHandler(StoreRequestHandler):
     """Answers 503 to the first request for every distinct key."""
 
@@ -198,6 +207,19 @@ def test_doctor_reports_version_rejection_with_conversion_guidance(sharded_store
     with serving(StoreRequestHandler, old) as url:
         checks = diagnose(url)
     assert any("chronozarr convert" in c.detail for c in failures(checks))
+
+
+def test_doctor_and_reader_reject_a_shifted_partial_response(sharded_store):
+    key = "0/data/c/0/0/0/0"
+    expected = "Content-Range bytes 1-100/.* does not match requested bytes=0-99"
+    with serving(WrongRangeHandler, sharded_store) as url:
+        with pytest.raises(OSError, match=expected):
+            asyncio.run(
+                HttpStore(url).get(key, default_buffer_prototype(), RangeByteRequest(0, 100))
+            )
+        check = by_name(diagnose(url))[f"byte range on {key}"]
+    assert check.status == "fail"
+    assert re.search(expected, check.detail)
 
 
 def test_missing_content_range_exposure_fails(sharded_store):
@@ -652,6 +674,12 @@ def test_http_store_reads_ranges_and_reports_missing_keys(sharded_store):
         assert (
             asyncio.run(read(store, "zarr.json", RangeByteRequest(3, 10))).to_bytes()
             == whole[3:10]
+        )
+        assert (
+            asyncio.run(
+                read(store, "zarr.json", RangeByteRequest(len(whole) - 7, len(whole) + 10))
+            ).to_bytes()
+            == whole[-7:]
         )
         assert (
             asyncio.run(read(store, "zarr.json", OffsetByteRequest(20))).to_bytes() == whole[20:]

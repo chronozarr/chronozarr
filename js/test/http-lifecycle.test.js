@@ -37,7 +37,7 @@ test('suffix reads use the HEAD length and clamp to the whole object for long su
       const { store } = http('https://example.test/', async request => {
         if (request.method === 'HEAD') return new Response(null, { headers: { 'Content-Length': '4' } });
         ranges.push(request.headers.get('Range'));
-        return new Response(status === 200 ? body : body.slice(start), { status });
+        return new Response(status === 200 ? body : body.slice(start), { status, headers: { 'Content-Range': `bytes ${start}-3/4` } });
       });
       assert.deepEqual(await store.getRange('/chunk', { suffixLength }), body.slice(start));
       assert.deepEqual(ranges, [`bytes=${start}-3`]);
@@ -49,6 +49,28 @@ test('suffix reads of an empty object return empty bytes without sending an inva
   const { store, network } = http('https://example.test/', async () => new Response(null, { headers: { 'Content-Length': '0' } }));
   assert.deepEqual(await store.getRange('/chunk', { suffixLength: 4 }), new Uint8Array(0));
   assert.equal(network.requests, 1);
+});
+
+test('partial responses must contain the requested range and body length', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  for (const [header, body, message] of [
+    ['bytes 3-3/4', [40], /does not match requested bytes=2-2/],
+    [null, [30], /missing Content-Range/],
+    ['bytes 2-2/4', [30, 40], /body length does not match/],
+  ]) {
+    const { store, network } = http('https://example.test/', async () => new Response(Uint8Array.from(body), {
+      status: 206, headers: header ? { 'Content-Range': header } : {},
+    }));
+    await assert.rejects(store.getRange('/chunk', { offset: 2, length: 1 }), message);
+    assert.equal(network.requests, 1);
+  }
+});
+
+test('a valid partial response can end at EOF before the requested end', async () => {
+  const { store } = http('https://example.test/', async () => new Response(Uint8Array.of(30, 40), {
+    status: 206, headers: { 'Content-Range': 'bytes 2-3/4' },
+  }));
+  assert.deepEqual(await store.getRange('/chunk', { offset: 2, length: 10 }), Uint8Array.of(30, 40));
 });
 
 test('a queued cancellation settles before the occupied slot is released', async (t) => {

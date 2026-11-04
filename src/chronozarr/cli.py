@@ -557,14 +557,15 @@ def append_command(
 def validate_command(store: str) -> None:
     """Check STORE against the chronozarr spec. Exit status 1 if it does not conform."""
     report = validate_report(store)
+    shown = redact_url(store)
     if report.problems:
         for problem in report.problems:
             click.echo(problem, err=True)
         for note in [*report.notes, *_decoding_notes(store, [*report.problems, *report.notes])]:
             click.echo(f"note: {note}", err=True)
-        click.echo(f"{store}: {len(report.problems)} problem(s)", err=True)
+        click.echo(f"{shown}: {len(report.problems)} problem(s)", err=True)
         sys.exit(1)
-    click.echo(f"{store}: conforms to chronozarr {report.spec_version}")
+    click.echo(f"{shown}: conforms to chronozarr {report.spec_version}")
     for note in report.notes:
         click.echo(f"note: {note}")
 

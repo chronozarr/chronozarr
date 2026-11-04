@@ -20,7 +20,10 @@ test('the query string of the store URL is sent with every object request', asyn
   const urls = [];
   const http = store('https://data.example/prefix/store?Policy=P&Signature=S', async (request) => {
     urls.push(request.url);
-    return new Response(Uint8Array.of(1, 2, 3, 4), { status: request.headers.has('Range') ? 206 : 200 });
+    if (request.headers.has('Range')) {
+      return new Response(Uint8Array.of(1, 2), { status: 206, headers: { 'Content-Range': 'bytes 0-1/4' } });
+    }
+    return new Response(Uint8Array.of(1, 2, 3, 4));
   });
   await http.get('/zarr.json');
   await http.getRange('/0/data/c/0/0/0/0', { offset: 0, length: 2 });

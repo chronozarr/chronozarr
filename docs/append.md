@@ -62,7 +62,7 @@ chronozarr publish my_store \
 | 3 | Level and array `zarr.json` files | `public, max-age=300` |
 | 4 | Root `zarr.json`, last | `public, max-age=300` |
 
-The command skips every object that is stored with the same size and MD5. It deletes nothing and replaces no chunk. `--dry-run` lists the prefix, prints the counts per phase and writes nothing.
+The command skips every object that is stored with the same size and MD5. If an existing chunk or shard lacks a verifiable MD5 checksum, publish to a fresh prefix. The command deletes nothing and replaces no chunk. `--dry-run` lists the prefix, prints the counts per phase and writes nothing.
 
 ### Refusals
 

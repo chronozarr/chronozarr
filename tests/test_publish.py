@@ -368,21 +368,35 @@ def test_same_size_but_different_checksum_counts_as_different(store, adapter):
         upload(plan, adapter)
 
 
-def test_an_etag_that_is_not_an_md5_falls_back_to_size(store, adapter):
+@pytest.mark.parametrize("etag", ["abc123-7", ""])
+def test_resume_refuses_a_same_size_chunk_without_a_verifiable_md5(store, adapter, etag):
     plan = make_plan(store, adapter)
-    upload(plan, adapter)
+    root_key = "aoi/store-v1/zarr.json"
+    chunk_key = "aoi/store-v1/0/data/c/0/0/0/0"
+    adapter.fail_keys = {root_key}
+    with pytest.raises(PublishError):
+        upload(plan, adapter)
+    assert not (adapter.root / root_key).exists()
+    existing = adapter.root / chunk_key
+    data = bytearray(existing.read_bytes())
+    data[0] ^= 0xFF
+    existing.write_bytes(data)
 
-    class Multipart(FakeAdapter):
+    class Unverifiable(FakeAdapter):
         def list_objects(self, prefix):
-            return {
-                k: RemoteObject(v.size, "abc123-7")
-                for k, v in super().list_objects(prefix).items()
-            }
+            objects = super().list_objects(prefix)
+            objects[chunk_key] = RemoteObject(objects[chunk_key].size, etag)
+            return objects
 
-    other = Multipart(adapter.root)
-    state = inspect_destination(plan, other)
-    assert len(state.identical) == len(plan.objects)
-    assert not state.conflicts
+    other = Unverifiable(adapter.root)
+    with pytest.raises(PublishError, match="lack a verifiable MD5 checksum"):
+        upload(plan, other)
+    assert other.puts == []
+    assert not (adapter.root / root_key).exists()
+
+    upload(plan, other, overwrite=True)
+    assert other.puts == [chunk_key, root_key]
+    assert existing.read_bytes() == (store / "0/data/c/0/0/0/0").read_bytes()
 
 
 def test_overwrite_replaces_differing_objects_and_deletes_nothing(store, adapter):

@@ -129,7 +129,9 @@ class S3Adapter:
         pages = paginator.paginate(Bucket=self.bucket, Prefix=f"{prefix}/" if prefix else "")
         for page in self._iterate("list", pages):
             for obj in page.get("Contents", []):
-                found[obj["Key"]] = RemoteObject(obj["Size"], obj["ETag"].strip('"').lower())
+                found[obj["Key"]] = RemoteObject(
+                    obj["Size"], obj.get("ETag", "").strip('"').lower()
+                )
         return found
 
     def put_object(self, key: str, path: Path, *, cache_control: str, content_type: str) -> None:

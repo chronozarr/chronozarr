@@ -23,10 +23,11 @@ from typing import Any, Generic, Literal, TypeVar, cast
 
 import numpy as np
 import zarr
+from zarr.abc.store import RangeByteRequest, SuffixByteRequest
 
 from chronozarr.decode import ChronoStore, as_store, open_store
 from chronozarr.schema import parse_root_attrs, validate
-from chronozarr.store import object_url, redact_url
+from chronozarr.store import object_url, partial_response_problem, redact_url
 
 DEFAULT_ORIGIN = "https://chronozarr.org"
 USER_AGENT = "chronozarr-doctor"
@@ -228,16 +229,26 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
     # takes: the probes that do not depend on each other's answers go out together.
     array_meta = _Background(_probe, object_url(base, array_meta_key), read_limit=1_000_000)
     used, target = key, object_url(base, key)
-    ranged = _probe(target, headers={**browser, "Range": "bytes=0-99"}, read_limit=100)
+    range_size = 100
+    ranged = _probe(
+        target,
+        headers={**browser, "Range": f"bytes=0-{range_size - 1}"},
+        read_limit=range_size + 1,
+    )
     if ranged.status == 404:  # an unsharded store may omit an all-fill chunk
         used, target = array_meta_key, object_url(base, array_meta_key)
-        ranged = _probe(target, headers={**browser, "Range": "bytes=0-9"}, read_limit=10)
+        range_size = 10
+        ranged = _probe(
+            target,
+            headers={**browser, "Range": f"bytes=0-{range_size - 1}"},
+            read_limit=range_size + 1,
+        )
     ranged_label = f"byte range on {used}"
     if ranged.status == 0:
         checks.append(_request_failed(ranged_label, target, ranged))
         return checks, document
     suffix_sent = _Background(
-        _probe, target, headers={**browser, "Range": "bytes=-16"}, read_limit=16
+        _probe, target, headers={**browser, "Range": "bytes=-16"}, read_limit=17
     )
     preflight_sent = _Background(
         _probe,
@@ -261,24 +272,28 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
 
     layout = "sharded" if sharded else "unsharded"
     content_range = ranged.headers.get("content-range", "")
-    if ranged.status == 206 and content_range:
-        checks.append(
-            Check(
-                ranged_label,
-                "ok",
-                f"206, Content-Range {content_range} ({layout} store, "
-                f"{ranged.seconds * 1000:.0f} ms)",
-            )
+    if ranged.status == 206:
+        problem = partial_response_problem(
+            RangeByteRequest(0, range_size), content_range, len(ranged.body)
         )
-    elif ranged.status == 206:
-        checks.append(
-            Check(
-                ranged_label,
-                "fail",
-                "206 without a Content-Range header",
-                "The host must return Content-Range on partial responses.",
+        if problem is None:
+            checks.append(
+                Check(
+                    ranged_label,
+                    "ok",
+                    f"206, Content-Range {content_range} ({layout} store, "
+                    f"{ranged.seconds * 1000:.0f} ms)",
+                )
             )
-        )
+        else:
+            checks.append(
+                Check(
+                    ranged_label,
+                    "fail",
+                    problem,
+                    "The host must return the requested bytes with a matching Content-Range.",
+                )
+            )
     elif ranged.status == 200:
         checks.append(
             Check(
@@ -323,14 +338,14 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
         )
 
     suffix_range = suffix.headers.get("content-range", "")
-    suffix_works = suffix.status == 206 and suffix_range.startswith("bytes ")
+    suffix_problem = (
+        partial_response_problem(SuffixByteRequest(16), suffix_range, len(suffix.body))
+        if suffix.status == 206
+        else f"`Range: bytes=-16` returned HTTP {suffix.status or suffix.error}"
+    )
     if not sharded:
         # Readers fetch an unsharded chunk with a plain GET; only shard indexes need `bytes=-N`.
-        outcome = (
-            f"206, Content-Range {suffix_range}"
-            if suffix_works
-            else f"`Range: bytes=-16` returned HTTP {suffix.status or suffix.error}"
-        )
+        outcome = suffix_problem or f"206, Content-Range {suffix_range}"
         checks.append(
             Check(
                 "suffix range",
@@ -338,7 +353,7 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
                 f"{outcome}; not used by an unsharded store (it has no shard index)",
             )
         )
-    elif suffix_works:
+    elif suffix_problem is None:
         checks.append(
             Check("suffix range", "ok", f"206, Content-Range {suffix_range} (shard index reads)")
         )
@@ -347,7 +362,7 @@ def _http_checks(base: str, origin: str) -> tuple[list[Check], dict[str, Any] | 
             Check(
                 "suffix range",
                 "fail",
-                f"`Range: bytes=-16` returned HTTP {suffix.status or suffix.error}",
+                suffix_problem,
                 "Sharded stores keep their shard index at the end of each shard and readers fetch "
                 "it with a suffix range; the host must support `bytes=-N`.",
             )

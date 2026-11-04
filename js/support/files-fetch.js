@@ -41,8 +41,9 @@ export function filesFetch(files, { basePath = '/store', fail = () => null, dela
       if (!match) return new Response(file, { status: 200, headers: { 'Content-Length': String(file.length) } });
       const start = match[1] === '' ? Math.max(0, file.length - Number(match[2])) : Number(match[1]);
       const end = match[1] !== '' && match[2] !== '' ? Math.min(file.length - 1, Number(match[2])) : file.length - 1;
+      if (start > end) return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${file.length}` } });
       const body = file.slice(start, end + 1);
-      return new Response(body, { status: 206, headers: { 'Content-Length': String(body.length) } });
+      return new Response(body, { status: 206, headers: { 'Content-Range': `bytes ${start}-${end}/${file.length}`, 'Content-Length': String(body.length) } });
     } finally {
       inFlight--;
     }

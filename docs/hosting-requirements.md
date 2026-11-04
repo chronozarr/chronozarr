@@ -37,7 +37,7 @@ Doctor exits with status 1 only when a check fails. Warnings and info lines do n
 
 Notes on the table:
 
-- Row 4, unsharded: doctor warns when the server answers 200 to a range request.
+- Rows 4 and 6: a `206` must identify the requested interval in `Content-Range` and return exactly that many bytes. A bounded range may end early at the end of the object. For an unsharded store, doctor warns when the server answers `200` to a bounded range request.
 - Row 6: a suffix range reads the shard index. An unsharded store has no shard index.
 - Row 8, sharded: doctor reports `warn` instead of `fail` when the store has `shard_bytes`.
 - Row 9: doctor reports `warn` when the last path segment of the prefix ends in a version or a date, such as `chronozarr-2`. Otherwise it reports `info`.

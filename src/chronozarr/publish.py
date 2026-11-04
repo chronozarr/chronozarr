@@ -135,7 +135,7 @@ def check_public_url(url: str) -> str:
 @dataclass(frozen=True)
 class RemoteObject:
     """An object already in the destination. `etag` is the hex MD5 of the content when the
-    provider reports one for this object, else ''. Size alone then decides whether it matches."""
+    provider reports one for this object. An opaque or missing value cannot verify a match."""
 
     size: int
     etag: str
@@ -335,9 +335,11 @@ def _md5(path: Path) -> str:
 
 
 def same_content(local: LocalObject, remote: RemoteObject) -> bool:
-    if local.size != remote.size:
-        return False
-    return not _MD5_HEX.match(remote.etag) or _md5(local.path) == remote.etag
+    return (
+        local.size == remote.size
+        and _MD5_HEX.fullmatch(remote.etag) is not None
+        and _md5(local.path) == remote.etag
+    )
 
 
 @dataclass(frozen=True)
@@ -345,7 +347,7 @@ class DestinationState:
     """What the destination prefix holds, compared with the plan."""
 
     identical: frozenset[str]  # full keys stored with the same size and checksum
-    different: frozenset[str]  # full keys of plan objects stored with other content
+    different: frozenset[str]  # full keys of plan objects whose content could not be matched
     foreign: frozenset[str]  # full keys that are not in the plan at all
 
     @property
@@ -357,12 +359,16 @@ class DestinationState:
             return "empty: a fresh prefix, everything will be uploaded"
         counts = (
             f"{len(self.identical):,} identical objects stored, "
-            f"{len(self.different):,} differing, {len(self.foreign):,} not in the store"
+            f"{len(self.different):,} differing or unverified, "
+            f"{len(self.foreign):,} not in the store"
         )
         if not self.conflicts:
             return f"{counts}: an earlier upload, which will resume"
         if overwrite:
-            return f"{counts}: --overwrite replaces the differing objects and deletes nothing"
+            return (
+                f"{counts}: --overwrite replaces differing or unverified objects "
+                "and deletes nothing"
+            )
         return f"{counts}: publishing would be refused without --overwrite"
 
 
@@ -429,8 +435,8 @@ def put_objects(
             raise PublishError(
                 f"upload stopped in phase {index + 1} ({name}): {len(errors)} object(s) failed, "
                 f"first {key}: {type(exc).__name__}: {exc}. Later phases were not started, so the "
-                "root zarr.json was not written. Run the same command again to resume; stored "
-                "objects are skipped."
+                "root zarr.json was not written. Run the same command again to resume; "
+                "objects verified by size and MD5 are skipped."
             ) from exc
     return done
 
@@ -455,7 +461,7 @@ def upload(
     Objects already in the destination with the same size and checksum are skipped, so running
     the same command again resumes an interrupted upload and does nothing once it is complete.
     A prefix holding any other object is refused unless `overwrite` is set; `overwrite`
-    replaces objects with different content and never deletes anything.
+    replaces objects whose content differs or cannot be verified and never deletes anything.
     """
     dest = plan.destination
     state = inspect_destination(plan, adapter)
@@ -463,11 +469,12 @@ def upload(
         examples = ", ".join(sorted(state.foreign | state.different)[:3])
         raise PublishError(
             f"{dest.uri} already holds {len(state.foreign)} object(s) that are not in this store "
-            f"and {len(state.different)} that differ from it (for example {examples}). Refusing "
+            f"and {len(state.different)} that differ from it or lack a verifiable MD5 checksum "
+            f"(for example {examples}). Refusing "
             "to overwrite. Publish to a fresh prefix (a new name or version, since objects are "
             "cached for a year), pass --update when the prefix holds an earlier version of this "
             "store that you have since appended to, or pass --overwrite to replace differing "
-            "objects. Objects not in the store are never deleted."
+            "or unverified objects. Objects not in the store are never deleted."
         )
     todo = [o for o in plan.objects if dest.key(o.key) not in state.identical]
     skipped = len(plan.objects) - len(todo)

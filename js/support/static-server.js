@@ -51,6 +51,7 @@ export async function startStaticServer(rootDir, port = 0, { tls } = {}) {
         'Content-Length': end - start + 1,
         'Content-Type': CONTENT_TYPES[path.extname(file)] ?? 'application/octet-stream',
         'Access-Control-Allow-Origin': '*',
+        'Access-Control-Expose-Headers': 'Content-Range',
         'Accept-Ranges': 'bytes',
       };
       if (status === 206) headers['Content-Range'] = `bytes ${start}-${end}/${size}`;

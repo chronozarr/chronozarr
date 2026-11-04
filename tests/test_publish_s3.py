@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from typing import Any
 
@@ -166,14 +167,14 @@ def test_list_objects_follows_pages_and_strips_etag_quotes():
         )
         stubber.add_response(
             "list_objects_v2",
-            {"IsTruncated": False, "Contents": [{"Key": "a/b/0/c", "Size": 3, "ETag": '"12"'}]},
+            {"IsTruncated": False, "Contents": [{"Key": "a/b/0/c", "Size": 3}]},
             {"Bucket": "bucket", "Prefix": "a/b/", "ContinuationToken": "t1"},
         )
         found = adapter.list_objects("a/b")
         stubber.assert_no_pending_responses()
     assert {k: (v.size, v.etag) for k, v in found.items()} == {
         "a/b/zarr.json": (7, "abcdef"),
-        "a/b/0/c": (3, "12"),
+        "a/b/0/c": (3, ""),
     }
 
 
@@ -265,7 +266,11 @@ def test_resume_skips_objects_the_bucket_already_holds(store):
     stored = plan.objects[:5]
     listing = {
         "Contents": [
-            {"Key": f"aoi/store-v1/{o.key}", "Size": o.size, "ETag": '"deadbeef-3"'}
+            {
+                "Key": f"aoi/store-v1/{o.key}",
+                "Size": o.size,
+                "ETag": f'"{hashlib.md5(o.path.read_bytes()).hexdigest()}"',
+            }
             for o in stored
         ]
     }
