@@ -58,10 +58,8 @@ const STRETCH_SAMPLES_PER_CELL = 300;
 const URL_SYNC_MS = 300;
 const CHART_BATCH = 4;
 const CHART_RENDER_MS = 120;
-// While the user scrubs or plays, or the frame they stopped on loads, the chart waits between batches and looks again this often;
-// it waits for a loading frame at most CHART_LOADING_MAX_MS per batch, so that a chunk that fails to load cannot hold the chart back.
+// While the user scrubs or plays, the chart waits between batches and looks again this often.
 const CHART_YIELD_MS = 250;
-const CHART_LOADING_MAX_MS = 2000;
 // A time change of more than this many steps is a jump: the speculative fetches around the old position are dropped.
 const SEEK_DISTANCE = 4;
 const PERF_UPDATE_MS = 250;
@@ -1993,10 +1991,13 @@ class Viewer {
       .flatMap((reading, t) => (reading && (!chart.coverage || chart.coverage[t] !== undefined) ? [] : [t]))
       .sort((a, b) => Math.abs(a - this.t) - Math.abs(b - this.t));
     const { signal } = chart.controller;
-    for (let i = 0; i < missing.length; i += CHART_BATCH) {
-      if (!(await this.#chartMayRead(signal))) return;
+    for (let next = 0; next < missing.length; ) {
+      const size = await this.#chartBatchSize(signal);
+      if (size === 0) return;
+      const batch = missing.slice(next, next + size);
+      next += size;
       await Promise.all(
-        missing.slice(i, i + CHART_BATCH).map(async (t) => {
+        batch.map(async (t) => {
           const observed = chart.coverage && chart.coverage[t] === undefined ? this.#loadChartCoverage(chart, t, coverageOffset) : null;
           if (!chart.readings[t]) {
             try {
@@ -2023,20 +2024,17 @@ class Viewer {
   }
 
   /**
-   * Resolves true when the chart may read its next batch, false when `signal` aborts first. The chart's reads are at demand priority, so
-   * they queue next to the chunks of the frame that a scrub (its timer runs from the first step to the end), a movie or the sharp frame
-   * after a scrub is waiting for: they wait until none is going on, the loading frame for at most CHART_LOADING_MAX_MS.
+   * How many timesteps the chart reads next, 0 when `signal` aborts first. The chart's reads are at demand priority, so they queue next to
+   * the chunks of the frame that a scrub (its timer runs from the first step to the end) or a movie is waiting for: they wait until
+   * neither is going on. While the frame the user stopped on loads they go one timestep at a time, a small share of the link whatever
+   * it takes the frame to arrive, and in batches again once it is in.
    */
-  async #chartMayRead(signal) {
-    let loadingMs = 0;
-    for (;;) {
-      const busy = this.#playing || this.#scrubTimer !== 0;
-      const loading = this.#loading && loadingMs < CHART_LOADING_MAX_MS;
-      if (!busy && !loading) return true;
-      if (!busy) loadingMs += CHART_YIELD_MS;
+  async #chartBatchSize(signal) {
+    while (this.#playing || this.#scrubTimer !== 0) {
       await delay(CHART_YIELD_MS, signal);
-      if (signal.aborted) return false;
+      if (signal.aborted) return 0;
     }
+    return this.#loading ? 1 : CHART_BATCH;
   }
 
   /** The coverage of the charted pixel at timestep t, into chart.coverage (null when it cannot be read). */

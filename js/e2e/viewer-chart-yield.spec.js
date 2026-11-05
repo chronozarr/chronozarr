@@ -1,6 +1,6 @@
-// The chart of a clicked pixel reads one chunk per timestep of its cell. Those reads wait while the user scrubs or plays, and
-// while the frame they stopped on loads: they would queue next to the chunks of the frames the user is waiting for. The chart
-// carries on when the scrub or the movie is over and the frame is in.
+// The chart of a clicked pixel reads one chunk per timestep of its cell. Those reads wait while the user scrubs or plays, and go
+// one timestep at a time while the frame they stopped on loads: they would queue next to the chunks of the frames the user is
+// waiting for. The chart reads in batches again when the scrub or the movie is over and the frame is in.
 //
 // A single-cell store of 60 timesteps with every chunk answered after 120 ms, so the chart's batches of four take a good
 // second to cover it and a scrub of a second and a half falls inside that time.
@@ -80,21 +80,39 @@ test.describe('chart over a slow single-cell store', () => {
     await expect(page.locator('#chart-status')).toContainText(`${N_TIME} of ${N_TIME} timesteps`, { timeout: 30_000 });
   });
 
-  test('the chart does not read while the frame the user stopped on loads, and finishes once it is in', async ({ page }) => {
+  test('the chart reads one timestep at a time while the frame the user stopped on loads, and in batches again once it is in', async ({ page }) => {
     lastTimestep = {};
     lastTimestep.promise = new Promise((resolve) => {
       lastTimestep.release = resolve;
     });
-    // A jump to the last timestep: its frame cannot be drawn until its chunk arrives. The scrub of the jump is over 300 ms later.
+    // Count the chart's reads in flight: every ensureRaw but the one for the last timestep, which is the loading frame's.
+    await page.evaluate((last) => {
+      const { store } = window.chronozarr.viewer;
+      const ensureRaw = store.ensureRaw.bind(store);
+      const reads = { inflight: 0, max: 0 };
+      store.ensureRaw = (lod, row, col, t, options) => {
+        if (t === last) return ensureRaw(lod, row, col, t, options);
+        reads.max = Math.max(reads.max, ++reads.inflight);
+        return ensureRaw(lod, row, col, t, options).finally(() => reads.inflight--);
+      };
+      window.__reads = reads;
+    }, N_TIME - 1);
+    // A jump to the last timestep: its frame cannot be drawn until its chunk arrives. The scrub of the jump is over 300 ms later,
+    // and the batch of four that was in flight lands within a chunk delay.
     await page.evaluate((t) => window.chronozarr.viewer.goToTime(t), N_TIME - 1);
-    await sleep(600);
+    await sleep(700);
+    await page.evaluate(() => {
+      window.__reads.max = window.__reads.inflight;
+    });
     const during = await chartLoaded(page);
-    await sleep(900);
+    await sleep(1000);
     const after = await chartLoaded(page);
-    expect(after - during, 'timesteps the chart loaded while the frame was loading (at most the batch that was already in flight)').toBeLessThanOrEqual(CHART_BATCH);
+    expect(await page.evaluate(() => window.__reads.max), 'chart reads in flight while the frame was loading').toBeLessThanOrEqual(1);
+    expect(after - during, 'the chart goes on, a timestep at a time').toBeGreaterThanOrEqual(3);
     expect(after, 'the chart is not done yet').toBeLessThan(N_TIME);
 
     lastTimestep.release();
     await expect(page.locator('#chart-status')).toContainText(`${N_TIME} of ${N_TIME} timesteps`, { timeout: 30_000 });
+    expect(await page.evaluate(() => window.__reads.max), 'chart reads in flight once the frame was in').toBeGreaterThan(1);
   });
 });
