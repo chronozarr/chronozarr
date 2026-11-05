@@ -14,7 +14,9 @@ Convert a raster time series and see it play in your browser. The sample uses a 
 
 ## 1. Install
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then run these commands in a terminal. This guide uses [chronozarr 0.5.2](release-0.5.2.md). If you have a repository checkout, you can [install from source](development.md).
+**Package version — 0.5.2.** See the [release notes](release-0.5.2.md) or [install from source](development.md).
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then run these commands in a terminal.
 
 ```bash
 uv tool install --python 3.13 'chronozarr[geo]==0.5.2'
