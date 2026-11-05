@@ -296,40 +296,53 @@ const settled = async () => {
 
 /**
  * A store whose data chunks are answered only when the test lets them through (the gate is armed after the link has been
- * measured). `started` lists the timesteps requested since, in order; `release(t, row, col)` answers one request and
- * `openAll()` all of them, now and from then on; an aborted request is rejected. With a `rate` the link is measured at that
- * many bytes/s on the simulated clock, which fixes how many speculative requests may be in flight (0.2 MB/s leaves one).
+ * measured). `started` lists the timesteps requested since, in order; `release(t, row, col)` answers one request, `fail` fails
+ * one and `openAll()` answers all of them, now and from then on; an aborted request is rejected. With a `rate` the link is measured
+ * at that many bytes/s on the simulated clock, which fixes how many speculative requests may be in flight (0.2 MB/s leaves one);
+ * with `mature` it is measured for over a second of transfer time, the estimate the speculative share needs to rise to its idle value.
  */
-async function openGated({ rate = 400_000_000, ...options } = {}) {
+async function openGated({ rate = 400_000_000, mature = false, ...options } = {}) {
   const readable = buildSyntheticStore(LARGE);
   const link = simulatedLink(readable, rate);
   const waiting = new Map();
   const started = [];
+  const duplicates = [];
   let armed = false;
   const gate = (read) => async (key, o, ...rest) => {
     const chunk = /\/data\/c\/(\d+)\/0\/(\d+\/\d+)$/.exec(key);
     if (chunk && armed) started.push(Number(chunk[1]));
     const bytes = await read(key, o, ...rest);
     if (!chunk || !armed) return bytes;
+    const id = `${chunk[1]}/${chunk[2]}`;
+    if (waiting.has(id)) duplicates.push(id);
     await new Promise((resolve, reject) => {
-      waiting.set(`${chunk[1]}/${chunk[2]}`, resolve);
-      o?.signal?.addEventListener('abort', () => reject(o.signal.reason), { once: true });
+      const request = { resolve, reject };
+      waiting.set(id, request);
+      const abort = () => {
+        if (waiting.get(id) === request) waiting.delete(id);
+        reject(o.signal.reason);
+      };
+      if (o?.signal?.aborted) abort();
+      o?.signal?.addEventListener('abort', abort, { once: true });
     });
     return bytes;
   };
   const store = await openStore('memory://gated', { store: { get: gate(link.store.get), getRange: gate(link.store.getRange) }, workers: 0, clock: link.clock, speculativeBytesInitial: 1e12, idleBytes: 1e12, ...options });
-  for (let t = 0; t < 30 && !(store.bandwidthEstimate() > 0); t++) await store.getRaw(0, 0, 0, t);
+  for (let t = 0; t < 60 && !(store.bandwidthEstimate() > 0 && (!mature || store.stats().cache.speculativeShare === 1)); t++) await store.getRaw(0, 0, 0, t);
   armed = true;
-  const release = (t, row = 0, col = 0) => {
-    waiting.get(`${t}/${row}/${col}`)();
+  const take = (t, row, col) => {
+    const request = waiting.get(`${t}/${row}/${col}`);
     waiting.delete(`${t}/${row}/${col}`);
+    return request;
   };
+  const release = (t, row = 0, col = 0) => take(t, row, col).resolve();
+  const fail = (t, row = 0, col = 0) => take(t, row, col).reject(new Error('the request failed'));
   const openAll = () => {
     armed = false;
-    for (const resolve of waiting.values()) resolve();
+    for (const { resolve } of waiting.values()) resolve();
     waiting.clear();
   };
-  return { store, readable, started, release, openAll };
+  return { store, readable, started, duplicates, waiting, release, fail, openAll };
 }
 
 test('a demand read that joins a speculative request holds speculative starts back until that request settles', async () => {
@@ -456,4 +469,159 @@ test('a seek promotes the request for its own timestep that was running as specu
   assert.ok(started.length > 6, 'the window goes on once it has landed');
   openAll();
   await Promise.all([old, next]);
+});
+
+test('a demand read that joins a speculative request and aborts stops holding prefetch back, though the request goes on', async () => {
+  const { store, started, release, openAll } = await openGated();
+  const abort = new AbortController();
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, signal: abort.signal });
+  await settled();
+  assert.equal(started.length, 6);
+  const reader = new AbortController();
+  const read = store.getRaw(0, 0, 0, 32, { signal: reader.signal }).catch((error) => error.name);
+  reader.abort();
+  assert.equal(await read, 'AbortError');
+  for (const t of [30, 31, 29, 33, 28]) release(t);
+  await settled();
+  assert.ok(started.length > 6, 'no frame waits for t=32 any more: prefetch goes on while its request is still in flight');
+  abort.abort();
+  openAll();
+  await job;
+});
+
+test('a joined request that fails stops counting as demand, and a later join counts again', async () => {
+  const { store, started, release, fail, openAll } = await openGated();
+  const abort = new AbortController();
+  // A failed chunk leaves its cell alone for a while, so a second cell is what the job goes on with.
+  const job = store.prefetch({ lod: 0, cells: [[0, 0], [1, 0]], t: 30, signal: abort.signal });
+  await settled();
+  assert.equal(started.length, 6);
+  const read = store.getRaw(0, 0, 0, 31).catch((error) => error.message);
+  for (const [t, row] of [[30, 0], [30, 1], [31, 1], [29, 0], [29, 1]]) release(t, row);
+  fail(31);
+  assert.equal(await read, 'the request failed');
+  await settled();
+  assert.ok(started.length > 6, 'prefetch went on');
+  const inFlight = started.slice(6);
+  const again = store.getRaw(0, 1, 0, inFlight[0]);
+  const before = started.length;
+  for (const t of inFlight.slice(1)) release(t, 1);
+  await settled();
+  assert.equal(started.length, before, 'a new join holds it back again');
+  release(inFlight[0], 1);
+  await again;
+  await settled();
+  assert.ok(started.length > before, 'and lets it go on when the request has settled');
+  abort.abort();
+  openAll();
+  await job;
+});
+
+test('closing the store while joined requests are in flight leaves nothing counted as demand', async () => {
+  const { store } = await openGated({ rate: 400_000, mature: true });
+  assert.equal(store.stats().cache.speculativeShare, 1, 'idle and measured: speculation earns at the full share');
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30 });
+  await settled();
+  const reads = [31, 32].map((t) => store.getRaw(0, 0, 0, t).catch((error) => error.name));
+  assert.equal(store.stats().cache.speculativeShare, 0.5, 'two frames wait');
+  store.close();
+  assert.equal(store.stats().cache.speculativeShare, 1);
+  await Promise.all([job.catch((error) => error.name), ...reads]);
+  await settled();
+  assert.equal(store.stats().cache.speculativeShare, 1);
+});
+
+test('a demand fetch that is aborted while its shard index read cannot be cancelled stops counting as demand at once', async () => {
+  const readable = buildSyntheticStore({ nTime: 60, nBand: 4, height: 256, width: 256, chunk: 128, sharded: true, shardTime: 30, shardBytes: true });
+  // The first read of the shard that holds t=45 of cell (0, 1) (its index) waits for the test; a read of an index takes no signal.
+  let releaseIndex;
+  const held = new Promise((resolve) => { releaseIndex = resolve; });
+  let armed = false;
+  let heldOnce = false;
+  const getRange = async (key, range, options) => {
+    if (armed && key === '/0/data/c/1/0/0/1' && !heldOnce) {
+      heldOnce = true;
+      await held;
+    }
+    return readable.getRange(key, range, options);
+  };
+  const store = await openStore('memory://index', { store: { get: (key, options) => readable.get(key, options), getRange }, workers: 0, speculativeBytesInitial: 1e12, idleBytes: 1e12 });
+  armed = true;
+  // A seek fetches its own timestep at demand priority.
+  const first = new AbortController();
+  const a = store.prefetch({ lod: 0, cells: [[0, 1]], t: 45, seek: true, maxSteps: 1, concurrency: 1, signal: first.signal });
+  await settled();
+  const second = new AbortController();
+  const mark = readable.log.length;
+  const b = store.prefetch({ lod: 0, cells: [[0, 0]], t: 10, maxSteps: 2, concurrency: 1, signal: second.signal });
+  await settled();
+  assert.equal(readable.log.length, mark, 'a frame waits: the other job has not started a request');
+  first.abort();
+  await settled();
+  assert.ok(readable.log.slice(mark).some(({ key }) => key === '/0/data/c/0/0/0/0'), 'nobody waits any more, though the index read is still pending: the other job started');
+  releaseIndex();
+  second.abort();
+  await Promise.all([a, b]);
+});
+
+/** A small seeded generator, so that a failing run can be repeated. */
+function seeded(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+test('random jobs, reads, aborts, failures and releases: nothing is requested twice at once, and once drained nothing counts as demand and prefetch goes on', async () => {
+  const withTimeout = (promise, label) => Promise.race([promise, new Promise((resolve, reject) => setTimeout(() => reject(new Error(`hung: ${label}`)), 5000))]);
+  for (let seed = 1; seed <= 12; seed++) {
+    const rand = seeded(seed);
+    const pick = (n) => Math.floor(rand() * n);
+    const { store, duplicates, waiting, release, fail, openAll } = await openGated({ rate: 4_000_000, mature: true });
+    assert.equal(store.stats().cache.speculativeShare, 1, `seed ${seed}: idle and measured`);
+    const jobs = [];
+    const reads = [];
+    for (let op = 0; op < 40 + pick(30); op++) {
+      const choice = pick(10);
+      if (choice <= 2) {
+        const abort = new AbortController();
+        const kind = ['horizon', 'seek', 'movie', 'ambient'][pick(4)];
+        const job = { lod: 0, cells: [[0, 0], [1, 0], [0, 1]].slice(0, 1 + pick(3)), t: pick(60), signal: abort.signal };
+        if (kind === 'seek') job.seek = true;
+        if (kind === 'movie') Object.assign(job, { playing: true, loop: true, maxSteps: 4 + pick(20) });
+        if (kind === 'ambient') Object.assign(job, { playing: true, loop: true, ambient: true, maxSteps: 4 + pick(30) });
+        if (pick(4) === 0) job.concurrency = 1 + pick(6);
+        jobs.push({ abort, done: store.prefetch(job).catch((error) => error.name) });
+      } else if (choice === 3 && jobs.length) {
+        jobs[pick(jobs.length)].abort.abort();
+      } else if (choice <= 6) {
+        let [t, row, col] = [pick(60), pick(2), pick(2)];
+        const pending = [...waiting.keys()];
+        if (pending.length && pick(10) < 7) [t, row, col] = pending[pick(pending.length)].split('/').map(Number);
+        const mode = pick(3);
+        const abort = new AbortController();
+        reads.push(store.getRaw(0, row, col, t, mode === 0 ? {} : { signal: abort.signal }).catch((error) => error.name));
+        if (mode === 2) setTimeout(() => abort.abort(), pick(20));
+      } else if (choice === 7 && waiting.size) {
+        const [t, row, col] = [...waiting.keys()][pick(waiting.size)].split('/').map(Number);
+        if (pick(5) === 0) fail(t, row, col);
+        else release(t, row, col);
+      } else {
+        await settled(1 + pick(3));
+      }
+      if (rand() < 0.7) await settled(3);
+      assert.deepEqual(duplicates, [], `seed ${seed}, op ${op}: a chunk was requested while its request was in flight`);
+    }
+    for (const job of jobs) job.abort.abort();
+    openAll();
+    await withTimeout(Promise.all([...jobs.map((job) => job.done), ...reads]), `seed ${seed} drained`);
+    await settled(10);
+    assert.equal(store.stats().cache.speculativeShare, 1, `seed ${seed}: nothing counts as demand once everything has settled`);
+    const result = await withTimeout(store.prefetch({ lod: 0, cells: [[1, 1]], t: 5, maxSteps: 3 }), `seed ${seed} fresh prefetch`);
+    assert.ok(result.fetched + result.skipped > 0, `seed ${seed}: a new prefetch goes on`);
+    store.close();
+  }
 });

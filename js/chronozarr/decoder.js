@@ -370,7 +370,7 @@ export class ChronoStore {
   /** Clock time of the last root re-read that brought no new `shard_bytes`, or null. */
   #noNewHintsAt = null;
   #recoveries = { rootRefetches: 0, retried: 0, suffixFallbacks: 0, suppressed: 0 };
-  /** Demand reads in flight, and the speculative requests a demand read has joined (they count until they settle). */
+  /** Requests a demand read waits for (see #count). */
   #demandInflight = 0;
   #demandIdleWaiters = [];
   #slotWaiters = [];
@@ -1174,21 +1174,37 @@ export class ChronoStore {
     this.#promote(entry);
   }
 
-  /** Move a speculative request to demand priority. */
+  /** Move a speculative request to demand priority and count it as demand. */
   #promote(entry) {
-    if (entry.priority.value === 0) return;
-    entry.priority.value = 0;
-    const index = this.#shardIndexes.get(entry.indexKey);
-    if (index) index.priority.value = 0;
-    this.#limiter.reprioritize();
-    this.#decoder.reprioritize?.();
-    // A frame now waits for a request that was speculative: it counts as demand until it settles, and prefetch holds back as it does for
-    // a read of its own. A movie's prefetch is the exception: its pump joins the chunks it plans all the time, and holding the movie back
-    // for each would give up the speed that letting speculation use the link while nothing waits bought (adc26d5).
-    if (![...entry.owners].some((owner) => this.#movieJobs.has(owner))) {
-      entry.promoted = true;
-      this.#demandInflight++;
+    if (entry.priority.value !== 0) {
+      entry.priority.value = 0;
+      const index = this.#shardIndexes.get(entry.indexKey);
+      if (index) index.priority.value = 0;
+      this.#limiter.reprioritize();
+      this.#decoder.reprioritize?.();
+    }
+    this.#count(entry);
+  }
+
+  /**
+   * A request that a frame waits for counts as demand, once, and prefetch holds back as it does for a read of its own: from the read's
+   * start or the join until the request settles, is aborted, or its last demand waiter leaves. A movie's prefetch is the exception when
+   * a read joins one of its requests: its pump joins the chunks it plans all the time, and holding the movie back for each would give up
+   * the speed that letting speculation use the link while nothing waits bought (adc26d5).
+   */
+  #count(entry) {
+    if (entry.counted || [...entry.owners].some((owner) => this.#movieJobs.has(owner))) return;
+    entry.counted = true;
+    this.#demandInflight++;
+    this.#updateSpeculativeShare();
+  }
+
+  #uncount(entry) {
+    if (!entry.counted) return;
+    entry.counted = false;
+    if (--this.#demandInflight === 0) {
       this.#updateSpeculativeShare();
+      for (const wake of this.#demandIdleWaiters.splice(0)) wake();
     }
   }
 
@@ -1199,21 +1215,15 @@ export class ChronoStore {
    */
   #start(key, meta, { background, owner = null }) {
     const controller = new AbortController();
-    const entry = { controller, kind: meta.kind, waiters: 0, sticky: false, owners: new Set(), releases: [], background, promoted: false, priority: { value: background ? 1 : 0 }, promise: null };
+    const entry = { controller, kind: meta.kind, waiters: 0, sticky: false, owners: new Set(), releases: [], background, counted: false, priority: { value: background ? 1 : 0 }, promise: null };
     this.#own(entry, owner);
-    if (!background) {
-      this.#demandInflight++;
-      this.#updateSpeculativeShare();
-    }
+    if (!background) this.#count(entry);
     entry.promise = this.#load(key, meta, entry)
       .finally(() => {
         for (const release of entry.releases) release();
         if (this.#inflight.get(key) === entry) this.#inflight.delete(key);
         for (const wake of this.#slotWaiters.splice(0)) wake();
-        if ((!background || entry.promoted) && --this.#demandInflight === 0) {
-          this.#updateSpeculativeShare();
-          for (const wake of this.#demandIdleWaiters.splice(0)) wake();
-        }
+        this.#uncount(entry);
       });
     this.#inflight.set(key, entry);
     return entry;
@@ -1246,10 +1256,14 @@ export class ChronoStore {
     if (entry.waiters === 0 && !entry.sticky && entry.owners.size === 0) this.#abortEntry(entry);
   }
 
-  /** Abort a fetch that nobody wants any more. Its rejection (an AbortError) has no one left to handle it, so it is marked handled here. */
+  /**
+   * Abort a fetch that nobody wants any more. Its rejection (an AbortError) has no one left to handle it, so it is marked handled here.
+   * It stops counting as demand now: it may not settle for a while (a shard index read cannot be cancelled).
+   */
   #abortEntry(entry) {
     entry.promise.catch(() => {});
     entry.controller.abort();
+    this.#uncount(entry);
   }
 
   /** The view jumped: cancel every speculative fetch nobody is waiting for, except those the plan of `signal` has claimed. */
@@ -1497,6 +1511,7 @@ export class ChronoStore {
         if (done) return;
         finish();
         reject(abortError());
+        if (entry.waiters === 0 && !entry.sticky) this.#uncount(entry);
         this.#cancelIfUnwanted(entry);
       };
       if (signal.aborted) {
