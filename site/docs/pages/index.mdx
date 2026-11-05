@@ -18,7 +18,7 @@ export const plateView = 'https://chronozarr.org/demo/?t=110&p=false_color'
 
   <nav className="cz-actions" aria-label="Start">
     <a className="cz-cta cz-cta-primary" href={demo}>Open the live demo</a>
-    <a className="cz-cta" href="/quickstart">Convert my data</a>
+    <a className="cz-cta" href="/quickstart#choose-your-input">Convert my data</a>
     <a className="cz-cta" href="/guides/share">Share a dataset</a>
   </nav>
 </header>
@@ -59,11 +59,11 @@ export const plateView = 'https://chronozarr.org/demo/?t=110&p=false_color'
   <p className="cz-label">Three commands</p>
   <div className="cz-commands">
     <pre><code>chronozarr convert rasters/ my_store</code></pre>
-    <pre><code>chronozarr share my_store</code></pre>
     <pre><code>chronozarr preview my_store</code></pre>
+    <pre><code>chronozarr share my_store</code></pre>
   </div>
   <div className="cz-commands-notes">
-    <p>Run <code>convert</code>, then choose <code>share</code> for a temporary public link or <code>preview</code> for this computer only. Sharing needs <code>cloudflared</code>; preview does not. Both commands keep running until you press Ctrl-C.</p>
+    <p>Convert your files and open the map on your computer with <code>preview</code>. When you want a temporary public link, stop the preview with Ctrl-C and run <code>share</code> with <code>cloudflared</code> installed.</p>
     <a href="/quickstart">Quickstart, with a sample dataset</a>
   </div>
 </section>

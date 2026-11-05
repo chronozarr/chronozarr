@@ -10,21 +10,21 @@ chronozarr lets you share a georeferenced raster time series as an interactive m
 
 ## Quickstart
 
-This quickstart targets Python and npm **0.5.2**. The [release notes](https://chronozarr.org/reference/release-0.5.2) cover the viewer, preview and sharing fixes, new import routes, and compatibility with existing stores.
+Use the sample below or [choose the guide for your input format](https://chronozarr.org/guides/convert).
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then the `chronozarr` command:
 
 ```bash
-uv tool install --python 3.13 'chronozarr[geo]==0.5.2'
+uv tool install --python 3.13 'chronozarr[geo]'
 ```
 
 chronozarr supports Python 3.11 and newer. `--python 3.13` makes uv use 3.13 even when an older Python comes first on your computer. With pip, in an environment with Python 3.11 or newer:
 
 ```bash
-python -m pip install 'chronozarr[geo]==0.5.2'
+python -m pip install 'chronozarr[geo]'
 ```
 
-Use a folder with one GeoTIFF per date, with the date in each file name, such as `ndvi_2024-01.tif`. All files share one grid. To try it without your own files, export twelve months of the public demo as GeoTIFFs:
+Export twelve months of the public demo as GeoTIFFs.
 
 ```bash
 chronozarr export-cog https://data.chronozarr.org/ucayali_santa_maria_v03 sample --level 2 --times 2024-01..2024-12
@@ -37,33 +37,17 @@ chronozarr convert sample my_store --dry-run
 chronozarr convert sample my_store
 ```
 
-The dry run checks every file before `convert` writes the store.
+The dry run checks every file before `convert` writes the store. To use your own dated GeoTIFFs on one grid, replace `sample` with their folder.
 
-To send a temporary public link to a colleague, install [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/), then run:
-
-```bash
-chronozarr share my_store
-```
-
-Keep this command running and your computer on while the colleague uses the link. Anyone with the link can read the store. Press Ctrl-C to stop sharing before running another command in the same terminal.
-
-For a view that opens only on your computer, use this instead. It needs no `cloudflared`:
+Open the map on your computer.
 
 ```bash
 chronozarr preview my_store
 ```
 
-Preview also keeps running until you press Ctrl-C.
+Press Space to play the series or click a pixel to see its values over time. Press Ctrl-C in the terminal when you finish.
 
-The [full quickstart](https://chronozarr.org/quickstart) has a sample dataset, the expected output of each command and the pip route.
-
-For [Icechunk](https://github.com/chronozarr/chronozarr/blob/main/docs/icechunk.md), choose the variable, region and snapshot to convert.
-The tested examples cover a materialized GFS window and virtual GRIB; converting
-Float64 values requires an explicit choice to round to Float32.
-
-The [Tile-Ripper Python bridge](https://github.com/chronozarr/chronozarr/blob/main/docs/tile-ripper.md) reads completed COG
-observations, joins each scene to its selected quality mask and retains source
-identities. It does not need an intermediate stacked store.
+The [full quickstart](https://chronozarr.org/quickstart) shows the expected output. If Chrome asks for local network access, allow it so the viewer can read your store.
 
 ## Share a store
 
@@ -72,7 +56,7 @@ identities. It does not need an intermediate stacked store.
 | Temporary | `chronozarr share my_store` | While the command runs | `cloudflared`, your computer on and online |
 | Permanent | `chronozarr publish my_store --destination s3://BUCKET/PREFIX` | As long as you keep the files | Cloud storage that you control: S3, R2, Google Cloud Storage or Azure |
 
-The recipient needs only a web browser. chronozarr.org serves the viewer page and stores no data. See [Share a temporary link](https://chronozarr.org/guides/share) and [Publish a permanent link](https://chronozarr.org/guides/publish).
+Anyone with the link can read the store. The recipient needs only a web browser. chronozarr.org serves the viewer page and stores no data. See [Share a temporary link](https://chronozarr.org/guides/share) and [Publish a permanent link](https://chronozarr.org/guides/publish).
 
 ## Read the values
 
@@ -87,13 +71,13 @@ uv init --bare --python 3.13
 Then install the library in that project:
 
 ```bash
-uv add 'chronozarr==0.5.2'
+uv add chronozarr
 ```
 
 Use `uv run python` to start Python in that folder, or `uv run python your_script.py` to run a script. The `"my_store"` path below is relative to that folder. To use an existing Python 3.11+ environment instead, install the library with:
 
 ```bash
-python -m pip install 'chronozarr==0.5.2'
+python -m pip install chronozarr
 ```
 
 A notebook must use that environment as its kernel. Then run:
@@ -109,14 +93,14 @@ A store is a Zarr v3 group, so xarray, zarr-python and GDAL 3.13 also read it wi
 ## JavaScript
 
 ```bash
-npm install chronozarr@0.5.2
+npm install chronozarr
 ```
 
 The npm package has a DOM-free reader, a MapLibre layer, a GeoLibre plugin and the production viewer for [self-hosting](https://chronozarr.org/guides/viewer-distribution). See the [JavaScript reader](https://chronozarr.org/reference/javascript).
 
 ## Versions
 
-Python and npm package **0.5.2** read both draft store formats: **v0.3.0** for CRSs with an EPSG code and **v0.4.0** for other CRSs. Package versions and store specification versions are independent. Existing v0.3 stores need no conversion. Readers from package 0.4.1 and earlier cannot open v0.4 stores; upgrade the reader to 0.5.2. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`. See the [0.5.2 release notes](https://chronozarr.org/reference/release-0.5.2).
+Package versions and store format versions are independent. Packages 0.5.1 and later read both draft store formats. Stores with an EPSG code use **v0.3.0**. Stores without one use **v0.4.0**. To use a v0.2 store, convert it with `chronozarr convert OLD_STORE NEW_STORE`.
 
 Use `chronozarr --version` for the installed package version. `chronozarr info my_store` reports the store's format version.
 
@@ -126,6 +110,7 @@ Use `chronozarr --version` for the installed package version. `chronozarr info m
 |---|---|
 | What chronozarr is, and how it compares | [What is chronozarr?](https://chronozarr.org/what-is-chronozarr) |
 | Every input type | [Convert your data](https://chronozarr.org/guides/convert) |
+| Icechunk and Tile-Ripper imports in 0.5.2 | [0.5.2 release notes in the source tree](https://github.com/chronozarr/chronozarr/blob/main/docs/release-0.5.2.md) |
 | Sentinel-2 for your own area and dates (a repository checkout) | [Sentinel-2 for your area](https://chronozarr.org/guides/sentinel-2) |
 | SWOT, NISAR and model output | [Examples](https://chronozarr.org/guides/examples) |
 | Every command | [Command line](https://chronozarr.org/reference/cli) |

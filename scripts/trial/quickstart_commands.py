@@ -7,15 +7,14 @@ cannot silently shrink what the job tests:
 
 - a fence with a language the job does not know (only bash, text and python are known);
 - a command other than ``uv`` or ``chronozarr`` in a bash fence: decide how CI runs it first;
-- a missing, repeated or reordered install, export-cog, dry-run convert, convert, share or
-  preview command;
+- a missing, repeated or reordered install, export-cog, dry-run convert, convert, preview or
+  share command;
 - a share or preview command that shares its fence with another command;
 - install pins that name more than one chronozarr version.
 
 One alternative route is skipped, and the plan says so: a bash fence whose introducing paragraph
 contains the word "instead" (the pip install: "To install with pip instead, ..."). The word
-"or" is not the marker: the paragraph before `chronozarr preview` contains ", or to check a
-store before you share it", and that command is a step of its own, not an alternative.
+"or" is not the marker, so a choice within an instruction does not skip a step.
 
 ``share`` and ``preview`` never return, so they are marked long running with a readiness check:
 the ``open:`` link they print names the store, and ``<store>/zarr.json`` must answer 200.
@@ -48,8 +47,8 @@ REQUIRED_COMMANDS = (
     ("export-cog", re.compile(r"^chronozarr export-cog\b")),
     ("dry-run convert", re.compile(r"^chronozarr convert\b.*--dry-run\b")),
     ("convert", re.compile(r"^chronozarr convert\b(?!.*--dry-run\b)")),
-    ("share", re.compile(r"^chronozarr share\b")),
     ("preview", re.compile(r"^chronozarr preview\b")),
+    ("share", re.compile(r"^chronozarr share\b")),
 )
 
 # share's tunnel link usually takes 30 s; its own wait allows up to 90 s after cloudflared starts.
@@ -199,7 +198,7 @@ def check_required(steps: list[Step]) -> None:
     if positions != sorted(positions):
         raise StructureError(
             "the page's commands are no longer in the order install, export-cog, dry-run "
-            f"convert, convert, share, preview (steps {positions})"
+            f"convert, convert, preview, share (steps {positions})"
         )
 
 
