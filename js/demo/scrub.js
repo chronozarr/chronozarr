@@ -154,8 +154,9 @@ export const PROBE_MAX_NEED = 12;
 
 /**
  * What to load for a scrub that is drawing at `lod`: the timestep on screen and as many ahead as FILL_LOOKAHEADS
- * lookaheads at that level, nearest first, and the next sharper level of `levels` for the first `need` timesteps
- * ahead: the probe that a step up waits for. The probe is spare capacity only:
+ * lookaheads at that level, nearest first, and the next sharper level of `levels` for the timestep on screen and the first
+ * `need` timesteps ahead: the probe that a step up waits for, and, for the timestep the scrub stops on, a sharper frame that
+ * is in memory already when it does. The probe is spare capacity only:
  * - it exists while the level in use has everything it is asked to hold, so it takes nothing the level in use still needs;
  * - it reaches no further than the lookahead, and only for scrubs of at most PROBE_MAX_NEED timesteps of it.
  * @param {{isReady: (lod: number, t: number) => boolean}} options  `isReady` says whether the complete frame of a level at a timestep is in memory
@@ -167,7 +168,7 @@ export function planScrubLoads({ t, direction, count, levels, lod, need, isReady
   const sharper = levels[levels.indexOf(lod) - 1];
   return {
     primary: { lod, steps: [t, ...ahead] },
-    probe: sharper !== undefined && full && need > 0 && need <= PROBE_MAX_NEED ? { lod: sharper, steps: ahead.slice(0, need) } : null,
+    probe: sharper !== undefined && full && need > 0 && need <= PROBE_MAX_NEED ? { lod: sharper, steps: [t, ...ahead.slice(0, need)] } : null,
   };
 }
 
