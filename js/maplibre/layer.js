@@ -699,6 +699,8 @@ export class ChronozarrLayer {
 
     const lod = selectLod({ mercatorPerTexel0: this.#geo.mercatorPerTexel0, levelCount: store.levels.length, zoom: this.#map.getZoom(), bias: this.#options.lodBias });
     const visible = this.#visibleCells(lod, matrix);
+    // What a level showed on an earlier visit says nothing about the frame that was just on screen: a stand-in from it would be the wrong timestep.
+    if (lod !== this.#lastView.lod) this.#shown.clear();
     this.#lastView = { lod, cells: visible.map((c) => [c.row, c.col]) };
     if (!this.#seeded) this.#seeded = this.#seedCoarse(lod, matrix);
 

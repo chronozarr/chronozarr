@@ -367,6 +367,27 @@ test('a finer cell stands in only with the timestep being drawn', async (t) => {
   assert.deepEqual(drawn(frame().draws), ids(1, [0, 1, 2], [0, 1, 2], 1));
 });
 
+test('a stand-in shows the timestep being drawn, not what the level showed on an earlier visit', async (t) => {
+  const { layer, view, frame, settle } = await openLayer(t, WIDE);
+  view.zoom = 12;
+  await settle(); // level 1 at timestep 0
+  view.zoom = 13;
+  layer.setTime(2);
+  await settle(); // level 0 at timestep 2
+  view.zoom = 12;
+  const first = frame();
+  assert.equal(first.lod, 1);
+  assert.deepEqual(drawn(first.draws), ids(0, range(12), range(19), 2), 'timestep 2 from level 0, not timestep 0 from level 1');
+});
+
+test('a time change at the same level holds the previous timestep while the new one loads', async (t) => {
+  const { layer, memory, frame, settle } = await openLayer(t, { cells: 6, levels: 2, nTime: 2 });
+  await settle();
+  memory.delayMs = HANG_MS;
+  layer.setTime(1);
+  assert.deepEqual(drawn(frame().draws), ids(0, ALL, ALL, 0), 'timestep 0 stays on screen');
+});
+
 for (const [direction, from, to, expected] of [['backwards', 10, 9, [8, 7, 6]], ['forwards', 10, 11, [12, 13, 14]]]) {
   test(`scrubbing ${direction} prefetches the timesteps in that direction first`, async (t) => {
     const { layer, store, memory, settle } = await openLayer(t, { cells: 1, nTime: 24, layerOptions: { prefetch: true, t: from } });
