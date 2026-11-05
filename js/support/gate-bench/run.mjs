@@ -29,17 +29,10 @@ import { mkdir, writeFile, appendFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { chromium } from '@playwright/test';
 import { startStaticServer } from '../static-server.js';
+import { BROWSER_ARGS, VIEWPORT, launchBrowser, rendererInfo, withTimeout } from './browser.mjs';
 import { compareBuilds, summaryMarkdown } from './compare.js';
 
-const BROWSER_ARGS = {
-  // The flags of playwright.config.js: WebGL2 on the CPU, the same on a laptop as on a runner without a GPU.
-  swiftshader: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
-  // Those of scripts/fieldperf/lib.mjs.
-  metal: ['--ignore-gpu-blocklist', '--use-angle=metal'],
-};
-const VIEWPORT = { width: 1280, height: 720 };
 // Five cold opens per run: with three, one slow open moved a run's median by up to 59 % on GitHub's runners.
 const COLD_RUNS = 5;
 // bench()'s own warm loops are not the measurement (see above): a few switches each.
@@ -125,22 +118,8 @@ async function warmLoops({ switches, pauseMs, settleMs }) {
   return { stepping, jumping, readerRequests: network.requests - before.requests, readerBytes: network.bytes - before.bytes, evictions: store.stats.cache.evictions - before.evictions };
 }
 
-function rendererInfo() {
-  const gl = document.createElement('canvas').getContext('webgl2');
-  const debug = gl?.getExtension('WEBGL_debug_renderer_info');
-  return { userAgent: navigator.userAgent, renderer: gl ? gl.getParameter(debug ? debug.UNMASKED_RENDERER_WEBGL : gl.RENDERER) : null };
-}
-
-function withTimeout(promise, what) {
-  let timer;
-  const deadline = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${what} took more than ${RUN_TIMEOUT_MS / 1000} s`)), RUN_TIMEOUT_MS);
-  });
-  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
-}
-
 async function measure({ variant, pair, appUrl, storeUrl, data }) {
-  const browser = await chromium.launch({ headless: true, args: BROWSER_ARGS[args.gpu] });
+  const browser = await launchBrowser(args.gpu);
   const errors = [];
   try {
     const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1, serviceWorkers: 'block' });
@@ -151,10 +130,10 @@ async function measure({ variant, pair, appUrl, storeUrl, data }) {
     await page.goto(`${appUrl}/demo/index.html?store=${encodeURIComponent(storeUrl)}`);
     await page.waitForFunction(() => window.chronozarr?.ready, null, { timeout: 120_000 });
     if (!(await page.evaluate(() => window.chronozarr.ready))) throw new Error('the viewer did not open the store');
-    const bench = await withTimeout(page.evaluate((options) => window.chronozarr.bench(options), { coldRuns: COLD_RUNS, switches: BENCH_SWITCHES }), 'bench()');
-    const loaded = await withTimeout(page.evaluate(loadLevel0, { maxCacheBytes: WARM_CACHE_BYTES }), 'loading level 0');
+    const bench = await withTimeout(page.evaluate((options) => window.chronozarr.bench(options), { coldRuns: COLD_RUNS, switches: BENCH_SWITCHES }), 'bench()', RUN_TIMEOUT_MS);
+    const loaded = await withTimeout(page.evaluate(loadLevel0, { maxCacheBytes: WARM_CACHE_BYTES }), 'loading level 0', RUN_TIMEOUT_MS);
     const serverBefore = data.requests.length;
-    const warm = await withTimeout(page.evaluate(warmLoops, { switches: SWITCHES, pauseMs: STEP_PAUSE_MS, settleMs: SETTLE_MS }), 'the warm loops');
+    const warm = await withTimeout(page.evaluate(warmLoops, { switches: SWITCHES, pauseMs: STEP_PAUSE_MS, settleMs: SETTLE_MS }), 'the warm loops', RUN_TIMEOUT_MS);
     const serverRequests = data.requests.length - serverBefore;
     const browserInfo = await page.evaluate(rendererInfo);
     const frames = [...warm.stepping, ...warm.jumping];

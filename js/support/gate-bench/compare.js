@@ -26,13 +26,13 @@ const TRAFFIC = ['serverRequests', 'readerRequests', 'readerBytes'];
 
 export const MIN_PAIRS = 3;
 
-function median(values) {
+export function median(values) {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-const stats = (values) => ({ median: median(values), min: Math.min(...values), max: Math.max(...values), n: values.length });
+export const stats = (values) => ({ median: median(values), min: Math.min(...values), max: Math.max(...values), n: values.length });
 
 const sumLoops = (records) =>
   Object.fromEntries([...TRAFFIC, 'incomplete'].map((field) => [field, records.reduce((n, record) => n + record.warmLoop[field], 0)]));
