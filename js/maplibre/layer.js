@@ -115,6 +115,7 @@ export class ChronozarrLayer {
   #geo = null;
   #meshes = new Map();
   #t;
+  #direction = 1; // sign of the last time change: the way the viewer is scrubbing, which the prefetch window favours
   #productId;
   #band;
   #colormap;
@@ -253,6 +254,7 @@ export class ChronozarrLayer {
       throw new RangeError(`ChronozarrLayer.setTime: timestep must be an integer in 0..${this.#store ? this.#store.times.length - 1 : 'n-1'}, got ${t}`);
     }
     if (t === this.#t) return;
+    this.#direction = t > this.#t ? 1 : -1;
     this.#t = t;
     this.#retired.push(this.#controller);
     this.#controller = new AbortController();
@@ -1101,7 +1103,7 @@ export class ChronozarrLayer {
     // The reader fetches each mask with its chunk, as a speculative read under the same allowances; a mask requested after
     // the chunk landed would be a demand read that holds the prefetch workers back.
     store
-      .prefetch({ lod, cells, t: this.#t, seek, masks: store.hasMask, signal: controller.signal })
+      .prefetch({ lod, cells, t: this.#t, direction: this.#direction, seek, masks: store.hasMask, signal: controller.signal })
       .then((result) => {
         if (result.errors.length > 0) this.#emit('error', { error: result.errors[0].error, prefetch: true, errors: result.errors });
       }, report);

@@ -218,3 +218,17 @@ test('a finer cell stands in only with the timestep being drawn', async (t) => {
   await settle();
   assert.deepEqual(frame().draws, Array(9).fill(111));
 });
+
+for (const [direction, from, to, expected] of [['backwards', 10, 9, [8, 7, 6]], ['forwards', 10, 11, [12, 13, 14]]]) {
+  test(`scrubbing ${direction} prefetches the timesteps in that direction first`, async (t) => {
+    const { layer, store, memory, settle } = await openLayer(t, { cells: 1, nTime: 24, layerOptions: { prefetch: true, t: from } });
+    const watch = watchPrefetch(store);
+    await settle();
+    layer.setTime(to);
+    await settle();
+    await watch.first;
+    await watch.runs[0].result;
+    const fetched = chunkRequests(memory).map((request) => Number(request.id.split('/')[3])).filter((time) => time !== from && time !== to);
+    assert.deepEqual(fetched.slice(0, 3).sort((a, b) => a - b), [...expected].sort((a, b) => a - b), `the first timesteps fetched, in fetch order: ${fetched.slice(0, 6)}`);
+  });
+}
