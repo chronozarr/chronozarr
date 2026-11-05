@@ -197,3 +197,85 @@ test('describePixel validity without a mask: invalid only when every band is at 
   assert.equal(describePixel(Float32Array.of(NaN), [{ name: 'depth' }], null).valid, false);
   assert.equal(describePixel(Float32Array.of(-9999), [{ name: 'depth' }], -9999).valid, false);
 });
+
+// The comparator sorts that computeStretchLo and percentileRange replaced with typed-array sorts, kept as the reference for their results.
+// NaN needs a comparator that is a total order (a bare a - b is not one), so it is placed last, as a typed-array sort does.
+const nanLast = (a, b) => (Number.isNaN(a) || Number.isNaN(b) ? Number.isNaN(a) - Number.isNaN(b) : a - b);
+
+function referenceStretchLo(rgbSamples) {
+  const tones = [];
+  for (const [r, g, b] of rgbSamples) {
+    if (r === 0 && g === 0 && b === 0) continue;
+    tones.push(reinhardSrgb(r), reinhardSrgb(g), reinhardSrgb(b));
+  }
+  if (tones.length < 30) return 0;
+  tones.sort(nanLast);
+  return tones[Math.floor(tones.length * 0.02)];
+}
+
+function referencePercentileRange(values) {
+  const finite = values.filter(Number.isFinite).sort(nanLast);
+  if (finite.length === 0) return null;
+  const lo = finite[Math.floor(finite.length * 0.02)];
+  const hi = finite[Math.min(finite.length - 1, Math.floor(finite.length * 0.98))];
+  return hi > lo ? [lo, hi] : [lo, lo + 1];
+}
+
+function seededRandom(seed) {
+  let state = seed;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 2 ** 32;
+  };
+}
+
+test('computeStretchLo gives the same value as sorting every tone with a comparator, for every sample count and kind of data', () => {
+  const random = seededRandom(1);
+  const kinds = {
+    'uniform reflectance': () => random() * 0.3,
+    'duplicates': () => Math.round(random() * 20) / 100,
+    'mostly nodata': () => (random() < 0.8 ? 0 : random() * 0.3),
+    'a few large values': () => (random() < 0.05 ? 5 + random() * 100 : random() * 0.2),
+    'negative reflectance': () => random() * 0.2 - 0.05,
+    'constant': () => 0.12,
+  };
+  // Nine samples give 27 tones, below the 30 needed; ten give exactly 30.
+  const counts = [0, 1, 2, 9, 10, 11, 49, 50, 51, 100, 333, 1200];
+  for (const [kind, value] of Object.entries(kinds)) {
+    for (const count of counts) {
+      const samples = Array.from({ length: count }, () => [value(), value(), value()]);
+      assert.equal(computeStretchLo(samples), referenceStretchLo(samples), `${kind}, ${count} samples`);
+    }
+  }
+  const nodata = Array.from({ length: 40 }, () => [0, 0, 0]);
+  assert.equal(computeStretchLo(nodata), 0, 'only all-zero samples');
+  assert.equal(computeStretchLo([...nodata, ...Array.from({ length: 10 }, () => [0.1, 0.1, 0.1])]), referenceStretchLo([...nodata, ...Array.from({ length: 10 }, () => [0.1, 0.1, 0.1])]), 'nodata does not count towards the 30 tones');
+});
+
+test('computeStretchLo puts NaN tones last instead of letting them break the order', () => {
+  const random = seededRandom(2);
+  const samples = Array.from({ length: 200 }, () => [random() * 0.3, random() * 0.3, random() * 0.3]);
+  for (let i = 0; i < 12; i++) samples[i * 7][i % 3] = NaN;
+  const lo = computeStretchLo(samples);
+  assert.ok(Number.isFinite(lo));
+  assert.equal(lo, referenceStretchLo(samples));
+});
+
+test('percentileRange gives the same range as sorting the finite values with a comparator, for every count and kind of data', () => {
+  const random = seededRandom(3);
+  const kinds = {
+    'uniform': () => random() * 5,
+    'duplicates': () => Math.round(random() * 10),
+    'negative': () => random() * 40 - 30,
+    'with NaN and infinities': () => (random() < 0.1 ? [NaN, Infinity, -Infinity][Math.floor(random() * 3)] : random() * 5),
+    'only non-finite and one value': () => (random() < 0.99 ? NaN : 1),
+    'constant': () => 5,
+  };
+  const counts = [0, 1, 2, 3, 49, 50, 51, 99, 100, 101, 102, 999, 5000];
+  for (const [kind, value] of Object.entries(kinds)) {
+    for (const count of counts) {
+      const values = Array.from({ length: count }, value);
+      assert.deepEqual(percentileRange(values), referencePercentileRange(values), `${kind}, ${count} values`);
+    }
+  }
+});
