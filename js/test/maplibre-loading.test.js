@@ -99,7 +99,7 @@ function viewMatrix({ left = 0, right = 1, top = 0, bottom = 1 }, width, height 
  * `view.matrix`. With `hang`, every chunk request stays pending until it is aborted; `delayMs` is the latency of each.
  */
 async function openLayer(t, { cells = 2, width = cells * CHUNK, height = cells * CHUNK, levels = 1, nTime = 6, mask = false, hang = false, delayMs = 0, layerOptions = {}, storeOptions = {} } = {}) {
-  const memory = buildSyntheticStore({ nTime, nBand: 1, height, width, chunk: CHUNK, sharded: false, nLevels: levels, mask, dtype: 'float32', delayMs,
+  const memory = buildSyntheticStore({ nTime, nBand: 1, height, width, chunk: CHUNK, sharded: false, nLevels: levels, mask, dtype: 'float32',
     crs: 'EPSG:4326', transform: [RES, 0, 0, 0, -RES, height * RES], bandObjects: [{ name: 'value', scale: 1, offset: 0 }],
     values: (time, band, y, x, lod) => chunkValue(lod, time, Math.floor(y / CHUNK), Math.floor(x / CHUNK)) });
   const view = { zoom: 13, matrix: viewMatrix({}, width, height) };
@@ -109,7 +109,7 @@ async function openLayer(t, { cells = 2, width = cells * CHUNK, height = cells *
   const gl = stubGl();
   layer.onAdd(map, gl);
   const store = await layer.opened;
-  if (hang) memory.delayMs = HANG_MS;
+  memory.delayMs = hang ? HANG_MS : delayMs;
   const frame = () => {
     gl.state.uploads = 0;
     gl.state.draws.length = 0;
@@ -157,6 +157,15 @@ const idsOf = (requests) => requests.map((request) => request.id).sort();
 const drawn = (draws) => draws.map(({ lod, row, col, t }) => `${lod}/${row}/${col}/${t}`).sort();
 const flush = () => new Promise(setImmediate);
 const ALL = range(6);
+const PAST_GRACE_MS = 500; // longer than STALE_LOAD_GRACE_MS in layer.js
+
+/** Moves the clock the layer reads forward, so a grace period passes without the test waiting for it. */
+function skewClock(t) {
+  const now = performance.now.bind(performance);
+  let skew = 0;
+  t.mock.method(performance, 'now', () => now() + skew);
+  return (ms) => { skew += ms; };
+}
 
 /**
  * Each draw sits where its cell lies on a map that shows the whole store (clip space), has the extent of the valid
@@ -194,7 +203,8 @@ test('prefetch fetches the masks through the reader as speculative reads', async
   assert.deepEqual(masksRead.filter((time) => time !== layer.t), [], 'the layer asked for no mask of another timestep at demand priority');
 });
 
-test('a pan cancels the loads of the cells that left the view and keeps the rest', async (t) => {
+test('a pan cancels the loads of the cells that left the view once they have been out of it for a while, and keeps the rest', async (t) => {
+  const advance = skewClock(t);
   const { layer, memory, view, frame, width, height } = await openLayer(t, { cells: 6, levels: 2, nTime: 2, hang: true, storeOptions: { maxRequests: 64 } });
   view.matrix = viewMatrix({ left: 0, right: 0.4 }, width, height); // columns 0 to 2
   frame();
@@ -203,24 +213,97 @@ test('a pan cancels the loads of the cells that left the view and keeps the rest
   view.matrix = viewMatrix({ left: 0.3, right: 0.7 }, width, height); // columns 1 to 4
   frame();
   await flush();
+  assert.deepEqual(idsOf(chunkRequests(memory).filter((request) => request.aborted)), [], 'column 0 has just left the view; a pan back would need it');
+  advance(PAST_GRACE_MS);
+  frame();
+  await flush();
   const requests = chunkRequests(memory);
-  assert.deepEqual(idsOf(requests.filter((request) => request.aborted)), ids(0, ALL, [0], 0), 'column 0 left the view');
+  assert.deepEqual(idsOf(requests.filter((request) => request.aborted)), ids(0, ALL, [0], 0), 'column 0 stayed out of the view');
   assert.deepEqual(idsOf(requests.filter((request) => !request.aborted)), ids(0, ALL, [1, 2, 3, 4], 0), 'columns 1 and 2 stayed, columns 3 and 4 entered');
   assert.equal(layer.stats.pending, 24, 'the cancelled loads are no longer pending');
 });
 
-test('a zoom out cancels the loads of the finer level, so the loads of the new level start at once', async (t) => {
+test('panning back and forth requests every chunk once, however often a cell leaves the view', async (t) => {
+  const { memory, view, frame, width, height } = await openLayer(t, { cells: 6, levels: 2, nTime: 2, hang: true, storeOptions: { maxRequests: 64 } });
+  const left = viewMatrix({ left: 0, right: 0.4 }, width, height);
+  const right = viewMatrix({ left: 0.3, right: 0.7 }, width, height);
+  for (const matrix of [left, right, left, right, left]) {
+    view.matrix = matrix;
+    frame();
+    await flush();
+  }
+  const requests = chunkRequests(memory);
+  assert.deepEqual(idsOf(requests), ids(0, ALL, [0, 1, 2, 3, 4], 0), 'columns 0 to 4, once each');
+  assert.deepEqual(requests.filter((request) => request.aborted), []);
+});
+
+test('a coarser load stays while a visible cell stands in on it, and goes once none does', async (t) => {
+  const advance = skewClock(t);
+  const { memory, view, frame, width, height } = await openLayer(t, { cells: 6, levels: 2, nTime: 2, hang: true, storeOptions: { maxRequests: 64 } });
+  view.zoom = 12;
+  frame(); // the 9 level-1 cells
+  await flush();
+  view.zoom = 13;
+  view.matrix = viewMatrix({ left: 0.55, right: 1 }, width, height); // level-0 columns 3 to 5, under level-1 columns 1 and 2
+  frame();
+  advance(PAST_GRACE_MS);
+  frame();
+  await flush();
+  const requests = chunkRequests(memory);
+  assert.deepEqual(idsOf(requests.filter((request) => request.aborted)), ids(1, [0, 1, 2], [0], 0), 'level-1 column 0 lies under no visible cell');
+  assert.deepEqual(idsOf(requests.filter((request) => !request.aborted)), [...ids(1, [0, 1, 2], [1, 2], 0), ...ids(0, ALL, [3, 4, 5], 0)].sort());
+});
+
+test('a zoom out cancels the loads of the finer level, so the loads of the new level start', async (t) => {
+  const advance = skewClock(t);
   const { memory, view, frame } = await openLayer(t, { cells: 6, levels: 2, nTime: 2, hang: true });
   frame();
   await flush();
   assert.equal(chunkRequests(memory).length, 12, 'the request limit lets 12 of the 36 level-0 loads start');
   view.zoom = 12;
   frame();
+  advance(PAST_GRACE_MS);
+  frame();
   await flush();
   const requests = chunkRequests(memory);
   assert.ok(requests.slice(0, 12).every((request) => request.aborted), 'the level-0 loads that had started were cancelled');
   assert.deepEqual(idsOf(requests.slice(12)), ids(1, [0, 1, 2], [0, 1, 2], 0), 'all 9 level-1 loads started');
   assert.ok(requests.slice(12).every((request) => !request.aborted));
+});
+
+test('with prefetch on, the loads of the cells that left the view are cancelled too, and the new view starts', async (t) => {
+  const advance = skewClock(t);
+  const { layer, store, memory, view, frame, width, height } = await openLayer(t, { cells: 6, levels: 2, nTime: 3, hang: true, layerOptions: { prefetch: true }, storeOptions: { maxRequests: 8 } });
+  const watch = watchPrefetch(store);
+  view.matrix = viewMatrix({ left: 0, right: 0.4 }, width, height); // columns 0 to 2
+  layer.setTime(1);
+  frame();
+  await watch.first; // the plan now owns the 8 loads in flight, which the limiter admits out of 18
+  await flush();
+  assert.equal(chunkRequests(memory).length, 8);
+  view.matrix = viewMatrix({ left: 0.6, right: 1 }, width, height); // columns 3 to 5
+  frame();
+  advance(PAST_GRACE_MS);
+  frame();
+  await flush();
+  const requests = chunkRequests(memory);
+  assert.ok(requests.slice(0, 8).every((request) => request.aborted), 'the loads of columns 0 to 2 were cancelled although the prefetch owned them');
+  assert.equal(requests.length, 16, 'the freed request slots went to the new view');
+  assert.ok(requests.slice(8).every((request) => !request.aborted && /^0\/\d\/[345]\/1$/.test(request.id)), 'columns 3 to 5');
+});
+
+test('wobbling across a level boundary keeps every load, and the layer reaches ready', async (t) => {
+  const { layer, memory, view, frame, settle } = await openLayer(t, { cells: 6, levels: 2, nTime: 2, delayMs: 100, storeOptions: { maxRequests: 64 } });
+  for (let i = 0; i < 30; i++) {
+    view.zoom = i % 2 ? 12.2 : 12.3; // level 0 and level 1
+    frame();
+    await flush();
+  }
+  await settle();
+  const requests = chunkRequests(memory);
+  assert.deepEqual(idsOf(requests), [...ids(0, ALL, ALL, 0), ...ids(1, [0, 1, 2], [0, 1, 2], 0)].sort(), 'the 36 + 9 chunks, each requested once');
+  assert.deepEqual(requests.filter((request) => request.aborted), []);
+  assert.equal(layer.stats.state, 'ready');
 });
 
 test('a time change cancels the loads of the old timestep and starts those of the new one', async (t) => {

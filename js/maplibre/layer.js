@@ -28,6 +28,7 @@ const FAILURE_COOLDOWN_MS = 5000; // a cell whose fetch failed is left alone thi
 const MESH_CACHE_LIMIT = 512;
 const STRETCH_SAMPLES_PER_CELL = 300;
 const PREFETCH_DELAY_MS = 250;
+const STALE_LOAD_GRACE_MS = 400; // a load that nothing in view needs is cancelled only after this long, so a pan back or a zoom wobble keeps it
 const STAND_IN_FINER_LEVELS = 2; // levels below the target that a stand-in may come from: 4 + 16 cell lookups at most per cell and frame
 const SEEK_DISTANCE = 4; // a time change of more than this many steps drops queued speculative fetches (as the viewer does)
 const EVENTS = ['open', 'loading', 'ready', 'error'];
@@ -127,7 +128,7 @@ export class ChronozarrLayer {
   #bandInfo = null;
   #frame = 0;
   #state = 'loading';
-  #pending = new Map(); // loads in flight by key: a cell's load maps to its AbortController, the sample recovery to null
+  #pending = new Map(); // loads in flight by key: a cell's load maps to {controller, unwantedSince}, the sample recovery to null
   #failed = new Map();
   #shown = new Map();
   #controller = new AbortController();
@@ -1049,7 +1050,7 @@ export class ChronozarrLayer {
     const signal = AbortSignal.any([controller.signal, this.#controller.signal]);
     const reads = [store.getRaw(lod, row, col, t, { signal })];
     if (store.hasMask) reads.push(store.getMask(lod, row, col, t, { signal }));
-    this.#pending.set(key, controller);
+    this.#pending.set(key, { controller, unwantedSince: null });
     Promise.all(reads).then(
       () => {
         this.#pending.delete(key);
@@ -1070,14 +1071,32 @@ export class ChronozarrLayer {
   }
 
   /**
-   * Cancels the loads of cells that left the view, and of other timesteps, so the loads of the cells in view do not queue
-   * behind them. A load that is still wanted keeps going, and the reader keeps the requests that a prefetch owns.
+   * Cancels the loads that nothing in view needs, so the loads of the cells in view do not queue behind them. A load is
+   * needed by a visible cell at the current level and timestep, or by a coarser level that stands in for one. It is
+   * cancelled once it has been unneeded for STALE_LOAD_GRACE_MS, measured between frames (they keep coming while loads
+   * land), so a pan back or a wobble across a level boundary keeps it. The prefetch is cancelled with it: the reader keeps a
+   * request that a prefetch owns, and that plan was made for a view that is gone; the next 'ready' plans it again.
    */
   #cancelStale(lod, visible, t) {
     if (this.#pending.size === 0) return;
-    const wanted = new Set(visible.map((cell) => chunkId(lod, cell.row, cell.col, t)));
-    for (const [key, controller] of this.#pending) {
-      if (controller && !wanted.has(key)) controller.abort();
+    const now = performance.now();
+    const wanted = new Set();
+    for (const cell of visible) {
+      for (let level = lod; level < this.#store.levels.length; level++) {
+        const scale = 2 ** (level - lod);
+        wanted.add(chunkId(level, Math.floor(cell.row / scale), Math.floor(cell.col / scale), t));
+      }
+    }
+    for (const [key, load] of this.#pending) {
+      if (!load) continue;
+      if (wanted.has(key)) {
+        load.unwantedSince = null;
+        continue;
+      }
+      load.unwantedSince ??= now;
+      if (now - load.unwantedSince < STALE_LOAD_GRACE_MS) continue;
+      load.controller.abort();
+      this.#prefetchController?.abort();
     }
   }
 

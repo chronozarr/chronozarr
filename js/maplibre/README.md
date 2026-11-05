@@ -169,7 +169,7 @@ Each cell is a mesh of 8 x 8 quads (`meshDivisions`). A store with much larger c
 
 ### Loading order
 
-While a cell loads, the layer paints the last timestep shown there. If there is none, it paints the same area from a coarser level that is already loaded. If there is no coarser one either, as just after a zoom out, it paints the finer cells of the same timestep that are still on the GPU, from up to two levels finer. The first view fetches the cells of the coarsest level first. It fetches the level that the zoom asks for after them. A pan, a zoom or a time change cancels the loads of cells that are no longer in view, so the cells of the new view do not queue behind them. A measured example is in [evidence.md](../../docs/evidence.md#maplibre-layer).
+While a cell loads, the layer paints the last timestep shown there. If there is none, it paints the same area from a coarser level that is already loaded. If there is no coarser one either, as just after a zoom out, it paints the finer cells of the same timestep that are still on the GPU, from up to two levels finer. The first view fetches the cells of the coarsest level first. It fetches the level that the zoom asks for after them. A time change cancels the loads of the old timestep. A load that no cell in view needs any more, because its cell left the view or no visible cell stands in on its level, is cancelled once that has been so for 0.4 s, together with the prefetch of the old view, so the cells of the new view do not queue behind it. A pan back within that time finds the load still running. A measured example is in [evidence.md](../../docs/evidence.md#maplibre-layer).
 
 ## Checking alignment
 
