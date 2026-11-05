@@ -418,6 +418,18 @@ test('a time change at the same level holds the previous timestep while the new 
   assert.deepEqual(drawn(frame().draws), ids(0, ALL, ALL, 0), 'timestep 0 stays on screen');
 });
 
+test('a wobble across a level boundary during a time change still holds the previous timestep on return', async (t) => {
+  const { layer, memory, view, frame, settle } = await openLayer(t, { cells: 6, levels: 2, nTime: 2 });
+  await settle();
+  memory.delayMs = HANG_MS;
+  layer.setTime(1);
+  assert.deepEqual(drawn(frame().draws), ids(0, ALL, ALL, 0), 'timestep 0 held at level 0');
+  view.zoom = 12;
+  frame();
+  view.zoom = 13;
+  assert.deepEqual(drawn(frame().draws), ids(0, ALL, ALL, 0), 'and again after the round trip through level 1');
+});
+
 for (const [direction, from, to, expected] of [['backwards', 10, 9, [8, 7, 6]], ['forwards', 10, 11, [12, 13, 14]]]) {
   test(`scrubbing ${direction} prefetches the timesteps in that direction first`, async (t) => {
     const { layer, store, memory, settle } = await openLayer(t, { cells: 1, nTime: 24, layerOptions: { prefetch: true, t: from } });

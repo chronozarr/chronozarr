@@ -131,6 +131,7 @@ export class ChronozarrLayer {
   #pending = new Map(); // loads in flight by key: a cell's load maps to {controller, unwantedSince}, the sample recovery to null
   #failed = new Map();
   #shown = new Map();
+  #levelT = new Map(); // the timestep of the last frame drawn at each level
   #controller = new AbortController();
   #openController = new AbortController();
   #retired = [];
@@ -701,8 +702,11 @@ export class ChronozarrLayer {
 
     const lod = selectLod({ mercatorPerTexel0: this.#geo.mercatorPerTexel0, levelCount: store.levels.length, zoom: this.#map.getZoom(), bias: this.#options.lodBias });
     const visible = this.#visibleCells(lod, matrix);
-    // What a level showed on an earlier visit says nothing about the frame that was just on screen: a stand-in from it would be the wrong timestep.
-    if (lod !== this.#lastView.lod) this.#shown.clear();
+    // Back at a level after the timestep changed, what it showed on the earlier visit says nothing about the frame that was just on screen: a stand-in from it would be the wrong timestep.
+    if (lod !== this.#lastView.lod && this.#levelT.get(lod) !== t) {
+      for (const key of this.#shown.keys()) if (key.startsWith(`${lod}/`)) this.#shown.delete(key);
+    }
+    this.#levelT.set(lod, t);
     this.#lastView = { lod, cells: visible.map((c) => [c.row, c.col]) };
     if (!this.#seeded) this.#seeded = this.#seedCoarse(lod, matrix);
 
