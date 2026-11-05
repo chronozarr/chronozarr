@@ -5,16 +5,37 @@ import { buildSyntheticStore } from '../support/synthetic-store.js';
 
 // The layer's loading logic against a stub GL and an in-memory store, without a browser: which requests it starts,
 // which it cancels, what it draws and which timesteps it prefetches. The store sits at the equator, RES degrees per
-// level-0 texel, so a map zoom of 13 draws level 0 and a zoom of 12 draws level 1.
+// level-0 texel, so a map zoom of 13 draws level 0, a zoom of 12 level 1, and so on.
 const CHUNK = 8;
 const RES = 0.0001;
 const WORLD = RES / 360; // mercator units per level-0 texel
 const HANG_MS = 60_000; // a request that never lands unless it is aborted
 
-/** Records what the layer uploads and draws. A draw is identified by the first value of the chunk in its slot. */
+/** Every texel of a chunk holds its own level, timestep and cell, so a draw can be traced back to the chunk it shows. */
+const chunkValue = (lod, time, row, col) => ((lod * 64 + time) * 64 + row) * 64 + col;
+const chunkOf = (value) => ({ lod: Math.floor(value / 262144), t: Math.floor(value / 4096) % 64, row: Math.floor(value / 64) % 64, col: value % 64 });
+
+/**
+ * Records what the layer uploads and draws. A draw carries the chunk in its data slot, the mask slot it names and the
+ * mask slot uploaded with that chunk, its extent uniform, and the clip-space box of its mesh.
+ */
 function stubGl() {
   const constants = new Map([['NO_ERROR', 0]]);
-  const state = { uploads: [], draws: [], uniforms: new Map(), slotFirst: new Map() };
+  const state = { uploads: 0, draws: [], uniforms: new Map(), slotValue: new Map(), maskSlotOf: new Map(), lastData: null, vao: null, arrayBuffer: null };
+  const box = () => {
+    const matrix = state.uniforms.get('u_matrix');
+    const vertices = state.vao?.vbo?.data;
+    const out = [Infinity, Infinity, -Infinity, -Infinity];
+    for (let k = 0; k < vertices.length; k += 4) {
+      const x = matrix[0] * vertices[k] + matrix[4] * vertices[k + 1] + matrix[12];
+      const y = matrix[1] * vertices[k] + matrix[5] * vertices[k + 1] + matrix[13];
+      out[0] = Math.min(out[0], x);
+      out[1] = Math.min(out[1], y);
+      out[2] = Math.max(out[2], x);
+      out[3] = Math.max(out[3], y);
+    }
+    return out;
+  };
   const gl = new Proxy({}, {
     get(_, name) {
       if (name === 'state') return state;
@@ -24,14 +45,30 @@ function stubGl() {
       if (name === 'getUniformLocation') return (_, uniform) => uniform;
       if (name === 'getAttribLocation') return () => 0;
       if (name === 'uniform1i') return (uniform, value) => state.uniforms.set(uniform, value);
+      if (name === 'uniform2f') return (uniform, x, y) => state.uniforms.set(uniform, [x, y]);
+      if (name === 'uniformMatrix4fv') return (uniform, _, matrix) => state.uniforms.set(uniform, Array.from(matrix));
+      if (name === 'bindVertexArray') return (vao) => { state.vao = vao; };
+      if (name === 'bindBuffer') return (target, buffer) => { if (target === constants.get('ARRAY_BUFFER')) state.arrayBuffer = buffer; };
+      if (name === 'bufferData') return (target, data) => { if (target === constants.get('ARRAY_BUFFER')) state.arrayBuffer.data = data; };
+      if (name === 'vertexAttribPointer') return () => { state.vao.vbo = state.arrayBuffer; };
       if (name === 'texSubImage3D') {
         return (...args) => {
-          // Data uploads carry every band of a slot: layer z = slot * bands.
-          state.uploads.push(args[4]);
-          state.slotFirst.set(args[4], args[10][0]);
+          const slot = args[4]; // data uploads carry every band of a slot: layer z = slot * bands, and the test store has one band
+          if (args[10] instanceof Uint8Array) {
+            state.maskSlotOf.set(state.lastData, slot);
+            return;
+          }
+          state.uploads++;
+          state.lastData = slot;
+          state.slotValue.set(slot, args[10][0]);
         };
       }
-      if (name === 'drawElements') return () => state.draws.push(state.slotFirst.get(state.uniforms.get('u_dataBase')));
+      if (name === 'drawElements') {
+        return () => {
+          const dataBase = state.uniforms.get('u_dataBase');
+          state.draws.push({ ...chunkOf(state.slotValue.get(dataBase)), mask: state.uniforms.get('u_maskLayer'), uploadedMask: state.maskSlotOf.get(dataBase), extent: state.uniforms.get('u_extent'), box: box() });
+        };
+      }
       if (/^create/.test(name)) return () => ({});
       if (/^[A-Z_0-9]+$/.test(name)) {
         if (!constants.has(name)) constants.set(name, constants.size + 1);
@@ -44,28 +81,28 @@ function stubGl() {
 }
 
 /**
- * Clip-space matrix of a map that shows the given part of the store: left, right, top and bottom are fractions of the
- * store's width and height. The axes scale independently, which the layer does not mind.
+ * Clip-space matrix of a map that shows the given part of a store of width x height texels: left, right, top and
+ * bottom are fractions of its width and height. The axes scale independently, which the layer does not mind.
  */
-function viewMatrix({ left = 0, right = 1, top = 0, bottom = 1 }, size) {
-  const width = size * WORLD;
-  const x0 = 0.5 + left * width;
-  const y0 = 0.5 - width + top * width;
-  const sx = 2 / ((right - left) * width);
-  const sy = 2 / ((bottom - top) * width);
-  return [sx, 0, 0, 0, 0, -sy, 0, 0, 0, 0, 1, 0, -(x0 + (right - left) * width / 2) * sx, (y0 + (bottom - top) * width / 2) * sy, 0, 1];
+function viewMatrix({ left = 0, right = 1, top = 0, bottom = 1 }, width, height = width) {
+  const worldWidth = width * WORLD;
+  const worldHeight = height * WORLD;
+  const x0 = 0.5 + left * worldWidth;
+  const y0 = 0.5 - worldHeight + top * worldHeight;
+  const sx = 2 / ((right - left) * worldWidth);
+  const sy = 2 / ((bottom - top) * worldHeight);
+  return [sx, 0, 0, 0, 0, -sy, 0, 0, 0, 0, 1, 0, -(x0 + (right - left) * worldWidth / 2) * sx, (y0 + (bottom - top) * worldHeight / 2) * sy, 0, 1];
 }
 
 /**
- * A layer on a map with a stub GL. `values(t, lod)` is the value every texel of a chunk takes, so a draw can be traced
- * back to the timestep and level of its data. With `hang`, every chunk request stays pending until it is aborted.
+ * A layer on a map with a stub GL. The map shows the whole store at `view.zoom`; a test moves it by setting
+ * `view.matrix`. With `hang`, every chunk request stays pending until it is aborted; `delayMs` is the latency of each.
  */
-async function openLayer(t, { cells = 2, levels = 1, nTime = 6, mask = false, hang = false, values = (time, lod) => 100 + time + 10 * lod, layerOptions = {}, storeOptions = {} } = {}) {
-  const size = cells * CHUNK;
-  const memory = buildSyntheticStore({ nTime, nBand: 1, height: size, width: size, chunk: CHUNK, sharded: false, nLevels: levels, mask,
-    crs: 'EPSG:4326', transform: [RES, 0, 0, 0, -RES, size * RES], bandObjects: [{ name: 'value', scale: 1, offset: 0 }],
-    values: (time, band, y, x, lod) => values(time, lod) });
-  const view = { zoom: 13, matrix: viewMatrix({}, size) };
+async function openLayer(t, { cells = 2, width = cells * CHUNK, height = cells * CHUNK, levels = 1, nTime = 6, mask = false, hang = false, delayMs = 0, layerOptions = {}, storeOptions = {} } = {}) {
+  const memory = buildSyntheticStore({ nTime, nBand: 1, height, width, chunk: CHUNK, sharded: false, nLevels: levels, mask, dtype: 'float32', delayMs,
+    crs: 'EPSG:4326', transform: [RES, 0, 0, 0, -RES, height * RES], bandObjects: [{ name: 'value', scale: 1, offset: 0 }],
+    values: (time, band, y, x, lod) => chunkValue(lod, time, Math.floor(y / CHUNK), Math.floor(x / CHUNK)) });
+  const view = { zoom: 13, matrix: viewMatrix({}, width, height) };
   const map = { triggerRepaint() {}, getLayer() { return false; }, getZoom() { return view.zoom; } };
   const layer = new ChronozarrLayer({ url: 'memory://maplibre-loading', product: 'band', range: [0, 1], ...layerOptions, storeOptions: { store: memory, workers: 0, ...storeOptions } });
   t.after(() => layer.remove());
@@ -74,21 +111,21 @@ async function openLayer(t, { cells = 2, levels = 1, nTime = 6, mask = false, ha
   const store = await layer.opened;
   if (hang) memory.delayMs = HANG_MS;
   const frame = () => {
-    gl.state.uploads.length = 0;
+    gl.state.uploads = 0;
     gl.state.draws.length = 0;
     layer.render({ defaultProjectionData: { mainMatrix: view.matrix } });
-    return { uploads: gl.state.uploads.length, draws: [...gl.state.draws], lod: layer.lod };
+    return { uploads: gl.state.uploads, draws: [...gl.state.draws], lod: layer.lod };
   };
   /** Draws frames, letting finished loads land in between, until the layer reports ready. */
   const settle = async () => {
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < 300; i++) {
       frame();
-      await new Promise(setImmediate);
+      await new Promise((resolve) => setTimeout(resolve, 2));
       if (layer.stats.state === 'ready') return;
     }
     assert.fail(`the layer did not settle: ${JSON.stringify(layer.stats)}`);
   };
-  return { layer, store, memory, view, frame, settle, size };
+  return { layer, store, memory, view, frame, settle, width, height };
 }
 
 /** Wraps store.prefetch so the test sees each call's arguments and its result, and waits for the first call. */
@@ -104,6 +141,40 @@ function watchPrefetch(store) {
     return result;
   };
   return { runs, first };
+}
+
+/** The chunk requests that reached the store, as 'lod/row/col/t', with whether each was cancelled. */
+function chunkRequests(memory) {
+  return memory.log.flatMap(({ key, signal }) => {
+    const match = /^\/(\d+)\/data\/c\/(\d+)\/0\/(\d+)\/(\d+)$/.exec(key);
+    return match ? [{ id: `${match[1]}/${match[3]}/${match[4]}/${match[2]}`, aborted: signal.aborted }] : [];
+  });
+}
+
+const range = (n) => Array.from({ length: n }, (_, i) => i);
+const ids = (lod, rows, cols, t) => rows.flatMap((row) => cols.map((col) => `${lod}/${row}/${col}/${t}`)).sort();
+const idsOf = (requests) => requests.map((request) => request.id).sort();
+const drawn = (draws) => draws.map(({ lod, row, col, t }) => `${lod}/${row}/${col}/${t}`).sort();
+const flush = () => new Promise(setImmediate);
+const ALL = range(6);
+
+/**
+ * Each draw sits where its cell lies on a map that shows the whole store (clip space), has the extent of the valid
+ * texels of its chunk, and names the mask slot that was uploaded with its data chunk.
+ */
+function assertPlaced(draws, { width, height }) {
+  for (const { lod, row, col, box, extent, mask, uploadedMask } of draws) {
+    const side = CHUNK * 2 ** lod;
+    const u0 = col * side;
+    const u1 = Math.min(u0 + side, width);
+    const v0 = row * side;
+    const v1 = Math.min(v0 + side, height);
+    const expected = [-1 + 2 * u0 / width, 1 - 2 * v1 / height, -1 + 2 * u1 / width, 1 - 2 * v0 / height];
+    const id = `${lod}/${row}/${col}`;
+    expected.forEach((value, i) => assert.ok(Math.abs(box[i] - value) < 1e-4, `cell ${id}: mesh box ${box.map((v) => v.toFixed(4))}, expected ${expected.map((v) => v.toFixed(4))}`));
+    assert.deepEqual(extent, [Math.min(CHUNK, Math.ceil(width / 2 ** lod) - col * CHUNK), Math.min(CHUNK, Math.ceil(height / 2 ** lod) - row * CHUNK)], `extent of cell ${id}`);
+    assert.equal(mask, uploadedMask, `cell ${id} names the mask slot that was uploaded with its data`);
+  }
 }
 
 test('prefetch fetches the masks through the reader as speculative reads', async (t) => {
@@ -123,26 +194,13 @@ test('prefetch fetches the masks through the reader as speculative reads', async
   assert.deepEqual(masksRead.filter((time) => time !== layer.t), [], 'the layer asked for no mask of another timestep at demand priority');
 });
 
-/** The chunk requests that reached the store, as 'lod/row/col/t', with whether each was cancelled. */
-function chunkRequests(memory) {
-  return memory.log.flatMap(({ key, signal }) => {
-    const match = /^\/(\d+)\/data\/c\/(\d+)\/0\/(\d+)\/(\d+)$/.exec(key);
-    return match ? [{ id: `${match[1]}/${match[3]}/${match[4]}/${match[2]}`, aborted: signal.aborted }] : [];
-  });
-}
-
-const ids = (lod, rows, cols, t) => rows.flatMap((row) => cols.map((col) => `${lod}/${row}/${col}/${t}`)).sort();
-const ALL = [0, 1, 2, 3, 4, 5];
-const flush = () => new Promise(setImmediate);
-const idsOf = (requests) => requests.map((request) => request.id).sort();
-
 test('a pan cancels the loads of the cells that left the view and keeps the rest', async (t) => {
-  const { layer, memory, view, frame, size } = await openLayer(t, { cells: 6, levels: 2, nTime: 2, hang: true, storeOptions: { maxRequests: 64 } });
-  view.matrix = viewMatrix({ left: 0, right: 0.4 }, size); // columns 0 to 2
+  const { layer, memory, view, frame, width, height } = await openLayer(t, { cells: 6, levels: 2, nTime: 2, hang: true, storeOptions: { maxRequests: 64 } });
+  view.matrix = viewMatrix({ left: 0, right: 0.4 }, width, height); // columns 0 to 2
   frame();
   await flush();
   assert.deepEqual(idsOf(chunkRequests(memory)), ids(0, ALL, [0, 1, 2], 0));
-  view.matrix = viewMatrix({ left: 0.3, right: 0.7 }, size); // columns 1 to 4
+  view.matrix = viewMatrix({ left: 0.3, right: 0.7 }, width, height); // columns 1 to 4
   frame();
   await flush();
   const requests = chunkRequests(memory);
@@ -176,37 +234,44 @@ test('a time change cancels the loads of the old timestep and starts those of th
   assert.deepEqual(idsOf(requests.filter((request) => !request.aborted)), ids(0, [0, 1], [0, 1], 2));
 });
 
-const FIRST = 100; // the value of a level-0 chunk at timestep 0 (see openLayer)
+// 19 x 12 cells at level 0, 10 x 6 at level 1, 5 x 3 at level 2 and 3 x 2 at level 3: not square, not a power of two, with
+// partial cells at every edge, and more than 4 cells at the coarsest level, so the first view is not seeded from it.
+const WIDE = { width: 150, height: 90, levels: 4, nTime: 3 };
+const LEVEL_0 = ids(0, range(12), range(19), 0);
 
-test('the first frame after a zoom out draws the finer cells that are still on the GPU', async (t) => {
-  const { view, frame, settle } = await openLayer(t, { cells: 6, levels: 2, nTime: 2 });
+test('the first frame after a zoom out draws every finer cell that is on the GPU, in its place and with its mask', async (t) => {
+  const { view, frame, settle } = await openLayer(t, { ...WIDE, mask: true });
   await settle();
-  assert.deepEqual(frame().draws, Array(36).fill(FIRST), 'level 0 is on screen');
+  assert.deepEqual(drawn(frame().draws), LEVEL_0, 'level 0 is on screen');
   view.zoom = 12;
   const first = frame();
   assert.equal(first.lod, 1);
   assert.equal(first.uploads, 0, 'the stand-in costs no upload');
-  assert.deepEqual(first.draws, Array(36).fill(FIRST), 'the 36 level-0 cells cover the area while the 9 level-1 cells load');
+  assert.deepEqual(drawn(first.draws), LEVEL_0, 'each of the 228 level-0 cells once, while the 60 level-1 cells load');
+  assertPlaced(first.draws, WIDE);
   await settle();
-  assert.deepEqual(frame().draws, Array(9).fill(110), 'level 1 replaces them once loaded');
+  const final = frame();
+  assert.deepEqual(drawn(final.draws), ids(1, range(6), range(10), 0), 'level 1 replaces them once loaded');
+  assertPlaced(final.draws, WIDE);
 });
 
 test('a zoom out over two levels draws the finest cells on the GPU that cover each cell', async (t) => {
-  const { view, frame, settle } = await openLayer(t, { cells: 12, levels: 3, nTime: 2 });
+  const { view, frame, settle } = await openLayer(t, { ...WIDE, mask: true });
   await settle();
   view.zoom = 11;
   const first = frame();
   assert.equal(first.lod, 2);
-  assert.deepEqual(first.draws, Array(144).fill(FIRST), 'level 1 was never drawn, so the 144 level-0 cells stand in for the 9 level-2 cells');
+  assert.deepEqual(drawn(first.draws), LEVEL_0, 'level 1 was never drawn, so the level-0 cells stand in for the 15 level-2 cells');
+  assertPlaced(first.draws, WIDE);
 });
 
 test('a zoom out over more than two levels leaves the cells blank until they load', async (t) => {
-  const { view, frame, settle } = await openLayer(t, { cells: 24, levels: 4, nTime: 2 });
+  const { view, frame, settle } = await openLayer(t, WIDE);
   await settle();
   view.zoom = 10;
   const first = frame();
   assert.equal(first.lod, 3);
-  assert.deepEqual(first.draws, [], 'level 0 is three levels finer than the 9 level-3 cells');
+  assert.deepEqual(first.draws, [], 'level 0 is three levels finer than the 6 level-3 cells');
 });
 
 test('a finer cell stands in only with the timestep being drawn', async (t) => {
@@ -216,7 +281,7 @@ test('a finer cell stands in only with the timestep being drawn', async (t) => {
   view.zoom = 12;
   assert.deepEqual(frame().draws, [], 'level 0 holds timestep 0 only; it would mix timesteps');
   await settle();
-  assert.deepEqual(frame().draws, Array(9).fill(111));
+  assert.deepEqual(drawn(frame().draws), ids(1, [0, 1, 2], [0, 1, 2], 1));
 });
 
 for (const [direction, from, to, expected] of [['backwards', 10, 9, [8, 7, 6]], ['forwards', 10, 11, [12, 13, 14]]]) {
