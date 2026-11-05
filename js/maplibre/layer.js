@@ -28,6 +28,7 @@ const FAILURE_COOLDOWN_MS = 5000; // a cell whose fetch failed is left alone thi
 const MESH_CACHE_LIMIT = 512;
 const STRETCH_SAMPLES_PER_CELL = 300;
 const PREFETCH_DELAY_MS = 250;
+const STAND_IN_FINER_LEVELS = 2; // levels below the target that a stand-in may come from: 4 + 16 cell lookups at most per cell and frame
 const SEEK_DISTANCE = 4; // a time change of more than this many steps drops queued speculative fetches (as the viewer does)
 const EVENTS = ['open', 'loading', 'ready', 'error'];
 
@@ -710,8 +711,7 @@ export class ChronozarrLayer {
       }
       allResident = false;
       if (!this.#seeding) this.#request(lod, cell.row, cell.col, t);
-      const stand = this.#standIn(cell, lod, t);
-      if (stand) fallback.push(stand);
+      fallback.push(...this.#standIn(cell, lod, t));
     }
     this.#cancelStale(lod, visible, t);
     fallback.sort((a, b) => b.lod - a.lod);
@@ -833,23 +833,47 @@ export class ChronozarrLayer {
   }
 
   /**
-   * What to paint for a cell whose data for timestep t is not on the GPU yet: the last timestep shown there (time
-   * changes hold the previous frame), else the same area from a coarser level.
+   * What to paint for a cell whose data for timestep t is not on the GPU yet, as a list of items: the last timestep
+   * shown there (time changes hold the previous frame), else the same area from a coarser level, else the cells of a
+   * finer level that cover it and are still on the GPU (the frame that a zoom out just left; up to two levels finer). Empty when there is nothing.
    */
   #standIn(cell, lod, t) {
     const shownT = this.#shown.get(`${lod}/${cell.row}/${cell.col}`);
     if (shownT !== undefined && shownT !== t) {
       const slots = this.#slotsFor(lod, cell.row, cell.col, shownT, false);
-      if (slots) return { lod, row: cell.row, col: cell.col, extent: cell.extent, rect: { x0: 0, y0: 0, x1: cell.footprint.width, y1: cell.footprint.height }, slots };
+      if (slots) return [{ lod, row: cell.row, col: cell.col, extent: cell.extent, rect: { x0: 0, y0: 0, x1: cell.footprint.width, y1: cell.footprint.height }, slots }];
     }
     const store = this.#store;
     const level = store.levels[lod];
     for (let coarse = lod + 1; coarse < store.levels.length; coarse++) {
       const footprint = coarseFootprint({ lod, row: cell.row, col: cell.col, extent: cell.footprint }, coarse, { width: level.chunkWidth, height: level.chunkHeight }, (r, c) => this.#footprint(coarse, r, c));
       const slots = this.#slotsFor(coarse, footprint.row, footprint.col, t, true);
-      if (slots) return { lod: coarse, row: footprint.row, col: footprint.col, extent: store.cellExtent(coarse, footprint.row, footprint.col), rect: footprint.rect, slots };
+      if (slots) return [{ lod: coarse, row: footprint.row, col: footprint.col, extent: store.cellExtent(coarse, footprint.row, footprint.col), rect: footprint.rect, slots }];
     }
-    return null;
+    for (let finer = lod - 1; finer >= Math.max(0, lod - STAND_IN_FINER_LEVELS); finer--) {
+      const items = this.#residentWithin(cell, lod, finer, t);
+      if (items.length > 0) return items;
+    }
+    return [];
+  }
+
+  /**
+   * The cells of a finer level that lie inside a cell and are on the GPU at timestep t, each drawn whole. They tile
+   * the cell without overlap, and a missing one leaves its part blank. Nothing is uploaded for them.
+   */
+  #residentWithin(cell, lod, finer, t) {
+    const level = this.#store.levels[finer];
+    const scale = 2 ** (lod - finer);
+    const items = [];
+    for (let row = cell.row * scale; row < Math.min((cell.row + 1) * scale, level.gridRows); row++) {
+      for (let col = cell.col * scale; col < Math.min((cell.col + 1) * scale, level.gridCols); col++) {
+        const slots = this.#slotsFor(finer, row, col, t, false);
+        if (!slots) continue;
+        const { width, height } = this.#footprint(finer, row, col);
+        items.push({ lod: finer, row, col, extent: this.#store.cellExtent(finer, row, col), rect: { x0: 0, y0: 0, x1: width, y1: height }, slots });
+      }
+    }
+    return items;
   }
 
   /** What the shader needs for the current product: inputs, stored-to-physical conversion, and how the values reach the screen. */

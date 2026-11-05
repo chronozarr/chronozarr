@@ -175,3 +175,46 @@ test('a time change cancels the loads of the old timestep and starts those of th
   assert.deepEqual(idsOf(requests.filter((request) => request.aborted)), ids(0, [0, 1], [0, 1], 0));
   assert.deepEqual(idsOf(requests.filter((request) => !request.aborted)), ids(0, [0, 1], [0, 1], 2));
 });
+
+const FIRST = 100; // the value of a level-0 chunk at timestep 0 (see openLayer)
+
+test('the first frame after a zoom out draws the finer cells that are still on the GPU', async (t) => {
+  const { view, frame, settle } = await openLayer(t, { cells: 6, levels: 2, nTime: 2 });
+  await settle();
+  assert.deepEqual(frame().draws, Array(36).fill(FIRST), 'level 0 is on screen');
+  view.zoom = 12;
+  const first = frame();
+  assert.equal(first.lod, 1);
+  assert.equal(first.uploads, 0, 'the stand-in costs no upload');
+  assert.deepEqual(first.draws, Array(36).fill(FIRST), 'the 36 level-0 cells cover the area while the 9 level-1 cells load');
+  await settle();
+  assert.deepEqual(frame().draws, Array(9).fill(110), 'level 1 replaces them once loaded');
+});
+
+test('a zoom out over two levels draws the finest cells on the GPU that cover each cell', async (t) => {
+  const { view, frame, settle } = await openLayer(t, { cells: 12, levels: 3, nTime: 2 });
+  await settle();
+  view.zoom = 11;
+  const first = frame();
+  assert.equal(first.lod, 2);
+  assert.deepEqual(first.draws, Array(144).fill(FIRST), 'level 1 was never drawn, so the 144 level-0 cells stand in for the 9 level-2 cells');
+});
+
+test('a zoom out over more than two levels leaves the cells blank until they load', async (t) => {
+  const { view, frame, settle } = await openLayer(t, { cells: 24, levels: 4, nTime: 2 });
+  await settle();
+  view.zoom = 10;
+  const first = frame();
+  assert.equal(first.lod, 3);
+  assert.deepEqual(first.draws, [], 'level 0 is three levels finer than the 9 level-3 cells');
+});
+
+test('a finer cell stands in only with the timestep being drawn', async (t) => {
+  const { layer, view, frame, settle } = await openLayer(t, { cells: 6, levels: 2, nTime: 2 });
+  await settle();
+  layer.setTime(1);
+  view.zoom = 12;
+  assert.deepEqual(frame().draws, [], 'level 0 holds timestep 0 only; it would mix timesteps');
+  await settle();
+  assert.deepEqual(frame().draws, Array(9).fill(111));
+});
