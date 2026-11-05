@@ -2,7 +2,7 @@
 // second is slower (compare.js). The workflow .github/workflows/speed-gates.yml runs it on pull requests that change js/.
 //
 //   node support/gate-bench/run.mjs --base <viewer root> --head <viewer root> --store <store dir>
-//        [--pairs 5] [--gpu swiftshader|metal] [--out results.json] [--summary summary.md]
+//        [--pairs 5] [--cache default|compact] [--gpu swiftshader|metal] [--out results.json] [--summary summary.md]
 //
 // A viewer root holds demo/ as support/build-viewer.mjs writes it; the store is the one store.mjs writes. Each run is a new
 // headless Chromium that opens the store in the viewer and then measures:
@@ -24,6 +24,13 @@
 //
 // --gpu swiftshader (the default) draws on the CPU, as the browser tests and a runner without a GPU do; --gpu metal draws on
 // the GPU of a Mac, for the gates' own figures on a quiet machine.
+//
+// --cache compact measures the cold open and the warm switches with the cache that the public demo store gets. The cache
+// policy (js/demo/cache-policy.js) packs every chunk of a uint16 store in memory, losslessly, when the loop of level 0 is more
+// than 0.9 of the cache cap: the demo's loop is 8.4 GiB against 1.5 GiB. The gate store's 576 MiB loop never is, so the default
+// pass never runs that path: packing in the decode workers, unpacking on the main thread, the GPU reading packed words. The
+// compact pass opens the store with a cap that the loop exceeds and that the packed loop (72 % of it) fits, so that the warm
+// loops still hold everything. Decode is the same code packed or not, and only the default pass measures it.
 
 import { mkdir, writeFile, appendFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -31,7 +38,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { startStaticServer } from '../static-server.js';
 import { BROWSER_ARGS, VIEWPORT, launchBrowser, rendererInfo, withTimeout } from './browser.mjs';
-import { compareBuilds, summaryMarkdown } from './compare.js';
+import { COMPACT_METRICS, METRICS, compareBuilds, summaryMarkdown } from './compare.js';
 
 // Five cold opens per run: with three, one slow open moved a run's median by up to 59 % on GitHub's runners.
 const COLD_RUNS = 5;
@@ -41,6 +48,8 @@ const SWITCHES = 20;
 const STEP_PAUSE_MS = 120;
 const SETTLE_MS = 1000;
 const WARM_CACHE_BYTES = 2 * 1024 ** 3;
+// The cap of the compact pass: the loop of level 0 (576 MiB) is above 0.9 of it, and the packed loop (about 414 MiB) is below it.
+const COMPACT_TOTAL_BYTES = 560 * 1024 ** 2;
 const RUN_TIMEOUT_MS = 5 * 60_000;
 const CELLS = 36;
 
@@ -50,34 +59,62 @@ const { values: args } = parseArgs({
     head: { type: 'string' },
     store: { type: 'string' },
     pairs: { type: 'string', default: '5' },
+    cache: { type: 'string', default: 'default' },
     gpu: { type: 'string', default: 'swiftshader' },
     out: { type: 'string' },
     summary: { type: 'string' },
   },
 });
-if (!args.base || !args.head || !args.store || !BROWSER_ARGS[args.gpu]) {
-  console.error('Usage: node support/gate-bench/run.mjs --base <viewer root> --head <viewer root> --store <store dir> [--pairs 5] [--gpu swiftshader|metal] [--out results.json] [--summary summary.md]');
+if (!args.base || !args.head || !args.store || !BROWSER_ARGS[args.gpu] || !['default', 'compact'].includes(args.cache)) {
+  console.error('Usage: node support/gate-bench/run.mjs --base <viewer root> --head <viewer root> --store <store dir> [--pairs 5] [--cache default|compact] [--gpu swiftshader|metal] [--out results.json] [--summary summary.md]');
   process.exit(2);
 }
 const pairs = Number(args.pairs);
+const compact = args.cache === 'compact';
 
 const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 const load = () => os.loadavg()[0].toFixed(1);
 
-/** In the page: open the store again with room for every chunk of level 0, load them all, and wait until no request is in flight. */
-async function loadLevel0({ maxCacheBytes }) {
+/** In the page: the cold opens of bench(), with the cache budgets of the compact pass (the viewer opens a store with the cap it is given). */
+async function compactColdOpens({ runs, totalBytes }) {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const noStoreFetch = (request) => fetch(new Request(request, { cache: 'no-store' }));
+  const { viewer } = window.chronozarr;
+  const url = viewer.store.url.replace(/\/$/, '');
+  const rows = [];
+  for (let run = 0; run < runs; run++) {
+    await sleep(300);
+    const { openMs, firstPaintMs } = await viewer.loadStore(url, { lod: 0, fetch: noStoreFetch, totalBytes });
+    rows.push({ run, openMs, firstPaintMs, compact: viewer.store.compactCacheEnabled });
+  }
+  return rows;
+}
+
+/**
+ * In the page: open the store again with the cache budgets `cache` names (loadStore's options), load every chunk of level 0, and
+ * wait until no request is in flight. `ensureRaw` fills the cache like `getRaw` and does not unpack a packed chunk to return it.
+ */
+async function loadLevel0(cache) {
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const { viewer } = window.chronozarr;
-  await viewer.loadStore(viewer.store.url, { lod: 0, maxCacheBytes });
+  await viewer.loadStore(viewer.store.url, { lod: 0, ...cache });
   const { store } = viewer;
   const level = store.levels[0];
   const reads = [];
   for (let t = 0; t < store.times.length; t++) {
-    for (let row = 0; row < level.gridRows; row++) for (let col = 0; col < level.gridCols; col++) reads.push(store.getRaw(0, row, col, t));
+    for (let row = 0; row < level.gridRows; row++) for (let col = 0; col < level.gridCols; col++) reads.push(store.ensureRaw(0, row, col, t));
   }
   await Promise.all(reads);
   for (let quiet = 0; quiet < 10; quiet = store.stats.network.inflight === 0 ? quiet + 1 : 0) await sleep(50);
-  return { chunks: reads.length, timesteps: store.times.length, cells: level.gridRows * level.gridCols, decodedBytes: store.stats.cache.decodedBytes };
+  return {
+    chunks: reads.length,
+    timesteps: store.times.length,
+    cells: level.gridRows * level.gridCols,
+    loopBytes: reads.length * level.chunkBytes,
+    decodedBytes: store.stats.cache.decodedBytes,
+    compact: store.compactCacheEnabled,
+    compactRatio: store.compactCacheRatio,
+  };
 }
 
 /** In the page: the warm switches of bench() (stepping with pauses, then jumping) on a store whose level 0 is all in memory. */
@@ -130,8 +167,17 @@ async function measure({ variant, pair, appUrl, storeUrl, data }) {
     await page.goto(`${appUrl}/demo/index.html?store=${encodeURIComponent(storeUrl)}`);
     await page.waitForFunction(() => window.chronozarr?.ready, null, { timeout: 120_000 });
     if (!(await page.evaluate(() => window.chronozarr.ready))) throw new Error('the viewer did not open the store');
-    const bench = await withTimeout(page.evaluate((options) => window.chronozarr.bench(options), { coldRuns: COLD_RUNS, switches: BENCH_SWITCHES }), 'bench()', RUN_TIMEOUT_MS);
-    const loaded = await withTimeout(page.evaluate(loadLevel0, { maxCacheBytes: WARM_CACHE_BYTES }), 'loading level 0', RUN_TIMEOUT_MS);
+    let bench = null;
+    let coldOpens;
+    if (compact) {
+      coldOpens = await withTimeout(page.evaluate(compactColdOpens, { runs: COLD_RUNS, totalBytes: COMPACT_TOTAL_BYTES }), 'the cold opens', RUN_TIMEOUT_MS);
+      if (!coldOpens.every((row) => row.compact)) throw new Error(`the cold opens of the compact pass did not pack the cache (cap ${COMPACT_TOTAL_BYTES / 1024 ** 2} MiB): the loop of the store is not above 0.9 of it`);
+    } else {
+      bench = await withTimeout(page.evaluate((options) => window.chronozarr.bench(options), { coldRuns: COLD_RUNS, switches: BENCH_SWITCHES }), 'bench()', RUN_TIMEOUT_MS);
+      coldOpens = bench.coldOpenConsolidated;
+    }
+    const loaded = await withTimeout(page.evaluate(loadLevel0, compact ? { totalBytes: COMPACT_TOTAL_BYTES } : { maxCacheBytes: WARM_CACHE_BYTES }), 'loading level 0', RUN_TIMEOUT_MS);
+    if (loaded.compact !== compact) throw new Error(`the ${args.cache} pass held its cache ${loaded.compact ? 'packed' : 'unpacked'}: the cap of the pass and the size of the store no longer agree`);
     const serverBefore = data.requests.length;
     const warm = await withTimeout(page.evaluate(warmLoops, { switches: SWITCHES, pauseMs: STEP_PAUSE_MS, settleMs: SETTLE_MS }), 'the warm loops', RUN_TIMEOUT_MS);
     const serverRequests = data.requests.length - serverBefore;
@@ -146,15 +192,15 @@ async function measure({ variant, pair, appUrl, storeUrl, data }) {
       load: { start: Number(loadAtStart), end: Number(load()) },
       browser: browserInfo,
       figures: {
-        coldOpenMs: median(bench.coldOpenConsolidated.map((row) => row.firstPaintMs)),
+        coldOpenMs: median(coldOpens.map((row) => row.firstPaintMs)),
         warmStepMs: median(warm.stepping.map((frame) => frame.ms)),
         warmJumpMs: median(warm.jumping.map((frame) => frame.ms)),
-        decodeMs: bench.decodePerChunk.chunk.median,
+        ...(compact ? {} : { decodeMs: bench.decodePerChunk.chunk.median }),
       },
       warmLoop: { serverRequests, readerRequests: warm.readerRequests, readerBytes: warm.readerBytes, incomplete: frames.filter((frame) => !frame.complete).length },
       loaded,
       warm,
-      bench: {
+      bench: bench && {
         coldOpenConsolidated: bench.coldOpenConsolidated,
         coldOpenPerArrayMetadata: bench.coldOpenPerArrayMetadata,
         warmSwitchStepping: bench.warmSwitchStepping,
@@ -163,6 +209,7 @@ async function measure({ variant, pair, appUrl, storeUrl, data }) {
         productSwitch: bench.productSwitch,
         decodePerChunk: bench.decodePerChunk,
       },
+      coldOpens,
     };
   } finally {
     await browser.close();
@@ -170,7 +217,7 @@ async function measure({ variant, pair, appUrl, storeUrl, data }) {
 }
 
 const describe = (r) =>
-  `cold ${r.figures.coldOpenMs.toFixed(0)} ms, step ${r.figures.warmStepMs.toFixed(1)} ms, jump ${r.figures.warmJumpMs.toFixed(1)} ms, decode ${r.figures.decodeMs.toFixed(1)} ms; ` +
+  `cold ${r.figures.coldOpenMs.toFixed(0)} ms, step ${r.figures.warmStepMs.toFixed(1)} ms, jump ${r.figures.warmJumpMs.toFixed(1)} ms${compact ? '' : `, decode ${r.figures.decodeMs.toFixed(1)} ms`}; ` +
   `warm loop ${r.warmLoop.serverRequests} server requests, ${r.warmLoop.readerBytes} bytes, ${r.warmLoop.incomplete} incomplete (load ${r.load.start} to ${r.load.end})`;
 
 const data = await startStaticServer(path.resolve(args.store));
@@ -192,14 +239,18 @@ try {
   await Promise.all([data.close(), apps.base.close(), apps.head.close()]);
 }
 
-const result = compareBuilds(records);
-const { browser } = records[0];
+const result = compareBuilds(records, { metrics: compact ? COMPACT_METRICS : METRICS });
+const { browser, loaded } = records[0];
 const environment = [
   `${browser.userAgent.match(/(?:Headless)?Chrome\/[\d.]+/)?.[0] ?? browser.userAgent}, WebGL renderer: ${browser.renderer}`,
   `${os.cpus().length} × ${os.cpus()[0]?.model ?? 'unknown CPU'}, ${(os.totalmem() / 1024 ** 3).toFixed(0)} GB; 1-minute load ${loadBefore} at the start, ${load()} at the end`,
-  `Viewport ${VIEWPORT.width} × ${VIEWPORT.height} at pixel ratio 1; per run ${COLD_RUNS} cold opens, ${SWITCHES} steps and ${SWITCHES} jumps on a fully loaded level 0, decode of 80 chunks`,
+  `Viewport ${VIEWPORT.width} × ${VIEWPORT.height} at pixel ratio 1; per run ${COLD_RUNS} cold opens, ${SWITCHES} steps and ${SWITCHES} jumps on a fully loaded level 0${
+    compact
+      ? `, held packed: cap ${COMPACT_TOTAL_BYTES / 1024 ** 2} MiB, level 0 of ${loaded.timesteps} timesteps ${Math.round(loaded.loopBytes / 1024 ** 2)} MiB unpacked, packed to ${Math.round(loaded.compactRatio * 100)} % of it`
+      : ', decode of 80 chunks'
+  }`,
 ];
-const summary = summaryMarkdown(result, { environment });
+const summary = summaryMarkdown(result, { environment, ...(compact && { title: 'Speed gates, compact cache: head against base' }) });
 console.log(`\n${summary}`);
 if (args.out) {
   await mkdir(path.dirname(path.resolve(args.out)), { recursive: true });

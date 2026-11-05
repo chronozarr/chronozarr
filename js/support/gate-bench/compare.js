@@ -21,6 +21,13 @@ export const METRICS = [
   { key: 'decodeMs', label: 'Decode per 2 MiB chunk', gateMs: 5, tolerance: 0.05, floorMs: 0.2 },
 ];
 
+/**
+ * The metrics of the compact pass (run.mjs --cache compact): the cold open and the warm switches on a cache that packs every chunk
+ * in memory, as the public demo store gets (js/demo/cache-policy.js), against the same gates. Decode is the same code with or
+ * without packing, so the default pass alone measures it.
+ */
+export const COMPACT_METRICS = METRICS.filter(({ key }) => key !== 'decodeMs').map((metric) => ({ ...metric, label: `${metric.label}, compact cache` }));
+
 /** The counters of the warm loops that must all be 0 for the head. */
 const TRAFFIC = ['serverRequests', 'readerRequests', 'readerBytes'];
 
@@ -43,13 +50,13 @@ const percent = (ratio) => `${ratio >= 1 ? '+' : '−'}${Math.round(Math.abs(rat
 /**
  * @param {{variant: 'base'|'head', pair: number, figures: Record<string, number>,
  *   warmLoop: {serverRequests: number, readerRequests: number, readerBytes: number, incomplete: number}}[]} records
- *   one per run: `figures` holds a value of every METRICS key, `warmLoop` what the warm loops of that run counted.
+ *   one per run: `figures` holds a value of every key of `metrics`, `warmLoop` what the warm loops of that run counted.
  */
-export function compareBuilds(records) {
+export function compareBuilds(records, { metrics = METRICS } = {}) {
   const byPair = new Map();
   for (const record of records) {
     // A field that bench() no longer reports arrives as undefined, and NaN passes every comparison: stop instead.
-    for (const { key } of METRICS) {
+    for (const { key } of metrics) {
       const value = record.figures[key];
       if (!(Number.isFinite(value) && value > 0)) {
         throw new Error(`${key} of the ${record.variant} run of pair ${record.pair + 1} is ${value}, not a time: did a field of bench() or of the warm loop change name?`);
@@ -60,7 +67,7 @@ export function compareBuilds(records) {
   const pairs = [...byPair.values()].filter((pair) => pair.base && pair.head);
   if (pairs.length < MIN_PAIRS) throw new Error(`${pairs.length} complete pairs of runs: comparing the builds needs at least ${MIN_PAIRS} pairs`);
 
-  const rows = METRICS.map((metric) => {
+  const rows = metrics.map((metric) => {
     const base = stats(pairs.map((pair) => pair.base.figures[metric.key]));
     const head = stats(pairs.map((pair) => pair.head.figures[metric.key]));
     const ratios = pairs.map((pair) => pair.head.figures[metric.key] / pair.base.figures[metric.key]);
@@ -84,9 +91,9 @@ export function compareBuilds(records) {
 }
 
 /** The step summary of the job: the verdict, then the absolute figures of both builds next to the gates. */
-export function summaryMarkdown(result, { environment = [] } = {}) {
+export function summaryMarkdown(result, { environment = [], title = 'Speed gates: head against base' } = {}) {
   const lines = [
-    '## Speed gates: head against base',
+    `## ${title}`,
     '',
     result.failures.length ? `**Fail.** ${result.failures.length === 1 ? 'One regression' : `${result.failures.length} regressions`}:` : '**Pass.** The head is not slower than the base beyond the tolerances, and its warm switches used no network.',
     ...result.failures.map((failure) => `- ${failure}`),

@@ -2,7 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { METRICS, compareBuilds, summaryMarkdown } from '../support/gate-bench/compare.js';
+import { COMPACT_METRICS, METRICS, compareBuilds, summaryMarkdown } from '../support/gate-bench/compare.js';
 
 const QUIET = { serverRequests: 0, readerRequests: 0, readerBytes: 0, incomplete: 0 };
 const BASE_FIGURES = { coldOpenMs: 400, decodeMs: 6, warmStepMs: 20, warmJumpMs: 40 };
@@ -108,4 +108,31 @@ test('the summary gives the absolute figures of both builds, the gates and the v
   assert.match(text, /fail/i);
   const headColdOpen = Math.round(result.rows.find((row) => row.key === 'coldOpenMs').head.median);
   assert.ok(headColdOpen > 790 && text.includes(`${headColdOpen} ms`), 'the head cold open, about 2 x 400 ms, in absolute terms');
+});
+
+test('the compact pass compares the cold open and the warm switches against the same gates, without decode', () => {
+  assert.deepEqual(COMPACT_METRICS.map((metric) => metric.key), ['coldOpenMs', 'warmStepMs', 'warmJumpMs']);
+  for (const metric of COMPACT_METRICS) {
+    const plain = METRICS.find((candidate) => candidate.key === metric.key);
+    assert.deepEqual({ ...metric, label: plain.label }, plain, 'the gate and its tolerance are those of the default pass');
+    assert.match(metric.label, /, compact cache$/);
+  }
+});
+
+test('records of the compact pass have no decode figure and are compared on the three metrics', () => {
+  const records = runs(5).map((record) => ({ ...record, figures: Object.fromEntries(Object.entries(record.figures).filter(([key]) => key !== 'decodeMs')) }));
+  const result = compareBuilds(records, { metrics: COMPACT_METRICS });
+  assert.deepEqual(result.failures, []);
+  assert.deepEqual(result.rows.map((row) => row.key), ['coldOpenMs', 'warmStepMs', 'warmJumpMs']);
+  // The default metrics still need the decode figure.
+  assert.throws(() => compareBuilds(records), /decodeMs of the base run of pair 1 is undefined/);
+});
+
+test('the compact pass fails on a slower head like the default pass, and the summary says which pass it is', () => {
+  const records = runs(5, { head: { warmStepMs: 2 } }).map((record) => ({ ...record, figures: Object.fromEntries(Object.entries(record.figures).filter(([key]) => key !== 'decodeMs')) }));
+  const result = compareBuilds(records, { metrics: COMPACT_METRICS });
+  assert.equal(result.failures.length, 1);
+  assert.match(result.failures[0], /Warm switch, stepping, compact cache/);
+  assert.match(summaryMarkdown(result, { title: 'Speed gates, compact cache: head against base' }), /^## Speed gates, compact cache: head against base/);
+  assert.match(summaryMarkdown(result), /^## Speed gates: head against base/);
 });
