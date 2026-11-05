@@ -38,6 +38,59 @@ test('a chunk demoted from the decoded tier is decoded again from its compressed
   assert.ok(store.peekRaw(0, 0, 0, 1), 'decoded again, so resident');
 });
 
+test('a chunk that is cancelled while it decodes keeps the bytes it downloaded: the next read decodes them with no new request', async () => {
+  const readable = buildSyntheticStore({ nTime: 4, nBand: 1, height: 32, width: 32, chunk: 32, sharded: false });
+  // A stand-in worker that holds every decode until the test answers it.
+  const decodes = [];
+  const worker = {
+    postMessage(message) {
+      if (message.type === 'init') queueMicrotask(() => worker.onmessage({ data: { type: 'ready' } }));
+      if (message.type === 'decode') decodes.push(message);
+    },
+    terminate() {},
+  };
+  const answer = ({ id }) => worker.onmessage({ data: { type: 'decoded', id, data: new Uint16Array(32 * 32) } });
+  const until = async (done) => {
+    for (let i = 0; i < 100 && !done(); i++) await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(done(), 'the decode was posted');
+  };
+  const store = await openStore('memory://late-abort', { store: readable, workers: 1, spawnWorker: () => worker, speculativeBytesInitial: 1e12 });
+  const abort = new AbortController();
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 1, maxSteps: 1, signal: abort.signal });
+  await until(() => decodes.length === 1);
+  abort.abort();
+  await job;
+  // The worker finishes the decode that nobody wants any more; its result is dropped.
+  answer(decodes[0]);
+  assert.equal(store.peekRaw(0, 0, 0, 1), undefined, 'the cancelled chunk is not decoded');
+  const read = store.getRaw(0, 0, 0, 1);
+  await until(() => decodes.length === 2);
+  assert.deepEqual(decodes[1].bytes, readable.files.get('/0/data/c/1/0/0/0'), 'the bytes of the first request are what gets decoded');
+  answer(decodes[1]);
+  await read;
+  assert.equal(readable.log.filter(({ key }) => key === '/0/data/c/1/0/0/0').length, 1, 'the chunk object was requested once, by the prefetch');
+  store.close();
+});
+
+test('closing the store while a chunk decodes does not put the downloaded bytes back into the cache', async () => {
+  const readable = buildSyntheticStore({ nTime: 4, nBand: 1, height: 32, width: 32, chunk: 32, sharded: false });
+  const decodes = [];
+  const worker = {
+    postMessage(message) {
+      if (message.type === 'init') queueMicrotask(() => worker.onmessage({ data: { type: 'ready' } }));
+      if (message.type === 'decode') decodes.push(message);
+    },
+    terminate() {},
+  };
+  const store = await openStore('memory://close-decoding', { store: readable, workers: 1, spawnWorker: () => worker, speculativeBytesInitial: 1e12 });
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 1, maxSteps: 1 });
+  for (let i = 0; i < 100 && decodes.length === 0; i++) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(decodes.length, 1, 'the decode was posted');
+  store.close();
+  await job;
+  assert.equal(store.cacheInfo().compressedBytes, 0);
+});
+
 test('with the compressed tier off, a demoted chunk is fetched again', async () => {
   const readable = buildSyntheticStore(SMALL);
   const store = await openStore('memory://no-compressed', { store: readable, workers: 0, maxCacheBytes: SMALL_CHUNK * 2, compressedBytes: 0 });

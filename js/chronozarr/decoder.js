@@ -1295,10 +1295,22 @@ export class ChronoStore {
       // The pool takes ownership of what it decodes, so a copy goes in when the bytes are also being kept.
       retained = held ?? (keepCompressed ? (bytes.byteOffset === 0 && bytes.buffer.byteLength === bytes.byteLength ? bytes : bytes.slice()) : null);
       const decodeNow = !entry.background || kind !== 'data' || !keepCompressed || this.#cache.canHoldDecoded(meta, size);
-      if (decodeNow) data = await this.#decoder.decode(retained ? retained.slice() : bytes, entry.priority, signal, spec, { compact: kind === 'data' && this.#compact });
+      // An abort while the chunk decodes is dealt with below, with the bytes in hand.
+      if (decodeNow) {
+        data = await this.#decoder.decode(retained ? retained.slice() : bytes, entry.priority, signal, spec, { compact: kind === 'data' && this.#compact }).catch((error) => {
+          if (signal.aborted && isAbort(error)) return null;
+          throw error;
+        });
+      }
     }
     const decodedAt = performance.now();
-    if (signal.aborted) throw abortError();
+    if (signal.aborted) {
+      // The body arrived whole before the chunk was let go (a seek, a new plan): keep it as a speculative copy, which displaces nothing better.
+      if (retained && !held && !this.#closeController.signal.aborted) {
+        this.#cache.insert(key, { kind, lod, row: meta.row, col: meta.col, t: meta.t }, { compressed: retained }, { background: true });
+      }
+      throw abortError();
+    }
     this.#counters.loads.count++;
     if (!held) this.#counters.loads.fetchMs += fetchedAt - requestedAt;
     this.#counters.loads.decodeMs += decodedAt - fetchedAt;
