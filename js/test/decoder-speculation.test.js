@@ -400,7 +400,7 @@ test('a movie is not held back by a demand read that joins its requests or begin
   await other;
 });
 
-test('a seek does not cancel the requests of an ambient job: its plan is complete once both jobs have finished', async () => {
+test('a seek cancels the requests of an ambient job so its own timestep has the link, and the ambient job fetches them again: its plan is complete once both jobs have finished', async () => {
   const { store, readable, started, openAll } = await openGated();
   const mark = readable.log.length;
   const loopAbort = new AbortController();
@@ -410,10 +410,11 @@ test('a seek does not cancel the requests of an ambient job: its plan is complet
   assert.equal(started.length, 6, 'the coarse loop has six requests in flight');
   const jump = store.prefetch({ lod: 0, cells: [[1, 0]], t: 10, seek: true });
   await settled();
-  assert.ok(readable.log.slice(mark, mark + 6).every(({ signal }) => !signal.aborted), 'the seek left them running');
+  const alive = readable.log.slice(mark).filter(({ key, signal }) => /\/data\/c\//.test(key) && !signal.aborted);
+  assert.deepEqual(alive.map(({ key }) => key), ['/0/data/c/10/0/1/0'], 'only the seek\'s own timestep is in flight');
   openAll();
   const [result] = await Promise.all([loop, jump]);
-  assert.equal(result.fetched, 30, 'the coarse loop fetched every chunk it planned');
+  assert.equal(result.fetched, 30, 'the coarse loop fetched every chunk it planned, the six that were cancelled included');
   assert.equal(landed.length, 30);
   for (const t of landed) assert.ok(store.hasCachedRaw(0, 0, 0, t), `t=${t} is cached`);
 });

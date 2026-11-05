@@ -376,8 +376,6 @@ export class ChronoStore {
   #slotWaiters = [];
   /** The signals of the running movie jobs (playing, not ambient): the owners whose requests a demand read can join without holding prefetch back. */
   #movieJobs = new WeakSet();
-  /** The signals of the ambient jobs (the coarse loop): the owners whose requests a seek leaves running. */
-  #ambientJobs = new WeakSet();
   #limiter;
   #bandwidth;
   #speculative;
@@ -815,8 +813,9 @@ export class ChronoStore {
    * fits. Otherwise it stops at the horizon, `horizonSteps` timesteps either side of t (12 by default); when scrubbing it reaches further in the scrub direction within that. If nothing has
    * moved t for `idleMs` (3 s), the viewer is idle, and prefetch also stops once it has started `idleBytes` (64 MiB)
    * of speculative traffic for this view and timestep; a scrub, playback or new view starts a new allowance. A
-   * `seek` (the view just jumped) does not widen anything: it only cancels the speculative requests that neither it nor an
-   * ambient job wants (it takes over the ones in its own plan).
+   * `seek` (the view just jumped) does not widen anything: it only cancels the speculative requests it does not want itself (it
+   * takes over the ones in its own plan), so that its own timestep has the link to itself. An ambient job fetches what a seek
+   * cancelled under it after the rest of its plan.
    *
    * Speculative traffic is metered: 16 MB may start at once, after that half the measured bandwidth. Prefetch
    * waits while any demand fetch is in flight (a speculative request that a demand read joins counts as one from then
@@ -852,7 +851,6 @@ export class ChronoStore {
     const wholeAxis = playing || loop;
     const movie = wholeAxis && !ambient;
     if (movie) this.#movieJobs.add(signal);
-    if (ambient) this.#ambientJobs.add(signal);
     const withMasks = masks && this.hasMask;
     if (!ambient) this.#noteActivity({ lod, cells, t, wholeAxis });
     const targets = new Set([t]);
@@ -876,7 +874,8 @@ export class ChronoStore {
     const limitInflight = concurrency === undefined;
     const worker = async () => {
       while (next < queue.length && !signal?.aborted && !result.budgetReached) {
-        const { row, col, t: tt, free } = queue[next++];
+        const item = queue[next++];
+        const { row, col, t: tt, free } = item;
         const key = chunkKey(lod, row, col, tt);
         const failedAt = this.#cellFailures.get(`${lod}/${row}/${col}`);
         const failed = failedAt !== undefined && this.#now() - failedAt < PREFETCH_COOLDOWN_MS;
@@ -965,7 +964,11 @@ export class ChronoStore {
           if (!data) result.compressedOnly++;
         } catch (error) {
           this.#refundIdle(idleCharge);
-          if (isAbort(error)) continue;
+          if (isAbort(error)) {
+            // A seek cancelled this chunk under an ambient job, which plans once: it is fetched again after the rest of the plan.
+            if (ambient && !signal.aborted) queue.push(item);
+            continue;
+          }
           result.errors.push({ key, error });
           this.#cellFailures.set(`${lod}/${row}/${col}`, this.#now());
         }
@@ -1249,16 +1252,11 @@ export class ChronoStore {
     entry.controller.abort();
   }
 
-  /**
-   * The view jumped: cancel every speculative fetch nobody is waiting for, except those the plan of `signal` has claimed and those
-   * of an ambient job. A job that plans once, as the coarse loop does, never asks for a chunk that was cancelled under it again.
-   */
+  /** The view jumped: cancel every speculative fetch nobody is waiting for, except those the plan of `signal` has claimed. */
   #cancelSpeculative(signal) {
     for (const entry of this.#inflight.values()) {
       if (!entry.background) continue;
-      for (const owner of entry.owners) {
-        if (owner !== signal && !this.#ambientJobs.has(owner)) entry.owners.delete(owner);
-      }
+      for (const owner of entry.owners) if (owner !== signal) entry.owners.delete(owner);
       this.#cancelIfUnwanted(entry);
     }
   }
