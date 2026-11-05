@@ -288,3 +288,109 @@ test('chunkWireBytes is what a chunk of the level takes on the wire, estimated f
   assert.ok(store.chunkWireBytes(1) > 0, 'a level with no chunks yet uses the average of the others');
   assert.throws(() => store.chunkWireBytes(5), /out of range/);
 });
+
+/** Let every promise continuation that can run without a timer run. */
+const settled = async () => {
+  for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+};
+
+/**
+ * A store whose data chunks are answered only when the test lets them through (the gate is armed after the link has been
+ * measured). `started` lists the timesteps requested since, in order; `release(t)` answers one, an aborted request is
+ * rejected. With a `rate` the link is measured at that many bytes/s on the simulated clock, which fixes how many
+ * speculative requests may be in flight (0.2 MB/s leaves one).
+ */
+async function openGated({ rate = 400_000_000, ...options } = {}) {
+  const readable = buildSyntheticStore(LARGE);
+  const link = simulatedLink(readable, rate);
+  const waiting = new Map();
+  const started = [];
+  let armed = false;
+  const gate = (read) => async (key, o, ...rest) => {
+    const t = /\/data\/c\/(\d+)\//.exec(key)?.[1];
+    if (t !== undefined && armed) started.push(Number(t));
+    const bytes = await read(key, o, ...rest);
+    if (t === undefined || !armed) return bytes;
+    await new Promise((resolve, reject) => {
+      waiting.set(Number(t), resolve);
+      o?.signal?.addEventListener('abort', () => reject(o.signal.reason), { once: true });
+    });
+    return bytes;
+  };
+  const store = await openStore('memory://gated', { store: { get: gate(link.store.get), getRange: gate(link.store.getRange) }, workers: 0, clock: link.clock, speculativeBytesInitial: 1e12, idleBytes: 1e12, ...options });
+  for (let t = 0; t < 30 && !(store.bandwidthEstimate() > 0); t++) await store.getRaw(0, 0, 0, t);
+  armed = true;
+  const release = (t) => {
+    waiting.get(t)();
+    waiting.delete(t);
+  };
+  return { store, readable, started, release };
+}
+
+test('a demand read that joins a speculative request holds speculative starts back until that request settles', async () => {
+  const { store, started, release } = await openGated();
+  const abort = new AbortController();
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, signal: abort.signal });
+  await settled();
+  assert.deepEqual(started, [30, 31, 29, 32, 33, 28], 'six speculative requests in flight, nearest first');
+  const read = store.getRaw(0, 0, 0, 32);
+  for (const t of [30, 31, 29, 33, 28]) release(t);
+  await settled();
+  assert.equal(started.length, 6, 'nothing replaced the five that settled while the read waits for the sixth');
+  release(32);
+  await read;
+  await settled();
+  assert.ok(started.length > 6, 'prefetch goes on once the joined request has settled');
+  abort.abort();
+  await job;
+});
+
+test('workers that wait for a request slot do not start once a demand read has begun', async () => {
+  // A long idleSeconds, so that the allowance of an idle job (a second of this slow link) does not end the job after two chunks.
+  const { store, started, release } = await openGated({ rate: 200_000, idleSeconds: 1000 });
+  const abort = new AbortController();
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, signal: abort.signal });
+  await settled();
+  assert.deepEqual(started, [30], 'the slow link leaves one speculative slot; the other workers wait for it');
+  const read = store.getRaw(0, 0, 0, 50);
+  await settled();
+  release(30);
+  await settled();
+  assert.deepEqual(started, [30, 50], 'the slot that freed up stays unused while the read waits');
+  release(50);
+  await read;
+  await settled();
+  assert.ok(started.length > 2, 'prefetch goes on once the read has settled');
+  abort.abort();
+  await job;
+});
+
+test('a movie is not held back by a demand read that joins its requests or begins while its workers wait', async () => {
+  const joined = await openGated();
+  const abortJoined = new AbortController();
+  const movie = joined.store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, playing: true, signal: abortJoined.signal });
+  await settled();
+  const read = joined.store.getRaw(0, 0, 0, 32);
+  for (const t of [30, 31, 29, 33, 28]) joined.release(t);
+  await settled();
+  assert.ok(joined.started.length > 6, 'the pump joining a chunk of the movie does not stop the next ones');
+  joined.release(32);
+  await read;
+  abortJoined.abort();
+  await movie;
+
+  const parked = await openGated({ rate: 200_000 });
+  const abortParked = new AbortController();
+  const other = parked.store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, playing: true, signal: abortParked.signal });
+  await settled();
+  assert.deepEqual(parked.started, [30]);
+  const pump = parked.store.getRaw(0, 0, 0, 50);
+  await settled();
+  parked.release(30);
+  await settled();
+  assert.equal(parked.started.length, 3, 'a worker that waited for the slot starts as soon as it frees up');
+  parked.release(50);
+  await pump;
+  abortParked.abort();
+  await other;
+});

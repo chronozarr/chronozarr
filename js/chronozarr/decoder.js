@@ -370,9 +370,12 @@ export class ChronoStore {
   /** Clock time of the last root re-read that brought no new `shard_bytes`, or null. */
   #noNewHintsAt = null;
   #recoveries = { rootRefetches: 0, retried: 0, suffixFallbacks: 0, suppressed: 0 };
+  /** Demand reads in flight, and the speculative requests a demand read has joined (they count until they settle). */
   #demandInflight = 0;
   #demandIdleWaiters = [];
   #slotWaiters = [];
+  /** The signals of the running movie jobs (playing, not ambient): the owners whose requests a demand read can join without holding prefetch back. */
+  #movieJobs = new WeakSet();
   #limiter;
   #bandwidth;
   #speculative;
@@ -813,7 +816,8 @@ export class ChronoStore {
    * `seek` (the view just jumped) does not widen anything: it only cancels the other speculative requests.
    *
    * Speculative traffic is metered: 16 MB may start at once, after that half the measured bandwidth. Prefetch
-   * waits while any demand fetch is in flight and never takes the last request slots. A cell whose chunk
+   * waits while any demand fetch is in flight (a speculative request that a demand read joins counts as one from then
+   * on, unless a movie's prefetch is fetching it) and never takes the last request slots. A cell whose chunk
    * failed is left alone for PREFETCH_COOLDOWN_MS. Aborting `signal` cancels this job's fetches that nobody else
    * waits for. With `seek`, the chunks of timestep `t` itself (its data) are fetched at demand
    * priority outside the allowance before the rest of the window. Resolves with counts and per-chunk errors
@@ -840,9 +844,11 @@ export class ChronoStore {
   async prefetch({ lod, cells, t, direction = 1, behindFactor = 2, loop = false, playing = false, seek = false, masks = false, maxSteps = Infinity, ambient = false, concurrency, signal, onChunk }) {
     if (this.#closeController.signal.aborted) throw new Error('ChronoStore is closed');
     if (maxSteps !== Infinity && (!Number.isInteger(maxSteps) || maxSteps < 1)) throw new RangeError('maxSteps must be an integer >= 1');
-    signal = signal ? AbortSignal.any([signal, this.#closeController.signal]) : this.#closeController.signal;
+    signal = AbortSignal.any(signal ? [signal, this.#closeController.signal] : [this.#closeController.signal]);
     const level = this.level(lod);
     const wholeAxis = playing || loop;
+    const movie = wholeAxis && !ambient;
+    if (movie) this.#movieJobs.add(signal);
     const withMasks = masks && this.hasMask;
     if (!ambient) this.#noteActivity({ lod, cells, t, wholeAxis });
     if (seek) this.#cancelSpeculative();
@@ -917,9 +923,11 @@ export class ChronoStore {
               result.skipped++;
               continue;
             }
-            if (limitInflight) {
-              // The test and the start below are one synchronous step: a slot that frees up goes to whichever worker runs first.
-              while (this.#speculativeInflight() >= this.#speculativeSlots(level)) {
+            if (limitInflight || !movie) {
+              // The test and the start below are one synchronous step: a slot that frees up goes to whichever worker runs first. A demand
+              // read that began while this worker waited for the allowance or a slot holds it back, as it would have before it waited;
+              // a movie is not held, its buffer pump keeps demand pending almost all the time.
+              while ((limitInflight && this.#speculativeInflight() >= this.#speculativeSlots(level)) || (!movie && this.#demandInflight > 0)) {
                 await this.#slotFreed(signal);
                 if (signal?.aborted) {
                   this.#speculative.spend(-estimate);
@@ -1160,6 +1168,14 @@ export class ChronoStore {
       if (index) index.priority.value = 0;
       this.#limiter.reprioritize();
       this.#decoder.reprioritize?.();
+      // A frame now waits for a request that was speculative: it counts as demand until it settles, and prefetch holds back as it does for
+      // a read of its own. A movie's prefetch is the exception: its pump joins the chunks it plans all the time, and holding the movie back
+      // for each would give up the speed that letting speculation use the link while nothing waits bought (adc26d5).
+      if (![...entry.owners].some((owner) => this.#movieJobs.has(owner))) {
+        entry.promoted = true;
+        this.#demandInflight++;
+        this.#updateSpeculativeShare();
+      }
     }
   }
 
@@ -1170,7 +1186,7 @@ export class ChronoStore {
    */
   #start(key, meta, { background, owner = null }) {
     const controller = new AbortController();
-    const entry = { controller, kind: meta.kind, waiters: 0, sticky: false, owners: new Set(), releases: [], background, priority: { value: background ? 1 : 0 }, promise: null };
+    const entry = { controller, kind: meta.kind, waiters: 0, sticky: false, owners: new Set(), releases: [], background, promoted: false, priority: { value: background ? 1 : 0 }, promise: null };
     this.#own(entry, owner);
     if (!background) {
       this.#demandInflight++;
@@ -1181,7 +1197,7 @@ export class ChronoStore {
         for (const release of entry.releases) release();
         if (this.#inflight.get(key) === entry) this.#inflight.delete(key);
         for (const wake of this.#slotWaiters.splice(0)) wake();
-        if (!background && --this.#demandInflight === 0) {
+        if ((!background || entry.promoted) && --this.#demandInflight === 0) {
           this.#updateSpeculativeShare();
           for (const wake of this.#demandIdleWaiters.splice(0)) wake();
         }
