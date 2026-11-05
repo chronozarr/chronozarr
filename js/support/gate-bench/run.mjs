@@ -47,7 +47,7 @@ import { startStaticServer } from '../static-server.js';
 import { BROWSER_ARGS, VIEWPORT, launchBrowser, measureFrameInterval, rendererInfo, withTimeout } from './browser.mjs';
 import { COMPACT_METRICS, METRICS, compareBuilds, summaryMarkdown } from './compare.js';
 import { firstVisit } from './first-visit.mjs';
-import { LOAD_LIMIT, RAF_RANGE_MS, guardsEnabled, measureGuarded, readMachine, refuseNoisyMachine } from './guards.js';
+import { guardsMode, guardsSummary, measureGuarded, readMachine, refuseNoisyMachine } from './guards.js';
 
 // Five cold opens per run: with three, one slow open moved a run's median by up to 59 % on GitHub's runners.
 const COLD_RUNS = 5;
@@ -81,7 +81,8 @@ if (!args.base || !args.head || !args.store || !BROWSER_ARGS[args.gpu] || !['def
 }
 const pairs = Number(args.pairs);
 const compact = args.cache === 'compact';
-const guards = guardsEnabled({ ignore: args['ignore-guards'] });
+const guardMode = guardsMode({ ignore: args['ignore-guards'] });
+const guards = guardMode.enabled;
 if (guards) refuseNoisyMachine(readMachine());
 
 const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
@@ -275,13 +276,13 @@ const environment = [
       ? `, held packed: cap ${COMPACT_TOTAL_BYTES / 1024 ** 2} MiB, level 0 of ${loaded.timesteps} timesteps ${Math.round(loaded.loopBytes / 1024 ** 2)} MiB unpacked, packed to ${Math.round(loaded.compactRatio * 100)} % of it`
       : ', decode of 80 chunks'
   }`,
-  ...(guards ? [`Guards: a load of ${LOAD_LIMIT} or less and no battery power at the start; the median animation frame interval before and after each run in ${RAF_RANGE_MS[0]} to ${RAF_RANGE_MS[1]} ms (${discarded.length} runs discarded)`] : []),
+  guardsSummary({ mode: guardMode, cores: os.cpus().length, discarded: discarded.length }),
 ];
 const summary = summaryMarkdown(result, { environment, ...(compact && { title: 'Speed gates, compact cache: head against base' }) });
 console.log(`\n${summary}`);
 if (args.out) {
   await mkdir(path.dirname(path.resolve(args.out)), { recursive: true });
-  await writeFile(args.out, `${JSON.stringify({ startedAt, pairs, environment, result, records, discarded }, null, 1)}\n`);
+  await writeFile(args.out, `${JSON.stringify({ startedAt, pairs, guards: guardMode, environment, result, records, discarded }, null, 1)}\n`);
 }
 if (args.summary) await appendFile(args.summary, summary);
 process.exitCode = result.failures.length ? 1 : 0;

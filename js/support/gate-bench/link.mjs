@@ -47,7 +47,7 @@ import { parseArgs } from 'node:util';
 import { startStaticServer } from '../static-server.js';
 import { BROWSER_ARGS, LOOPBACK_ONLY, VIEWPORT, launchBrowser, measureFrameInterval, rendererInfo, withTimeout } from './browser.mjs';
 import { attachNetworkLog, setLink } from './cdp.js';
-import { LOAD_LIMIT, RAF_RANGE_MS, guardsEnabled, measureGuarded, readMachine, refuseNoisyMachine } from './guards.js';
+import { guardsMode, guardsSummary, measureGuarded, readMachine, refuseNoisyMachine } from './guards.js';
 import { LINKS, SCENARIOS, compareLinks, linkSummaryMarkdown, runFigures } from './link-compare.js';
 import { runScenario } from './link-scenarios.js';
 
@@ -81,7 +81,8 @@ if (!args.base || !args.head || !args.store || !BROWSER_ARGS[args.gpu] || !(pair
   console.error(`Usage: node support/gate-bench/link.mjs --base <viewer root> --head <viewer root> --store <long store dir> [--pairs 3] [--links ${Object.keys(LINKS)}] [--scenarios ${Object.keys(SCENARIOS)}] [--play-seconds 30] [--gpu metal|swiftshader] [--ignore-guards] [--out results.json] [--summary summary.md]`);
   process.exit(2);
 }
-const guards = guardsEnabled({ ignore: args['ignore-guards'] });
+const guardMode = guardsMode({ ignore: args['ignore-guards'] });
+const guards = guardMode.enabled;
 if (guards) refuseNoisyMachine(readMachine());
 
 const load = () => os.loadavg()[0].toFixed(1);
@@ -163,7 +164,7 @@ function environmentLines() {
     `${browser.userAgent.match(/(?:Headless)?Chrome\/[\d.]+/)?.[0] ?? browser.userAgent}, WebGL renderer: ${browser.renderer}`,
     `${os.cpus().length} × ${os.cpus()[0]?.model ?? 'unknown CPU'}, ${(os.totalmem() / 1024 ** 3).toFixed(0)} GB; 1-minute load ${loadBefore} at the start, ${load()} at the end`,
     `Viewport ${VIEWPORT.width} × ${VIEWPORT.height} at pixel ratio 1; a store of ${records[0].detail.steps} timesteps over HTTP/2; per run the link is throttled before the page loads, the viewer idles ${IDLE_MS / 1000} s after its first frame, then the scenario (${playMs / 1000} s of playback, at most ${SETTLE_CAP_MS / 1000} s for the last frame of a drag or a jump)`,
-    ...(guards ? [`Guards: a load of ${LOAD_LIMIT} or less and no battery power at the start; the median animation frame interval before and after each run in ${RAF_RANGE_MS[0]} to ${RAF_RANGE_MS[1]} ms (${discarded.length} runs discarded)`] : []),
+    guardsSummary({ mode: guardMode, cores: os.cpus().length, discarded: discarded.length }),
   ];
 }
 
@@ -171,7 +172,7 @@ function environmentLines() {
 async function writeResults(result = null) {
   if (!args.out) return;
   await mkdir(path.dirname(path.resolve(args.out)), { recursive: true });
-  await writeFile(args.out, `${JSON.stringify({ startedAt, pairs, links, scenarios, environment: environmentLines(), result, records, discarded }, null, 1)}\n`);
+  await writeFile(args.out, `${JSON.stringify({ startedAt, pairs, links, scenarios, guards: guardMode, environment: environmentLines(), result, records, discarded }, null, 1)}\n`);
 }
 
 // Not counted: the first browsers of a job pay for cold file and GPU caches.

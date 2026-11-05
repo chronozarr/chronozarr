@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ATTEMPTS, LOAD_LIMIT, frameIntervalProblem, guardsEnabled, machineProblems, measureGuarded, onBattery, refuseNoisyMachine } from '../support/gate-bench/guards.js';
+import { ATTEMPTS, RAF_MAX_MS, frameIntervalProblem, guardsEnabled, guardsMode, guardsSummary, loadLimit, machineProblems, measureGuarded, onBattery, refuseNoisyMachine } from '../support/gate-bench/guards.js';
 
 const BATTERY = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1234567)\t81%; discharging; 6:12 remaining present: true\n";
 const AC = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1234567)\t100%; charged; 0:00 remaining present: true\n";
@@ -16,27 +16,38 @@ test('pmset says whether the Mac draws from its battery, and nothing when it say
   assert.equal(onBattery('pmset: command not found'), null);
 });
 
-test('a load above the limit stops a run, and the limit itself does not', () => {
-  assert.deepEqual(machineProblems({ load: LOAD_LIMIT, onBattery: false }), []);
-  const problems = machineProblems({ load: 4.1, onBattery: false });
+test('the load limit is half the logical cores', () => {
+  assert.equal(loadLimit(16), 8);
+  assert.equal(loadLimit(4), 2);
+});
+
+test('a load above half the cores stops a run, and the limit itself does not', () => {
+  assert.deepEqual(machineProblems({ load: 8, cores: 16, onBattery: false }), []);
+  const problems = machineProblems({ load: 8.1, cores: 16, onBattery: false });
   assert.equal(problems.length, 1);
-  assert.match(problems[0], /load average is 4\.1, above 4/);
+  assert.match(problems[0], /load average is 8\.1, above half of the 16 logical cores \(8\)/);
+});
+
+test('the same load stops a small machine and not a large one', () => {
+  assert.equal(machineProblems({ load: 6, cores: 4, onBattery: false }).length, 1);
+  assert.deepEqual(machineProblems({ load: 6, cores: 16, onBattery: false }), []);
 });
 
 test('battery power stops a run, and an unknown power source does not', () => {
-  const problems = machineProblems({ load: 0.5, onBattery: true });
+  const problems = machineProblems({ load: 0.5, cores: 16, onBattery: true });
   assert.equal(problems.length, 1);
   assert.match(problems[0], /battery power.*30 Hz/);
-  assert.deepEqual(machineProblems({ load: 0.5, onBattery: null }), []);
+  assert.deepEqual(machineProblems({ load: 0.5, cores: 16, onBattery: null }), []);
 });
 
 test('a loaded machine on battery power gives both reasons', () => {
-  assert.equal(machineProblems({ load: 12, onBattery: true }).length, 2);
+  assert.equal(machineProblems({ load: 12, cores: 16, onBattery: true }).length, 2);
 });
 
-test('a median frame interval from 15.5 to 18 ms, both ends included, is a 60 Hz display; others are not', () => {
-  for (const ok of [15.5, 16.7, 18]) assert.equal(frameIntervalProblem(ok, 'before'), null, String(ok));
-  for (const bad of [15.4, 18.1, 33.3, Number.NaN, undefined]) assert.match(frameIntervalProblem(bad, 'after'), /interval after the run was .* outside 15\.5 to 18 ms/, String(bad));
+test('a median frame interval up to 18 ms is fine, a faster display too, and a slower one is refused', () => {
+  assert.equal(RAF_MAX_MS, 18);
+  for (const ok of [4.2, 8.3, 16.7, 18]) assert.equal(frameIntervalProblem(ok, 'before'), null, `${ok}: 240, 120 and 60 Hz`);
+  for (const bad of [18.1, 33.3, Number.NaN, undefined]) assert.match(frameIntervalProblem(bad, 'after'), /interval after the run was .* above 18 ms/, String(bad));
 });
 
 test('CI is never guarded, and a local run is guarded unless it says otherwise', () => {
@@ -46,14 +57,30 @@ test('CI is never guarded, and a local run is guarded unless it says otherwise',
   assert.equal(guardsEnabled({ env: { CI: '' } }), true);
 });
 
+test('the mode says why the guards are off, so that a summary does not look like a guarded one', () => {
+  assert.deepEqual(guardsMode({ env: {} }), { enabled: true, off: null });
+  assert.deepEqual(guardsMode({ env: { CI: 'true' } }), { enabled: false, off: 'CI' });
+  assert.deepEqual(guardsMode({ env: {}, ignore: true }), { enabled: false, off: '--ignore-guards' });
+  assert.deepEqual(guardsMode({ env: { CI: 'true' }, ignore: true }), { enabled: false, off: 'CI' });
+});
+
+test('the summary line says what was guarded and how many runs were discarded, or that nothing was checked', () => {
+  const on = guardsSummary({ mode: guardsMode({ env: {} }), cores: 16, discarded: 2 });
+  assert.match(on, /load of at most 8 \(half of 16 logical cores\)/);
+  assert.match(on, /at most 18 ms \(2 runs discarded\)/);
+  const ignored = guardsSummary({ mode: guardsMode({ env: {}, ignore: true }), cores: 16, discarded: 0 });
+  assert.match(ignored, /^Guards: off \(--ignore-guards\): the load, the power source and the animation frame interval were not checked/);
+  assert.match(guardsSummary({ mode: guardsMode({ env: { CI: '1' } }), cores: 4, discarded: 0 }), /^Guards: off \(CI\)/);
+});
+
 test('a refused machine says why and how to override, and exits; a fit machine goes on', () => {
   const logs = [];
   const exits = [];
-  refuseNoisyMachine({ load: 0.5, onBattery: false }, { log: (text) => logs.push(text), exit: (code) => exits.push(code) });
+  refuseNoisyMachine({ load: 0.5, cores: 16, onBattery: false }, { log: (text) => logs.push(text), exit: (code) => exits.push(code) });
   assert.deepEqual([logs, exits], [[], []]);
-  refuseNoisyMachine({ load: 9, onBattery: true }, { log: (text) => logs.push(text), exit: (code) => exits.push(code) });
+  refuseNoisyMachine({ load: 9, cores: 8, onBattery: true }, { log: (text) => logs.push(text), exit: (code) => exits.push(code) });
   assert.deepEqual(exits, [3]);
-  assert.match(logs[0], /load average is 9\.0/);
+  assert.match(logs[0], /load average is 9\.0, above half of the 8 logical cores \(4\)/);
   assert.match(logs[0], /battery power/);
   assert.match(logs[0], /--ignore-guards/);
 });
