@@ -1758,6 +1758,8 @@ class Viewer {
           this.#setProgress((++done / wanted.length) * 0.98);
           this.#emit({ type: 'cell-ready', t, row, col });
           this.#render({ force: false });
+          // The cells that have landed go to the GPU while the rest of the frame is still on its way, so the paint that completes it has little left to upload.
+          this.#scheduleGpuFill();
         },
         (error) => {
           if (error.name === 'AbortError') return;
