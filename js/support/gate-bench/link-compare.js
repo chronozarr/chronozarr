@@ -39,8 +39,8 @@ export const LINK_METRICS = {
   drag: [
     { key: 'framesAtTarget', label: 'Frames at the target level', unit: '', better: 'higher', tolerance: 0.1, floor: 2 },
     { key: 'framesCoarser', label: 'Frames at a coarser level', unit: '', better: null },
-    { key: 'held', label: 'Held: no whole frame ready', unit: '', better: 'lower', tolerance: 0.1, floor: 2 },
-    { key: 'skipped', label: 'Timesteps never shown', unit: '', better: 'lower', tolerance: 0.1, floor: 2 },
+    { key: 'heldMs', label: 'Time on an older timestep than asked for', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 100 },
+    { key: 'skipped', label: 'Timesteps between the ends never shown', unit: '', better: 'lower', tolerance: 0.1, floor: 2 },
     { key: 'lagMedianMs', label: 'Input to frame, median', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 20 },
     { key: 'lagP95Ms', label: 'Input to frame, 95th percentile', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 50 },
     { key: 'settleMs', label: 'Release to the frame at the target level', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 200 },
@@ -69,29 +69,64 @@ function quantile(values, q) {
 }
 
 /**
- * The raw result of a drag, from the page: the first paint of every frame the viewer drew (`events`, each with its time `at`
- * and `t`, `lod`, `kind`), the `inputs` it was given (when each timestep was asked for), when the pointer was released and
- * the level the store shows at rest (`normalLod`). `capMs` is the time the page waited for the last frame after the release.
+ * The frames among the paints of the viewer, in order. The viewer paints whenever it is asked to render, so a paint is not a
+ * frame: one with kind 'previous' is the frame on screen drawn again because nothing newer was whole (it carries the old
+ * timestep), and a paint of the level and timestep that the last frame had is the same frame again. Neither is counted.
  */
-export function dragFigures({ events, inputs, releaseAt, normalLod, from, to, capMs }) {
-  const paints = events.filter((event) => event.type === 'paint');
-  const duringDrag = paints.filter((paint) => paint.at <= releaseAt);
-  const shownDuringDrag = new Set(duringDrag.map((paint) => paint.t).filter((t) => t !== from));
+export function distinctFrames(paints) {
+  const frames = [];
+  for (const paint of paints) {
+    if (paint.kind === 'previous') continue;
+    const last = frames.at(-1);
+    if (last && last.t === paint.t && last.lod === paint.lod) continue;
+    frames.push(paint);
+  }
+  return frames;
+}
+
+/**
+ * How long, between the animation frames from `beginAt` to `endAt`, the frame on screen was of an earlier timestep than the
+ * viewer was asked for: whether it redrew the old frame, drew nothing or was busy. `samples` hold, per animation frame, the
+ * timestep asked for (`t`) and the one shown (`shownT`). A request needs one frame to be drawn, so an interval counts only when
+ * the same timestep was already asked for at its start.
+ */
+export function heldMs(samples, beginAt, endAt) {
+  let held = 0;
+  for (let i = 1; i < samples.length; i++) {
+    const [before, after] = [samples[i - 1], samples[i]];
+    if (before.at < beginAt || after.at > endAt) continue;
+    if (after.t === before.t && after.shownT !== null && after.shownT < after.t) held += after.at - before.at;
+  }
+  return held;
+}
+
+/**
+ * The raw result of a drag, from the page: every paint of the viewer (`events`, each with its time `at` and `t`, `lod`, `kind`),
+ * the `inputs` it was given (when each timestep was due, and when it was dispatched), a sample per animation frame, when the drag
+ * began and when the pointer was released, and the level the store shows at rest (`normalLod`). `capMs` is the time the page
+ * waited for the last frame after the release.
+ */
+export function dragFigures({ events, inputs, samples, beginAt, releaseAt, normalLod, from, to, capMs }) {
+  const frames = distinctFrames(events.filter((event) => event.type === 'paint'));
+  const duringDrag = frames.filter((frame) => frame.at <= releaseAt);
+  // The timesteps strictly between the ends: the first is on screen when the drag starts, and the last is asked for as the pointer is released.
+  const shownBetween = new Set(duringDrag.map((frame) => frame.t).filter((t) => t > from && t < to));
   // A step is answered by the first frame that shows its timestep or a later one, so a step that was skipped over waits for the next frame.
+  // Its wait counts from when it was due: a main thread that ran the timer late made the step late, and that is the viewer's cost too.
   const lags = [];
   for (const input of inputs) {
-    const answer = paints.find((paint) => paint.at >= input.at && paint.t >= input.t);
-    if (answer) lags.push(answer.at - input.at);
+    const answer = frames.find((frame) => frame.at >= input.at && frame.t >= input.t);
+    if (answer) lags.push(answer.at - input.due);
   }
-  const settled = paints.find((paint) => paint.t === to && paint.lod === normalLod && paint.kind === 'target');
+  const settled = frames.find((frame) => frame.t === to && frame.lod === normalLod && frame.kind === 'target');
   const timedOut = [];
   if (!settled) timedOut.push('settleMs');
   if (!lags.length) timedOut.push('lagMs');
   const figures = {
-    framesAtTarget: duringDrag.filter((paint) => paint.lod === normalLod).length,
-    framesCoarser: duringDrag.filter((paint) => paint.lod > normalLod).length,
-    held: events.filter((event) => event.type === 'kept' && event.at <= releaseAt).length,
-    skipped: Math.abs(to - from) - shownDuringDrag.size,
+    framesAtTarget: duringDrag.filter((frame) => frame.lod === normalLod).length,
+    framesCoarser: duringDrag.filter((frame) => frame.lod > normalLod).length,
+    heldMs: round(heldMs(samples, beginAt, releaseAt)),
+    skipped: Math.max(0, to - from - 1) - shownBetween.size,
     lagMedianMs: lags.length ? round(median(lags)) : capMs,
     lagP95Ms: lags.length ? round(quantile(lags, 0.95)) : capMs,
     settleMs: settled ? round(Math.max(0, settled.at - releaseAt)) : capMs,
@@ -111,18 +146,23 @@ export function jumpFigures({ events, at, to, normalLod, capMs }) {
   return { figures, timedOut, detail: { normalLod, firstFrameLod: first?.lod ?? null } };
 }
 
-/** The raw result of playback: its statistics after `windowMs` of playing, and the level it chose for the movie. */
-export function playFigures({ stats: playback, startAt, windowMs, normalLod, movieLod }) {
+/**
+ * The raw result of playback: its statistics after `windowMs` of playing, the level it chose for the movie and, if playback was
+ * waiting for frames after it had started when the window ended, since when (`stallOpenSince`). Playback adds a pause to its
+ * total only when the pause ends, so the stall that is still open is added here.
+ */
+export function playFigures({ stats: playback, startAt, endAt, stallOpenSince, windowMs, normalLod, movieLod }) {
   const timedOut = playback.firstStepAt === null ? ['firstStepMs'] : [];
   const playedMs = playback.lastStepAt - playback.firstStepAt;
+  const stalledAtEndMs = stallOpenSince === null ? 0 : endAt - stallOpenSince;
   const figures = {
     steps: playback.steps,
     stepsPerSecond: playback.steps > 1 && playedMs > 0 ? round(((playback.steps - 1) / playedMs) * 1000, 2) : 0,
     firstStepMs: playback.firstStepAt === null ? windowMs : round(playback.firstStepAt - startAt),
     pauses: playback.bufferingPauses,
-    pausedMs: round(playback.bufferingMs),
+    pausedMs: round(playback.bufferingMs + stalledAtEndMs),
   };
-  return { figures, timedOut, detail: { normalLod, movieLod, longestPauseMs: round(playback.longestBufferingMs), initialBufferMs: playback.initialBufferMs === null ? null : round(playback.initialBufferMs) } };
+  return { figures, timedOut, detail: { normalLod, movieLod, stalledAtEndMs: round(stalledAtEndMs), longestPauseMs: round(Math.max(playback.longestBufferingMs, stalledAtEndMs)), initialBufferMs: playback.initialBufferMs === null ? null : round(playback.initialBufferMs) } };
 }
 
 const FIGURES = { drag: dragFigures, jump: jumpFigures, play: playFigures };
@@ -133,7 +173,7 @@ export function runFigures(scenario, raw, traffic) {
   return {
     figures: { ...figures, requests: traffic.requests, wireMB: round(traffic.bytes / 1e6) },
     timedOut,
-    detail: { ...detail, failedRequests: traffic.failed },
+    detail: { ...detail, failedRequests: traffic.failed, start: raw.start },
   };
 }
 

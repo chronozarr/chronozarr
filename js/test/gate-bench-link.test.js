@@ -3,49 +3,118 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LINKS, LINK_METRICS, SCENARIOS, compareLinks, dragFigures, jumpFigures, linkSummaryMarkdown, playFigures, runFigures } from '../support/gate-bench/link-compare.js';
+import { LINKS, LINK_METRICS, SCENARIOS, compareLinks, distinctFrames, dragFigures, heldMs, jumpFigures, linkSummaryMarkdown, playFigures, runFigures } from '../support/gate-bench/link-compare.js';
 
 const paint = (at, t, lod, kind = 'target') => ({ type: 'paint', at, t, lod, kind });
 
-/** A drag of timesteps 0 to 4, one every 100 ms from time 1000, released at 1400, drawn at level 2 until the frame at level 1 at 1900. */
-function drag(overrides = {}) {
+/**
+ * A drag as a slow link makes the viewer emit it: the viewer asks for timestep t every 150 ms from 1000, draws the first four at
+ * level 3 (the store rests at level 2), then has nothing whole for the next ones and draws the frame on screen again at every
+ * render (kind 'previous', still timestep 4; 'kept' never fires, as nothing is wrong with that frame), paints the frame of
+ * timestep 4 once more when a cell arrives, and shows timestep 8 at level 3 just after the pointer is released at 2200 and at level
+ * 2 at 3400. The main thread is blocked from 1750 to 1950, so the timer of step 5 runs 200 ms late and the next one at once. The
+ * shape is that of a dump of one such drag at 8 Mbit/s.
+ */
+function slowDrag(overrides = {}) {
+  const events = [
+    paint(1155, 1, 3, 'fallback'),
+    paint(1306, 2, 3),
+    paint(1455, 3, 3),
+    paint(1605, 4, 3),
+    paint(1650, 4, 3),
+    paint(1755, 4, 3, 'previous'),
+    paint(1955, 4, 3, 'previous'),
+    paint(2055, 4, 3, 'previous'),
+    paint(2205, 4, 3, 'previous'),
+    paint(2260, 8, 3, 'fallback'),
+    paint(3400, 8, 2),
+  ];
+  const dispatched = { 1: 1150, 2: 1300, 3: 1450, 4: 1600, 5: 1950, 6: 1950, 7: 2050, 8: 2200 };
+  const inputs = Object.entries(dispatched).map(([t, at]) => ({ t: Number(t), due: 1000 + Number(t) * 150, at }));
   return {
-    events: [paint(1010, 1, 2), paint(1110, 2, 2), paint(1310, 4, 2), { type: 'kept', at: 1250, t: 3 }, { type: 'kept', at: 1600, t: 4 }, paint(1900, 4, 1)],
-    inputs: [1, 2, 3, 4].map((t) => ({ at: 1000 + t * 100 - 100, t })),
-    releaseAt: 1400,
-    normalLod: 1,
+    events,
+    inputs,
+    samples: samples({ inputs, events, from: 1000, to: 2200 }),
+    beginAt: 1000,
+    releaseAt: 2200,
+    normalLod: 2,
     from: 0,
-    to: 4,
+    to: 8,
     capMs: 60000,
     ...overrides,
   };
 }
 
-test('a drag counts the frames at and below the target level and the holds up to the release, and the steps never shown', () => {
-  const { figures } = dragFigures(drag());
-  assert.equal(figures.framesAtTarget, 0);
-  assert.equal(figures.framesCoarser, 3);
-  assert.equal(figures.held, 1, 'the hold after the release is not the drag');
-  assert.equal(figures.skipped, 1, 'timestep 3 was never drawn');
-  assert.equal(figures.settleMs, 500);
+/** What the page samples at every 16.7 ms animation frame: the timestep asked for and the one on screen. */
+function samples({ inputs, events, from, to }) {
+  const frames = distinctFrames(events.filter((event) => event.type === 'paint'));
+  const rows = [];
+  for (let at = from; at <= to; at += 16.7) {
+    rows.push({ at, t: inputs.filter((input) => input.at <= at).at(-1)?.t ?? 0, shownT: frames.filter((frame) => frame.at <= at).at(-1)?.t ?? 0 });
+  }
+  return rows;
+}
+
+test('a repainted frame is not a frame: the frame on screen drawn again (previous) and a repeated paint are left out', () => {
+  const frames = distinctFrames(slowDrag().events);
+  assert.deepEqual(frames.map((frame) => [frame.t, frame.lod]), [[1, 3], [2, 3], [3, 3], [4, 3], [8, 3], [8, 2]]);
+  // A paint of kind 'previous' is never a frame, whatever it shows.
+  assert.deepEqual(distinctFrames([paint(10, 4, 2), paint(20, 3, 3, 'previous'), paint(30, 5, 2)]).map((frame) => frame.t), [4, 5]);
 });
 
-test('the lag of a step is the wait for the first frame that shows its timestep or a later one', () => {
-  const { figures, detail } = dragFigures(drag());
-  // Inputs at 1000 (t 1), 1100 (t 2), 1200 (t 3), 1300 (t 4); answers at 1010, 1110, 1310 (t 4 answers t 3 too), 1310.
-  assert.equal(figures.lagMedianMs, 10);
-  assert.equal(figures.lagP95Ms, 110);
+test('a drag that the viewer holds on a stale frame scores no frames for the repaints, and the time it was held', () => {
+  const { figures } = dragFigures(slowDrag());
+  assert.equal(figures.framesAtTarget, 0, 'timestep 4 drawn again four times is not a frame at the target level');
+  assert.equal(figures.framesCoarser, 4);
+  assert.equal(figures.skipped, 3, 'of the timesteps 1 to 7 between the ends, 5, 6 and 7 were never shown');
+  assert.ok(figures.heldMs > 150 && figures.heldMs < 300, `held from the request of timestep 5 until the release, about 14 animation frames: ${figures.heldMs}`);
+  assert.equal(figures.settleMs, 1200);
+});
+
+test('a build that holds more scores worse than one that shows frames, however often it repaints', () => {
+  // The same slow drag where the viewer shows a frame for every step has more frames, no hold and no stale repaints.
+  const shown = [1, 2, 3, 4, 5, 6, 7].map((t) => paint(1000 + t * 150 + 5, t, 3));
+  const prompt = slowDrag({ events: [...shown, paint(2260, 8, 3, 'fallback'), paint(3400, 8, 2)] });
+  prompt.samples = samples({ inputs: prompt.inputs, events: prompt.events, from: 1000, to: 2200 });
+  const stuck = dragFigures(slowDrag()).figures;
+  const moving = dragFigures(prompt).figures;
+  assert.ok(moving.framesCoarser > stuck.framesCoarser);
+  assert.ok(moving.heldMs < stuck.heldMs);
+  assert.ok(moving.skipped < stuck.skipped);
+});
+
+test('the hold counts only the intervals where the timestep asked for had a frame to be drawn in, not the one frame that a draw takes', () => {
+  const one = (at, t, shownT) => ({ at, t, shownT });
+  // Asked for 2 at 20, drawn by 60: the interval 20 to 40 (asked for at its start, still not drawn) is held, 0 to 20 and 40 to 60 are not.
+  assert.equal(heldMs([one(0, 1, 1), one(20, 2, 1), one(40, 2, 1), one(60, 2, 2)], 0, 100), 20);
+  assert.equal(heldMs([one(0, 1, 1), one(20, 2, 1), one(40, 2, 1), one(60, 2, 2)], 30, 100), 0, 'only samples inside the drag count');
+  assert.equal(heldMs([one(0, 3, null), one(20, 3, null)], 0, 100), 0, 'no frame on screen yet is not an older one');
+});
+
+test('the lag of a step is the wait for the first frame that shows its timestep or a later one, from when the step was due', () => {
+  const { figures, detail } = dragFigures(slowDrag());
+  // Due at 1150, 1300, 1450, 1600: answered at once. Due at 1750, 1900, 2050, 2200: all by timestep 8 at 2260, 510, 360, 210 and 60 later.
+  assert.equal(figures.lagMedianMs, 33);
+  assert.equal(figures.lagP95Ms, 510);
   assert.equal(detail.stepsNeverAnswered, 0);
 });
 
+test('a step whose timer ran late waits from when it was due: the blocked main thread is the viewer\'s cost', () => {
+  const late = slowDrag();
+  const onTime = slowDrag({ inputs: late.inputs.map((input) => ({ ...input, at: input.due })) });
+  assert.ok(dragFigures(late).figures.lagP95Ms >= dragFigures(onTime).figures.lagP95Ms);
+  // Step 5 was due at 1750 and dispatched at 1950: from the dispatch the wait for timestep 8 at 2260 is 310 ms, from the due time 510.
+  assert.equal(dragFigures(late).figures.lagP95Ms, 510);
+});
+
 test('a drag whose last frame never comes reports the wait as the figure and says so', () => {
-  const { figures, timedOut } = dragFigures(drag({ events: [paint(1010, 1, 2)] }));
+  const { figures, timedOut } = dragFigures(slowDrag({ events: slowDrag().events.slice(0, 5) }));
   assert.equal(figures.settleMs, 60000);
-  assert.deepEqual(timedOut, ['settleMs']);
+  assert.ok(timedOut.includes('settleMs'));
 });
 
 test('a drag with no frame at all has no lag', () => {
-  const { figures, timedOut } = dragFigures(drag({ events: [] }));
+  const { figures, timedOut } = dragFigures(slowDrag({ events: [] }));
   assert.equal(figures.lagMedianMs, 60000);
   assert.deepEqual(timedOut, ['settleMs', 'lagMs']);
 });
@@ -67,14 +136,31 @@ test('a jump that never reaches the target level reports the wait', () => {
 
 test('playback reports the steps, the rate between the first and last step, the wait for the first and the pauses', () => {
   const stats = { steps: 21, bufferingPauses: 2, bufferingMs: 1500, longestBufferingMs: 900, initialBufferMs: 2000, firstStepAt: 3000, lastStepAt: 8000 };
-  const { figures, detail } = playFigures({ stats, startAt: 1000, windowMs: 30000, normalLod: 2, movieLod: 3 });
+  const { figures, detail } = playFigures({ stats, startAt: 1000, endAt: 31000, stallOpenSince: null, windowMs: 30000, normalLod: 2, movieLod: 3 });
   assert.deepEqual(figures, { steps: 21, stepsPerSecond: 4, firstStepMs: 2000, pauses: 2, pausedMs: 1500 });
   assert.equal(detail.movieLod, 3);
 });
 
+test('a stall that is still open when the window ends is added to the time paused, which playback adds only when a pause ends', () => {
+  // It ran dry at 24000 and was waiting at 31000: one pause counted, no time for it in the statistics.
+  const dry = { steps: 8, bufferingPauses: 1, bufferingMs: 0, longestBufferingMs: 0, initialBufferMs: 500, firstStepAt: 1500, lastStepAt: 24000 };
+  const { figures, detail } = playFigures({ stats: dry, startAt: 1000, endAt: 31000, stallOpenSince: 24000, windowMs: 30000, normalLod: 2, movieLod: 2 });
+  assert.equal(figures.pauses, 1);
+  assert.equal(figures.pausedMs, 7000);
+  assert.equal(detail.stalledAtEndMs, 7000);
+  assert.equal(detail.longestPauseMs, 7000);
+  // With an earlier pause that ended, both count.
+  const both = playFigures({ stats: { ...dry, bufferingPauses: 2, bufferingMs: 1500, longestBufferingMs: 1500 }, startAt: 1000, endAt: 31000, stallOpenSince: 24000, windowMs: 30000, normalLod: 2, movieLod: 2 });
+  assert.equal(both.figures.pausedMs, 8500);
+  assert.equal(both.detail.longestPauseMs, 7000);
+  // A build that stalls for good no longer looks better than one that recovers.
+  const recovered = playFigures({ stats: { ...dry, bufferingMs: 3000, longestBufferingMs: 3000, lastStepAt: 30500 }, startAt: 1000, endAt: 31000, stallOpenSince: null, windowMs: 30000, normalLod: 2, movieLod: 2 });
+  assert.ok(figures.pausedMs > recovered.figures.pausedMs);
+});
+
 test('playback that never took a step reports a rate of 0 and the window as its wait', () => {
   const stats = { steps: 0, bufferingPauses: 0, bufferingMs: 0, longestBufferingMs: 0, initialBufferMs: null, firstStepAt: null, lastStepAt: null };
-  const { figures, timedOut } = playFigures({ stats, startAt: 1000, windowMs: 30000, normalLod: 2, movieLod: 2 });
+  const { figures, timedOut } = playFigures({ stats, startAt: 1000, endAt: 31000, stallOpenSince: null, windowMs: 30000, normalLod: 2, movieLod: 2 });
   assert.equal(figures.stepsPerSecond, 0);
   assert.equal(figures.firstStepMs, 30000);
   assert.deepEqual(timedOut, ['firstStepMs']);
@@ -120,8 +206,8 @@ test('a metric where higher is better is flagged the other way round', () => {
 
 test('a change inside the tolerance, or smaller than the floor in the metric\'s own unit, is not flagged', () => {
   assert.deepEqual(flags(compareLinks(runs(5, { head: { settleMs: (v) => v * 1.1 } }))), []);
-  // 3 to 6 held frames is twice as many, but 3 frames is not above the floor of 2.
-  assert.deepEqual(flags(compareLinks(runs(5, { base: { held: 1 }, head: { held: (v) => v * 2 } }))), [], 'a doubling from 1 held frame is under the floor of 2');
+  // 100 to 200 ms held is twice as long, but it is not above the floor of 100 ms.
+  assert.deepEqual(flags(compareLinks(runs(5, { base: { heldMs: 100 }, head: { heldMs: (v) => v * 1.9 } }))), [], 'under the floor of 100 ms');
 });
 
 test('a metric without a direction is shown and never flagged', () => {
@@ -129,15 +215,15 @@ test('a metric without a direction is shown and never flagged', () => {
 });
 
 test('a head with something where the base had nothing is flagged beyond the floor, and has no ratio', () => {
-  const result = compareLinks(runs(5, { base: { held: 0 }, head: { held: () => 10 } }));
-  const row = result.groups[0].rows.find((candidate) => candidate.key === 'held');
+  const result = compareLinks(runs(5, { base: { heldMs: 0 }, head: { heldMs: () => 500 } }));
+  const row = result.groups[0].rows.find((candidate) => candidate.key === 'heldMs');
   assert.equal(row.verdict, 'worse');
   assert.equal(row.ratio, null);
-  assert.match(linkSummaryMarkdown(result), /\| Held: no whole frame ready \| 0 \(0 to 0\) \| 10 \(10 to 10\) \| n\/a \| \*\*worse\*\* \|/);
+  assert.match(linkSummaryMarkdown(result), /\| Time on an older timestep than asked for \| 0\.0 ms \(0\.0 ms to 0\.0 ms\) \| 500 ms \(500 ms to 500 ms\) \| n\/a \| \*\*worse\*\* \|/);
 });
 
 test('zero on both sides is a ratio of 1', () => {
-  const row = compareLinks(runs(5, { base: { held: 0 }, head: { held: () => 0 } })).groups[0].rows.find((candidate) => candidate.key === 'held');
+  const row = compareLinks(runs(5, { base: { heldMs: 0 }, head: { heldMs: () => 0 } })).groups[0].rows.find((candidate) => candidate.key === 'heldMs');
   assert.equal(row.ratio, 1);
 });
 

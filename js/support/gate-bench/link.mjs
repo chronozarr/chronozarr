@@ -17,7 +17,7 @@
 //   3. The scenario (link-compare.js: SCENARIOS; link-scenarios.js drives the page): a drag of the timeline over the whole
 //      time axis at 40 or 150 ms per step, a press on the timeline half the axis away, or Play at 4 or 30 steps/s for 30 s.
 //
-// Its figures: for a drag, the frames it drew at the target level and at a coarser one, the holds, the timesteps never shown,
+// Its figures: for a drag, the frames it drew at the target level and at a coarser one (a repaint of the frame on screen is not one), the time the frame on screen was older than the timestep asked for, the timesteps never shown,
 // the delay from each input to a frame that shows it and the time from the release to the frame at the target level; for a
 // jump, the time to the first whole frame of the timestep at any level and at the target level; for playback, the steps it
 // took, the rate it kept, the wait before the first step and the pauses to buffer; for every scenario the requests and the
@@ -127,6 +127,8 @@ async function measure({ variant, pair, link, scenario, appUrl, storeUrl, dataOr
       browser: await page.evaluate(rendererInfo),
       figures,
       timedOut,
+      // What the page returned, for reading the figures again with other definitions.
+      raw,
       detail: { ...detail, steps, open: { openMs: opened.openMs, coarseMs: opened.coarseMs, firstPaintMs: opened.firstPaintMs } },
       errors,
       ...(guards && { frameInterval: { before: frameBefore, after: frameAfter } }),
