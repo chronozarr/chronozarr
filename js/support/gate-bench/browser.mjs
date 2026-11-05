@@ -22,6 +22,31 @@ export function rendererInfo() {
   return { userAgent: navigator.userAgent, renderer: gl ? gl.getParameter(debug ? debug.UNMASKED_RENDERER_WEBGL : gl.RENDERER) : null };
 }
 
+/** In the page: the median time between `frames` animation frames, in ms. */
+export function frameIntervalMedian(frames) {
+  return new Promise((resolve) => {
+    const gaps = [];
+    let last = null;
+    const tick = (now) => {
+      if (last !== null) gaps.push(now - last);
+      last = now;
+      if (gaps.length < frames) requestAnimationFrame(tick);
+      else resolve([...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)]);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+/** The median animation frame interval of `browser`, in ms, on a blank page of its own: the viewer's page is busy with its own work. */
+export async function measureFrameInterval(browser) {
+  const page = await browser.newPage();
+  try {
+    return await withTimeout(page.evaluate(frameIntervalMedian, 60), 'measuring the animation frame interval', 15_000);
+  } finally {
+    await page.close();
+  }
+}
+
 export function withTimeout(promise, what, ms) {
   let timer;
   const deadline = new Promise((_, reject) => {

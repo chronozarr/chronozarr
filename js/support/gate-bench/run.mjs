@@ -2,7 +2,7 @@
 // second is slower (compare.js). The workflow .github/workflows/speed-gates.yml runs it on pull requests that change js/.
 //
 //   node support/gate-bench/run.mjs --base <viewer root> --head <viewer root> --store <store dir>
-//        [--pairs 5] [--cache default|compact] [--gpu swiftshader|metal] [--out results.json] [--summary summary.md]
+//        [--pairs 5] [--cache default|compact] [--gpu swiftshader|metal] [--ignore-guards] [--out results.json] [--summary summary.md]
 //
 // A viewer root holds demo/ as support/build-viewer.mjs writes it; the store is the one store.mjs writes. Each run is a new
 // headless Chromium that opens the store in the viewer and then measures:
@@ -26,6 +26,9 @@
 // The builds alternate (base then head, then head then base, ...) after one warm-up pair that is not counted, so that the
 // load of a shared runner falls on both, and each pair is compared on its own.
 //
+// A local run refuses to start on a machine whose load or power source would make the timings noise, and discards a run whose
+// browser was not drawing at 60 Hz (guards.js); `--ignore-guards` measures anyway. CI is not guarded.
+//
 // --gpu swiftshader (the default) draws on the CPU, as the browser tests and a runner without a GPU do; --gpu metal draws on
 // the GPU of a Mac, for the gates' own figures on a quiet machine.
 //
@@ -41,9 +44,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { startStaticServer } from '../static-server.js';
-import { BROWSER_ARGS, VIEWPORT, launchBrowser, rendererInfo, withTimeout } from './browser.mjs';
+import { BROWSER_ARGS, VIEWPORT, launchBrowser, measureFrameInterval, rendererInfo, withTimeout } from './browser.mjs';
 import { COMPACT_METRICS, METRICS, compareBuilds, summaryMarkdown } from './compare.js';
 import { firstVisit } from './first-visit.mjs';
+import { LOAD_LIMIT, RAF_RANGE_MS, guardsEnabled, measureGuarded, readMachine, refuseNoisyMachine } from './guards.js';
 
 // Five cold opens per run: with three, one slow open moved a run's median by up to 59 % on GitHub's runners.
 const COLD_RUNS = 5;
@@ -66,16 +70,19 @@ const { values: args } = parseArgs({
     pairs: { type: 'string', default: '5' },
     cache: { type: 'string', default: 'default' },
     gpu: { type: 'string', default: 'swiftshader' },
+    'ignore-guards': { type: 'boolean', default: false },
     out: { type: 'string' },
     summary: { type: 'string' },
   },
 });
 if (!args.base || !args.head || !args.store || !BROWSER_ARGS[args.gpu] || !['default', 'compact'].includes(args.cache)) {
-  console.error('Usage: node support/gate-bench/run.mjs --base <viewer root> --head <viewer root> --store <store dir> [--pairs 5] [--cache default|compact] [--gpu swiftshader|metal] [--out results.json] [--summary summary.md]');
+  console.error('Usage: node support/gate-bench/run.mjs --base <viewer root> --head <viewer root> --store <store dir> [--pairs 5] [--cache default|compact] [--gpu swiftshader|metal] [--ignore-guards] [--out results.json] [--summary summary.md]');
   process.exit(2);
 }
 const pairs = Number(args.pairs);
 const compact = args.cache === 'compact';
+const guards = guardsEnabled({ ignore: args['ignore-guards'] });
+if (guards) refuseNoisyMachine(readMachine());
 
 const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 const load = () => os.loadavg()[0].toFixed(1);
@@ -172,6 +179,7 @@ async function measure({ variant, pair, appUrl, storeUrl, data }) {
   const browser = await launchBrowser(args.gpu);
   const errors = [];
   try {
+    const frameBefore = guards ? await measureFrameInterval(browser) : null;
     const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 1, serviceWorkers: 'block' });
     page.on('console', (message) => message.type() === 'error' && errors.push(`console.error: ${message.text()}`));
     page.on('pageerror', (error) => errors.push(`uncaught: ${error.stack || error.message}`));
@@ -194,6 +202,7 @@ async function measure({ variant, pair, appUrl, storeUrl, data }) {
     const serverBefore = data.requests.length;
     const warm = await withTimeout(page.evaluate(warmLoops, { switches: SWITCHES, pauseMs: STEP_PAUSE_MS, settleMs: SETTLE_MS }), 'the warm loops', RUN_TIMEOUT_MS);
     const serverRequests = data.requests.length - serverBefore;
+    const frameAfter = guards ? await measureFrameInterval(browser) : null;
     const browserInfo = await page.evaluate(rendererInfo);
     const frames = [...warm.stepping, ...warm.jumping];
     const wrongView = frames.filter((frame) => frame.lod !== 0 || frame.cells !== CELLS);
@@ -224,6 +233,7 @@ async function measure({ variant, pair, appUrl, storeUrl, data }) {
       },
       coldOpens,
       ...(visit && { firstVisit: visit }),
+      ...(guards && { frameInterval: { before: frameBefore, after: frameAfter } }),
     };
   } finally {
     await browser.close();
@@ -238,13 +248,15 @@ const data = await startStaticServer(path.resolve(args.store));
 const apps = { base: await startStaticServer(path.resolve(args.base)), head: await startStaticServer(path.resolve(args.head)) };
 const storeUrl = `${data.url}/`;
 const records = [];
+const discarded = [];
 const startedAt = new Date().toISOString();
 const loadBefore = load();
 try {
   for (let pair = -1; pair < pairs; pair++) {
     const order = pair % 2 === 0 ? ['base', 'head'] : ['head', 'base'];
     for (const variant of order) {
-      const record = await measure({ variant, pair, appUrl: apps[variant].url, storeUrl, data });
+      const label = `${pair < 0 ? 'warm-up' : `pair ${pair + 1}`} ${variant} run`;
+      const record = await measureGuarded(() => measure({ variant, pair, appUrl: apps[variant].url, storeUrl, data }), { enabled: guards, label, discarded });
       console.log(`${pair < 0 ? 'warm-up' : `pair ${pair + 1}/${pairs}`} ${variant}: ${describe(record)}`);
       if (pair >= 0) records.push(record);
     }
@@ -263,12 +275,13 @@ const environment = [
       ? `, held packed: cap ${COMPACT_TOTAL_BYTES / 1024 ** 2} MiB, level 0 of ${loaded.timesteps} timesteps ${Math.round(loaded.loopBytes / 1024 ** 2)} MiB unpacked, packed to ${Math.round(loaded.compactRatio * 100)} % of it`
       : ', decode of 80 chunks'
   }`,
+  ...(guards ? [`Guards: a load of ${LOAD_LIMIT} or less and no battery power at the start; the median animation frame interval before and after each run in ${RAF_RANGE_MS[0]} to ${RAF_RANGE_MS[1]} ms (${discarded.length} runs discarded)`] : []),
 ];
 const summary = summaryMarkdown(result, { environment, ...(compact && { title: 'Speed gates, compact cache: head against base' }) });
 console.log(`\n${summary}`);
 if (args.out) {
   await mkdir(path.dirname(path.resolve(args.out)), { recursive: true });
-  await writeFile(args.out, `${JSON.stringify({ startedAt, pairs, environment, result, records }, null, 1)}\n`);
+  await writeFile(args.out, `${JSON.stringify({ startedAt, pairs, environment, result, records, discarded }, null, 1)}\n`);
 }
 if (args.summary) await appendFile(args.summary, summary);
 process.exitCode = result.failures.length ? 1 : 0;

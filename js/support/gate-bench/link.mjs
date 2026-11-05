@@ -4,7 +4,7 @@
 //
 //   node support/gate-bench/link.mjs --base <viewer root> --head <viewer root> --store <long store dir>
 //        [--pairs 3] [--links 50mbit-40ms,8mbit-80ms] [--scenarios drag40,drag150,jump,play4,play30] [--play-seconds 30]
-//        [--gpu metal|swiftshader] [--out results.json] [--summary summary.md]
+//        [--gpu metal|swiftshader] [--ignore-guards] [--out results.json] [--summary summary.md]
 //
 // A viewer root holds demo/ as support/build-viewer.mjs writes it; the store is one that `store.mjs <dir> --times 48` writes,
 // with enough timesteps for a drag, a jump and a movie to need more than the viewer holds. Both builds and the store are served
@@ -26,6 +26,9 @@
 // to a busy machine than the gates, but not insensitive: look at the load in the log, and run --base and --head on the same
 // build once to see the noise of a metric before reading a difference.
 //
+// A run refuses to start on a machine whose load or power source would make the timings noise, and discards a run whose
+// browser was not drawing at 60 Hz (guards.js); `--ignore-guards` measures anyway.
+//
 // Not a CI job: five scenarios on two links, three pairs of two builds, is about 25 minutes (CONTRIBUTING.md).
 
 import { execFileSync } from 'node:child_process';
@@ -35,8 +38,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { startStaticServer } from '../static-server.js';
-import { BROWSER_ARGS, LOOPBACK_ONLY, VIEWPORT, launchBrowser, rendererInfo, withTimeout } from './browser.mjs';
+import { BROWSER_ARGS, LOOPBACK_ONLY, VIEWPORT, launchBrowser, measureFrameInterval, rendererInfo, withTimeout } from './browser.mjs';
 import { attachNetworkLog, setLink } from './cdp.js';
+import { LOAD_LIMIT, RAF_RANGE_MS, guardsEnabled, measureGuarded, readMachine, refuseNoisyMachine } from './guards.js';
 import { LINKS, SCENARIOS, compareLinks, linkSummaryMarkdown, runFigures } from './link-compare.js';
 import { runScenario } from './link-scenarios.js';
 
@@ -57,6 +61,7 @@ const { values: args } = parseArgs({
     scenarios: { type: 'string', default: Object.keys(SCENARIOS).join(',') },
     'play-seconds': { type: 'string', default: '30' },
     gpu: { type: 'string', default: 'metal' },
+    'ignore-guards': { type: 'boolean', default: false },
     out: { type: 'string' },
     summary: { type: 'string' },
   },
@@ -66,9 +71,11 @@ const scenarios = args.scenarios.split(',');
 const pairs = Number(args.pairs);
 const playMs = Number(args['play-seconds']) * 1000;
 if (!args.base || !args.head || !args.store || !BROWSER_ARGS[args.gpu] || !(pairs >= 1) || !(playMs > 0) || links.some((link) => !LINKS[link]) || scenarios.some((scenario) => !SCENARIOS[scenario])) {
-  console.error(`Usage: node support/gate-bench/link.mjs --base <viewer root> --head <viewer root> --store <long store dir> [--pairs 3] [--links ${Object.keys(LINKS)}] [--scenarios ${Object.keys(SCENARIOS)}] [--play-seconds 30] [--gpu metal|swiftshader] [--out results.json] [--summary summary.md]`);
+  console.error(`Usage: node support/gate-bench/link.mjs --base <viewer root> --head <viewer root> --store <long store dir> [--pairs 3] [--links ${Object.keys(LINKS)}] [--scenarios ${Object.keys(SCENARIOS)}] [--play-seconds 30] [--gpu metal|swiftshader] [--ignore-guards] [--out results.json] [--summary summary.md]`);
   process.exit(2);
 }
+const guards = guardsEnabled({ ignore: args['ignore-guards'] });
+if (guards) refuseNoisyMachine(readMachine());
 
 const load = () => os.loadavg()[0].toFixed(1);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -90,6 +97,7 @@ async function measure({ variant, pair, link, scenario, appUrl, storeUrl, dataOr
   const browser = await launchBrowser(args.gpu, [LOOPBACK_ONLY]);
   const errors = [];
   try {
+    const frameBefore = guards ? await measureFrameInterval(browser) : null;
     const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1, serviceWorkers: 'block', ignoreHTTPSErrors: true });
     const page = await context.newPage();
     page.on('console', (message) => message.type() === 'error' && errors.push(`console.error: ${message.text()}`));
@@ -108,6 +116,7 @@ async function measure({ variant, pair, link, scenario, appUrl, storeUrl, dataOr
     const raw = await withTimeout(page.evaluate(runScenario, { ...SCENARIOS[scenario], capMs: SETTLE_CAP_MS, windowMs: playMs }), `the scenario ${scenario}`, RUN_TIMEOUT_MS);
     await sleep(QUIET_MS);
     const after = log.snapshot();
+    const frameAfter = guards ? await measureFrameInterval(browser) : null;
     const { figures, timedOut, detail } = runFigures(scenario, raw, { requests: after.requests - before.requests, bytes: after.bytes - before.bytes, failed: after.failed - before.failed });
     return {
       variant,
@@ -120,6 +129,7 @@ async function measure({ variant, pair, link, scenario, appUrl, storeUrl, dataOr
       timedOut,
       detail: { ...detail, steps, open: { openMs: opened.openMs, coarseMs: opened.coarseMs, firstPaintMs: opened.firstPaintMs } },
       errors,
+      ...(guards && { frameInterval: { before: frameBefore, after: frameAfter } }),
     };
   } finally {
     await browser.close();
@@ -133,6 +143,7 @@ const data = await startStaticServer(path.resolve(args.store), 0, { tls });
 const apps = { base: await startStaticServer(path.resolve(args.base), 0, { tls }), head: await startStaticServer(path.resolve(args.head), 0, { tls }) };
 const storeUrl = `${data.url}/`;
 const records = [];
+const discarded = [];
 const startedAt = new Date().toISOString();
 const loadBefore = load();
 const groups = links.flatMap((link) => scenarios.map((scenario) => ({ link, scenario })));
@@ -140,7 +151,8 @@ for (let pair = 0; pair < pairs; pair++) {
   for (const [index, { link, scenario }] of groups.entries()) {
     const order = (pair + index) % 2 === 0 ? ['base', 'head'] : ['head', 'base'];
     for (const variant of order) {
-      const record = await measure({ variant, pair, link, scenario, appUrl: apps[variant].url, storeUrl, dataOrigin: data.url });
+      const label = `pair ${pair + 1} ${link} ${scenario} ${variant} run`;
+      const record = await measureGuarded(() => measure({ variant, pair, link, scenario, appUrl: apps[variant].url, storeUrl, dataOrigin: data.url }), { enabled: guards, label, discarded });
       console.log(`pair ${pair + 1}/${pairs} ${link} ${scenario} ${variant}: ${describe(record)}`);
       records.push(record);
     }
@@ -153,12 +165,13 @@ const environment = [
   `${browser.userAgent.match(/(?:Headless)?Chrome\/[\d.]+/)?.[0] ?? browser.userAgent}, WebGL renderer: ${browser.renderer}`,
   `${os.cpus().length} × ${os.cpus()[0]?.model ?? 'unknown CPU'}, ${(os.totalmem() / 1024 ** 3).toFixed(0)} GB; 1-minute load ${loadBefore} at the start, ${load()} at the end`,
   `Viewport ${VIEWPORT.width} × ${VIEWPORT.height} at pixel ratio 1; a store of ${records[0].detail.steps} timesteps over HTTP/2; per run the store is opened unthrottled, the link is throttled, the viewer idles ${IDLE_MS / 1000} s, then the scenario (${playMs / 1000} s of playback, at most ${SETTLE_CAP_MS / 1000} s for the last frame of a drag or a jump)`,
+  ...(guards ? [`Guards: a load of ${LOAD_LIMIT} or less and no battery power at the start; the median animation frame interval before and after each run in ${RAF_RANGE_MS[0]} to ${RAF_RANGE_MS[1]} ms (${discarded.length} runs discarded)`] : []),
 ];
 const summary = linkSummaryMarkdown(result, { environment, records });
 console.log(`\n${summary}`);
 if (args.out) {
   await mkdir(path.dirname(path.resolve(args.out)), { recursive: true });
-  await writeFile(args.out, `${JSON.stringify({ startedAt, pairs, links, scenarios, environment, result, records }, null, 1)}\n`);
+  await writeFile(args.out, `${JSON.stringify({ startedAt, pairs, links, scenarios, environment, result, records, discarded }, null, 1)}\n`);
 }
 if (args.summary) await appendFile(args.summary, summary);
 // An HTTP/2 server's close() waits for the browsers' sessions to end; exiting is what stops the three.
