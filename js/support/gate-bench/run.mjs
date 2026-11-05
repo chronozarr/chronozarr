@@ -125,6 +125,7 @@ async function loadLevel0(cache) {
     cells: level.gridRows * level.gridCols,
     loopBytes: reads.length * level.chunkBytes,
     decodedBytes: store.stats.cache.decodedBytes,
+    evictions: store.stats.cache.evictions,
     compact: store.compactCacheEnabled,
     compactRatio: store.compactCacheRatio,
   };
@@ -168,6 +169,12 @@ async function warmLoops({ switches, pauseMs, settleMs }) {
   return { stepping, jumping, readerRequests: network.requests - before.requests, readerBytes: network.bytes - before.bytes, evictions: store.stats.cache.evictions - before.evictions };
 }
 
+/** A packed loop that does not fit its cap evicts, and the warm switches then fetch again: say that the cap is why, not the network. */
+function evictionError(when, count, { decodedBytes, loopBytes, compactRatio }) {
+  const MiB = (bytes) => Math.round(bytes / 1024 ** 2);
+  return new Error(`the compact pass evicted ${count} chunks ${when}: its cap is ${COMPACT_TOTAL_BYTES / 1024 ** 2} MiB and the loop of ${MiB(loopBytes)} MiB packs to ${Math.round(compactRatio * 100)} % (${MiB(decodedBytes)} MiB resident). Either the packing regressed or the cap needs raising (COMPACT_TOTAL_BYTES); the warm switches would fetch because of it, not because of the network`);
+}
+
 async function measure({ variant, pair, appUrl, storeUrl, data }) {
   // Informational: a visit that fails is logged and kept in the record, and does not stop the gates. The compact pass and the warm-up pair skip it.
   const visit =
@@ -199,10 +206,15 @@ async function measure({ variant, pair, appUrl, storeUrl, data }) {
       coldOpens = bench.coldOpenConsolidated;
     }
     const loaded = await withTimeout(page.evaluate(loadLevel0, compact ? { totalBytes: COMPACT_TOTAL_BYTES } : { maxCacheBytes: WARM_CACHE_BYTES }), 'loading level 0', RUN_TIMEOUT_MS);
-    if (loaded.compact !== compact) throw new Error(`the ${args.cache} pass held its cache ${loaded.compact ? 'packed' : 'unpacked'}: the cap of the pass and the size of the store no longer agree`);
+    // The default pass measures whatever the cache policy does with its 2 GiB cap: a change to the policy that packs the gate store
+    // is a finding for the summary, not a reason to stop a CI job. The compact pass exists to measure the packed path, and stops if it did not.
+    if (compact && !loaded.compact) throw new Error(`the compact pass held its cache unpacked: the cap (${COMPACT_TOTAL_BYTES / 1024 ** 2} MiB) and the size of the store no longer agree`);
+    if (!compact && loaded.compact) console.warn(`the ${variant} build of pair ${pair + 1} held the default pass's cache packed (cap ${WARM_CACHE_BYTES / 1024 ** 3} GiB): this run measured the compact path`);
+    if (compact && loaded.evictions) throw evictionError('while loading level 0', loaded.evictions, loaded);
     const serverBefore = data.requests.length;
     const warm = await withTimeout(page.evaluate(warmLoops, { switches: SWITCHES, pauseMs: STEP_PAUSE_MS, settleMs: SETTLE_MS }), 'the warm loops', RUN_TIMEOUT_MS);
     const serverRequests = data.requests.length - serverBefore;
+    if (compact && warm.evictions) throw evictionError('during the warm switches', warm.evictions, loaded);
     const frameAfter = guards ? await measureFrameInterval(browser) : null;
     const browserInfo = await page.evaluate(rendererInfo);
     const frames = [...warm.stepping, ...warm.jumping];
@@ -277,6 +289,7 @@ const environment = [
       : ', decode of 80 chunks'
   }`,
   guardsSummary({ mode: guardMode, cores: os.cpus().length, discarded: discarded.length }),
+  ...(!compact && records.some((record) => record.loaded.compact) ? [`Warning: ${records.filter((record) => record.loaded.compact).length} runs held the default pass's cache packed, so they measured the compact path`] : []),
 ];
 const summary = summaryMarkdown(result, { environment, ...(compact && { title: 'Speed gates, compact cache: head against base' }) });
 console.log(`\n${summary}`);
