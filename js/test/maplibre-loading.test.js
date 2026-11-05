@@ -96,14 +96,14 @@ function viewMatrix({ left = 0, right = 1, top = 0, bottom = 1 }, width, height 
 
 /**
  * A layer on a map with a stub GL. The map shows the whole store at `view.zoom`; a test moves it by setting
- * `view.matrix`. With `hang`, every chunk request stays pending until it is aborted; `delayMs` is the latency of each.
+ * `view.matrix`, and may set `view.repaint` to draw when the layer asks for a frame. With `hang`, every chunk request stays pending until it is aborted; `delayMs` is the latency of each.
  */
 async function openLayer(t, { cells = 2, width = cells * CHUNK, height = cells * CHUNK, levels = 1, nTime = 6, mask = false, hang = false, delayMs = 0, layerOptions = {}, storeOptions = {} } = {}) {
   const memory = buildSyntheticStore({ nTime, nBand: 1, height, width, chunk: CHUNK, sharded: false, nLevels: levels, mask, dtype: 'float32',
     crs: 'EPSG:4326', transform: [RES, 0, 0, 0, -RES, height * RES], bandObjects: [{ name: 'value', scale: 1, offset: 0 }],
     values: (time, band, y, x, lod) => chunkValue(lod, time, Math.floor(y / CHUNK), Math.floor(x / CHUNK)) });
   const view = { zoom: 13, matrix: viewMatrix({}, width, height) };
-  const map = { triggerRepaint() {}, getLayer() { return false; }, getZoom() { return view.zoom; } };
+  const map = { triggerRepaint() { view.repaint?.(); }, getLayer() { return false; }, getZoom() { return view.zoom; } };
   const layer = new ChronozarrLayer({ url: 'memory://maplibre-loading', product: 'band', range: [0, 1], ...layerOptions, storeOptions: { store: memory, workers: 0, ...storeOptions } });
   t.after(() => layer.remove());
   const gl = stubGl();
@@ -252,6 +252,36 @@ test('a coarser load stays while a visible cell stands in on it, and goes once n
   const requests = chunkRequests(memory);
   assert.deepEqual(idsOf(requests.filter((request) => request.aborted)), ids(1, [0, 1, 2], [0], 0), 'level-1 column 0 lies under no visible cell');
   assert.deepEqual(idsOf(requests.filter((request) => !request.aborted)), [...ids(1, [0, 1, 2], [1, 2], 0), ...ids(0, ALL, [3, 4, 5], 0)].sort());
+});
+
+test('the grace ends in a frame of its own, so a map that draws only when asked still cancels the stale loads', async (t) => {
+  const { view, frame, memory, width, height } = await openLayer(t, { cells: 6, levels: 2, nTime: 2, hang: true, storeOptions: { maxRequests: 8 } });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const advance = skewClock(t);
+  let scheduled = false;
+  view.repaint = () => {
+    if (scheduled) return;
+    scheduled = true;
+    setImmediate(() => {
+      scheduled = false;
+      frame();
+    });
+  };
+  view.matrix = viewMatrix({ left: 0, right: 0.4 }, width, height); // columns 0 to 2: the limiter admits 8 of 18 loads
+  frame();
+  await flush();
+  view.matrix = viewMatrix({ left: 0.6, right: 1 }, width, height); // columns 3 to 5; the last frame the map draws on its own
+  frame();
+  await flush();
+  assert.equal(chunkRequests(memory).length, 8, 'the old loads still hold the request slots');
+  advance(PAST_GRACE_MS);
+  t.mock.timers.tick(PAST_GRACE_MS);
+  await flush();
+  await flush();
+  const requests = chunkRequests(memory);
+  assert.ok(requests.slice(0, 8).every((request) => request.aborted), 'the loads of columns 0 to 2 were cancelled');
+  assert.equal(requests.length, 16, 'the freed request slots went to the new view');
+  assert.ok(requests.slice(8).every((request) => !request.aborted && /^0\/\d\/[345]\/0$/.test(request.id)), 'columns 3 to 5');
 });
 
 test('a zoom out cancels the loads of the finer level, so the loads of the new level start', async (t) => {

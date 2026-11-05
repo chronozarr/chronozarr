@@ -137,6 +137,7 @@ export class ChronozarrLayer {
   #lastView = { lod: 0, cells: [] };
   #reported = new Set();
   #prefetchTimer = null;
+  #graceTimer = null;
   #prefetchController = null;
   #prefetchedAt = 0;
   #seeded = false;
@@ -544,6 +545,7 @@ export class ChronozarrLayer {
     if (this.#disposed) return;
     this.#disposed = true;
     clearTimeout(this.#prefetchTimer);
+    clearTimeout(this.#graceTimer);
     this.#prefetchController?.abort();
     this.#controller.abort();
     this.#openController.abort();
@@ -1075,9 +1077,10 @@ export class ChronozarrLayer {
   /**
    * Cancels the loads that nothing in view needs, so the loads of the cells in view do not queue behind them. A load is
    * needed by a visible cell at the current level and timestep, or by a coarser level that stands in for one. It is
-   * cancelled once it has been unneeded for STALE_LOAD_GRACE_MS, measured between frames (they keep coming while loads
-   * land), so a pan back or a wobble across a level boundary keeps it. The prefetch is cancelled with it: the reader keeps a
-   * request that a prefetch owns, and that plan was made for a view that is gone; the next 'ready' plans it again.
+   * cancelled once it has been unneeded for STALE_LOAD_GRACE_MS, measured between frames, so a pan back or a wobble across a
+   * level boundary keeps it. No frame follows a view that has settled, so one timer asks for a frame when the first grace
+   * ends. The prefetch is cancelled with it: the reader keeps a request that a prefetch owns, and that plan was made for a
+   * view that is gone; the next 'ready' plans it again.
    */
   #cancelStale(lod, visible, t) {
     if (this.#pending.size === 0) return;
@@ -1089,6 +1092,7 @@ export class ChronozarrLayer {
         wanted.add(chunkId(level, Math.floor(cell.row / scale), Math.floor(cell.col / scale), t));
       }
     }
+    let soonest = Infinity;
     for (const [key, load] of this.#pending) {
       if (!load) continue;
       if (wanted.has(key)) {
@@ -1096,9 +1100,20 @@ export class ChronozarrLayer {
         continue;
       }
       load.unwantedSince ??= now;
-      if (now - load.unwantedSince < STALE_LOAD_GRACE_MS) continue;
+      const remaining = STALE_LOAD_GRACE_MS - (now - load.unwantedSince);
+      if (remaining > 0) {
+        soonest = Math.min(soonest, remaining);
+        continue;
+      }
       load.controller.abort();
       this.#prefetchController?.abort();
+    }
+    // A few ms late, so the clock has passed the end of the grace when the frame reads it.
+    if (soonest < Infinity && this.#graceTimer === null) {
+      this.#graceTimer = setTimeout(() => {
+        this.#graceTimer = null;
+        this.#repaint();
+      }, soonest + 10);
     }
   }
 
