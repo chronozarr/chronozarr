@@ -169,7 +169,7 @@ Each cell is a mesh of 8 x 8 quads (`meshDivisions`). A store with much larger c
 
 ### Loading order
 
-While a cell loads, the layer paints the last timestep shown there. If there is none, it paints the same area from a coarser level that is already loaded. The first view fetches the cells of the coarsest level first. It fetches the level that the zoom asks for after them. A measured example is in [evidence.md](../../docs/evidence.md#maplibre-layer).
+While a cell loads, the layer paints the last timestep shown there. If there is none, it paints the same area from a coarser level that is already loaded. The first view fetches the cells of the coarsest level first. It fetches the level that the zoom asks for after them. A pan, a zoom or a time change cancels the loads of cells that are no longer in view, so the cells of the new view do not queue behind them. A measured example is in [evidence.md](../../docs/evidence.md#maplibre-layer).
 
 ## Checking alignment
 

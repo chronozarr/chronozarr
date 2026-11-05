@@ -125,7 +125,7 @@ export class ChronozarrLayer {
   #bandInfo = null;
   #frame = 0;
   #state = 'loading';
-  #pending = new Set();
+  #pending = new Map(); // loads in flight by key: a cell's load maps to its AbortController, the sample recovery to null
   #failed = new Map();
   #shown = new Map();
   #controller = new AbortController();
@@ -713,6 +713,7 @@ export class ChronozarrLayer {
       const stand = this.#standIn(cell, lod, t);
       if (stand) fallback.push(stand);
     }
+    this.#cancelStale(lod, visible, t);
     fallback.sort((a, b) => b.lod - a.lod);
 
     const view = this.#productView();
@@ -939,7 +940,7 @@ export class ChronozarrLayer {
     if (failedAt !== undefined && performance.now() - failedAt < FAILURE_COOLDOWN_MS) return;
     const { signal } = this.#controller;
     const store = this.#store;
-    this.#pending.add('samples');
+    this.#pending.set('samples', null);
     const collect = async () => {
       const samples = [];
       for (const { row, col, extent } of items) {
@@ -1018,10 +1019,11 @@ export class ChronozarrLayer {
     const failedAt = this.#failed.get(key);
     if (failedAt !== undefined && performance.now() - failedAt < FAILURE_COOLDOWN_MS) return;
     const store = this.#store;
-    const { signal } = this.#controller;
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, this.#controller.signal]);
     const reads = [store.getRaw(lod, row, col, t, { signal })];
     if (store.hasMask) reads.push(store.getMask(lod, row, col, t, { signal }));
-    this.#pending.add(key);
+    this.#pending.set(key, controller);
     Promise.all(reads).then(
       () => {
         this.#pending.delete(key);
@@ -1039,6 +1041,18 @@ export class ChronozarrLayer {
         this.#repaint();
       },
     );
+  }
+
+  /**
+   * Cancels the loads of cells that left the view, and of other timesteps, so the loads of the cells in view do not queue
+   * behind them. A load that is still wanted keeps going, and the reader keeps the requests that a prefetch owns.
+   */
+  #cancelStale(lod, visible, t) {
+    if (this.#pending.size === 0) return;
+    const wanted = new Set(visible.map((cell) => chunkId(lod, cell.row, cell.col, t)));
+    for (const [key, controller] of this.#pending) {
+      if (controller && !wanted.has(key)) controller.abort();
+    }
   }
 
   /** Once the view has settled, let the reader fill its caches around t for the visible cells (store.prefetch). */
