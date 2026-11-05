@@ -6,9 +6,17 @@ import { openViewer, waitForPaintedTime } from './viewer-helpers.js';
 
 test.use({ viewport: { width: 1280, height: 720 } });
 
-/** Stop animation frames from running: the page keeps them queued until `releaseFrames`. Whatever happens in between happens in the calls of the test. */
+/**
+ * Stop animation frames from running: the page keeps them queued until `releaseFrames`. Whatever happens in between happens
+ * in the calls of the test. A frame that the viewer had asked for already would still run, and would stand in for the one a
+ * jump asks for (requestRender asks for one at a time), so the scrub timer is ended and two frames are let through first.
+ */
 const holdFrames = (page) =>
-  page.evaluate(() => {
+  page.evaluate(async () => {
+    window.chronozarr.viewer.endScrub();
+    const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    await nextFrame();
+    await nextFrame();
     window.heldFrames = [];
     window.realRequestAnimationFrame = window.requestAnimationFrame;
     window.requestAnimationFrame = (callback) => window.heldFrames.push(callback);
@@ -20,27 +28,32 @@ const releaseFrames = (page) =>
     for (const callback of window.heldFrames.splice(0)) window.requestAnimationFrame(callback);
   });
 
+/** Let the requests that a test held go to the server. The page may have given up on one meanwhile (a jump cancels the prefetch): that one cannot be continued. */
+const releaseRoutes = (routes) => Promise.all(routes.map((route) => route.continue().catch(() => {})));
+
 test('a jump in time asks for its chunks in the call, not on the next animation frame', async ({ page, servers, storeUrl }) => {
   const url = await storeUrl('beyond_idle');
-  // The last timestep is not answered until the end of the test, so it cannot be in memory however long the idle prefetch has run.
+  // The last timestep is not answered until the end of the test, so it cannot be in memory whatever the prefetch does.
   const held = [];
   await page.route(`${servers.dataUrl}/beyond_idle/**/c/9/**`, (route) => {
     held.push(route);
   });
   await openViewer(page, servers, url);
 
-  expect(held.length, 'nothing has asked for the last timestep yet').toBe(0);
+  // Nothing else in the page runs between the call and the read of what it did, so no animation frame comes in between.
+  const afterCall = await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    const events = [];
+    viewer.probe = (event) => events.push(event);
+    const painted = viewer.frameStats.painted;
+    viewer.goToTime(9);
+    return { loads: events.filter((event) => event.type === 'load-start').map((event) => event.t), painted: viewer.frameStats.painted - painted, shown: viewer.shownFrame.t };
+  });
+  expect(afterCall.loads, 'the call asked for the cells of timestep 9').toEqual([9]);
+  expect(afterCall.painted, 'and drew nothing').toBe(0);
+  expect(afterCall.shown, 'the canvas still shows the first timestep').toBe(0);
 
-  await holdFrames(page);
-  const before = await page.evaluate(() => window.chronozarr.viewer.frameStats.painted);
-  await page.evaluate(() => window.chronozarr.viewer.goToTime(9));
-
-  await expect.poll(() => held.length, { message: 'the chunks of the target timestep were requested while no animation frame ran' }).toBeGreaterThan(0);
-  const after = await page.evaluate(() => ({ painted: window.chronozarr.viewer.frameStats.painted, shown: window.chronozarr.viewer.shownFrame }));
-  expect(after.painted, 'nothing was drawn in the meantime').toBe(before);
-  expect(after.shown.t, 'the canvas still shows the first timestep').toBe(0);
-  await releaseFrames(page);
-  await Promise.all(held.map((route) => route.continue()));
+  await releaseRoutes(held);
   await waitForPaintedTime(page, 9);
 });
 
@@ -122,7 +135,7 @@ for (const yielding of ['scheduler.postTask', 'MessageChannel']) {
       expect(waiting.shown.lod === 0 && waiting.shown.t === 8, 'the canvas does not show a frame with a cell missing').toBe(false);
       expect(waiting.paintedT).toBe(0);
 
-      await Promise.all(held.map((route) => route.continue()));
+      await releaseRoutes(held);
       await waitForPaintedTime(page, 8);
       expect(await page.evaluate(() => window.paintUploads), 'the paint that completed the frame uploaded only the cell that was late').toEqual([1]);
     });
