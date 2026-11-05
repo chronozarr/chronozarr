@@ -3,22 +3,37 @@
 // arrays cost two bytes; binary masks cost one bit/pixel. Other uint8 values remain
 // exact (coverage counts and masks from external writers need not be binary).
 export function packAux(data) {
-  let uniform = true;
-  let binary = true;
-  for (let i = 0; i < data.length; i++) {
-    if (data[i] !== data[0]) uniform = false;
-    if (data[i] > 1) binary = false;
+  const n = data.length;
+  // The scan reads four bytes at a time, which needs a view that starts on a 4-byte boundary (a subarray may not).
+  // A uniform array is one whose every word is its first byte repeated four times; a binary one has no bit set above
+  // the lowest of any byte. The trailing bytes that do not fill a word are checked one by one.
+  const bytes = data.byteOffset % 4 === 0 ? data : data.slice();
+  const words = new Uint32Array(bytes.buffer, bytes.byteOffset, n >> 2);
+  const fill = (data[0] ?? 0) * 0x01010101;
+  let differ = 0;
+  let high = 0;
+  for (let i = 0; i < words.length; i++) {
+    differ |= words[i] ^ fill;
+    high |= words[i];
   }
-  if (uniform) return Uint8Array.of(0, data[0] ?? 0);
-  if (!binary) {
-    const packed = new Uint8Array(data.length + 1);
+  for (let i = words.length * 4; i < n; i++) {
+    differ |= data[i] ^ data[0];
+    high |= data[i];
+  }
+  if (differ === 0) return Uint8Array.of(0, data[0] ?? 0);
+  if ((high & 0xfefefefe) !== 0) {
+    const packed = new Uint8Array(n + 1);
     packed[0] = 2;
     packed.set(data, 1);
     return packed;
   }
-  const packed = new Uint8Array(1 + Math.ceil(data.length / 8));
+  const packed = new Uint8Array(1 + Math.ceil(n / 8));
   packed[0] = 1;
-  for (let i = 0; i < data.length; i++) packed[1 + (i >> 3)] |= data[i] << (i & 7);
+  const whole = n >> 3;
+  for (let j = 0, i = 0; j < whole; j++, i += 8) {
+    packed[1 + j] = data[i] | (data[i + 1] << 1) | (data[i + 2] << 2) | (data[i + 3] << 3) | (data[i + 4] << 4) | (data[i + 5] << 5) | (data[i + 6] << 6) | (data[i + 7] << 7);
+  }
+  for (let i = whole * 8; i < n; i++) packed[1 + (i >> 3)] |= data[i] << (i & 7);
   return packed;
 }
 
