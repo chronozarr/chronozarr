@@ -1151,9 +1151,8 @@ class Viewer {
     }
   }
 
-  /** Timesteps the buffer loads at once, at demand priority: BUFFER_BATCH, or fewer while a movie plays on a link that carries less (see bufferBatch). */
+  /** Timesteps the buffer loads at once, at demand priority: BUFFER_BATCH, or fewer on a link that carries less (see bufferBatch), for a scrub as for a movie. */
   #bufferBatch(lod) {
-    if (!this.#playing) return BUFFER_BATCH;
     return bufferBatch({ bytesPerStep: this.#wireBytesPerStep(lod, this.#visibleCells(lod)), bandwidth: this.store.bandwidthEstimate(), max: BUFFER_BATCH });
   }
 
