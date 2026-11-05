@@ -18,6 +18,7 @@ import { redactText, redactUrl } from '../chronozarr/redact.js';
 import { toggleExportPanel } from './export.js';
 import { FrameMonitor, formatBytes, formatMs, formatRate, hitRate, readStats } from './perf.js';
 import { Renderer } from './renderer.js';
+import { yieldToMain } from './yield.js';
 import { prepareMovieCache } from './cache-policy.js';
 import { MAX_SCALE, bindViewerInput } from './input.js';
 import { escapeHtml, formatValue, pixelLocation, sidebarHtml } from './inspector.js';
@@ -184,7 +185,7 @@ class Viewer {
   #rafId = 0;
   #prefetchTimer = 0;
   #prefetchStartedAt = -Infinity;
-  #gpuFillTimer = 0;
+  #cancelGpuFill = () => {};
   #prefetchAbort = null;
   #painted = [];
   #storeGeneration = 0;
@@ -1205,7 +1206,7 @@ class Viewer {
     this.#coarseLoop = null;
     this.#wave?.controller.abort();
     this.#wave = null;
-    clearTimeout(this.#gpuFillTimer);
+    this.#cancelGpuFill();
     clearTimeout(this.#prefetchTimer);
     this.#prefetchTimer = 0;
     this.#prefetchAbort?.abort();
@@ -1446,8 +1447,8 @@ class Viewer {
   }
 
   #scheduleGpuFill() {
-    clearTimeout(this.#gpuFillTimer);
-    this.#gpuFillTimer = setTimeout(() => this.#fillGpuWindow(), 0);
+    this.#cancelGpuFill();
+    this.#cancelGpuFill = yieldToMain(() => this.#fillGpuWindow());
   }
 
   /**
@@ -1480,7 +1481,7 @@ class Viewer {
             if (mask) renderer.uploadMask(slot, mask);
           }
           if (performance.now() - started > sliceMs) {
-            this.#gpuFillTimer = setTimeout(() => this.#fillGpuWindow(), 0);
+            this.#scheduleGpuFill();
             return;
           }
         }

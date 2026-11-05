@@ -63,3 +63,17 @@ test('a jump to a frame that is in memory is drawn on the next animation frame, 
   await releaseFrames(page);
   await waitForPaintedTime(page, 8);
 });
+
+const LEVEL_0_CELLS = [[0, 0], [0, 1], [1, 0], [1, 1]];
+
+test('behind a drawn frame the GPU window fills: the next timesteps are on the GPU before anyone steps to them', async ({ page, servers, storeUrl }) => {
+  await openViewer(page, servers, await storeUrl('link_plain'));
+  await page.waitForFunction(
+    (cells) => {
+      const { viewer } = window.chronozarr;
+      return cells.every(([row, col]) => [1, 2].every((t) => viewer.renderer.isResident(`0/${row}/${col}/${t}`)));
+    },
+    LEVEL_0_CELLS,
+    { timeout: 15_000 },
+  );
+});
