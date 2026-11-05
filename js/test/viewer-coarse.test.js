@@ -66,31 +66,43 @@ test('coarse stages: limits can be overridden', () => {
   assert.deepEqual(planCoarseStages({ targetLod: 1, coarsestLod: 3, frameBytes: ucayali, minDirectMs: 1e9 }), []);
 });
 
-test('stage lead: a round trip plus the time the stage\'s bytes take at the link\'s rate', () => {
-  const coarse = 0.7e6; // the level-3 chunk of the Ucayali store on the wire
-  const links = [
-    { link: 'the assumed 50 Mbit/s', bandwidth: ASSUMED_BANDWIDTH, roundTripMs: 45, lead: 157 },
-    { link: '20 MB/s', bandwidth: 20e6, roundTripMs: 45, lead: 80 },
-    { link: '2 MB/s', bandwidth: 2e6, roundTripMs: 50, lead: 400 },
-    { link: '1 MB/s', bandwidth: 1e6, roundTripMs: 50, lead: 750 },
-    { link: '0.5 MB/s', bandwidth: 0.5e6, roundTripMs: 50, lead: 1450 },
-  ];
-  for (const { link, bandwidth, roundTripMs, lead } of links) {
-    const ms = stageLeadMs({ wireBytes: coarse, bandwidth, roundTripMs });
-    assert.equal(ms, lead, link);
-    assert.ok(ms >= (coarse * 1000) / bandwidth, `${link}: the next stage waits at least as long as the coarse chunk takes to arrive`);
-  }
-  const lead = (wireBytes, bandwidth, roundTripMs = 50) => stageLeadMs({ wireBytes, bandwidth, roundTripMs });
-  assert.ok(lead(coarse, 1e6) > lead(coarse, 2e6) && lead(coarse, 2e6) > lead(coarse, 20e6), 'the slower the link, the longer the wait');
-  assert.ok(lead(2 * coarse, 1e6) > lead(coarse, 1e6), 'the more bytes the stage has to fetch, the longer the wait');
-  assert.ok(lead(coarse, 20e6, 200) > lead(coarse, 20e6, 50), 'a store that answers slowly gets a longer wait');
+// The lead of a stage with a short transfer is the one the viewer had before bytes counted: two store round trips (the time to open the store), 30 to 400 ms.
+const lead = (roundTripMs, bandwidth, wireBytes = 0.7e6) => stageLeadMs({ wireBytes, bandwidth, roundTripMs }); // 0.7 MB: the level-3 chunk of the Ucayali store on the wire
+
+test('stage lead: two round trips, 30 to 400 ms, while the stage\'s transfer is shorter than that', () => {
+  assert.equal(lead(45, 20e6), 90, '0.7 MB takes 35 ms at 20 MB/s');
+  assert.equal(lead(99, 20e6), 198);
+  assert.equal(lead(900, 20e6), 400, 'a very slow first response does not delay the stages for seconds');
+  assert.equal(lead(0, 20e6, 0.1e6), 30, 'a local store: hardly any lead');
+  assert.equal(lead(2, 20e6, 0.1e6), 30);
+  assert.equal(lead(127, ASSUMED_BANDWIDTH, 1.47e6), 254, 'a first open, nothing measured: the reader\'s 1.47 MB for a level-3 chunk takes 235 ms at 50 Mbit/s, under two round trips');
 });
 
-test('stage lead: at least 30 ms, at most 5 s', () => {
-  assert.equal(stageLeadMs({ wireBytes: 0, bandwidth: ASSUMED_BANDWIDTH, roundTripMs: 0 }), 30, 'a stage with nothing left to fetch on a local store: hardly any lead');
-  assert.equal(stageLeadMs({ wireBytes: 0, bandwidth: ASSUMED_BANDWIDTH, roundTripMs: 2 }), 30);
-  assert.equal(stageLeadMs({ wireBytes: 0.7e6, bandwidth: 50e3, roundTripMs: 50 }), 5000, 'a link that would take 14 s does not hold the next stage for that long');
-  assert.equal(stageLeadMs({ wireBytes: 0.7e6, bandwidth: 0.2e6, roundTripMs: 50 }), 3550, 'but a 1.6 Mbit/s link still gets the whole transfer');
+test('stage lead: the transfer time, not the transfer time plus a round trip, when the stage\'s transfer is longer', () => {
+  assert.equal(lead(50, 2e6), 350, '0.7 MB at 2 MB/s, over the 100 ms of two round trips');
+  assert.equal(lead(50, 1e6), 700, '1 MB/s');
+  assert.equal(lead(50, 0.5e6), 1400);
+  assert.equal(lead(50, 1e6, 1.4e6), 1400, 'twice the bytes');
+  assert.equal(lead(900, 1e6), 700, 'over the 400 ms that two round trips are held to');
+  assert.equal(lead(200, 2e6), 400, 'two round trips when they are longer than the transfer');
+});
+
+test('stage lead: at most 2 s', () => {
+  assert.equal(lead(50, 0.2e6), 2000, '0.7 MB at 0.2 MB/s would take 3.5 s');
+  assert.equal(lead(50, 0.35e6), 2000, 'a transfer of exactly 2 s');
+  assert.equal(lead(50, 0.4e6), 1750, 'and under it');
+  assert.equal(lead(900, 1e3), 2000);
+});
+
+test('stage lead: a stage with no bytes to fetch, or no usable bandwidth, has the lead of two round trips', () => {
+  assert.equal(lead(45, 1e6, 0), 90);
+  assert.equal(lead(45, 0, 0), 90, 'zero bytes over zero bandwidth is not NaN');
+  assert.equal(lead(0, 0, 0), 30);
+  for (const bandwidth of [0, -1e6, NaN, Infinity, -Infinity, undefined]) {
+    assert.equal(lead(45, bandwidth), 90, `bandwidth ${bandwidth}`);
+  }
+  assert.equal(lead(45, 1e6, NaN), 90);
+  assert.equal(lead(45, 1e6, -5), 90);
 });
 
 // ---- the coarse loop's window ----

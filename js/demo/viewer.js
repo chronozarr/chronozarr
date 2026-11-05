@@ -1666,8 +1666,8 @@ class Viewer {
   /**
    * The cells a wave still needs, coarse first: the small coarse levels (see coarse.js), each shown once it is
    * complete, then the target level, which is shown when all of its cells are in. A stage starts when the previous one lands or, sooner,
-   * when the previous one's bytes should have landed (its leadMs, see stageLeadMs): its requests wait on the network for about as long
-   * as the bytes of the one before take to arrive, and do not share the link with them.
+   * its leadMs after the previous one started (see stageLeadMs): a couple of round trips, so the requests of one stage wait on the
+   * network while the bytes of the one before are still arriving instead of after them, or the time those bytes take when that is longer.
    */
   async #loadWanted(wave, wanted) {
     const { lod } = wave;
@@ -1704,7 +1704,7 @@ class Viewer {
    * Levels to show before `lod` for the cells about to load at timestep t, coarsest first, as {lod, cells, leadMs}; none for
    * a pinned level or a movie. A stage is skipped by the plan when its frame is in memory already (the coarse loop
    * got there first) or when the frame asked for would arrive soon anyway. `leadMs` is how long the next stage waits for this one
-   * (stageLeadMs): the chunks of its cells that are not in memory, at the measured or assumed bandwidth.
+   * (stageLeadMs), given the time its cells' chunks that are not in memory take to arrive at the measured or assumed bandwidth.
    */
   #coarseStages(lod, cells, t) {
     if (this.lodOverride !== null || this.#playing) return [];
