@@ -475,8 +475,10 @@ class Viewer {
     this.#updateTimeUi();
     if (playing) this.renderNow();
     else {
-      // A jump asks the store for its cells now instead of when the next animation frame runs (8 ms away on average); the frame is still drawn on that one.
-      if (jump) this.#requestTargetCells();
+      // A jump that stands alone (a click on the timeline, a link, the API) asks the store for its cells now instead of when the next
+      // animation frame runs (8 ms away on average); the frame is still drawn on that one. In a scrub (a second step within SCRUB_WINDOW_MS)
+      // the next step replaces this one, so a request made now would only be cancelled: it waits for the frame, which coalesces the steps.
+      if (jump && this.#scrub.speed(performance.now()) === 0) this.#requestTargetCells();
       this.requestRender();
       this.#scheduleUrlSync();
     }

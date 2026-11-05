@@ -28,16 +28,29 @@ const releaseFrames = (page) =>
     for (const callback of window.heldFrames.splice(0)) window.requestAnimationFrame(callback);
   });
 
-/** Let the requests that a test held go to the server. The page may have given up on one meanwhile (a jump cancels the prefetch): that one cannot be continued. */
-const releaseRoutes = (routes) => Promise.all(routes.map((route) => route.continue().catch(() => {})));
+/**
+ * Hold the requests whose URL matches `pattern`, unanswered, so that what they carry cannot be in memory whatever the prefetch does.
+ * `release` lets the held ones go to the server and stops holding. The page may have given up on one meanwhile (a jump cancels
+ * the prefetch): that one cannot be continued.
+ */
+async function holdRequests(page, pattern) {
+  const held = [];
+  const hold = (route) => {
+    held.push(route);
+  };
+  await page.route(pattern, hold);
+  return {
+    held,
+    release: async () => {
+      await page.unroute(pattern, hold);
+      await Promise.all(held.map((route) => route.continue().catch(() => {})));
+    },
+  };
+}
 
 test('a jump in time asks for its chunks in the call, not on the next animation frame', async ({ page, servers, storeUrl }) => {
   const url = await storeUrl('beyond_idle');
-  // The last timestep is not answered until the end of the test, so it cannot be in memory whatever the prefetch does.
-  const held = [];
-  await page.route(`${servers.dataUrl}/beyond_idle/**/c/9/**`, (route) => {
-    held.push(route);
-  });
+  const last = await holdRequests(page, `${servers.dataUrl}/beyond_idle/**/c/9/**`);
   await openViewer(page, servers, url);
 
   // Nothing else in the page runs between the call and the read of what it did, so no animation frame comes in between.
@@ -53,7 +66,7 @@ test('a jump in time asks for its chunks in the call, not on the next animation 
   expect(afterCall.painted, 'and drew nothing').toBe(0);
   expect(afterCall.shown, 'the canvas still shows the first timestep').toBe(0);
 
-  await releaseRoutes(held);
+  await last.release();
   await waitForPaintedTime(page, 9);
 });
 
@@ -75,6 +88,61 @@ test('a jump to a frame that is in memory is drawn on the next animation frame, 
   expect(during.frames, 'the draw waits for an animation frame').toBeGreaterThan(0);
   await releaseFrames(page);
   await waitForPaintedTime(page, 8);
+});
+
+const nextFrame = (page) => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve())));
+
+test('in a drag only the press asks for its cells in the call: the moves, each further than a few timesteps, wait for the frame', async ({ page, servers, storeUrl }) => {
+  const steps = await holdRequests(page, `${servers.dataUrl}/link_plain/**/c/{5,6,11}/**`);
+  await openViewer(page, servers, await storeUrl('link_plain'));
+
+  const inTheCalls = await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    window.loadStarts = [];
+    viewer.probe = (event) => {
+      if (event.type === 'load-start') window.loadStarts.push(event.t);
+    };
+    // A press on the timeline, then two moves of the drag, each more than SEEK_DISTANCE timesteps from the one before.
+    viewer.goToTime(6);
+    viewer.goToTime(11);
+    viewer.goToTime(5);
+    return [...window.loadStarts];
+  });
+  expect(inTheCalls, 'the press asked for its cells in its call, the moves did not').toEqual([6]);
+  await nextFrame(page);
+  // The scrub may ask for a timestep at more than one level, so what counts is which timesteps were asked for.
+  expect(await page.evaluate(() => [...new Set(window.loadStarts)]), 'the frame asked for the timestep the drag is at, and for none that it passed').toEqual([6, 5]);
+
+  await steps.release();
+  await waitForPaintedTime(page, 5);
+});
+
+test('two jumps before the next frame: the request of the first is cancelled and its frame is never drawn', async ({ page, servers, storeUrl }) => {
+  const jumps = await holdRequests(page, `${servers.dataUrl}/beyond_idle/**/c/{9,4}/**`);
+  const cancelled = [];
+  page.on('requestfailed', (request) => {
+    if (request.failure()?.errorText === 'net::ERR_ABORTED') cancelled.push(request.url());
+  });
+  await openViewer(page, servers, await storeUrl('beyond_idle'));
+
+  await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    window.events = [];
+    viewer.probe = (event) => {
+      if (event.type === 'load-start' || event.type === 'paint') window.events.push([event.type, event.t]);
+    };
+    viewer.goToTime(9);
+    viewer.goToTime(4);
+  });
+  await nextFrame(page);
+  expect(await page.evaluate(() => window.events.filter(([type]) => type === 'load-start')), 'both were asked for, the second at the frame').toEqual([['load-start', 9], ['load-start', 4]]);
+  // The first request was held, so the only way it ends is that the page gives it up.
+  await expect.poll(() => cancelled.some((url) => url.includes('/c/9/')), { message: 'the page cancelled the request of the first jump' }).toBe(true);
+
+  await jumps.release();
+  await waitForPaintedTime(page, 4);
+  const painted = await page.evaluate(() => window.events.filter(([type]) => type === 'paint').map(([, t]) => t));
+  expect(painted, 'no frame of the first jump was drawn').not.toContain(9);
 });
 
 const LEVEL_0_CELLS = [[0, 0], [0, 1], [1, 0], [1, 1]];
@@ -101,10 +169,7 @@ for (const yielding of ['scheduler.postTask', 'MessageChannel']) {
 
     test('while a jump waits for its last cell, the cells that have arrived are on the GPU already and the frame is not drawn', async ({ page, servers, storeUrl }) => {
       // The cell (1, 1) of timestep 8 is not answered until the cells around it are on the GPU.
-      const held = [];
-      await page.route(`${servers.dataUrl}/link_plain/0/data/c/8/0/1/1`, (route) => {
-        held.push(route);
-      });
+      const late = await holdRequests(page, `${servers.dataUrl}/link_plain/0/data/c/8/0/1/1`);
       await openViewer(page, servers, await storeUrl('link_plain'));
 
       await page.evaluate(() => {
@@ -130,32 +195,64 @@ for (const yielding of ['scheduler.postTask', 'MessageChannel']) {
         { timeout: 15_000 },
       );
       const waiting = await page.evaluate(() => ({ shown: window.chronozarr.viewer.shownFrame, paintedT: window.chronozarr.viewer.paintedT, paints: window.paintUploads }));
-      expect(held.length, 'the last cell was asked for and is still on its way').toBeGreaterThan(0);
+      expect(late.held.length, 'the last cell was asked for and is still on its way').toBeGreaterThan(0);
       expect(waiting.paints, 'no frame of level 0 at timestep 8 has been drawn').toEqual([]);
       expect(waiting.shown.lod === 0 && waiting.shown.t === 8, 'the canvas does not show a frame with a cell missing').toBe(false);
       expect(waiting.paintedT).toBe(0);
 
-      await releaseRoutes(held);
+      await late.release();
       await waitForPaintedTime(page, 8);
       expect(await page.evaluate(() => window.paintUploads), 'the paint that completed the frame uploaded only the cell that was late').toEqual([1]);
+    });
+
+    test('opening a store cancels the fill that was waiting for the one it replaces', async ({ page, servers, storeUrl }) => {
+      const url = await storeUrl('link_plain');
+      await openViewer(page, servers, url);
+      const reads = await page.evaluate(async (storeUrl) => {
+        const { viewer } = window.chronozarr;
+        const { renderer, store } = viewer;
+        // With nothing on the GPU the fill that the next frame schedules has a whole window to read from the store.
+        renderer.clearResident();
+        viewer.renderNow();
+        let count = 0;
+        for (const name of ['peekCompact', 'peekRaw']) {
+          const read = store[name];
+          store[name] = function (...args) {
+            count++;
+            return read.apply(this, args);
+          };
+        }
+        await viewer.loadStore(storeUrl);
+        return count;
+      }, url);
+      expect(reads, 'the fill of the old store did not run').toBe(0);
     });
   });
 }
 
-test('a warm step uploads nothing, requests nothing and draws a complete frame', async ({ page, servers, storeUrl }) => {
+test('a far jump to a frame that is in memory asks for nothing, in its call or a second later', async ({ page, servers, storeUrl }) => {
   await openViewer(page, servers, await storeUrl('link_plain'));
-  await page.waitForFunction(
-    (cells) => cells.every(([row, col]) => window.chronozarr.viewer.renderer.isResident(`0/${row}/${col}/1`)),
-    LEVEL_0_CELLS,
-    { timeout: 15_000 },
-  );
-  const step = await page.evaluate(() => {
+  // Visit the target and come back, so that its chunks are in memory when the jump is made again.
+  await page.evaluate(() => window.chronozarr.viewer.goToTime(8));
+  await waitForPaintedTime(page, 8);
+  await page.evaluate(() => window.chronozarr.viewer.goToTime(0));
+  await waitForPaintedTime(page, 0);
+
+  servers.data.requests.length = 0;
+  await page.evaluate(() => {
     const { viewer } = window.chronozarr;
-    const { renderer, store } = viewer;
-    const before = { uploads: renderer.stats.uploads, requests: store.stats.network.requests };
-    viewer.goToTime(1);
-    const frame = viewer.renderNow();
-    return { complete: frame.complete, uploads: renderer.stats.uploads - before.uploads, requests: store.stats.network.requests - before.requests };
+    // The scrub of the two jumps above is over, so this one stands alone and asks in its call.
+    viewer.endScrub();
+    window.loadStarts = [];
+    viewer.probe = (event) => {
+      if (event.type === 'load-start') window.loadStarts.push(event.t);
+    };
+    viewer.goToTime(8);
   });
-  expect(step).toEqual({ complete: true, uploads: 0, requests: 0 });
+  await waitForPaintedTime(page, 8);
+  // What a switch starts leaves after it, so, as the gate runner does, wait and count again.
+  await page.waitForTimeout(1000);
+  expect(await page.evaluate(() => window.loadStarts), 'no cell was missing').toEqual([]);
+  // Level 0 is the level of the frame; the coarse loop of the prefetch may still be fetching timesteps of the level above it.
+  expect(servers.data.requests.filter(({ path }) => path.includes('/0/data/c/8/')), 'no chunk of the frame reached the server').toEqual([]);
 });
