@@ -7,6 +7,7 @@
 // the chart has started, so that the chart has to read one chunk over the network as well as one from the cache.
 
 import { expect, test } from './fixtures.js';
+import { clickStorePixel, openViewer } from './viewer-helpers.js';
 
 const CAP_BYTES = 12 * 1024 * 1024;
 
@@ -85,4 +86,27 @@ test('compact mode: the coarse stage, the inspector click, the chart and the exp
     }
   });
   expect(exported, 'the export has the timestep in the cache and expanded no chunk').toEqual({ ready: true, expanded: 0 });
+});
+
+test('compact mode: the chart of a masked store draws what the unpacked chunks give', async ({ page, context, servers, storeUrl }) => {
+  const url = await storeUrl('u16_mask');
+  const charted = async (tab) => {
+    await clickStorePixel(tab, 10, 10);
+    await expect(tab.locator('#chart-status')).toContainText('6 of 6 timesteps · click to jump');
+    return tab.locator('#chart path[stroke]').evaluateAll((paths) => paths.map((path) => path.getAttribute('d')));
+  };
+  // The store as it first opens (it fits its cache): the chart reads ordinary decoded arrays.
+  await openViewer(page, servers, url);
+  const unpacked = await charted(page);
+  // Pixel (10, 10) is masked at t = 0 and 4 and valid at 1, 2, 3 and 5: two segments per series.
+  expect(unpacked.map((d) => (d.match(/M/g) ?? []).length), 'path segments of each charted series').toEqual([2, 2, 2]);
+
+  const tab = await context.newPage();
+  await openViewer(tab, servers, url);
+  const compact = await tab.evaluate(async ({ url, totalBytes }) => {
+    await window.chronozarr.viewer.loadStore(url, { lod: 0, totalBytes });
+    return window.chronozarr.viewer.store.compactCacheEnabled;
+  }, { url, totalBytes: 2 * 1024 * 1024 });
+  expect(compact, 'a cap of 2 MiB is less than the 3 MiB loop: the cache packs').toBe(true);
+  expect(await charted(tab), 'the same lines from packed chunks').toEqual(unpacked);
 });

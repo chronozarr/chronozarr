@@ -10,7 +10,7 @@ import {
   ScrubSpeed,
   chooseScrub,
   chooseScrubLevel,
-  nextPumpBatch,
+  nextPumpSteps,
   planScrubLoads,
   readyRun,
   savesData,
@@ -394,18 +394,27 @@ test('scrubPumpRequests: follows the direction of the scrub, so a turn replaces 
   assert.deepEqual(back.probe.steps, [60, 59, 58, 57, 56, 55]);
 });
 
-test('nextPumpBatch: the first timesteps of the list that are not in memory, nearest first, a few at a time', () => {
+test('nextPumpSteps: the first timesteps of the list that are not in memory, nearest first, as many as keep `size` in flight', () => {
   const have = new Set([31, 32, 34]);
-  const next = (options) => nextPumpBatch({ wanted: [30, 31, 32, 33, 34, 35, 36, 37], isReady: (step) => have.has(step), previous: '', size: 3, ...options });
-  assert.deepEqual(next(), { batch: [30, 33, 35], key: '30,33,35', done: false });
-  assert.deepEqual(next({ size: 2 }).batch, [30, 33]);
-  assert.deepEqual(next({ wanted: [37, 36, 35, 34, 33] }).batch, [37, 36, 35], 'a list the scrub replaced (it turned round) is followed in its own order');
+  const next = (options) => nextPumpSteps({ wanted: [30, 31, 32, 33, 34, 35, 36, 37], isReady: (step) => have.has(step), loading: new Set(), unkept: new Set(), size: 3, ...options });
+  assert.deepEqual(next(), [30, 33, 35]);
+  assert.deepEqual(next({ size: 2 }), [30, 33]);
+  assert.deepEqual(next({ wanted: [37, 36, 35, 34, 33] }), [37, 36, 35], 'a list the scrub replaced (it turned round) is followed in its own order');
 });
 
-test('nextPumpBatch: done when everything wanted is in memory, or when the cache gave back the batch just loaded', () => {
-  assert.equal(nextPumpBatch({ wanted: [30, 31], isReady: () => true, previous: '', size: 3 }).done, true);
-  assert.equal(nextPumpBatch({ wanted: [], isReady: () => false, previous: '', size: 3 }).done, true, 'nothing wanted');
-  const stuck = nextPumpBatch({ wanted: [30, 31, 32, 33], isReady: () => false, previous: '30,31,32', size: 3 });
-  assert.equal(stuck.done, true, 'the same batch twice: it is not staying in memory, so loading it again would never end');
-  assert.equal(nextPumpBatch({ wanted: [30, 31, 32, 33], isReady: (step) => step < 32, previous: '30,31,32', size: 3 }).done, false, 'the next batch is another one');
+test('nextPumpSteps: a timestep on the wire counts against `size` and is not asked for again, so one that lands makes room for the next', () => {
+  const next = (loading) => nextPumpSteps({ wanted: [30, 31, 32, 33, 34], isReady: () => false, loading: new Set(loading), unkept: new Set(), size: 3 });
+  assert.deepEqual(next([]), [30, 31, 32]);
+  assert.deepEqual(next([30, 31, 32]), [], 'the window is full');
+  assert.deepEqual(next([31, 32]), [30], 'one landed and is ready: the window has room for one');
+  assert.deepEqual(next([30]), [31, 32], 'the nearest one is on the wire: the next two follow it');
+  assert.deepEqual(next([30, 31, 32, 33]), [], 'more in flight than `size` (the link got slower): nothing starts');
+});
+
+test('nextPumpSteps: nothing when everything wanted is in memory or the list is empty, and not what the cache gave back after it landed', () => {
+  const next = (options) => nextPumpSteps({ wanted: [30, 31, 32, 33], isReady: () => false, loading: new Set(), unkept: new Set(), size: 3, ...options });
+  assert.deepEqual(next({ isReady: () => true }), []);
+  assert.deepEqual(next({ wanted: [] }), [], 'nothing wanted');
+  assert.deepEqual(next({ unkept: new Set([30, 31, 32]) }), [33], 'loaded and not staying in memory: loading them again would never end');
+  assert.deepEqual(next({ unkept: new Set([30, 31, 32, 33]) }), []);
 });

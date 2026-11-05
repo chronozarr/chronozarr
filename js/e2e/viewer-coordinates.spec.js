@@ -73,6 +73,7 @@ test('a delayed sample cannot replace a newer pixel selection', async ({ page, s
     const gate = new Promise((resolve) => { window.releaseFirstSample = resolve; });
     store.ensureRaw = async (...args) => {
       store.ensureRaw = original;
+      window.firstSampleCall = args.slice(0, 4);
       window.firstSampleWaiting = true;
       await original(...args);
       await gate;
@@ -80,6 +81,8 @@ test('a delayed sample cannot replace a newer pixel selection', async ({ page, s
   });
   await clickStorePixel(page, 50, 40);
   await page.waitForFunction(() => window.firstSampleWaiting);
+  // The read that waits is the first click's: level 0, row 0, column 0 (pixel 50, 40 of 128-pixel cells), timestep 0.
+  expect(await page.evaluate(() => window.firstSampleCall)).toEqual([0, 0, 0, 0]);
   await clickStorePixel(page, 80, 90);
   const content = page.locator('#sidebar-content');
   await expect(content).toContainText('80, 90');

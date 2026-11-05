@@ -1,5 +1,6 @@
-// The chart of a clicked pixel reads one chunk per timestep of its cell. Those reads wait while the user scrubs or plays:
-// they would queue next to the chunks of the frames the user is waiting for. The chart carries on when the scrub or the movie is over.
+// The chart of a clicked pixel reads one chunk per timestep of its cell. Those reads wait while the user scrubs or plays, and
+// while the frame they stopped on loads: they would queue next to the chunks of the frames the user is waiting for. The chart
+// carries on when the scrub or the movie is over and the frame is in.
 //
 // A single-cell store of 60 timesteps with every chunk answered after 120 ms, so the chart's batches of four take a good
 // second to cover it and a scrub of a second and a half falls inside that time.
@@ -28,13 +29,18 @@ async function writeChartStore(dir) {
 const chartLoaded = (page) => page.evaluate(() => Number(/(\d+) of \d+ timesteps/.exec(document.getElementById('chart-status').textContent)?.[1] ?? NaN));
 
 test.describe('chart over a slow single-cell store', () => {
+  // The chunks of the last timestep arrive when a test lets them, if it holds them: the frame of that timestep keeps loading.
+  let lastTimestep;
+
   // A small canvas: software GL draws it in a few ms, so that the page keeps up with a scrub on a busy runner.
   test.use({ viewport: { width: 480, height: 360 } });
 
   test.beforeEach(async ({ page, servers, stores }) => {
+    lastTimestep = null;
     await writeChartStore(stores.dir);
     await page.route(`${servers.dataUrl}/**/c/**`, async (route) => {
       await sleep(CHUNK_DELAY_MS);
+      if (lastTimestep && Number(/\/c\/(\d+)\//.exec(new URL(route.request().url()).pathname)?.[1]) === N_TIME - 1) await lastTimestep.promise;
       await route.continue();
     });
     await page.goto(`${servers.appUrl}/demo/index.html?store=${encodeURIComponent(`${servers.dataUrl}/chart-yield/`)}`);
@@ -71,6 +77,24 @@ test.describe('chart over a slow single-cell store', () => {
     expect(after, 'the chart is not done yet').toBeLessThan(N_TIME);
 
     await page.keyboard.press('Space');
+    await expect(page.locator('#chart-status')).toContainText(`${N_TIME} of ${N_TIME} timesteps`, { timeout: 30_000 });
+  });
+
+  test('the chart does not read while the frame the user stopped on loads, and finishes once it is in', async ({ page }) => {
+    lastTimestep = {};
+    lastTimestep.promise = new Promise((resolve) => {
+      lastTimestep.release = resolve;
+    });
+    // A jump to the last timestep: its frame cannot be drawn until its chunk arrives. The scrub of the jump is over 300 ms later.
+    await page.evaluate((t) => window.chronozarr.viewer.goToTime(t), N_TIME - 1);
+    await sleep(600);
+    const during = await chartLoaded(page);
+    await sleep(900);
+    const after = await chartLoaded(page);
+    expect(after - during, 'timesteps the chart loaded while the frame was loading (at most the batch that was already in flight)').toBeLessThanOrEqual(CHART_BATCH);
+    expect(after, 'the chart is not done yet').toBeLessThan(N_TIME);
+
+    lastTimestep.release();
     await expect(page.locator('#chart-status')).toContainText(`${N_TIME} of ${N_TIME} timesteps`, { timeout: 30_000 });
   });
 });

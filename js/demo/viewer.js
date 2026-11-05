@@ -1,14 +1,14 @@
 // chronozarr viewer: renders a chronozarr store with WebGL2, scrubs through time, switches
 // products on the GPU and shows decoded values on click. Opens ?store=<base url>.
 
-import { chunkKey, openStore, scrubCost, windowOrder } from '../chronozarr/decoder.js';
+import { chunkKey, openStore, samplePixelFrom, scrubCost, windowOrder } from '../chronozarr/decoder.js';
 import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, validAt, windowPixels, xFromTime } from './chart.js';
 import { ASSUMED_BANDWIDTH, ancestorCells, coarseLoopDrifted, coarseLoopSteps, planCoarseStages, stageLeadMs } from './coarse.js';
 import { fetchWithEarlyReads, takeEarlyRootMs } from './early.js';
 import { chooseFrame } from './frames.js';
 import { BUFFER_BATCH, DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, START_BUFFER_SECONDS, bufferBatch, chooseMovieLevel, describeReason, linkAllows, linkSteps, roundSteps, snapSpeed, wireRatio } from './playback.js';
 import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js';
-import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrub, nextPumpBatch, readyRun, savesData, scrubPumpRequests, stepsAhead } from './scrub.js';
+import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrub, nextPumpSteps, readyRun, savesData, scrubPumpRequests, stepsAhead } from './scrub.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
 import { bindOpenStoreForm, checkUniformChunks, explainOpenError, parseStoreUrl } from './open-store.js';
@@ -58,8 +58,10 @@ const STRETCH_SAMPLES_PER_CELL = 300;
 const URL_SYNC_MS = 300;
 const CHART_BATCH = 4;
 const CHART_RENDER_MS = 120;
-// While the user scrubs or plays, the chart waits between batches and looks again this often.
+// While the user scrubs or plays, or the frame they stopped on loads, the chart waits between batches and looks again this often;
+// it waits for a loading frame at most CHART_LOADING_MAX_MS per batch, so that a chunk that fails to load cannot hold the chart back.
 const CHART_YIELD_MS = 250;
+const CHART_LOADING_MAX_MS = 2000;
 // A time change of more than this many steps is a jump: the speculative fetches around the old position are dropped.
 const SEEK_DISTANCE = 4;
 const PERF_UPDATE_MS = 250;
@@ -82,15 +84,15 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 /** Resolves after `ms`, or as soon as `signal` aborts. */
 function delay(ms, signal) {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -1111,8 +1113,8 @@ class Viewer {
   /**
    * Playback or a scrub wants these timesteps (the next ones, nearest first) in memory: load the ones that are not, a
    * few at a time and at demand priority, in order, until they all are or playback stops or the scrub ends. They are
-   * loaded at the level in use, or at `lod` (the probe of a scrub). A new request replaces the list of a pump that is
-   * already running; the store shares the fetches.
+   * loaded at the level in use, or at `lod` (the probe of a scrub). The next one starts as soon as one lands, so the few
+   * stay in flight. A new request replaces the list of a pump that is already running; the store shares the fetches.
    */
   #fillBuffer(indices, { lod = null } = {}) {
     const pump = lod === null ? (this.#bufferPump ??= { wanted: [], lod: null, running: false, controller: null }) : (this.#probePump ??= { wanted: [], lod, running: false, controller: null });
@@ -1127,15 +1129,28 @@ class Viewer {
   async #runBufferPump(pump) {
     const { signal } = pump.controller;
     let failed = null;
+    // The timesteps on the wire, and those that landed and are still not in memory: the cache cannot keep them, so asking again would never end.
+    const loading = new Map();
+    const unkept = new Set();
+    let wanted = pump.wanted;
     try {
-      let previous = '';
       while (!signal.aborted) {
         const lod = pump.lod ?? this.#targetLod();
-        // The same batch again means the cache cannot keep what was loaded: stop rather than load it forever.
-        const { batch, key, done } = nextPumpBatch({ wanted: pump.wanted, isReady: (t) => this.#frameReady(lod, t), previous, size: this.#bufferBatch(lod) });
-        if (done) break;
-        previous = key;
-        await Promise.all(batch.map((t) => this.#loadTimestep(lod, t, signal)));
+        if (pump.wanted !== wanted) {
+          wanted = pump.wanted;
+          unkept.clear();
+        }
+        for (const t of nextPumpSteps({ wanted, isReady: (step) => this.#frameReady(lod, step), loading, unkept, size: this.#bufferBatch(lod) })) {
+          loading.set(
+            t,
+            this.#loadTimestep(lod, t, signal).then(() => {
+              loading.delete(t);
+              if (!this.#frameReady(lod, t)) unkept.add(t);
+            }),
+          );
+        }
+        if (loading.size === 0) break;
+        await Promise.race(loading.values());
       }
     } catch (error) {
       if (error.name !== 'AbortError') failed = error;
@@ -1874,9 +1889,11 @@ class Viewer {
     const { t } = frame;
     const cellX = x - col * level.chunkWidth;
     const cellY = y - row * level.chunkHeight;
+    let values;
     let mask = null;
     try {
-      [, mask] = await Promise.all([store.ensureRaw(lod, row, col, t), this.#maskRead(lod, row, col, t)]);
+      // Read in the turn that the chunk lands in: the mask and the coverage below take longer, and the chunk can leave the cache before they arrive.
+      [[values], mask] = await Promise.all([store.ensureRaw(lod, row, col, t).then(() => this.#pixelsOfLoaded(lod, row, col, t, [[cellX, cellY]])), this.#maskRead(lod, row, col, t)]);
     } catch (error) {
       if (request === this.#inspectRequest) {
         this.#showError('Chunk load failed', redactText(error?.message ?? error), { code: 'chunk_load_failed' });
@@ -1886,7 +1903,6 @@ class Viewer {
     if (request !== this.#inspectRequest) return;
     const observed = await this.#observedAt(lod, row, col, t, cellX, cellY);
     if (request !== this.#inspectRequest) return;
-    const values = store.samplePixel(lod, row, col, t, cellX, cellY);
     const maskValue = mask ? mask[cellY * level.chunkWidth + cellX] : null;
     const info = { t, lod, pixel: { x: Math.floor(worldX), y: Math.floor(worldY) }, observed, masked: maskValue === 0, ...describePixel(values, this.bands, this.#nodata, maskValue) };
     this.#hook('click', { pixel: info.pixel, t, lod, info });
@@ -1894,6 +1910,19 @@ class Viewer {
     this.#updateSidebar(info);
     this.openInspector();
     this.#startChart({ lod, row, col, x: cellX, y: cellY });
+  }
+
+  /**
+   * The stored values of `pixels` ([x, y] in the cell) of a chunk that has just loaded: read where they lie in the cache, so that a packed
+   * chunk (compact mode) is not expanded for them. A cache that cannot keep what loads at once can have dropped the chunk already (loads
+   * that finish in one turn push each other out); it is then read again whole, which holds it for the caller.
+   */
+  async #pixelsOfLoaded(lod, row, col, t, pixels, signal) {
+    const { store } = this;
+    const sampled = pixels.map(([x, y]) => store.samplePixel(lod, row, col, t, x, y));
+    if (!sampled.includes(null)) return sampled;
+    const data = await store.getRaw(lod, row, col, t, { signal });
+    return pixels.map(([x, y]) => samplePixelFrom(data, store.levels[lod], x, y));
   }
 
   /** How many observations (scenes) stand behind the pixel at timestep t: null when the store has no coverage variable or it cannot be read. */
@@ -1965,12 +1994,7 @@ class Viewer {
       .sort((a, b) => Math.abs(a - this.t) - Math.abs(b - this.t));
     const { signal } = chart.controller;
     for (let i = 0; i < missing.length; i += CHART_BATCH) {
-      // The chart's reads are at demand priority, so they queue next to the chunks of the frames that a scrub (its timer runs from
-      // the first step to the end) or a movie is waiting for: wait until neither is going on.
-      while (this.#playing || this.#scrubTimer !== 0) {
-        await delay(CHART_YIELD_MS, signal);
-        if (signal.aborted) return;
-      }
+      if (!(await this.#chartMayRead(signal))) return;
       await Promise.all(
         missing.slice(i, i + CHART_BATCH).map(async (t) => {
           const observed = chart.coverage && chart.coverage[t] === undefined ? this.#loadChartCoverage(chart, t, coverageOffset) : null;
@@ -1978,11 +2002,7 @@ class Viewer {
             try {
               const [pixels, mask] = await Promise.all([
                 // Read in the turn that the chunk lands in: the mask may take longer, and another chunk can push this one out of the cache meanwhile.
-                store.ensureRaw(lod, row, col, t, { signal }).then(() => {
-                  const values = pixelsAt(t);
-                  if (values.includes(null)) throw new Error('the chunk left the cache before its pixels were read');
-                  return values;
-                }),
+                store.ensureRaw(lod, row, col, t, { signal }).then(() => this.#pixelsOfLoaded(lod, row, col, t, chart.window, signal)),
                 this.#maskRead(lod, row, col, t, signal),
               ]);
               chart.readings[t] = readingOf(pixels, mask);
@@ -2000,6 +2020,23 @@ class Viewer {
     }
     chart.done = true;
     this.#renderChart();
+  }
+
+  /**
+   * Resolves true when the chart may read its next batch, false when `signal` aborts first. The chart's reads are at demand priority, so
+   * they queue next to the chunks of the frame that a scrub (its timer runs from the first step to the end), a movie or the sharp frame
+   * after a scrub is waiting for: they wait until none is going on, the loading frame for at most CHART_LOADING_MAX_MS.
+   */
+  async #chartMayRead(signal) {
+    let loadingMs = 0;
+    for (;;) {
+      const busy = this.#playing || this.#scrubTimer !== 0;
+      const loading = this.#loading && loadingMs < CHART_LOADING_MAX_MS;
+      if (!busy && !loading) return true;
+      if (!busy) loadingMs += CHART_YIELD_MS;
+      await delay(CHART_YIELD_MS, signal);
+      if (signal.aborted) return false;
+    }
   }
 
   /** The coverage of the charted pixel at timestep t, into chart.coverage (null when it cannot be read). */

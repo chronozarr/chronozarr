@@ -187,15 +187,18 @@ export function scrubPumpRequests({ saving, ...plan }) {
 }
 
 /**
- * The next batch a buffer pump loads: the first `size` of the `wanted` timesteps (nearest first) that are not ready, so
- * a list replaced mid-run is followed from where the scrub is. `done` when nothing is left to load, or when the batch
- * is the one just loaded (`previous`: the cache cannot keep what was loaded, so loading it again would never end).
- * @returns {{batch: number[], key: string, done: boolean}}
+ * The timesteps a buffer pump starts loading now: the first of the `wanted` ones (nearest first) that are not ready, not on the wire
+ * (`loading`) and not `unkept` (loaded already and still not ready: the cache cannot keep them, so loading them again would never
+ * end), as many as keep `size` timesteps in flight. A list replaced mid-run is followed from where the scrub is.
+ * @param {{wanted: number[], isReady: (step: number) => boolean, loading: {has(step: number): boolean, size: number}, unkept: {has(step: number): boolean}, size: number}} options
  */
-export function nextPumpBatch({ wanted, isReady, previous, size }) {
-  const batch = wanted.filter((step) => !isReady(step)).slice(0, size);
-  const key = batch.join(',');
-  return { batch, key, done: batch.length === 0 || key === previous };
+export function nextPumpSteps({ wanted, isReady, loading, unkept, size }) {
+  const steps = [];
+  for (const step of wanted) {
+    if (loading.size + steps.length >= size) break;
+    if (!loading.has(step) && !unkept.has(step) && !isReady(step)) steps.push(step);
+  }
+  return steps;
 }
 
 /** The `effectiveType` values (navigator.connection) of a link too slow to load a sharp scrub ahead of the user. */
