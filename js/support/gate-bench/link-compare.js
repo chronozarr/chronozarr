@@ -39,10 +39,11 @@ export const LINK_METRICS = {
   drag: [
     { key: 'framesAtTarget', label: 'Frames at the target level', unit: '', better: 'higher', tolerance: 0.1, floor: 2 },
     { key: 'framesCoarser', label: 'Frames at a coarser level', unit: '', better: null },
-    { key: 'heldMs', label: 'Time on an older timestep than asked for', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 100 },
+    { key: 'heldMs', label: 'Time on an older timestep than asked for (a coarser frame of it is not older)', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 100 },
     { key: 'skipped', label: 'Timesteps between the ends never shown', unit: '', better: 'lower', tolerance: 0.1, floor: 2 },
     { key: 'lagMedianMs', label: 'Input to frame, median', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 20 },
     { key: 'lagP95Ms', label: 'Input to frame, 95th percentile', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 50 },
+    { key: 'stepsNeverAnswered', label: 'Steps no frame answered (counted at the wait in the lag)', unit: '', better: 'lower', tolerance: 0.1, floor: 1 },
     { key: 'settleMs', label: 'Release to the frame at the target level', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 200 },
     ...TRAFFIC,
   ],
@@ -87,15 +88,18 @@ export function distinctFrames(paints) {
 /**
  * How long, between the animation frames from `beginAt` to `endAt`, the frame on screen was of an earlier timestep than the
  * viewer was asked for: whether it redrew the old frame, drew nothing or was busy. `samples` hold, per animation frame, the
- * timestep asked for (`t`) and the one shown (`shownT`). A request needs one frame to be drawn, so an interval counts only when
- * the same timestep was already asked for at its start.
+ * timestep asked for (`t`) and the one shown (`shownT`). An interval is held when the frame on screen at its end is older than
+ * the timestep asked for at its start, whatever the timestep asked for at its end: the sampler runs before the viewer's render of
+ * the same frame, so a request made before the interval has had the render of its first frame by the end of it, and a request
+ * that came in during it is not held against the viewer until the interval after. A frame of the timestep asked for at a coarser
+ * level is not older: that is the frames at a coarser level and the time to the target level.
  */
 export function heldMs(samples, beginAt, endAt) {
   let held = 0;
   for (let i = 1; i < samples.length; i++) {
     const [before, after] = [samples[i - 1], samples[i]];
     if (before.at < beginAt || after.at > endAt) continue;
-    if (after.t === before.t && after.shownT !== null && after.shownT < after.t) held += after.at - before.at;
+    if (after.shownT !== null && after.shownT < before.t) held += after.at - before.at;
   }
   return held;
 }
@@ -113,15 +117,22 @@ export function dragFigures({ events, inputs, samples, beginAt, releaseAt, norma
   const shownBetween = new Set(duringDrag.map((frame) => frame.t).filter((t) => t > from && t < to));
   // A step is answered by the first frame that shows its timestep or a later one, so a step that was skipped over waits for the next frame.
   // Its wait counts from when it was due: a main thread that ran the timer late made the step late, and that is the viewer's cost too.
+  // A step that no frame answered counts as the wait of the run (`capMs`), so that a build that shows nothing after a few steps does
+  // not report the small lags of the few it answered.
   const lags = [];
+  let unanswered = 0;
   for (const input of inputs) {
     const answer = frames.find((frame) => frame.at >= input.at && frame.t >= input.t);
     if (answer) lags.push(answer.at - input.due);
+    else {
+      lags.push(capMs);
+      unanswered++;
+    }
   }
   const settled = frames.find((frame) => frame.t === to && frame.lod === normalLod && frame.kind === 'target');
   const timedOut = [];
   if (!settled) timedOut.push('settleMs');
-  if (!lags.length) timedOut.push('lagMs');
+  if (unanswered) timedOut.push('lagMs');
   const figures = {
     framesAtTarget: duringDrag.filter((frame) => frame.lod === normalLod).length,
     framesCoarser: duringDrag.filter((frame) => frame.lod > normalLod).length,
@@ -129,9 +140,10 @@ export function dragFigures({ events, inputs, samples, beginAt, releaseAt, norma
     skipped: Math.max(0, to - from - 1) - shownBetween.size,
     lagMedianMs: lags.length ? round(median(lags)) : capMs,
     lagP95Ms: lags.length ? round(quantile(lags, 0.95)) : capMs,
+    stepsNeverAnswered: unanswered,
     settleMs: settled ? round(Math.max(0, settled.at - releaseAt)) : capMs,
   };
-  return { figures, timedOut, detail: { normalLod, paintedDuringDrag: duringDrag.length, stepsNeverAnswered: inputs.length - lags.length } };
+  return { figures, timedOut, detail: { normalLod, paintedDuringDrag: duringDrag.length } };
 }
 
 /** The raw result of a jump: when the timeline was pressed (`at`), the frames drawn since, the level at rest and the wait `capMs`. */

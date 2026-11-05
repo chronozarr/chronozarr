@@ -83,20 +83,40 @@ test('a build that holds more scores worse than one that shows frames, however o
   assert.ok(moving.skipped < stuck.skipped);
 });
 
-test('the hold counts only the intervals where the timestep asked for had a frame to be drawn in, not the one frame that a draw takes', () => {
+test('an interval is held when the frame on screen at its end is older than the timestep asked for at its start, the one frame that a draw takes excepted', () => {
   const one = (at, t, shownT) => ({ at, t, shownT });
   // Asked for 2 at 20, drawn by 60: the interval 20 to 40 (asked for at its start, still not drawn) is held, 0 to 20 and 40 to 60 are not.
   assert.equal(heldMs([one(0, 1, 1), one(20, 2, 1), one(40, 2, 1), one(60, 2, 2)], 0, 100), 20);
   assert.equal(heldMs([one(0, 1, 1), one(20, 2, 1), one(40, 2, 1), one(60, 2, 2)], 30, 100), 0, 'only samples inside the drag count');
   assert.equal(heldMs([one(0, 3, null), one(20, 3, null)], 0, 100), 0, 'no frame on screen yet is not an older one');
+  assert.equal(heldMs([one(0, 3, 1), one(20, 3, 3)], 0, 100), 0, 'asked for at its start and drawn by its end: the one frame that a draw takes');
+});
+
+test('an interval in which the timestep asked for changes is held too: that is where a stalled main thread leaves the canvas', () => {
+  const one = (at, t, shownT) => ({ at, t, shownT });
+  // Asked for 2 at 20 and for 3 at 40 (a timer that ran late), still showing 1 at 40 and at 60 (when 2 is drawn): 20 to 40 and 40 to 60 are both held.
+  assert.equal(heldMs([one(0, 1, 1), one(20, 2, 1), one(40, 3, 1), one(60, 3, 2)], 0, 100), 40);
+  // Timestep 2 is asked for at 20, then the main thread is blocked until 400, when the late inputs for 3 and 4 have run before the
+  // next animation frame: the interval 20 to 400 is where the canvas was stuck on 1 while 2 was asked for, though 4 is asked for at its end.
+  assert.equal(heldMs([one(0, 1, 1), one(20, 2, 1), one(400, 4, 1), one(417, 4, 2)], 0, 500), 380 + 17);
+});
+
+test('a drag at 40 ms per step that the viewer never draws is held for the whole of it, not for the intervals between the steps', () => {
+  // Steps due every 40 ms, 2.4 animation frames apart: 4 in 10 animation frames start a new timestep.
+  const inputs = Array.from({ length: 10 }, (_, i) => ({ t: i + 1, due: 1000 + (i + 1) * 40, at: 1000 + (i + 1) * 40 }));
+  const events = [paint(1045, 1, 3, 'fallback')];
+  const stuck = dragFigures({ events, inputs, samples: samples({ inputs, events, from: 1000, to: 1400 }), beginAt: 1000, releaseAt: 1400, normalLod: 2, from: 0, to: 11, capMs: 60000 });
+  // Timestep 2 is asked for at 1080: from the animation frame after it to the release is about 300 ms; counting only the
+  // intervals with an unchanged timestep would give about 60 % of that.
+  assert.ok(stuck.figures.heldMs > 280, `${stuck.figures.heldMs}`);
 });
 
 test('the lag of a step is the wait for the first frame that shows its timestep or a later one, from when the step was due', () => {
-  const { figures, detail } = dragFigures(slowDrag());
+  const { figures } = dragFigures(slowDrag());
   // Due at 1150, 1300, 1450, 1600: answered at once. Due at 1750, 1900, 2050, 2200: all by timestep 8 at 2260, 510, 360, 210 and 60 later.
   assert.equal(figures.lagMedianMs, 33);
   assert.equal(figures.lagP95Ms, 510);
-  assert.equal(detail.stepsNeverAnswered, 0);
+  assert.equal(figures.stepsNeverAnswered, 0);
 });
 
 test('a step whose timer ran late waits from when it was due: the blocked main thread is the viewer\'s cost', () => {
@@ -111,6 +131,19 @@ test('a drag whose last frame never comes reports the wait as the figure and say
   const { figures, timedOut } = dragFigures(slowDrag({ events: slowDrag().events.slice(0, 5) }));
   assert.equal(figures.settleMs, 60000);
   assert.ok(timedOut.includes('settleMs'));
+});
+
+test('steps that no frame answers count as the wait of the run in the lag, and are reported beside it', () => {
+  // The viewer shows timesteps 1 to 4 and then nothing: inputs 5 to 8 are never answered.
+  const { figures, timedOut } = dragFigures(slowDrag({ events: slowDrag().events.slice(0, 5) }));
+  assert.equal(figures.stepsNeverAnswered, 4);
+  assert.equal(figures.lagP95Ms, 60000);
+  assert.ok(figures.lagMedianMs > 1000, `the four answered lags are 5 ms; the median is of eight: ${figures.lagMedianMs}`);
+  assert.deepEqual(timedOut, ['settleMs', 'lagMs']);
+  // A build that answers them all, late, reports a lag below the wait.
+  assert.ok(dragFigures(slowDrag()).figures.lagP95Ms < figures.lagP95Ms + 1);
+  assert.equal(dragFigures(slowDrag()).figures.stepsNeverAnswered, 0);
+  assert.deepEqual(dragFigures(slowDrag()).timedOut, []);
 });
 
 test('a drag with no frame at all has no lag', () => {
@@ -219,7 +252,7 @@ test('a head with something where the base had nothing is flagged beyond the flo
   const row = result.groups[0].rows.find((candidate) => candidate.key === 'heldMs');
   assert.equal(row.verdict, 'worse');
   assert.equal(row.ratio, null);
-  assert.match(linkSummaryMarkdown(result), /\| Time on an older timestep than asked for \| 0\.0 ms \(0\.0 ms to 0\.0 ms\) \| 500 ms \(500 ms to 500 ms\) \| n\/a \| \*\*worse\*\* \|/);
+  assert.match(linkSummaryMarkdown(result), /\| Time on an older timestep than asked for \(a coarser frame of it is not older\) \| 0\.0 ms \(0\.0 ms to 0\.0 ms\) \| 500 ms \(500 ms to 500 ms\) \| n\/a \| \*\*worse\*\* \|/);
 });
 
 test('zero on both sides is a ratio of 1', () => {
