@@ -855,7 +855,7 @@ export class ChronoStore {
     if (!ambient) this.#noteActivity({ lod, cells, t, wholeAxis });
     const targets = new Set([t]);
     const horizon = wholeAxis ? null : this.#policy.horizonSteps;
-    const queue = this.#windowPlan(level, cells, t, { direction, behindFactor, loop }, horizon, withMasks, maxSteps).map(([row, col, ct]) => ({ row, col, t: ct, free: seek && targets.has(ct) }));
+    const queue = this.#windowPlan(level, cells, t, { direction, behindFactor, loop }, horizon, withMasks, maxSteps).map(([row, col, ct], rank) => ({ row, col, t: ct, rank, free: seek && targets.has(ct) }));
     const inherited = new Set();
     for (const { row, col, t: ct, free } of queue) {
       const running = this.#liveEntry(chunkKey(lod, row, col, ct));
@@ -880,10 +880,12 @@ export class ChronoStore {
         const failedAt = this.#cellFailures.get(`${lod}/${row}/${col}`);
         const failed = failedAt !== undefined && this.#now() - failedAt < PREFETCH_COOLDOWN_MS;
         let idleCharge = 0;
+        let skipped = false;
         try {
           const running = this.#liveEntry(key);
           if (this.#cache.has(key) || running || failed) {
             result.skipped++;
+            skipped = true;
             if (failed) continue;
             if (running) this.#own(running, signal);
             const maskRunning = withMasks ? this.#liveEntry(this.#auxKey('mask', lod, row, col, tt)) : null;
@@ -965,8 +967,13 @@ export class ChronoStore {
         } catch (error) {
           this.#refundIdle(idleCharge);
           if (isAbort(error)) {
-            // A seek cancelled this chunk under an ambient job, which plans once: it is fetched again after the rest of the plan.
-            if (ambient && !signal.aborted) queue.push(item);
+            // A seek cancelled this chunk under an ambient job, which plans once: it goes back to its place among the chunks that have
+            // not started, and is counted when it is dealt with again.
+            if (ambient && !signal.aborted) {
+              if (skipped) result.skipped--;
+              const at = queue.findIndex((other, i) => i >= next && other.rank > item.rank);
+              queue.splice(at < 0 ? queue.length : at, 0, item);
+            }
             continue;
           }
           result.errors.push({ key, error });

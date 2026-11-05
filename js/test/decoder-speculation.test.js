@@ -619,6 +619,40 @@ test('a reader that joins the request for a seek\'s own timestep and leaves does
   await jump;
 });
 
+test('an ambient chunk that a seek cancelled goes back to its place in the plan: the nearest are fetched again first', async () => {
+  const { store, started, release, openAll } = await openGated();
+  const abort = new AbortController();
+  const loop = store.prefetch({ lod: 0, cells: [[0, 0]], t: 10, loop: true, playing: true, ambient: true, behindFactor: 8, maxSteps: 30, signal: abort.signal });
+  await settled();
+  const nearest = started.slice();
+  assert.equal(nearest.length, 6);
+  const jump = store.prefetch({ lod: 0, cells: [[1, 0]], t: 10, seek: true, maxSteps: 1 });
+  await settled();
+  release(10, 1, 0);
+  await settled();
+  assert.deepEqual(started.slice(7).sort((a, b) => a - b), nearest.sort((a, b) => a - b), 'the six that were cancelled start again before any that had not started');
+  abort.abort();
+  openAll();
+  await Promise.all([loop, jump]);
+});
+
+test('a chunk that an ambient job took over from another job and a seek cancelled is counted once', async () => {
+  const { store, openAll } = await openGated();
+  const horizon = new AbortController();
+  const old = store.prefetch({ lod: 0, cells: [[0, 0]], t: 10, signal: horizon.signal });
+  await settled();
+  const loopAbort = new AbortController();
+  const loop = store.prefetch({ lod: 0, cells: [[0, 0]], t: 10, loop: true, playing: true, ambient: true, behindFactor: 2, maxSteps: 12, signal: loopAbort.signal });
+  await settled();
+  const jump = store.prefetch({ lod: 0, cells: [[1, 0]], t: 10, seek: true, maxSteps: 1 });
+  await settled();
+  openAll();
+  horizon.abort();
+  const [, result] = await Promise.all([old, loop, jump]);
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.fetched + result.skipped, result.planned, 'every planned chunk is dealt with once');
+});
+
 /** A small seeded generator, so that a failing run can be repeated. */
 function seeded(seed) {
   let state = seed >>> 0;
