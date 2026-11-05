@@ -4,6 +4,31 @@ import { yieldToMain } from '../demo/yield.js';
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
+/** A scheduler.postTask that holds its tasks until `run`, and drops one whose signal is aborted, rejecting with an AbortError as browsers do. */
+function fakeScheduler() {
+  const posted = [];
+  return {
+    posted,
+    postTask(callback, options) {
+      return new Promise((resolve, reject) => {
+        const entry = {
+          options,
+          run() {
+            if (options.signal.aborted) return;
+            try {
+              resolve(callback());
+            } catch (error) {
+              reject(error);
+            }
+          },
+        };
+        options.signal.addEventListener('abort', () => reject(new DOMException('The task was aborted', 'AbortError')), { once: true });
+        posted.push(entry);
+      });
+    },
+  };
+}
+
 afterEach(() => {
   delete globalThis.scheduler;
 });
@@ -49,15 +74,55 @@ test('cancelling after the task ran, or twice, does nothing', async () => {
   assert.equal(runs, 1);
 });
 
-test('where scheduler.postTask exists the task is posted to it at background priority, and cancelling still works', async () => {
-  const posted = [];
-  globalThis.scheduler = { postTask: (callback, options) => posted.push({ callback, options }) };
+test('where scheduler.postTask exists the task is posted to it at its default priority', async () => {
+  const scheduler = fakeScheduler();
+  globalThis.scheduler = scheduler;
   const order = [];
   yieldToMain(() => order.push('ran'));
-  const cancel = yieldToMain(() => order.push('cancelled'));
-  assert.deepEqual(posted.map((post) => post.options), [{ priority: 'background' }, { priority: 'background' }]);
+  assert.equal(scheduler.posted.length, 1);
+  assert.equal('priority' in scheduler.posted[0].options, false, 'a task at background priority can wait behind normal tasks for ever');
   assert.deepEqual(order, [], 'nothing runs in the call');
-  cancel();
-  for (const { callback } of posted) callback();
+  scheduler.posted[0].run();
   assert.deepEqual(order, ['ran']);
+});
+
+test('with scheduler.postTask a cancelled task is aborted, so the browser drops it, and the abort is not an unhandled rejection', async () => {
+  const scheduler = fakeScheduler();
+  globalThis.scheduler = scheduler;
+  const rejections = [];
+  const record = (reason) => rejections.push(reason);
+  process.on('unhandledRejection', record);
+  try {
+    const order = [];
+    const cancel = yieldToMain(() => order.push('cancelled'));
+    yieldToMain(() => order.push('kept'));
+    cancel();
+    assert.deepEqual(scheduler.posted.map((entry) => entry.options.signal.aborted), [true, false]);
+    for (const entry of scheduler.posted) entry.run();
+    await settle();
+    assert.deepEqual(order, ['kept']);
+    assert.deepEqual(rejections, []);
+  } finally {
+    process.off('unhandledRejection', record);
+  }
+});
+
+test('with scheduler.postTask a task that throws is reported as an uncaught error, not as an unhandled rejection', async () => {
+  const scheduler = fakeScheduler();
+  globalThis.scheduler = scheduler;
+  const failure = new Error('the fill failed');
+  const reported = [];
+  const queueMicrotaskBefore = globalThis.queueMicrotask;
+  globalThis.queueMicrotask = (callback) => reported.push(callback);
+  try {
+    yieldToMain(() => {
+      throw failure;
+    });
+    scheduler.posted[0].run();
+    await settle();
+  } finally {
+    globalThis.queueMicrotask = queueMicrotaskBefore;
+  }
+  assert.equal(reported.length, 1, 'the error was handed to be thrown outside the promise');
+  assert.throws(reported[0], (error) => error === failure);
 });
