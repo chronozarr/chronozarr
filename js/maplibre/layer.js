@@ -1060,17 +1060,10 @@ export class ChronozarrLayer {
     const report = (error) => {
       if (!isAbort(error)) this.#emit('error', { error, prefetch: true });
     };
+    // The reader fetches each mask with its chunk, as a speculative read under the same allowances; a mask requested after
+    // the chunk landed would be a demand read that holds the prefetch workers back.
     store
-      .prefetch({
-        lod,
-        cells,
-        t: this.#t,
-        seek,
-        signal: controller.signal,
-        onChunk: (chunkLod, row, col, t) => {
-          if (store.hasMask) store.getMask(chunkLod, row, col, t, { signal: controller.signal }).catch(report);
-        },
-      })
+      .prefetch({ lod, cells, t: this.#t, seek, masks: store.hasMask, signal: controller.signal })
       .then((result) => {
         if (result.errors.length > 0) this.#emit('error', { error: result.errors[0].error, prefetch: true, errors: result.errors });
       }, report);
