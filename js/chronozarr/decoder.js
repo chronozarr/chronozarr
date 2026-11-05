@@ -1311,6 +1311,8 @@ export class ChronoStore {
       if (decodeNow) {
         data = await this.#decoder.decode(retained ? retained.slice() : bytes, entry.priority, signal, spec, { compact: kind === 'data' && this.#compact }).catch((error) => {
           if (signal.aborted && isAbort(error)) return null;
+          // Bytes that were kept and do not decode (a damaged body) would fail every later read: forget them, so the next read fetches the chunk again.
+          if (held && !isAbort(error)) this.#cache.dropCompressed(key);
           throw error;
         });
       }

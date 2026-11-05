@@ -72,6 +72,53 @@ test('a chunk that is cancelled while it decodes keeps the bytes it downloaded: 
   store.close();
 });
 
+test('kept bytes that do not decode are forgotten, so the next read fetches the chunk again', async () => {
+  const readable = buildSyntheticStore({ nTime: 4, nBand: 1, height: 32, width: 32, chunk: 32, sharded: false });
+  const key = '/0/data/c/1/0/0/0';
+  const good = readable.files.get(key);
+  let requests = 0;
+  // The first body of the chunk is damaged (a bad proxy answer); later ones are fine.
+  const flaky = {
+    get: async (k, options) => {
+      const bytes = await readable.get(k, options);
+      return k === key && ++requests === 1 ? bytes.slice(0, bytes.length / 2) : bytes;
+    },
+    getRange: (k, range, options) => readable.getRange(k, range, options),
+  };
+  const decodes = [];
+  const worker = {
+    postMessage(message) {
+      if (message.type === 'init') queueMicrotask(() => worker.onmessage({ data: { type: 'ready' } }));
+      if (message.type === 'decode') decodes.push(message);
+    },
+    terminate() {},
+  };
+  const answer = ({ id, bytes }) => worker.onmessage({ data: bytes.length === good.length ? { type: 'decoded', id, data: new Uint16Array(32 * 32) } : { type: 'error', id, message: 'corrupt chunk' } });
+  const until = async (done) => {
+    for (let i = 0; i < 100 && !done(); i++) await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(done(), 'the decode was posted');
+  };
+  const store = await openStore('memory://poison', { store: flaky, workers: 1, spawnWorker: () => worker, speculativeBytesInitial: 1e12 });
+  // The prefetch is cancelled while the damaged body decodes, so that its bytes are kept.
+  const abort = new AbortController();
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 1, maxSteps: 1, signal: abort.signal });
+  await until(() => decodes.length === 1);
+  abort.abort();
+  await job;
+  answer(decodes[0]);
+  const read = async () => {
+    const posted = decodes.length;
+    const outcome = store.getRaw(0, 0, 0, 1).then(() => 'ok', (error) => error.message);
+    await until(() => decodes.length === posted + 1);
+    answer(decodes[posted]);
+    return outcome;
+  };
+  assert.equal(await read(), 'corrupt chunk', 'the kept bytes are the damaged ones');
+  assert.equal(await read(), 'ok', 'the next read fetched the chunk again');
+  assert.equal(requests, 2);
+  store.close();
+});
+
 test('closing the store while a chunk decodes does not put the downloaded bytes back into the cache', async () => {
   const readable = buildSyntheticStore({ nTime: 4, nBand: 1, height: 32, width: 32, chunk: 32, sharded: false });
   const decodes = [];
