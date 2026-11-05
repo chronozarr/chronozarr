@@ -27,19 +27,22 @@ export const COARSE_MIN_DIRECT_MS = 1000;
 /** Bandwidth assumed before any transfer has been measured: 50 Mbit/s. */
 export const ASSUMED_BANDWIDTH = (50 * 1e6) / 8;
 
-/** Each stage starts this many store round trips after the previous one, so its request latency overlaps the previous stage's transfer. */
-export const STAGE_LEAD_ROUND_TRIPS = 2;
+/** The next stage never waits less than this for the previous one, however little that one has left to fetch. */
 export const STAGE_LEAD_MIN_MS = 30;
-export const STAGE_LEAD_MAX_MS = 400;
+
+/** Nor more: a stage that has not landed this long after it started is stalled, or on a link far slower than measured, and the next one starts anyway. */
+export const STAGE_LEAD_MAX_MS = 5000;
 
 /**
- * How long after a stage starts the next one may start, if the stage has not landed by then. A chunk takes a few
- * sequential requests (the object's size, the shard index, then the bytes) and only the last one moves much data, so
- * starting the next stage about two round trips after this one lets its requests reach the point of moving bytes just as
- * this stage's bytes are done. `roundTripMs` is what it took to fetch the store's metadata.
+ * How long after a stage starts the next one may start, if the stage has not landed by then: when its bytes should have
+ * landed. A chunk of an unsharded store is one request that carries all its bytes, so that is one store round trip
+ * (`roundTripMs`) plus `wireBytes` (what the stage still has to fetch) at `bandwidth` (bytes per second). Requests that go
+ * out while the stage's bytes are still arriving share the link with them (an HTTP/2 edge serves equal-priority streams
+ * round-robin), so a coarse chunk that takes a second of the link alone takes several once the next stage's requests are
+ * in flight. Requests that go out later only wait, and the next stage starts at once when this one lands first.
  */
-export function stageLeadMs(roundTripMs) {
-  return Math.min(STAGE_LEAD_MAX_MS, Math.max(STAGE_LEAD_MIN_MS, STAGE_LEAD_ROUND_TRIPS * roundTripMs));
+export function stageLeadMs({ wireBytes, bandwidth, roundTripMs }) {
+  return Math.min(STAGE_LEAD_MAX_MS, Math.max(STAGE_LEAD_MIN_MS, roundTripMs + (wireBytes * 1000) / bandwidth));
 }
 
 /**

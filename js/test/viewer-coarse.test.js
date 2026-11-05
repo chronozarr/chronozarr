@@ -66,12 +66,31 @@ test('coarse stages: limits can be overridden', () => {
   assert.deepEqual(planCoarseStages({ targetLod: 1, coarsestLod: 3, frameBytes: ucayali, minDirectMs: 1e9 }), []);
 });
 
-test('stage lead: two store round trips, at least 30 ms and at most 400 ms', () => {
-  assert.equal(stageLeadMs(45), 90);
-  assert.equal(stageLeadMs(99), 198);
-  assert.equal(stageLeadMs(0), 30, 'a local store: hardly any lead');
-  assert.equal(stageLeadMs(2), 30);
-  assert.equal(stageLeadMs(900), 400, 'a very slow first response does not delay the stages for seconds');
+test('stage lead: a round trip plus the time the stage\'s bytes take at the link\'s rate', () => {
+  const coarse = 0.7e6; // the level-3 chunk of the Ucayali store on the wire
+  const links = [
+    { link: 'the assumed 50 Mbit/s', bandwidth: ASSUMED_BANDWIDTH, roundTripMs: 45, lead: 157 },
+    { link: '20 MB/s', bandwidth: 20e6, roundTripMs: 45, lead: 80 },
+    { link: '2 MB/s', bandwidth: 2e6, roundTripMs: 50, lead: 400 },
+    { link: '1 MB/s', bandwidth: 1e6, roundTripMs: 50, lead: 750 },
+    { link: '0.5 MB/s', bandwidth: 0.5e6, roundTripMs: 50, lead: 1450 },
+  ];
+  for (const { link, bandwidth, roundTripMs, lead } of links) {
+    const ms = stageLeadMs({ wireBytes: coarse, bandwidth, roundTripMs });
+    assert.equal(ms, lead, link);
+    assert.ok(ms >= (coarse * 1000) / bandwidth, `${link}: the next stage waits at least as long as the coarse chunk takes to arrive`);
+  }
+  const lead = (wireBytes, bandwidth, roundTripMs = 50) => stageLeadMs({ wireBytes, bandwidth, roundTripMs });
+  assert.ok(lead(coarse, 1e6) > lead(coarse, 2e6) && lead(coarse, 2e6) > lead(coarse, 20e6), 'the slower the link, the longer the wait');
+  assert.ok(lead(2 * coarse, 1e6) > lead(coarse, 1e6), 'the more bytes the stage has to fetch, the longer the wait');
+  assert.ok(lead(coarse, 20e6, 200) > lead(coarse, 20e6, 50), 'a store that answers slowly gets a longer wait');
+});
+
+test('stage lead: at least 30 ms, at most 5 s', () => {
+  assert.equal(stageLeadMs({ wireBytes: 0, bandwidth: ASSUMED_BANDWIDTH, roundTripMs: 0 }), 30, 'a stage with nothing left to fetch on a local store: hardly any lead');
+  assert.equal(stageLeadMs({ wireBytes: 0, bandwidth: ASSUMED_BANDWIDTH, roundTripMs: 2 }), 30);
+  assert.equal(stageLeadMs({ wireBytes: 0.7e6, bandwidth: 50e3, roundTripMs: 50 }), 5000, 'a link that would take 14 s does not hold the next stage for that long');
+  assert.equal(stageLeadMs({ wireBytes: 0.7e6, bandwidth: 0.2e6, roundTripMs: 50 }), 3550, 'but a 1.6 Mbit/s link still gets the whole transfer');
 });
 
 // ---- the coarse loop's window ----
