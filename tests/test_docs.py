@@ -138,6 +138,8 @@ def test_the_readme_quickstart_is_part_of_the_full_quickstart() -> None:
     readme = (REPO / "README.md").read_text(encoding="utf-8")
     section = readme.split("## Quickstart", 1)[1].split("\n## ", 1)[0]
     full = (REPO / "docs/quickstart.md").read_text(encoding="utf-8")
+    # The full guide pins its release. The README uses the registry default.
+    full = re.sub(r"(chronozarr\[geo\])==[\w.]+", r"\1", full)
     commands = _commands(section)
     assert commands, "the README quickstart has no commands"
     for command in commands:

@@ -1,12 +1,20 @@
 # Quickstart
 
-**Package version — 0.5.2.** These commands use the same version as the converter, Python API and viewer guides. See the [release notes](release-0.5.2.md), or [install from source](development.md) for local development.
+Convert a raster time series and see it play in your browser. The sample uses a year of Sentinel-2 images of the Ucayali River in Peru.
 
-Convert a folder of dated GeoTIFFs, explore the result in your browser and send a temporary link to a colleague. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and use a web browser. Temporary sharing needs no account or cloud storage.
+## Choose your input
 
-The [overview defines COG, CRS, nodata and pyramid levels](what-is.md#terms-used-in-these-guides).
+| What you have | Where to start |
+|---|---|
+| No files yet | [Start with the sample](#1-install) |
+| A folder of GeoTIFFs, one per date | [Use your own GeoTIFFs](#use-your-own-geotiffs) |
+| NetCDF or Zarr | [Convert NetCDF or Zarr](convert.md#from-netcdf-or-zarr) |
+| An Earth Engine export | [Convert Earth Engine exports](convert.md#from-earth-engine-exports) |
+| COG URLs, PNGs or another format | [See all supported inputs](convert.md) |
 
 ## 1. Install
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then run these commands in a terminal. This guide uses [chronozarr 0.5.2](release-0.5.2.md). If you have a repository checkout, you can [install from source](development.md).
 
 ```bash
 uv tool install --python 3.13 'chronozarr[geo]==0.5.2'
@@ -25,7 +33,17 @@ If you already use a uv project, run `uv add 'chronozarr[geo]==0.5.2'` in the pr
 
 ## 2. Get a dated raster series
 
-Use one GeoTIFF for each timestep, with one date in each file name:
+Export twelve months of the public demo as GeoTIFFs.
+
+```bash
+chronozarr export-cog https://data.chronozarr.org/ucayali_santa_maria_v03 sample --level 2 --times 2024-01..2024-12
+```
+
+This downloads about 40 MB and writes twelve files, `sample/L2_2024-01-01.tif` to `sample/L2_2024-12-01.tif`. The sample has four bands at 40 m resolution.
+
+### Use your own GeoTIFFs
+
+[Install chronozarr](#1-install), then use one GeoTIFF per date. Put the date in each file name.
 
 ```text
 rasters/
@@ -34,15 +52,9 @@ rasters/
   ndvi_2024-03.tif
 ```
 
-A date can be written `20240131`, `2024-01-31` or `2024-01`. All files must share one north-up grid: the same coordinate system, size, pixel size and position. They must also have the same bands, data type, scale, offset, units and nodata value.
+A date can be written `20240131`, `2024-01-31` or `2024-01`. All files must share a north-up grid with the same coordinate system, size, pixel size and position. They must also have the same bands, data type, scale, offset, units and nodata value. The [overview defines common terms](what-is.md#terms-used-in-these-guides).
 
-If you have no files at hand, export twelve months of the public demo as GeoTIFFs:
-
-```bash
-chronozarr export-cog https://data.chronozarr.org/ucayali_santa_maria_v03 sample --level 2 --times 2024-01..2024-12
-```
-
-This downloads about 40 MB and writes twelve files, `sample/L2_2024-01-01.tif` to `sample/L2_2024-12-01.tif`. Each has four Sentinel-2 bands from the public store's 40 m level-2 overview. Converting these files makes 40 m the new store's level 0, with an 80 m level 1. The rest of this page uses `sample`. Replace it with your own folder.
+Replace `sample` with your own folder in step 3.
 
 ## 3. Convert
 
@@ -82,61 +94,46 @@ chronozarr convert sample my_store
 ```text
 wrote my_store: 2 levels, 81 files, 40.2 MB, zstd level 5
 read 12 timesteps (0 reused) in 0.2 s, encoded in 0.3 s, total 0.5 s
-share it: chronozarr share my_store  (temporary public link via a Cloudflare quick tunnel; needs cloudflared)
-preview it here: chronozarr preview my_store  (this computer only)
+...
 ```
 
 `my_store` is a folder of static files. It holds your values unchanged, plus a coarser copy for zoomed-out views.
 
-## 4. Share a temporary link
+## 4. Look at it on your computer
 
-`share` makes your store reachable through a temporary public address that a colleague can open in a browser. Install [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/), a free program that runs the tunnel without a Cloudflare account. On macOS, use `brew install cloudflared`. Without `cloudflared`, go to step 5.
-
-```bash
-chronozarr share my_store
-```
-
-The command prints its progress and then a viewer link, and opens the link in your browser. The link usually appears after about half a minute.
-
-Try these in the viewer:
-
-- Press Space to play the series. Press the Left and Right arrow keys to step.
-- Choose a product, such as NDVI or False color.
-- Click a pixel to see its values over time.
-
-Choose the date, product and view that you want to show. Click Copy link and send the link. The recipient needs only a web browser. The [viewer guide](viewer.md) lists its controls; the hosted viewer can change independently when the site is deployed.
-
-While sharing:
-
-- The link works only while the command runs. Ctrl-C stops sharing, and the link stops working.
-- Your computer must stay on and connected. Every view that the recipient loads is sent from your computer, over your upload connection.
-- Anyone who has the link can read the store while it runs.
-
-[Share a temporary link](share.md) has the details and the troubleshooting steps.
-
-## 5. Look at it on your computer
-
-`preview` serves the store on `127.0.0.1` and opens the viewer. Nothing is public, and its link opens only on this computer. Use it when you have no `cloudflared`, when the data must stay on your computer, or to check a store before you share it.
+Run `preview` to open your map in a browser. The viewer page loads from chronozarr.org and reads the store directly from your computer. Your data stays on your computer.
 
 ```bash
 chronozarr preview my_store
 ```
 
-```text
-serving my_store at http://127.0.0.1:56925/my_store (byte ranges and CORS, 127.0.0.1 only)
-viewer: https://chronozarr.org/demo/ (loaded from the internet; the store itself is read from this machine). For offline use see --viewer-dir and https://chronozarr.org/guides/viewer-distribution.
-open: https://chronozarr.org/demo/?store=http%3A%2F%2F127.0.0.1%3A56925%2Fmy_store
-this link opens only on this computer; for a link others can open, run `chronozarr share my_store`
-press Ctrl-C to stop
+If the browser stays closed, copy the address after `open:` in the terminal and open it yourself. Use Chrome or Firefox. If Chrome asks for local network access, allow it so the viewer can read your store.
+
+Press Space to play the series or use the arrow keys to step through the dates. Click a pixel to see its values over time. With the sample, you can choose False color or NDVI in the product menu.
+
+Press Ctrl-C in the terminal to stop the preview. See the [viewer controls](viewer.md#controls) and [preview troubleshooting](troubleshooting.md#preview).
+
+## Next steps
+
+### Share a temporary link
+
+Install [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) to give your store a temporary public address. On macOS, use `brew install cloudflared`.
+
+Run `share` after stopping the preview.
+
+```bash
+chronozarr share my_store
 ```
 
-The viewer page loads from chronozarr.org and reads the store directly from your computer, without uploading it. Press Ctrl-C in the terminal to stop the preview. Use Chrome or Firefox for this step because Safari can block an internet page from reading `127.0.0.1`.
+The command opens the viewer when the link is ready, usually after about half a minute. Choose the date, product and map view you want to show. Click Copy link and send the link.
 
-## 6. Publish a permanent link
+Anyone with the link can read the store while the command runs and your computer is on and online. Press Ctrl-C to stop sharing. See the [sharing guide](share.md) for details and troubleshooting.
+
+### Publish a permanent link
 
 For a link that keeps working when your computer is off, use storage in your own Amazon S3, Cloudflare R2, Google Cloud Storage or Azure account. `chronozarr publish` uploads the store, checks it and prints the viewer link. Storage, request and transfer charges depend on your provider and plan. chronozarr.org does not store your data. See [Publish a permanent link](publish.md).
 
-## 7. Read the values in Python
+### Read the values in Python
 
 The `chronozarr` command from step 1 lives in its own environment. Install the library in the environment used by your script or notebook before running this code.
 
@@ -163,11 +160,10 @@ ds["data"].sel(band="B08").isel(time=0, x=100, y=80).item()
 
 The dataset holds the values that you converted, with the scale applied. See [Analyze a store in Python](analyze.md).
 
-## Next steps
+### More guides
 
 | I want to | Page |
 |---|---|
-| Convert Zarr, NetCDF, COGs on S3 or PNG frames | [Conversion guide](convert.md) |
 | Develop from a local checkout | [Source installation](development.md) |
 | Build a Sentinel-2 series for my own area | [Sentinel-2 time series](sentinel2.md) |
 | Add new timesteps later | [Append timesteps](append.md) |

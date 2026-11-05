@@ -77,15 +77,17 @@ Then convert:
 
 {bash(convert)}
 
-## 4. Share
-
-{bash(share)}
-
-## 5. Preview
+## 4. Preview
 
 Use it when you have no `cloudflared`, when the data must stay here, or to check a store first.
 
 {bash(preview)}
+
+## Next steps
+
+### Share
+
+{bash(share)}
 """
 
 
@@ -109,8 +111,8 @@ def test_real_page_gives_the_documented_steps_in_order():
         ["chronozarr", "export-cog"],
         ["chronozarr", "convert"],
         ["chronozarr", "convert"],
-        ["chronozarr", "share"],
         ["chronozarr", "preview"],
+        ["chronozarr", "share"],
         ["uv", "init"],
         ["uv", "add"],
     ]
@@ -131,8 +133,8 @@ def test_steps_carry_the_block_text_unchanged():
         EXPORT,
         DRY_RUN,
         CONVERT,
-        SHARE,
         PREVIEW,
+        SHARE,
     ]
     assert [step["index"] for step in plan["steps"]] == [1, 2, 3, 4, 5, 6]
     assert plan["steps"][0]["label"] == "01 uv tool install --python 3.13 'chronozarr[geo]==1.2.3'"
