@@ -212,16 +212,15 @@ export function reinhardSrgb(reflectance) {
   return t <= 0.0031308 ? 12.92 * t : 1.055 * Math.pow(t, 1 / 2.4) - 0.055;
 }
 
-/** 2nd percentile of tone-mapped red/green/blue reflectance samples ([r, g, b] triples); 0 with too few samples. */
+/** 2nd percentile of tone-mapped red/green/blue reflectance samples ([r, g, b] triples); 0 with fewer than 30 finite tones. */
 export function computeStretchLo(rgbSamples) {
-  // A Float64Array sorts numerically without a comparator, about three times faster than sorting boxed numbers.
+  // A Float64Array sorts numerically by default, so no comparator is needed.
   const tones = new Float64Array(rgbSamples.length * 3);
   let count = 0;
   for (const [r, g, b] of rgbSamples) {
     if (r === 0 && g === 0 && b === 0) continue;
-    tones[count++] = reinhardSrgb(r);
-    tones[count++] = reinhardSrgb(g);
-    tones[count++] = reinhardSrgb(b);
+    // A NaN reflectance (the nodata of a float store) or one that tone-maps to infinity says nothing about the shadows. Counted, it would push the percentile up, so it is left out, as in percentileRange.
+    for (const tone of [reinhardSrgb(r), reinhardSrgb(g), reinhardSrgb(b)]) if (Number.isFinite(tone)) tones[count++] = tone;
   }
   if (count < 30) return 0;
   return tones.subarray(0, count).sort()[Math.floor(count * 0.02)];
