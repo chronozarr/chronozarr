@@ -1000,6 +1000,11 @@ export class ChronoStore {
     return Math.max(1, Math.min(DEFAULT_PREFETCH_CONCURRENCY, Math.floor((rate * PREFETCH_FLIGHT_SECONDS) / this.chunkWireBytes(level.lod))));
   }
 
+  /** A speculative slot may be free, or demand may have ended: parked workers look again. */
+  #wakeSlotWaiters() {
+    for (const wake of this.#slotWaiters.splice(0)) wake();
+  }
+
   /** Resolves when any request settles (a slot may be free), or when `signal` aborts. */
   #slotFreed(signal) {
     return new Promise((resolve) => {
@@ -1182,6 +1187,8 @@ export class ChronoStore {
       if (index) index.priority.value = 0;
       this.#limiter.reprioritize();
       this.#decoder.reprioritize?.();
+      // The request is not a speculative one any more: a slot is free.
+      this.#wakeSlotWaiters();
     }
     this.#count(entry);
   }
@@ -1205,6 +1212,7 @@ export class ChronoStore {
     if (--this.#demandInflight === 0) {
       this.#updateSpeculativeShare();
       for (const wake of this.#demandIdleWaiters.splice(0)) wake();
+      this.#wakeSlotWaiters();
     }
   }
 
@@ -1222,7 +1230,7 @@ export class ChronoStore {
       .finally(() => {
         for (const release of entry.releases) release();
         if (this.#inflight.get(key) === entry) this.#inflight.delete(key);
-        for (const wake of this.#slotWaiters.splice(0)) wake();
+        this.#wakeSlotWaiters();
         this.#uncount(entry);
       });
     this.#inflight.set(key, entry);

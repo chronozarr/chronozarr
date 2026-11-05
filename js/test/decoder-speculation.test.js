@@ -564,6 +564,40 @@ test('a demand fetch that is aborted while its shard index read cannot be cancel
   await Promise.all([a, b]);
 });
 
+test('workers that wait for a slot start when the last reader of a joined request leaves, though no request has settled', async () => {
+  const { store, started, release, openAll } = await openGated({ rate: 200_000, idleSeconds: 1000 });
+  const abort = new AbortController();
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, signal: abort.signal });
+  await settled();
+  assert.deepEqual(started, [30], 'one slot: the other workers wait for it');
+  const reader = new AbortController();
+  const read = store.getRaw(0, 0, 0, 30, { signal: reader.signal }).catch((error) => error.name);
+  await settled();
+  assert.deepEqual(started, [30], 'a frame waits for t=30: nothing starts');
+  reader.abort();
+  assert.equal(await read, 'AbortError');
+  await settled();
+  assert.ok(started.length > 1, 'nobody waits any more, and the request for t=30 is no longer a speculative one: a worker started');
+  release(30);
+  abort.abort();
+  openAll();
+  await job;
+});
+
+test('workers of a movie that wait for a slot start when a read joins the request in flight, which is then no longer speculative', async () => {
+  const { store, started, openAll } = await openGated({ rate: 200_000 });
+  const abort = new AbortController();
+  const movie = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, playing: true, signal: abort.signal });
+  await settled();
+  assert.deepEqual(started, [30], 'one slot: the other workers wait for it');
+  const read = store.getRaw(0, 0, 0, 30);
+  await settled();
+  assert.ok(started.length > 1, 'the joined request is a demand one and gives its slot up: a worker started before it settled');
+  abort.abort();
+  openAll();
+  await Promise.all([read, movie]);
+});
+
 /** A small seeded generator, so that a failing run can be repeated. */
 function seeded(seed) {
   let state = seed >>> 0;
