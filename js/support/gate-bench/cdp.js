@@ -43,11 +43,11 @@ export class NetworkLog {
   }
 }
 
-/** A CDP session of the page with its network log on; the HTTP cache is off so that bytes mean bytes on the wire. */
-export async function attachNetworkLog(context, page, origins) {
+/** A CDP session of the page with its network log on. The HTTP cache is off by default, so that bytes mean bytes on the wire. */
+export async function attachNetworkLog(context, page, origins, { cacheDisabled = true } = {}) {
   const cdp = await context.newCDPSession(page);
   await cdp.send('Network.enable');
-  await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
+  await cdp.send('Network.setCacheDisabled', { cacheDisabled });
   return { cdp, log: new NetworkLog(cdp, origins) };
 }
 

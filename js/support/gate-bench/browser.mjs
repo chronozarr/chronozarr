@@ -9,6 +9,9 @@ export const BROWSER_ARGS = {
   metal: ['--ignore-gpu-blocklist', '--use-angle=metal'],
 };
 export const VIEWPORT = { width: 1280, height: 720 };
+// Only the loopback is reachable: a request to anything else fails to resolve at once, with no interception round trip in Node
+// (a Playwright route sends every request through Node, which adds 40 to 60 ms to a cold frame when it fulfils them).
+export const LOOPBACK_ONLY = '--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1';
 
 export const launchBrowser = (gpu, extraArgs = []) => chromium.launch({ headless: true, args: [...BROWSER_ARGS[gpu], ...extraArgs] });
 

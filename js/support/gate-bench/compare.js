@@ -28,6 +28,16 @@ export const METRICS = [
  */
 export const COMPACT_METRICS = METRICS.filter(({ key }) => key !== 'decodeMs').map((metric) => ({ ...metric, label: `${metric.label}, compact cache` }));
 
+/** The marks of the first visit (first-visit.mjs): shown next to the gates, with no tolerance and no gate. */
+export const FIRST_VISIT_MARKS = [
+  { key: 'firstRequestMs', label: 'Navigation to the first chunk request' },
+  { key: 'shaderMs', label: 'Shader compile and link, time blocked' },
+  { key: 'workerReadyMs', label: 'Decode worker spawn to its first message, with its codec' },
+  { key: 'codecMs', label: 'Codec module load by the page' },
+  { key: 'firstFrameMs', label: 'Navigation to the first whole frame' },
+  { key: 'targetFrameMs', label: 'Navigation to the frame at the target level' },
+];
+
 /** The counters of the warm loops that must all be 0 for the head. */
 const TRAFFIC = ['serverRequests', 'readerRequests', 'readerBytes'];
 
@@ -43,6 +53,18 @@ export const stats = (values) => ({ median: median(values), min: Math.min(...val
 
 const sumLoops = (records) =>
   Object.fromEntries([...TRAFFIC, 'incomplete'].map((field) => [field, records.reduce((n, record) => n + record.warmLoop[field], 0)]));
+
+/** The marks of the first visit of each build over the pairs; null when no run took them. A run whose visit failed has `firstVisit.error` and counts as unavailable. */
+function firstVisitRows(pairs) {
+  const visits = pairs.flatMap((pair) => [pair.base.firstVisit, pair.head.firstVisit]);
+  if (!visits.some(Boolean)) return null;
+  const rows = FIRST_VISIT_MARKS.map((mark) => {
+    const values = (variant) => pairs.map((pair) => pair[variant].firstVisit?.[mark.key]).filter(Number.isFinite);
+    const ratios = pairs.map((pair) => pair.head.firstVisit?.[mark.key] / pair.base.firstVisit?.[mark.key]).filter((ratio) => Number.isFinite(ratio) && ratio > 0);
+    return { ...mark, base: values('base').length ? stats(values('base')) : null, head: values('head').length ? stats(values('head')) : null, ratio: ratios.length ? median(ratios) : null };
+  });
+  return { rows, unavailable: visits.filter((visit) => !visit || visit.error).length };
+}
 
 const formatMs = (ms) => (ms >= 100 ? `${Math.round(ms)}` : ms.toFixed(1));
 const percent = (ratio) => `${ratio >= 1 ? '+' : '−'}${Math.round(Math.abs(ratio - 1) * 100)} %`;
@@ -87,7 +109,7 @@ export function compareBuilds(records, { metrics = METRICS } = {}) {
   if (incomplete) {
     failures.push(`${incomplete} warm switches of the head drew an incomplete frame with every chunk of the loop in memory: those switches were not warm.`);
   }
-  return { rows, traffic, pairs: pairs.length, failures };
+  return { rows, traffic, pairs: pairs.length, failures, firstVisit: firstVisitRows(pairs) };
 }
 
 /** The step summary of the job: the verdict, then the absolute figures of both builds next to the gates. */
@@ -110,8 +132,23 @@ export function summaryMarkdown(result, { environment = [], title = 'Speed gates
     '',
     'The real-GPU gates are those of CLAUDE.md. A CI runner draws with SwiftShader (the WebGL renderer below) on shared CPUs, so its timings are compared with the base measured in the same job, not with the gates.',
   ];
+  if (result.firstVisit) lines.push('', ...firstVisitLines(result.firstVisit));
   if (environment.length) lines.push('', ...environment.map((line) => `- ${line}`));
   return `${lines.join('\n')}\n`;
+}
+
+function firstVisitLines({ rows, unavailable }) {
+  const cell = (stat) => (stat ? `${formatMs(stat.median)} ms (${formatMs(stat.min)} to ${formatMs(stat.max)})` : '–');
+  return [
+    '### First visit (informational, not gated)',
+    '',
+    'A new browser with an empty profile and the HTTP cache on, once per run: the page, the viewer, its workers and the first open of the store, which the gates measure only after all of it is warm. Milliseconds from the start of the navigation, unless the row says otherwise; medians over the pairs, with the range.',
+    '',
+    '| Mark | Base | Head | Head / base |',
+    '|---|---|---|---|',
+    ...rows.map((row) => `| ${row.label} | ${cell(row.base)} | ${cell(row.head)} | ${row.ratio === null ? '–' : row.ratio.toFixed(2)} |`),
+    ...(unavailable ? ['', `The first visit failed in ${unavailable} of the runs (\`firstVisit.error\` in the JSON); the rows use the others.`] : []),
+  ];
 }
 
 function trafficText({ serverRequests, readerRequests, readerBytes, incomplete }) {

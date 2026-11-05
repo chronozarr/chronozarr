@@ -46,6 +46,8 @@ The runner alternates the two builds in pairs of runs, each a new headless Chrom
 node js/support/gate-bench/run.mjs --cache compact --base /tmp/gates/viewers/base --head /tmp/gates/viewers/head --store /tmp/gates/store
 ```
 
+The gates measure a page whose workers, shader programs and connections are warm from the opens before. Before each counted run of the default pass, the runner also makes a first visit in a new browser with an empty profile and the HTTP cache on (`first-visit.mjs`), and the summary lists its marks next to the gates: the start of the navigation to the first chunk request, the time spent in shader compile and link, a decode worker's spawn to its first message, the codec module load, and the navigation to the first whole frame and to the frame at the target level. They are for information: no gate reads them, and a visit that fails is logged without failing the job. A change to what happens before the first chunk is requested shows there and not in the gates.
+
 The gates cannot see what a slow link does to the viewer: they measure on an unthrottled link with every chunk in memory. `js/support/gate-bench/link.mjs` measures the same two builds on throttled links, for changes to what the viewer fetches and what it shows while it waits. It is not a CI job. It needs `openssl`, and a store with more timesteps than the viewer holds at once, which `store.mjs --times` makes by hard-linking the chunk files of the 8 generated timesteps (the same 510 MB on disk):
 
 ```bash

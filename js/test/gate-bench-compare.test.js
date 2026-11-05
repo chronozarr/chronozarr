@@ -136,3 +136,38 @@ test('the compact pass fails on a slower head like the default pass, and the sum
   assert.match(summaryMarkdown(result, { title: 'Speed gates, compact cache: head against base' }), /^## Speed gates, compact cache: head against base/);
   assert.match(summaryMarkdown(result), /^## Speed gates: head against base/);
 });
+
+const visit = (scale = 1) => ({ firstRequestMs: 100 * scale, shaderMs: 5 * scale, workerReadyMs: 60 * scale, codecMs: 8 * scale, firstFrameMs: 300 * scale, targetFrameMs: 320 * scale });
+
+test('the first visit of both builds is in the result and the summary, as information that fails nothing', () => {
+  const records = runs(5, { head: { coldOpenMs: 1 } }).map((record) => ({ ...record, firstVisit: visit(record.variant === 'head' ? 3 : 1) }));
+  const result = compareBuilds(records);
+  assert.deepEqual(result.failures, []);
+  const target = result.firstVisit.rows.find((row) => row.key === 'targetFrameMs');
+  assert.equal(target.base.median, 320);
+  assert.equal(target.head.median, 960);
+  assert.equal(target.ratio, 3);
+  assert.equal(result.firstVisit.unavailable, 0);
+  const text = summaryMarkdown(result);
+  assert.match(text, /### First visit \(informational, not gated\)/);
+  assert.match(text, /\| Navigation to the frame at the target level \| 320 ms \(320 to 320\) \| 960 ms \(960 to 960\) \| 3\.00 \|/);
+});
+
+test('a run whose first visit failed is counted and the other runs give the rows', () => {
+  const records = runs(5).map((record) => ({ ...record, firstVisit: record.pair === 2 && record.variant === 'head' ? { error: 'no frame' } : visit() }));
+  const result = compareBuilds(records);
+  assert.equal(result.firstVisit.unavailable, 1);
+  assert.equal(result.firstVisit.rows.find((row) => row.key === 'shaderMs').head.n, 4);
+  assert.match(summaryMarkdown(result), /The first visit failed in 1 of the runs/);
+});
+
+test('a mark that no run produced shows a dash, and runs without a first visit leave the section out', () => {
+  const marked = runs(3).map((record) => ({ ...record, firstVisit: { ...visit(), codecMs: null } }));
+  const row = compareBuilds(marked).firstVisit.rows.find((candidate) => candidate.key === 'codecMs');
+  assert.equal(row.base, null);
+  assert.equal(row.ratio, null);
+  assert.match(summaryMarkdown(compareBuilds(marked)), /\| Codec module load by the page \| – \| – \| – \|/);
+  const plain = compareBuilds(runs(3));
+  assert.equal(plain.firstVisit, null);
+  assert.doesNotMatch(summaryMarkdown(plain), /First visit/);
+});

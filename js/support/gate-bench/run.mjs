@@ -19,6 +19,10 @@
 // (32 MiB, about 23 of the 36 chunks of one timestep), so its first steps draw incomplete frames and fetch what they miss:
 // 7 of 20 frames per run on this store, and its stepping loop reports 228 requests (321 MB). Its figures stay in the JSON.
 //
+// Before each counted run, a new browser makes a first visit (first-visit.mjs): an empty profile, the HTTP cache on, the page
+// and its first open of the store, none of it warm. Its marks (the first chunk request, shader compile and link, the start of a
+// decode worker, the codec, the first whole frame) are in the summary and the JSON, for information: no gate reads them.
+//
 // The builds alternate (base then head, then head then base, ...) after one warm-up pair that is not counted, so that the
 // load of a shared runner falls on both, and each pair is compared on its own.
 //
@@ -39,6 +43,7 @@ import { parseArgs } from 'node:util';
 import { startStaticServer } from '../static-server.js';
 import { BROWSER_ARGS, VIEWPORT, launchBrowser, rendererInfo, withTimeout } from './browser.mjs';
 import { COMPACT_METRICS, METRICS, compareBuilds, summaryMarkdown } from './compare.js';
+import { firstVisit } from './first-visit.mjs';
 
 // Five cold opens per run: with three, one slow open moved a run's median by up to 59 % on GitHub's runners.
 const COLD_RUNS = 5;
@@ -156,6 +161,14 @@ async function warmLoops({ switches, pauseMs, settleMs }) {
 }
 
 async function measure({ variant, pair, appUrl, storeUrl, data }) {
+  // Informational: a visit that fails is logged and kept in the record, and does not stop the gates. The compact pass and the warm-up pair skip it.
+  const visit =
+    compact || pair < 0
+      ? undefined
+      : await firstVisit({ gpu: args.gpu, appUrl, storeUrl }).catch((error) => {
+          console.warn(`first visit of the ${variant} build, pair ${pair + 1}, failed: ${error.message}`);
+          return { error: error.message };
+        });
   const browser = await launchBrowser(args.gpu);
   const errors = [];
   try {
@@ -210,6 +223,7 @@ async function measure({ variant, pair, appUrl, storeUrl, data }) {
         decodePerChunk: bench.decodePerChunk,
       },
       coldOpens,
+      ...(visit && { firstVisit: visit }),
     };
   } finally {
     await browser.close();

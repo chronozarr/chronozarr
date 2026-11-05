@@ -35,13 +35,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { startStaticServer } from '../static-server.js';
-import { BROWSER_ARGS, VIEWPORT, launchBrowser, rendererInfo, withTimeout } from './browser.mjs';
+import { BROWSER_ARGS, LOOPBACK_ONLY, VIEWPORT, launchBrowser, rendererInfo, withTimeout } from './browser.mjs';
 import { attachNetworkLog, setLink } from './cdp.js';
 import { LINKS, SCENARIOS, compareLinks, linkSummaryMarkdown, runFigures } from './link-compare.js';
 import { runScenario } from './link-scenarios.js';
 
-// Only the loopback is reachable: a request to anything else fails to resolve at once, with no interception round trip in Node.
-const LOOPBACK_ONLY = '--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1';
 const IDLE_MS = 5000;
 // What a drag or a jump waits for its last frame, after the release: a run that cannot show it reports this, flagged `timedOut`.
 const SETTLE_CAP_MS = 60_000;
