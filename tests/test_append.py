@@ -114,6 +114,33 @@ def test_iterable_input_is_appended_like_a_dataarray(tmp_path, truth):
     assert not list(tmp_path.glob(".store-spill-*"))
 
 
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_append_leaves_store_unchanged_on_overview_nodata_collision(tmp_path, layout):
+    store = tmp_path / "store"
+    values = np.array([[[[8, 8], [8, 8]]], [[[-1, 1], [-1, 1]]]], dtype="int16")
+    series = make_da(values)
+    options = LAYOUTS[layout]
+    chronozarr.encode(
+        series.isel(time=slice(0, 1)),
+        store,
+        nodata=0,
+        n_lods=2,
+        chunk_size=2,
+        shard=bool(options.get("shard")),
+        shard_time=options.get("shard_time"),
+    )
+    before = digests(store)
+
+    with pytest.raises(ValueError, match=r"pyramid level 1.*nodata sentinel"):
+        append(store, series.isel(time=slice(1, 2)))
+
+    assert digests(store) == before
+    assert not list(tmp_path.glob(".store-append-*"))
+    corrected = series.isel(time=slice(1, 2)) + 2
+    assert append(store, corrected).n_time == 2
+    assert chronozarr.validate(store) == []
+
+
 def test_one_timestep_store_with_a_long_shard_takes_appends_in_the_same_shard(tmp_path, truth):
     store, fresh = tmp_path / "store", tmp_path / "fresh"
     encode_head(truth, store, 1, shard=True, shard_time=12)  # shard_time > n_time
@@ -533,6 +560,20 @@ def test_transform_mismatch(base_store, truth):
     shifted = (*TRANSFORM[:2], TRANSFORM[2] + 10.0, *TRANSFORM[3:])
     other.attrs["transform"] = shifted
     refuse(base_store, other, "transform: the input's is")
+
+
+def test_encode_and_append_refuse_a_slice_with_a_stale_transform(tmp_path, truth):
+    source, west = tmp_path / "source", tmp_path / "west"
+    encode_head(truth, source, 2)
+    da = chronozarr.open_store(source).to_xarray()
+    chronozarr.encode(da.isel(time=slice(0, 1), x=slice(0, 2)), west, n_lods=1)
+    east = da.isel(time=slice(1, 2), x=slice(2, 4))
+    message = "the transform attribute disagrees with the x pixel centres"
+    with pytest.raises(ValueError, match=message):
+        chronozarr.encode(east, tmp_path / "east", n_lods=1)
+    refuse(west, east, message)
+    append(west, da.isel(time=slice(1, 2), x=slice(0, 2)))
+    np.testing.assert_array_equal(decoded(west), truth[:2, :, :, :2])
 
 
 def test_times_must_follow_the_store(base_store, truth):

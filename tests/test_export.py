@@ -314,6 +314,42 @@ def test_export_keeps_the_nodata_tag_next_to_a_mask_when_no_valid_pixel_holds_it
             assert np.array_equal(band_validity(src), np.broadcast_to(mask[t] > 0, (2, 40, 50)))
 
 
+@pytest.mark.parametrize(
+    ("fill", "use_mask", "physical", "has_overviews"),
+    [
+        (0, False, False, False),
+        (-32768, False, False, True),
+        (0, True, False, True),
+        (0, False, True, True),
+        (0, True, True, True),
+    ],
+)
+def test_export_keeps_valid_means_separate_from_nodata(
+    tmp_path, fill, use_mask, physical, has_overviews
+):
+    rasterio = pytest.importorskip("rasterio")
+    truth = np.ones((1, 1, 520, 520), dtype=np.int16)
+    truth[0, 0, :2, :2] = [[-2, 2], [-2, 2]]
+    truth[0, 0, 2:4, 2:4] = fill
+    mask = truth[:, 0] != fill if use_mask else None
+    path = tmp_path / "store"
+    chronozarr.encode(make_da(truth, ["v"]), path, nodata=fill, mask=mask, n_lods=1)
+    (target,) = export_cog(path, tmp_path / "cogs", physical=physical)
+    with rasterio.open(target) as src:
+        if physical:
+            assert np.isnan(src.nodata)
+        else:
+            assert src.nodata == (None if use_mask else fill)
+        base = src.read(1, window=((0, 4), (0, 4)), masked=True)
+        np.testing.assert_array_equal(base[:2, :2], [[-2, 2], [-2, 2]])
+        assert base.mask[2:4, 2:4].all()
+        assert src.overviews(1) == ([2] if has_overviews else [])
+        if has_overviews:
+            overview = src.read(1, out_shape=(260, 260), masked=True)
+            assert overview[0, 0] == 0
+            assert overview.mask[1, 1]
+
+
 def test_export_decides_the_nodata_tag_per_timestep(tmp_path):
     rasterio = pytest.importorskip("rasterio")
     truth = make_truth(4, 2, 40, 50)

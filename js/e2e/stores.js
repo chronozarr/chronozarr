@@ -32,6 +32,7 @@ const S2_BANDS = ['B02', 'B03', 'B04', 'B08'];
 const ALL_PRODUCTS = ['True color', 'False color', 'NDVI', 'NDWI', 'Water', 'Single band'];
 const BASE = { height: 200, width: 200, chunk: 128, nTime: 6, sharded: true, nLevels: 2, consolidated: true };
 const GEOREFERENCE = [10, 0, 500000, 0, -10, 4000000];
+const opticalValues = wobbled(0);
 
 /**
  * name -> { dtype, spec, enabledProducts } where `spec` is the argument of buildSyntheticStore (its `values` is
@@ -49,6 +50,14 @@ export const STORES = {
   u16_plain: {
     dtype: 'uint16',
     spec: { ...BASE, nTime: 4, sharded: false, nBand: 4, bands: S2_BANDS, nodata: 0, transform: GEOREFERENCE, values: wobbled(0) },
+    enabledProducts: ALL_PRODUCTS,
+  },
+  u16_partial: {
+    dtype: 'uint16',
+    spec: {
+      ...BASE, nTime: 4, sharded: false, nBand: 4, bands: S2_BANDS, nodata: 0, transform: GEOREFERENCE,
+      values: (t, b, y, x, lod) => b === 2 && y === 40 && x === 50 && lod === 0 ? 0 : opticalValues(t, b, y, x, lod),
+    },
     enabledProducts: ALL_PRODUCTS,
   },
   // A step is 2 x 2 chunks of 524 KB at level 0 and one chunk at level 1: more than a link of 1 MB/s carries at the speed of a movie, at either level.

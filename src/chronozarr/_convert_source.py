@@ -183,6 +183,15 @@ def _grid_difference(found: Grid, wanted: Grid) -> str:
 _NAN = "nan"  # token for a declared NaN nodata; the other tokens are None or a number
 
 
+def _logical_packed_dtype(dtype: np.dtype, unsigned: object) -> np.dtype:
+    """A packed integer's dtype after applying the CF _Unsigned declaration."""
+    if dtype.kind == "i" and unsigned == "true":
+        return np.dtype(f"u{dtype.itemsize}")
+    if dtype.kind == "u" and unsigned == "false":
+        return np.dtype(f"i{dtype.itemsize}")
+    return dtype
+
+
 def _declared_nodata(value: float | None, dtype: np.dtype) -> float | int | str | None:
     """A declared nodata value as a token, or None when unset or when no pixel can hold it.
 

@@ -1,4 +1,10 @@
 // Pure formatting of decoded pixel values for the inspector.
+
+/** Escape store metadata before putting it into an HTML template. */
+export function escapeHtml(text) {
+  return String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+}
+
 /** WGS84 coordinates at the center of the selected level-0 pixel. */
 export async function pixelLocation(pixel, store) {
   if (!store?.transform) return null;
@@ -38,8 +44,8 @@ export function formatValue(value) {
 export function sidebarHtml(info, timeLabel) {
   const indices = [];
   if (info.hasNdvi) indices.push(metricHtml('NDVI', info.ndvi, ndviColor(info.ndvi)));
-  if (info.hasNdwi) {
-    indices.push(metricHtml('NDWI', info.ndwi, ndwiColor(info.ndwi)));
+  if (info.hasNdwi) indices.push(metricHtml('NDWI', info.ndwi, ndwiColor(info.ndwi)));
+  if (info.ndwi !== null) {
     indices.push(`
       <div class="metric">
         <div class="metric-header">
@@ -53,15 +59,15 @@ export function sidebarHtml(info, timeLabel) {
   }
   const row = (label, value) => `<div class="meta-row"><span class="label">${label}</span><span class="value mono">${value}</span></div>`;
   const reflectance = info.bands.every((b) => b.reflectance);
-  const physical = (b) => (reflectance ? b.value.toFixed(4) : `${formatValue(b.value)}${b.units && b.units !== 'reflectance' ? ` ${b.units}` : ''}`);
+  const physical = (b) => (reflectance ? b.value.toFixed(4) : `${formatValue(b.value)}${b.units && b.units !== 'reflectance' ? ` ${escapeHtml(b.units)}` : ''}`);
   const noData = '<span class="no-data">no data</span>';
-  const scaled = info.valid && info.bands.some((b) => b.value !== b.stored);
+  const scaled = info.bands.some((b) => b.value !== null && b.value !== b.stored);
   const status = info.valid ? '' : row('Status', `<span class="no-data">No data</span> · ${info.masked ? 'masked out' : 'at the nodata value'}`);
   const observed = info.observed === null || info.observed === undefined ? '' : row('Observed by', info.observed === 0 ? 'no scene (gap-filled)' : `${info.observed} scene${info.observed === 1 ? '' : 's'}`);
   return `
     <div class="sidebar-section">
       <div class="section-label">Location</div>
-      <div class="meta-row"><span class="label">Time</span><span class="value">${timeLabel}</span></div>
+      <div class="meta-row"><span class="label">Snapshot time</span><span class="value">${timeLabel}</span></div>
       ${row('Pixel (x, y)', `${info.pixel.x}, ${info.pixel.y}`)}
       <div class="coordinate-location">
         <div class="coordinate-heading"><span>Latitude, longitude</span><button type="button" id="copy-coordinates" aria-label="Copy latitude and longitude" hidden>Copy</button></div>
@@ -81,14 +87,14 @@ export function sidebarHtml(info, timeLabel) {
     </div>
     <div class="sidebar-section">
       <div class="section-label">${reflectance ? 'Reflectance' : 'Value'}</div>
-      ${info.bands.map((b) => row(b.name, info.valid ? physical(b) : noData)).join('')}
+      ${info.bands.map((b) => row(escapeHtml(b.name), b.value === null ? noData : physical(b))).join('')}
     </div>
     ${
       scaled
         ? `<div class="sidebar-section">
       <div class="section-label">Stored value</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 16px;">
-        ${info.bands.map((b) => row(b.name, b.stored)).join('')}
+        ${info.bands.map((b) => row(escapeHtml(b.name), b.value === null ? noData : b.stored)).join('')}
       </div>
     </div>`
         : ''

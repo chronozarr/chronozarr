@@ -121,7 +121,21 @@ def downsample_2x(
         np.floor_divide(total, count, out=mean, where=has_valid)
     if nodata:
         mean[~has_valid] = nodata
-    return mean.astype(values.dtype)
+    stored = mean.astype(values.dtype)
+    # Unsigned nonzero inputs cannot average to zero. Other sentinels may also
+    # be valid means, including after rounding a float64 mean to float32.
+    if (
+        valid is None
+        and nodata is not None
+        and not zero_is_nodata
+        and np.any(has_valid & (stored == nodata))
+    ):
+        raise ValueError(
+            f"an overview mean matches nodata sentinel {nodata!r} and would be read as missing. "
+            "Create or rebuild the store with an explicit validity mask or only level 0 "
+            "(n_lods=1 in Python or --lods 1 on the CLI)."
+        )
+    return stored
 
 
 def _downsample_plane_pair(
@@ -192,6 +206,7 @@ def _transform_from_coords(da: xr.DataArray) -> Transform:
 
 
 def _resolve_transform(raw: Sequence[float] | None, da: xr.DataArray | None) -> Transform:
+    from_attrs = raw is None
     if raw is None and da is not None:
         raw = da.attrs.get("transform")
     if raw is None:
@@ -208,7 +223,29 @@ def _resolve_transform(raw: Sequence[float] | None, da: xr.DataArray | None) -> 
         raise ValueError("rotated transforms are not supported; reproject to a north-up grid")
     if a <= 0 or e >= 0:
         raise ValueError(f"transform must be north-up (a > 0, e < 0), got a={a}, e={e}")
-    return (values[0], values[1], values[2], values[3], values[4], values[5])
+    transform = (values[0], values[1], values[2], values[3], values[4], values[5])
+    if from_attrs and da is not None and ("x" in da.coords or "y" in da.coords):
+        _check_transform_coords(da, transform)
+    return transform
+
+
+def _check_transform_coords(da: xr.DataArray, transform: Transform) -> None:
+    """Reject stale transform attributes on spatial slices with explicit pixel centres."""
+    y, x = schema.pixel_centers(transform, da.sizes["y"], da.sizes["x"])
+    for axis, expected, step in (("x", x, transform[0]), ("y", y, transform[4])):
+        if axis not in da.coords:
+            continue
+        coord = da.coords[axis]
+        if coord.dtype.kind == "f":
+            expected = expected.astype(coord.dtype)
+        if coord.dims != (axis,) or not np.allclose(
+            coord.values.astype(np.float64), expected, rtol=0, atol=abs(step) * 1e-6
+        ):
+            raise ValueError(
+                f"the transform attribute disagrees with the {axis} pixel centres. "
+                "Update the attribute after slicing, remove it to infer the transform from x/y, "
+                "or pass transform= explicitly for index coordinates"
+            )
 
 
 def _iso_times(times: np.ndarray) -> tuple[list[str], np.ndarray]:
@@ -546,7 +583,10 @@ class _Pyramid:
                     continue
                 child = self._produce(k - 1, child_row, child_col, submit, t0, t1)
                 started = time.perf_counter()
-                small = downsample_block(child, self.nodata, self.compute)
+                try:
+                    small = downsample_block(child, self.nodata, self.compute)
+                except ValueError as exc:
+                    raise ValueError(f"cannot build pyramid level {k}. {exc}") from exc
                 ys = slice(i * half, i * half + small.height)
                 xs = slice(j * half, j * half + small.width)
                 if parent.mask is None and small.mask is not None:

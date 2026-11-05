@@ -37,7 +37,6 @@ import urllib.request
 import webbrowser
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from email.utils import parsedate_to_datetime
 from functools import partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -95,15 +94,12 @@ def _parse_range(header: str, size: int) -> tuple[int, int] | None | str:
     return start, end
 
 
-def _unchanged_since(header: str | None, modified: int) -> bool:
-    """Whether an If-Modified-Since header says the client's copy is as new as `modified`."""
-    if not header:
-        return False
-    try:
-        since = parsedate_to_datetime(header)
-    except (TypeError, ValueError):
-        return False
-    return modified <= since.timestamp()
+def _etag_matches(header: str, tag: str) -> bool:
+    """Whether If-None-Match names this version, using weak comparison for GET and HEAD."""
+    return any(
+        value.strip().removeprefix("W/") in ("*", tag.removeprefix("W/"))
+        for value in header.split(",")
+    )
 
 
 @dataclass
@@ -202,17 +198,26 @@ class StoreRequestHandler(SimpleHTTPRequestHandler):
         if target is None:
             self.send_error(HTTPStatus.NOT_FOUND, "no such object in this store")
             return None
-        modified = int(target.stat().st_mtime)
-        # `no-cache` makes a browser revalidate every object; answer that without the body.
-        if "Range" not in self.headers and _unchanged_since(
-            self.headers.get("If-Modified-Since"), modified
+        try:
+            handle = target.open("rb")
+        except FileNotFoundError:
+            self.send_error(HTTPStatus.NOT_FOUND, "no such object in this store")
+            return None
+        stat = os.fstat(handle.fileno())
+        modified = self.date_time_string(stat.st_mtime)
+        tag = f'W/"{stat.st_ino:x}-{stat.st_size:x}-{stat.st_mtime_ns:x}-{stat.st_ctime_ns:x}"'
+        # Date validators have one-second resolution, so an append can replace a file without
+        # changing Last-Modified. Revalidate by entity tag and ignore date-only requests.
+        if "Range" not in self.headers and _etag_matches(
+            self.headers.get("If-None-Match", ""), tag
         ):
+            handle.close()
             self.send_response(HTTPStatus.NOT_MODIFIED)
-            self.send_header("Last-Modified", self.date_time_string(modified))
+            self.send_header("Last-Modified", modified)
+            self.send_header("ETag", tag)
             self.end_headers()
             return None
-        handle = target.open("rb")
-        size = target.stat().st_size
+        size = stat.st_size
         requested = _parse_range(self.headers.get("Range", ""), size)
         if requested == "unsatisfiable":
             handle.close()
@@ -233,7 +238,8 @@ class StoreRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", self.guess_type(self._split(self.path)[-1]))
         self.send_header("Content-Length", str(self._remaining))
         self.send_header("Accept-Ranges", "bytes")
-        self.send_header("Last-Modified", self.date_time_string(modified))
+        self.send_header("Last-Modified", modified)
+        self.send_header("ETag", tag)
         self.end_headers()
         return handle
 

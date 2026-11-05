@@ -17,50 +17,84 @@ export function bindViewerInput(viewer, callbacks) {
   bindKeyboardInput(viewer);
 }
 
-/** Keep drag state local to the map and preserve cursor-centered zoom. */
+/** Pan with one pointer and zoom about the midpoint of two captured pointers. */
 function bindMapInput(viewer, { inspect, cameraChanged }) {
   const canvas = viewer.canvas;
-  let drag = null;
+  const points = new Map();
+  let moved = 0;
+  let pinched = false;
+  const moveCamera = (from, to, factor = 1) => {
+    const rect = canvas.getBoundingClientRect();
+    const offset = ({ x, y }) => ({
+      x: ((x - rect.left) / rect.width - 0.5) * canvas.width,
+      y: ((y - rect.top) / rect.height - 0.5) * canvas.height,
+    });
+    const before = offset(from);
+    const after = offset(to);
+    const { cx, cy, scale } = viewer.camera;
+    const next = clamp(scale * factor, viewer.fitScale * 0.5, MAX_SCALE);
+    viewer.camera = { cx: cx + before.x / scale - after.x / next, cy: cy + before.y / scale - after.y / next, scale: next };
+    cameraChanged();
+  };
+  const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const position = (e) => ({ x: e.clientX, y: e.clientY });
   canvas.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || points.size >= 2) return;
     // No text selection or native drag from a press on the map.
     e.preventDefault();
-    drag = { x: e.clientX, y: e.clientY, moved: 0 };
+    if (!points.size) {
+      moved = 0;
+      pinched = false;
+    } else {
+      pinched = true;
+    }
+    points.set(e.pointerId, position(e));
     canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener('pointermove', (e) => {
-    if (!drag || !viewer.store) return;
-    const dx = e.clientX - drag.x;
-    const dy = e.clientY - drag.y;
-    drag.moved += Math.abs(dx) + Math.abs(dy);
-    drag.x = e.clientX;
-    drag.y = e.clientY;
-    const scaleToCanvas = canvas.width / canvas.getBoundingClientRect().width;
-    viewer.camera.cx -= (dx * scaleToCanvas) / viewer.camera.scale;
-    viewer.camera.cy -= (dy * scaleToCanvas) / viewer.camera.scale;
-    cameraChanged();
+    const before = points.get(e.pointerId);
+    if (!before || !viewer.store) return;
+    const after = position(e);
+    points.set(e.pointerId, after);
+    if (points.size === 2) {
+      const other = [...points.values()].find((p) => p !== after);
+      const previousDistance = distance(before, other);
+      const nextDistance = distance(after, other);
+      const factor = previousDistance > 0 && nextDistance > 0 ? nextDistance / previousDistance : 1;
+      moveCamera(midpoint(before, other), midpoint(after, other), factor);
+    } else {
+      moved += Math.abs(after.x - before.x) + Math.abs(after.y - before.y);
+      moveCamera(before, after);
+    }
   });
   canvas.addEventListener('pointerup', (e) => {
-    const wasClick = drag && drag.moved < CLICK_SLOP_PX;
-    drag = null;
-    if (wasClick) inspect(e.clientX, e.clientY);
+    if (points.delete(e.pointerId) && !pinched && moved < CLICK_SLOP_PX) inspect(e.clientX, e.clientY);
   });
-  canvas.addEventListener('pointercancel', () => {
-    drag = null;
-  });
+  canvas.addEventListener('lostpointercapture', (e) => points.delete(e.pointerId));
   canvas.addEventListener('wheel', (e) => {
     if (!viewer.store) return;
     e.preventDefault();
-    const rect = canvas.getBoundingClientRect();
-    const px = ((e.clientX - rect.left) * canvas.width) / rect.width;
-    const py = ((e.clientY - rect.top) * canvas.height) / rect.height;
-    const { cx, cy, scale } = viewer.camera;
-    const next = clamp(scale * Math.exp(-e.deltaY * 0.0015), viewer.fitScale * 0.5, MAX_SCALE);
-    const worldX = cx + (px - canvas.width / 2) / scale;
-    const worldY = cy + (py - canvas.height / 2) / scale;
-    viewer.camera = { cx: worldX - (px - canvas.width / 2) / next, cy: worldY - (py - canvas.height / 2) / next, scale: next };
-    cameraChanged();
+    const point = position(e);
+    moveCamera(point, point, Math.exp(-e.deltaY * 0.0015));
   }, { passive: false });
   canvas.addEventListener('dblclick', () => viewer.store && viewer.fit());
+  canvas.addEventListener('keydown', (e) => {
+    if (!viewer.store || !viewer.inspectorUi || e.metaKey || e.ctrlKey || e.altKey) return;
+    const rect = canvas.getBoundingClientRect();
+    const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    if (e.key === 'Enter') inspect(center.x, center.y);
+    else if (e.key === '+' || e.key === '=') moveCamera(center, center, 1.5);
+    else if (e.key === '-') moveCamera(center, center, 1 / 1.5);
+    else if (e.key === '0') viewer.fit();
+    else if (e.key === 'ArrowLeft') moveCamera(center, { ...center, x: center.x + 32 });
+    else if (e.key === 'ArrowRight') moveCamera(center, { ...center, x: center.x - 32 });
+    else if (e.key === 'ArrowUp') moveCamera(center, { ...center, y: center.y + 32 });
+    else if (e.key === 'ArrowDown') moveCamera(center, { ...center, y: center.y - 32 });
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  });
 }
 
 /** Bind product, playback, inspector and display controls to the viewer API. */
@@ -120,6 +154,7 @@ export function bindTimelineInput(viewer) {
 /** Keyboard shortcuts respect form focus: a focused select, field or button keeps its own Space (a button clicks on it). */
 function bindKeyboardInput(viewer) {
   document.addEventListener('keydown', (e) => {
+    if (e.target.closest('dialog[open]')) return;
     if (e.key === 'Escape' && viewer.inspectorOpen) {
       viewer.closeInspector();
       return;

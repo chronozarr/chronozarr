@@ -10,7 +10,7 @@ from __future__ import annotations
 import importlib.util
 import threading
 from collections import OrderedDict
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,9 +22,9 @@ import xarray as xr
 from chronozarr import schema
 from chronozarr._calendar import (
     CalendarMapping,
-    MissingCftimeError,
     calendar_name,
     check_rule,
+    decode_dimension_coordinates,
     explain_missing_cftime,
     is_cftime,
     to_gregorian,
@@ -38,6 +38,7 @@ from chronozarr._convert_source import (
     _crs_string,
     _decide_validity,
     _declared_nodata,
+    _logical_packed_dtype,
     _same_crs,
     _scaling,
     _settle_nan,
@@ -133,21 +134,29 @@ def _open_dataset(source: str) -> xr.Dataset:
     if source.lower().endswith(NETCDF_SUFFIXES):
         if not Path(source).is_file():
             raise FileNotFoundError(f"NetCDF file {source} does not exist")
-        return open_netcdf(source, mask_and_scale=False)
+        raw = open_netcdf(source, mask_and_scale=False, decode_times=False)
+    else:
+        raw = _open_raw_zarr(source)
+    return decode_dimension_coordinates(raw, redact_url(source))
+
+
+def _open_raw_zarr(source: str) -> xr.Dataset:
     if not source.startswith(("http://", "https://")) and not Path(source).exists():
         raise FileNotFoundError(f"input {source} does not exist")
     try:
-        return open_zarr(source, chunks=None, consolidated=True, mask_and_scale=False)
-    except MissingCftimeError:
-        raise
+        return open_zarr(
+            source, chunks=None, consolidated=True, mask_and_scale=False, decode_times=False
+        )
     except (KeyError, ValueError):
         if source.startswith(("http://", "https://")):
             raise ValueError(
-                f"{source}: a remote Zarr input needs consolidated metadata (.zmetadata or "
-                "consolidated zarr.json) because HTTP stores cannot be listed"
+                f"{redact_url(source)}: a remote Zarr input needs consolidated metadata "
+                "(.zmetadata or consolidated zarr.json) because HTTP stores cannot be listed"
             ) from None
     # Local store without consolidated metadata: xarray falls back to listing and warns.
-    return open_zarr(source, chunks=None, consolidated=False, mask_and_scale=False)
+    return open_zarr(
+        source, chunks=None, consolidated=False, mask_and_scale=False, decode_times=False
+    )
 
 
 def _first_present(names: Sequence[Any], aliases: Sequence[str]) -> str | None:
@@ -275,20 +284,42 @@ def _scalar_attr(da: xr.DataArray, key: str, default: float) -> float:
     return float(values[0])
 
 
+def _packed_nodata(
+    value: float, raw_dtype: np.dtype, logical_dtype: np.dtype
+) -> float | int | str | None:
+    """A source fill code after the same signedness reinterpretation as its pixels."""
+    token = _declared_nodata(value, raw_dtype)
+    if raw_dtype == logical_dtype:
+        return token
+    if isinstance(token, int):
+        return int(np.asarray(token, dtype=raw_dtype).astype(logical_dtype).item())
+    return _declared_nodata(value, logical_dtype)
+
+
+def _crs_attribute(attrs: Mapping[str, Any]) -> str | None:
+    for key in ("crs", "crs_wkt", "spatial_ref"):
+        if attrs.get(key):
+            return str(attrs[key])
+    return None
+
+
 def _crs_from_attrs(da: xr.DataArray, dataset: xr.Dataset) -> str | None:
-    for holder in (da.attrs, dataset.attrs):
-        for key in ("crs", "crs_wkt", "spatial_ref"):
-            if holder.get(key):
-                return str(holder[key])
-    for name in ("spatial_ref", "crs"):
-        if name in dataset.variables:
-            attrs = dataset[name].attrs
-            for key in ("crs_wkt", "spatial_ref", "crs"):
-                if attrs.get(key):
-                    return str(attrs[key])
+    if text := _crs_attribute(da.attrs):
+        return text
     mapping = da.attrs.get("grid_mapping", da.encoding.get("grid_mapping"))
-    if isinstance(mapping, str) and mapping in dataset.variables:
-        return wkt2_from_cf(dataset[mapping].attrs, mapping)
+    if isinstance(mapping, str) and mapping:
+        if mapping not in dataset.variables:
+            raise ValueError(
+                f"{da.name}: cannot find the CF grid mapping {mapping!r}; "
+                "pass --crs with an EPSG code or WKT2 text"
+            )
+        attrs = dataset[mapping].attrs
+        return _crs_attribute(attrs) or wkt2_from_cf(attrs, mapping)
+    if text := _crs_attribute(dataset.attrs):
+        return text
+    for name in ("spatial_ref", "crs"):
+        if name in dataset.variables and (text := _crs_attribute(dataset[name].attrs)):
+            return text
     return None
 
 
@@ -321,16 +352,21 @@ class _Inspected:
 
 
 def _inspect(
-    dataset: xr.Dataset, variable: str, dims: dict[str, str], *, cast_float32: bool = False
+    dataset: xr.Dataset,
+    variable: str,
+    dims: dict[str, str],
+    *,
+    read_crs: bool,
+    cast_float32: bool = False,
 ) -> _Inspected:
     """What `dataset` says about `variable`; ValueError when it cannot be a step of a store."""
     raw = dataset[variable]
     resolved, squeezed = _resolve_dims(raw, dims, variable)
-    dtype = np.dtype("float32") if cast_float32 else raw.dtype
+    logical_dtype = _logical_packed_dtype(raw.dtype, raw.attrs.get("_Unsigned"))
+    dtype = np.dtype("float32") if cast_float32 else logical_dtype
     if dtype.name not in schema.DTYPES:
         raise ValueError(
-            f"{variable} is {raw.dtype}; chronozarr stores hold {list(schema.DTYPES)}. "
-            "Cast it first"
+            f"{variable} is {dtype}; chronozarr stores hold {list(schema.DTYPES)}. Cast it first"
         )
     da = raw.isel({d: 0 for d in squeezed})
     squeezed_dimensions = tuple(_SqueezedDimension.of(raw, d) for d in squeezed)
@@ -352,9 +388,9 @@ def _inspect(
             token
             for key in ("_FillValue", "missing_value")
             for value in np.atleast_1d(da.attrs.get(key, [])).tolist()
-            if (token := _declared_nodata(value, da.dtype)) is not None
+            if (token := _packed_nodata(value, da.dtype, logical_dtype)) is not None
         ),
-        crs=_crs_from_attrs(da, dataset),
+        crs=_crs_from_attrs(da, dataset) if read_crs else None,
         bands=bands,
         calendar=calendar,
         squeezed=squeezed_dimensions,
@@ -687,7 +723,9 @@ class XarraySource(Source):
             raise ValueError(f"variable {variable!r} is not in {first}: {names}")
         self.variable = variable
         self._dims_arg = dims
-        ref = _inspect(dataset, variable, dims, cast_float32=self._cast_float32)
+        ref = _inspect(
+            dataset, variable, dims, read_crs=crs is None, cast_float32=self._cast_float32
+        )
         facts = ref.facts
         resolved = self._dims = ref.dims
         self._squeezed = ref.squeezed
@@ -853,7 +891,7 @@ class XarraySource(Source):
                             "every file of a series holds the variable: " + _FIX_DROP,
                         )
                     ]
-                found = _inspect(dataset, self.variable, self._dims_arg)
+                found = _inspect(dataset, self.variable, self._dims_arg, read_crs=crs is None)
                 problems = [
                     Problem(path, what, fix)
                     for what, fix in _differences(
@@ -963,6 +1001,8 @@ class XarraySource(Source):
             values = values[np.newaxis]
         if self._flip_y:
             values = values[:, ::-1, :]
+        if not self._cast_float32:
+            values = values.astype(self.info.dtype, copy=False)
         valid = None
         if self.info.mask:
             ok = _value_valid(values, self._sentinels)

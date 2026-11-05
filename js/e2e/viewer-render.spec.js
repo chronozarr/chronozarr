@@ -11,7 +11,7 @@ function expectedSidebar(storeName, t, X, Y) {
   const ndvi = (nir - red) / (nir + red);
   const ndwi = (green - nir) / (green + nir);
   return {
-    Location: [['Time', isoDate(t)], ['Pixel (x, y)', `${X}, ${Y}`], ['Level', '0 (full resolution)']],
+    Location: [['Snapshot time', isoDate(t)], ['Pixel (x, y)', `${X}, ${Y}`], ['Level', '0 (full resolution)']],
     Indices: [['NDVI', ndvi.toFixed(3)], ['NDWI', ndwi.toFixed(3)], ['Water', ndwi > 0 ? 'Detected' : 'None']],
     Reflectance: [['B02', blue.toFixed(4)], ['B03', green.toFixed(4)], ['B04', red.toFixed(4)], ['B08', nir.toFixed(4)]],
     'Stored value': [['B02', String(stored[0])], ['B03', String(stored[1])], ['B04', String(stored[2])], ['B08', String(stored[3])]],

@@ -3,6 +3,7 @@
 // what is on screen; a timestep whose data is not in memory yet is waited for, like playback holds. MP4 (H.264) is
 // what slides, chat apps and phones play; Chrome and Safari record it, Firefox records only WebM.
 
+import { redactText } from '../chronozarr/redact.js';
 import { applyPalette, GIFEncoder, quantize } from '../vendor/gifenc.esm.js';
 import { Playback } from './playback.js';
 
@@ -206,6 +207,8 @@ async function recordVideo(session, { format, from, to, stepsPerSecond, onProgre
 export async function exportLoop(viewer, { format, from, to, stepsPerSecond, scale = 1, onProgress = () => {}, signal }) {
   if (!EXPORT_FORMATS.includes(format)) throw new RangeError(`unknown export format "${format}"; formats: ${EXPORT_FORMATS.join(', ')}`);
   if (!(from >= 0 && to >= from && to < viewer.store.times.length)) throw new RangeError(`export range ${from}..${to} is outside 0..${viewer.store.times.length - 1}`);
+  const storeName = new URL(viewer.store.url, location.href).pathname.replace(/\/$/, '').split('/').slice(-2).join(' ');
+  const filename = exportFilename(storeName, format, from, to, (t) => viewer.timeLabel(t));
   viewer.pause();
   const started = performance.now();
   const session = viewer.createExportSession({ scale, timesteps: to - from + 1 });
@@ -213,10 +216,9 @@ export async function exportLoop(viewer, { format, from, to, stepsPerSecond, sca
     await preload(session, from, to, onProgress, signal);
     const run = format === 'gif' ? encodeGif : recordVideo;
     const blob = await run(session, { format, from, to, stepsPerSecond, onProgress, signal });
-    const storeName = new URL(viewer.store.url, location.href).pathname.replace(/\/$/, '').split('/').slice(-2).join(' ');
     return {
       blob,
-      filename: exportFilename(storeName, format, from, to, (t) => viewer.timeLabel(t)),
+      filename,
       frames: to - from + 1,
       width: session.canvas.width,
       height: session.canvas.height,
@@ -304,8 +306,8 @@ async function startExport(viewer) {
     status.textContent = `Done in ${(result.ms / 1000).toFixed(1)} s · ${megabytes(result.bytes)} · ${result.width}×${result.height} · ${result.frames} frames`;
   } catch (error) {
     fill.style.width = '0';
-    status.textContent = error.name === 'AbortError' ? 'Cancelled.' : `Export failed: ${error.name}: ${error.message}`;
-    if (error.name !== 'AbortError') console.error('export failed:', error);
+    status.textContent = error.name === 'AbortError' ? 'Cancelled.' : `Export failed: ${redactText(error)}`;
+    if (error.name !== 'AbortError') console.error('export failed:', redactText(error));
   } finally {
     running = null;
     $('export-start').hidden = false;

@@ -1,5 +1,7 @@
 // Parsing of chronozarr root attributes and Zarr v3 array metadata into the shapes the reader uses.
 // No I/O: openStore fetches the JSON, this module validates and normalizes it.
+import { redactText } from './redact.js';
+
 export { sameCrs } from './crs.js';
 
 export const DTYPES = {
@@ -22,7 +24,7 @@ export const CONVENTIONS = Object.fromEntries([
 }]));
 
 export function requireStore(condition, baseUrl, message) {
-  if (!condition) throw new Error(`${baseUrl}: not a valid chronozarr store: ${message}`);
+  if (!condition) throw new Error(redactText(`${baseUrl}: not a valid chronozarr store: ${message}`, baseUrl));
 }
 
 function checkExtensions(meta, baseUrl) {
@@ -53,6 +55,7 @@ export function parseRoot(root, baseUrl) {
   requireStore(Array.isArray(cz.times) && cz.times.length > 0 && cz.times.every((t, i) => typeof t === 'string' && Number.isFinite(Date.parse(t)) && (i === 0 || Date.parse(t) > Date.parse(cz.times[i - 1]))), baseUrl, 'chronozarr.times must contain increasing ISO timestamps');
   requireStore(cz.crs === undefined || (typeof cz.crs === 'string' && CRS_CODE.test(cz.crs)), baseUrl, 'chronozarr.crs must be a CRS code such as "EPSG:32631" when present');
   requireStore(cz.nodata === null || Number.isFinite(cz.nodata), baseUrl, 'chronozarr.nodata must be a number or null');
+  requireStore(cz.variable === undefined || (typeof cz.variable === 'string' && cz.variable.split('/').every((part) => part && part !== '.' && part !== '..')), baseUrl, 'chronozarr.variable must name an array inside each level');
   requireStore(cz.volatility_path === undefined || cz.volatility_path === 'volatility', baseUrl, 'volatility_path must equal volatility');
   for (const name of ['mask', 'coverage']) requireStore(cz[`${name}_variable`] === undefined || cz[`${name}_variable`] === name, baseUrl, `${name}_variable must equal ${name}`);
   registration(attrs, 'multiscales', notes);

@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import importlib
 import io
+import os
 import socket
 import urllib.error
 import urllib.request
@@ -774,8 +775,8 @@ def test_explicit_port_serves_and_the_check_is_not_counted_as_the_browser(store)
     assert server.state.store_requests == 1
 
 
-def conditional_get(url: str, since: str, **extra: str) -> tuple[int, dict[str, str], bytes]:
-    request = urllib.request.Request(url, headers={"If-Modified-Since": since, **extra})
+def conditional_get(url: str, **headers: str) -> tuple[int, dict[str, str], bytes]:
+    request = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(request) as response:
             return response.status, dict(response.headers.items()), response.read()
@@ -786,13 +787,35 @@ def conditional_get(url: str, since: str, **extra: str) -> tuple[int, dict[str, 
 
 def test_revalidation_gets_304_without_a_body_and_ranges_still_work(store):
     url = f"{serve_store(store).url}/zarr.json"
-    stamp = get(url)[1]["Last-Modified"]
-    status, headers, body = conditional_get(url, stamp)
+    tag = get(url)[1]["ETag"]
+    condition = {"If-None-Match": f'"other", {tag.removeprefix("W/")}'}
+    status, headers, body = conditional_get(url, **condition)
     assert (status, body) == (304, b"")
+    assert headers["ETag"] == tag
     assert headers["Access-Control-Allow-Origin"] == "*"
-    assert conditional_get(url, stamp, Range="bytes=0-0")[0] == 206  # never 304 for a range
-    assert conditional_get(url, "Mon, 01 Jan 1990 00:00:00 GMT")[0] == 200
-    assert conditional_get(url, "not a date")[0] == 200
+    assert conditional_get(url, Range="bytes=0-0", **condition)[0] == 206
+    assert conditional_get(url, **{"If-None-Match": '"other"'})[0] == 200
+
+
+def test_revalidation_reads_an_append_in_the_same_modified_second(tmp_path):
+    path = tmp_path / "appended"
+    data = make_da(make_truth(3, 1, 16, 16))
+    chronozarr.encode(data.isel(time=slice(0, 2)), path, chunk_size=16, n_lods=1)
+    root = path / "zarr.json"
+    second = root.stat().st_mtime_ns // 1_000_000_000 * 1_000_000_000
+    os.utime(root, ns=(second, second + 100_000_000))
+    url = f"{serve_store(path).url}/zarr.json"
+    _, initial, _ = get(url)
+
+    chronozarr.append(path, data.isel(time=slice(2, 3)))
+    os.utime(root, ns=(second, second + 900_000_000))
+    status, headers, body = conditional_get(
+        url, **{"If-Modified-Since": initial["Last-Modified"], "If-None-Match": initial["ETag"]}
+    )
+    assert (status, body) == (200, root.read_bytes())
+    assert headers["ETag"] != initial["ETag"]
+    assert headers["Last-Modified"] == initial["Last-Modified"]
+    assert conditional_get(url, **{"If-Modified-Since": initial["Last-Modified"]})[0] == 200
 
 
 def test_preview_with_a_port_says_what_a_tunnel_should_target(store, monkeypatch):

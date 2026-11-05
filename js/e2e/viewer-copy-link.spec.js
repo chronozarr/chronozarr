@@ -60,20 +60,42 @@ test('copies the selected catalog dataset instead of the catalog default', async
 
   await open(page, copied);
   expect(await page.evaluate(() => window.chronozarr.viewer.store.url)).toBe(second);
+  await page.reload();
+  await page.waitForFunction(() => window.chronozarr?.ready);
+  await page.evaluate(() => window.chronozarr.ready);
+  expect(await page.evaluate(() => window.chronozarr.viewer.store.url)).toBe(second);
 });
 
-test('says to copy the address bar if clipboard access fails', async ({ page, servers, storeUrl }) => {
+test('offers the selected dataset and view to copy when the clipboard API is unavailable', async ({ page, servers, storeUrl }) => {
   await page.addInitScript(() => {
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText: async () => Promise.reject(new Error('blocked')) },
-    });
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
   });
-  const store = await storeUrl('u16_plain');
-  await open(page, `${servers.appUrl}/demo/index.html?store=${encodeURIComponent(store)}`);
+  const first = await storeUrl('u16_sharded');
+  const second = await storeUrl('u16_plain');
+  await page.route('**/catalog.json', (route) => route.fulfill({ json: [{ name: 'First', url: first }, { name: 'Second', url: second }] }));
+  await open(page, `${servers.appUrl}/demo/index.html`);
+  await page.locator('#catalog-select').selectOption(second);
+  await page.waitForFunction((url) => window.chronozarr.viewer.store.url === url, second);
+  await page.evaluate(() => window.chronozarr.ready);
+  await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    viewer.setProduct(viewer.products.findIndex(({ id }) => id === 'ndvi'));
+    viewer.goToTime(1);
+  });
   await page.getByRole('button', { name: 'Copy link', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Copy address bar', exact: true })).toBeVisible();
-  await expect(page.locator('#copy-link-status')).toHaveText('Could not copy the link. Copy the address bar.');
+  const dialog = page.getByRole('dialog');
+  const link = dialog.getByRole('textbox', { name: 'View link' });
+  await expect(link).toBeFocused();
+  const copied = await link.inputValue();
+  expect(await link.evaluate((field) => [field.selectionStart, field.selectionEnd])).toEqual([0, copied.length]);
+  expect(new URL(copied).searchParams.get('store')).toBe(second);
+  await dialog.getByRole('button', { name: 'Close' }).click();
+  await expect(dialog).toBeHidden();
+  await open(page, copied);
+  expect(await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    return { store: viewer.store.url, t: viewer.t, product: viewer.products[viewer.productIndex].id };
+  })).toEqual({ store: second, t: 1, product: 'ndvi' });
 });
 
 test('is hidden in the compact embed and remains usable at phone width', async ({ page, servers, storeUrl }) => {

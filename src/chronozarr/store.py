@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request
 from collections.abc import AsyncIterator, Iterable
 from concurrent.futures import ThreadPoolExecutor
+from http.client import IncompleteRead
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -59,6 +60,10 @@ class HttpStatusError(OSError):
         self.status = status
 
 
+class HttpIncompleteReadError(OSError):
+    """An HTTP response body still ended early after the transport retries."""
+
+
 def _base_url(url: str) -> str:
     """`url` minus trailing slashes on the path and any fragment; the query stays."""
     parts = urlsplit(url)
@@ -76,13 +81,14 @@ def object_url(url: str, key: str) -> str:
 
 
 def redact_url(url: str) -> str:
-    """`url` with its query replaced by `?<redacted>`, for messages. Local paths pass through."""
+    """Redact HTTP URL credentials and fragments. Local paths pass through."""
     if not url.startswith(("http://", "https://")):
         return url
     parts = urlsplit(url)
-    if not parts.query:
-        return url
-    return urlunsplit(parts._replace(query="", fragment="")) + "?<redacted>"
+    shown = urlunsplit(
+        parts._replace(netloc=parts.netloc.rpartition("@")[2], query="", fragment="")
+    )
+    return shown + ("?<redacted>" if parts.query else "")
 
 
 def _range_header(byte_range: ByteRequest) -> str:
@@ -145,8 +151,8 @@ class HttpStore(Store):
     """A read-only Zarr store over HTTP(S), standard library only (no fsspec or aiohttp).
 
     Sharded arrays are read with `Range` requests, so the server must honour them (206). A
-    missing object (404) is a missing key. 5xx, 429 and connection errors are retried three
-    times; any other failure raises OSError naming the URL. The store cannot be listed.
+    missing object (404) is a missing key. 5xx, 429, interrupted bodies and connection errors
+    are retried three times. Failures raise OSError naming the URL. The store cannot be listed.
     """
 
     def __init__(self, url: str, *, timeout: float = 30.0) -> None:
@@ -199,14 +205,25 @@ class HttpStore(Store):
                             raise OSError(f"{method} {shown}: {problem}")
                     return body, response.headers
             except urllib.error.HTTPError as error:
-                code, reason = error.code, error.reason
+                code = error.code
                 error.close()  # an HTTPError owns the response socket
-                if code in (404, 416):
+                if code == 404:
                     return None
                 transient = code == 429 or code >= 500
                 if not transient or attempt == len(_RETRY_DELAYS_S):
-                    message = f"{method} {shown}: HTTP {code} {reason}"
+                    # Some hosts reflect the raw request path (including its signed query).
+                    message = f"{method} {shown}: HTTP {code}"
+                    if code == 416 and byte_range is not None:
+                        message += f" for Range {_range_header(byte_range)}"
                     raise HttpStatusError(message, code) from None
+            except IncompleteRead as error:
+                if attempt == len(_RETRY_DELAYS_S):
+                    ranged = (
+                        "" if byte_range is None else f" for Range {_range_header(byte_range)}"
+                    )
+                    raise HttpIncompleteReadError(
+                        f"{method} {shown}: {error}{ranged} after {attempt + 1} attempts"
+                    ) from None
             except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
                 if attempt == len(_RETRY_DELAYS_S):
                     raise OSError(f"{method} {shown}: {error}") from error

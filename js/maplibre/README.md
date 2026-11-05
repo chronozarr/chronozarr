@@ -78,8 +78,8 @@ map.on('click', async (e) => console.log(await layer.getValueAt(e.lngLat))); // 
 - `t` and `time` are the timestep and its ISO time.
 - `col` and `row` are the pixel of level 0.
 - `lngLat` is the center of that pixel, and `x` and `y` are the same point in the CRS of the store.
-- `valid` follows the mask when the store has one, and the nodata value otherwise.
-- `bands` has one entry per band with `name`, `units`, `reflectance`, `stored` and `value`. `stored` is the stored number. `value` is the stored number times `scale`, plus `offset`.
+- `valid` follows the mask when the store has one. Otherwise, it is true when at least one band has data.
+- `bands` has one entry per band with `name`, `units`, `reflectance`, `stored` and `value`. `stored` is the stored number. `value` is the stored number times `scale`, plus `offset`, or `null` for a missing band.
 - `ndvi`, `ndwi` and `isWater` are the products that the bands allow.
 
 For a masked pixel, `stored`, `value`, `ndvi` and `ndwi` are `null`, and `isWater` is false.

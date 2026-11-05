@@ -15,6 +15,7 @@ chronozarr.encode(da, "my_store", crs="EPSG:32631")
 ```
 
 `da` is an xarray `DataArray` with dims `(time, band, y, x)`. Its dtype is uint8, uint16, int16 or float32. Its `x` and `y` coordinates are the projected pixel centres of a grid with north up.
+After slicing the spatial axes, update the transform attribute or drop it to infer a transform from the new pixel centres. If your axes are index labels, pass the intended `transform=` explicitly.
 
 `crs` is an authority code such as `EPSG:32631`, or WKT2 text for a CRS with no code, such as a Lambert conformal conic or a sinusoidal grid. Without `crs`, `encode` reads `da.attrs["crs"]`. WKT1, PROJJSON and PROJ strings are converted to WKT2 when pyproj is installed. A store whose CRS has an EPSG code is written as spec 0.3.0 and any other as 0.4.0. `convert` keeps the CRS of its sources as it finds it and does not reproject unless you pass `--crs` for another CRS with `--resampling`.
 

@@ -143,7 +143,9 @@ LCC_CF = {
 }
 
 
-def cf_source(tmp_path: Path, truth: np.ndarray, mapping: dict[str, Any]) -> Path:
+def cf_source(
+    tmp_path: Path, truth: np.ndarray, mapping: dict[str, Any], *, other_crs: str | None = None
+) -> Path:
     """A Zarr store like Daymet's NetCDF: the CRS only as a CF grid mapping variable."""
     a, _, c, _, e, f = TRANSFORM
     da = xr.DataArray(
@@ -159,6 +161,8 @@ def cf_source(tmp_path: Path, truth: np.ndarray, mapping: dict[str, Any]) -> Pat
         attrs={"grid_mapping": "lambert_conformal_conic"},
     )
     dataset = da.to_dataset().assign(lambert_conformal_conic=xr.DataArray(0, attrs=mapping))
+    if other_crs is not None:
+        dataset["spatial_ref"] = xr.DataArray(0, attrs={"spatial_ref": other_crs})
     source = tmp_path / "cf.zarr"
     dataset.to_zarr(source, zarr_format=2, consolidated=True)
     return source
@@ -168,7 +172,8 @@ def test_convert_reads_a_cf_grid_mapping_variable_as_the_crs(tmp_path, truth):
     pyproj = pytest.importorskip("pyproj")
     rasterio_crs = pytest.importorskip("rasterio.crs").CRS
     out = tmp_path / "store"
-    convert(cf_source(tmp_path, truth, LCC_CF), out, variable="reflectance", chunk_size=CHUNK)
+    source = cf_source(tmp_path, truth, LCC_CF, other_crs="EPSG:32619")
+    convert(source, out, variable="reflectance", chunk_size=CHUNK)
 
     opened = chronozarr.open_store(out)
     assert (opened.attrs.spec_version, opened.crs.code) == ("0.4.0", None)
@@ -189,3 +194,6 @@ def test_a_cf_grid_mapping_that_pyproj_cannot_read_is_named(tmp_path, truth):
     source = cf_source(tmp_path, truth, {"grid_mapping_name": "no_such_projection"})
     with pytest.raises(ValueError, match=r"cannot read the CF grid mapping 'lambert_conformal"):
         plan_conversion(source, variable="reflectance", sample=False)
+
+    plan = plan_conversion(source, variable="reflectance", crs=CRS, sample=False)
+    assert plan.source.info.grid.crs == CRS

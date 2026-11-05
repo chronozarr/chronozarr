@@ -66,7 +66,7 @@ test('every control has an accessible name and the timeline is a focusable slide
   assert.match(html, /<button id="next-btn"[^>]*aria-label="Next timestep"/);
   assert.match(html, /<div class="timeline-track" id="timeline-track" role="slider" tabindex="0" aria-label="Timestep"/);
   assert.match(html, /<section class="timeline-bar" aria-label="Timeline">/);
-  assert.match(html, /<div class="error-overlay" id="error-overlay" role="alert">/);
+  assert.match(html, /<div class="error-overlay" id="error-overlay">\s*<div role="alert">/);
 });
 
 test('a focused control shows a ring, and no rule removes it', () => {

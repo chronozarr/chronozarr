@@ -126,6 +126,8 @@ test('describePixel reports indices from physical values, only when their bands 
 
   const empty = describePixel(Uint16Array.of(0, 2303), ['B04', 'B08'], 0);
   assert.equal(empty.ndvi, null, 'a band at nodata leaves no index');
+  assert.equal(empty.valid, true, 'the other band is valid');
+  assert.deepEqual(empty.bands.map(({ stored, value }) => [stored, value]), [[0, null], [2303, 0.2303]]);
   assert.equal(describePixel(Uint16Array.of(0, 2303), ['B04', 'B08']).ndvi, 1, 'without a nodata value a zero is a value: red 0');
 });
 
@@ -183,6 +185,7 @@ test('describePixel with a validity mask: masked-out means no values and no indi
   // A declared nodata of 0 is not compared once there is a mask (spec 2.3): a valid pixel holding 0 is data.
   const zero = describePixel(Uint16Array.of(0, 2303), bands, 0, 1);
   assert.equal(zero.valid, true);
+  assert.equal(zero.bands[0].value, 0, 'the mask makes a value equal to the sentinel valid');
   assert.equal(zero.ndvi, 1, 'red 0 is a value here');
   assert.equal(describePixel(Uint16Array.of(0, 2303), bands, 0, null).ndvi, null, 'without a mask the same pixel is missing');
 });

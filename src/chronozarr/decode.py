@@ -20,8 +20,13 @@ from chronozarr import outside, schema
 from chronozarr.crs import Crs, same_crs
 from chronozarr.level import Level, LevelData
 from chronozarr.schema import Chronozarr, SchemaError
+from chronozarr.store import (
+    HttpIncompleteReadError,
+    IndexStore,
+    missing_local_path_message,
+    redact_url,
+)
 from chronozarr.store import HttpStore as HttpStore
-from chronozarr.store import IndexStore, missing_local_path_message, redact_url
 from chronozarr.store import as_store as as_store
 
 # First and last whole millisecond representable as datetime64[ns].
@@ -278,6 +283,9 @@ class ChronoStore:
         """Read the stored values of `timesteps` over a window: (time, band, y, x)."""
         try:
             return level.data.read(timesteps, ys, xs)
+        except HttpIncompleteReadError:
+            # Transport retries already ran. A truncated body does not imply a stale index.
+            raise
         except (ValueError, OSError, IndexError):
             if level.data.shards is None or not isinstance(self._group.store, IndexStore):
                 raise

@@ -81,7 +81,12 @@ for (const [storeName, label, fixture] of [['u16_lcc', 'Daymet LCC', DAYMET_LCC]
       expect([value.col, value.row]).toEqual([col, row]);
       expect(value.lngLat.lng).toBeCloseTo(lon, 8);
       expect(value.lngLat.lat).toBeCloseTo(lat, 8);
-      for (const [band, bandValue] of value.bands.entries()) expect(bandValue.stored, `band ${band} at (${col}, ${row})`).toBe(storedValue(storeName, 2, band, row, col));
+      for (const [band, bandValue] of value.bands.entries()) {
+        const stored = storedValue(storeName, 2, band, row, col);
+        expect(bandValue.stored, `band ${band} at (${col}, ${row})`).toBe(stored);
+        if (stored === 0) expect(bandValue.value).toBeNull();
+        else expect(bandValue.value).toBeCloseTo(stored / 10000, 12);
+      }
     }
     // Half a pixel outside the grid is outside the store.
     const [, , lonOut, latOut] = fixture.grid.centres[0];

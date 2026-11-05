@@ -53,14 +53,17 @@ test('copies the supplied redacted permalink and briefly announces success', asy
   assert.equal(status.textContent, '');
 });
 
-test('does not report success when clipboard access is unavailable', async () => {
+test('hands the computed permalink to the manual copy fallback when clipboard access is unavailable', async () => {
   const button = fakeElement('Copy link');
   const status = fakeElement();
-  const { copy } = bindCopyLink({ button, status, getUrl: () => 'https://chronozarr.org/demo/', clipboard: undefined, timer: fakeTimer() });
+  const link = 'https://chronozarr.org/demo/?store=https%3A%2F%2Fdata.example%2Fstore&t=2';
+  const shown = [];
+  const { copy } = bindCopyLink({ button, status, getUrl: () => link, showFallback: (url) => shown.push(url), clipboard: undefined, timer: fakeTimer() });
 
   assert.equal(await copy(), false);
-  assert.equal(button.textContent, 'Copy address bar');
-  assert.equal(status.textContent, 'Could not copy the link. Copy the address bar.');
+  assert.equal(button.textContent, 'Copy link');
+  assert.match(status.textContent, /copy manually/);
+  assert.deepEqual(shown, [link]);
   await assert.rejects(copyLink('https://chronozarr.org/demo/', { clipboard: undefined }), /Clipboard access is unavailable/);
 });
 

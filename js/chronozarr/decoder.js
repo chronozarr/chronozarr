@@ -222,7 +222,7 @@ export async function openStore(baseUrl, options = {}) {
 
   const rootBytes = await readable.get('/zarr.json', { signal: options.signal });
   requireStore(rootBytes, baseUrl, 'root zarr.json not found');
-  const root = JSON.parse(new TextDecoder().decode(rootBytes));
+  const root = parseStoreJson(rootBytes, baseUrl, 'root zarr.json');
   const { cz, datasets, notes } = parseRoot(root, baseUrl);
   normalizeBands(cz, baseUrl);
   const variable = cz.variable ?? 'data';
@@ -233,7 +233,7 @@ export async function openStore(baseUrl, options = {}) {
     if (consolidated[path]) return consolidated[path];
     const bytes = await readable.get(`/${path}/zarr.json`, { signal: options.signal });
     requireStore(bytes || !required, baseUrl, `${path}/zarr.json not found`);
-    return bytes ? JSON.parse(new TextDecoder().decode(bytes)) : null;
+    return bytes ? parseStoreJson(bytes, baseUrl, `${path}/zarr.json`) : null;
   };
   const names = { data: variable, mask: cz.mask_variable ?? null, coverage: cz.coverage_variable ?? null };
   const readArrays = (name) => Promise.all(datasets.map((ds) => readMeta(`${ds.path}/${name}`, { required: true })));
@@ -329,6 +329,17 @@ export async function openStore(baseUrl, options = {}) {
     budgets,
     policy,
   });
+}
+
+function parseStoreJson(bytes, baseUrl, key) {
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    // Parser errors can quote the response, including a URL or token echoed by the host.
+    const message = `${key} does not contain valid JSON`;
+    if (key === 'root zarr.json') throw new SyntaxError(redactText(`${baseUrl}: ${message}`, baseUrl));
+    requireStore(false, baseUrl, message);
+  }
 }
 
 export class ChronoStore {
@@ -1335,7 +1346,7 @@ export class ChronoStore {
    * of another kind (network, 5xx, a shard without hint whose checksum fails) is not a stale length and is thrown as is.
    */
   async #readShardIndex({ cacheKey, shardKey, storage, handle, hintAt }) {
-    const where = `${redactText(this.url)}${shardKey}`;
+    const where = `${redactText(this.url, this.url)}${shardKey}`;
     const lookup = () => (hintAt ? this.#shardBytes?.[hintAt.path]?.[hintAt.key] : undefined);
     const rangeFor = (shardBytes) => shardIndexRange(storage.shardTime, storage.indexHasCrc, storage.indexAtStart, shardBytes);
     // Only an end-located index read with a known shard length can go stale.
@@ -1405,7 +1416,7 @@ export class ChronoStore {
         const bytes = await this.#readable.get('/zarr.json', { priority: 0, reload: true, signal: this.#closeController.signal });
         if (this.#closeController.signal.aborted) return;
         if (!bytes) throw new Error('root zarr.json not found');
-        const cz = JSON.parse(new TextDecoder().decode(bytes)).attributes?.chronozarr;
+        const cz = parseStoreJson(bytes, this.url, 'root zarr.json').attributes?.chronozarr;
         if (!cz) throw new Error('the root has no chronozarr attributes');
         const hints = cz.shard_bytes ?? null;
         if (JSON.stringify(hints) !== JSON.stringify(this.#shardBytes)) {
@@ -1416,7 +1427,7 @@ export class ChronoStore {
         }
       } catch (error) {
         if (isAbort(error)) return;
-        console.warn(redactText(`chronozarr: ${this.url}: cannot reload zarr.json to refresh shard_bytes (${error.name}: ${error.message})`));
+        console.warn(redactText(`chronozarr: ${this.url}: cannot reload zarr.json to refresh shard_bytes (${error.name}: ${error.message})`, this.url));
       }
       this.#noNewHintsAt = this.#clock();
     })();

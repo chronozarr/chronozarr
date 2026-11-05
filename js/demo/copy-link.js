@@ -25,7 +25,7 @@ export function linksToThisComputer(url) {
  * Bind the copy control. `getUrl` owns the viewer's permalink and redaction policy; this module only copies its
  * result and makes the outcome visible both on the button and to assistive technology.
  */
-export function bindCopyLink({ button, status, getUrl, clipboard, feedbackMs = COPY_FEEDBACK_MS, timer = globalThis }) {
+export function bindCopyLink({ button, status, getUrl, showFallback, clipboard, feedbackMs = COPY_FEEDBACK_MS, timer = globalThis }) {
   const label = button.textContent;
   let restoreTimer = null;
 
@@ -52,7 +52,8 @@ export function bindCopyLink({ button, status, getUrl, clipboard, feedbackMs = C
       }
       return true;
     } catch {
-      show('Copy address bar', 'Could not copy the link. Copy the address bar.');
+      showFallback(url);
+      show(label, 'Could not copy automatically. The view link is ready to copy manually.');
       return false;
     }
   };
