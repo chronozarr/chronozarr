@@ -85,7 +85,7 @@ function referenceRawPacked(data) {
 function compactRenderer(chunkWidth, chunkHeight) {
   const { gl, uploads } = recordingGl();
   const renderer = new Renderer({ getContext: () => gl });
-  renderer.configure({ dtype: 'uint16', nBand: 1, chunkWidth, chunkHeight, slots: 4, compact: true });
+  renderer.configure({ dtype: 'uint16', nBand: 1, chunkWidth, chunkHeight, slots: 8, compact: true });
   const uploaded = (format) => {
     const parts = uploads.filter((upload) => upload.format === gl[format]).map((upload) => upload.values);
     return { parts, all: Uint32Array.from(parts.flatMap((part) => [...part])) };
@@ -109,6 +109,7 @@ test('compact upload of a raw chunk sends the same words and blocks as the per-v
     ['even length, 4-aligned', 64 * 128, 0],
     ['odd length', 63 * 65, 0],
     ['even length, view starting 2 bytes into its buffer', 64 * 128, 2],
+    ['even length, 4-aligned view starting 8 bytes into its buffer', 64 * 128, 8],
     ['even length, partial last block', 70 * 74, 0],
   ];
   // One renderer takes every chunk, so the reused block table must also follow a change in length.

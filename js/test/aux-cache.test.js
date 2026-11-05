@@ -52,6 +52,12 @@ function referencePackAux(data) {
   return packed;
 }
 
+// Node's deepEqual diffs failing typed arrays element by element, which takes minutes on a full chunk: find the first difference instead.
+function assertSameBytes(actual, expected, message) {
+  assert.equal(actual.length, expected.length, `${message}: length`);
+  for (let i = 0; i < expected.length; i++) if (actual[i] !== expected[i]) assert.equal(actual[i], expected[i], `${message}: byte ${i}`);
+}
+
 test('packAux output is byte-identical to the byte-at-a-time packing for every length, alignment and kind of mask', () => {
   let seed = 12345;
   const random = () => {
@@ -70,15 +76,16 @@ test('packAux output is byte-identical to the byte-at-a-time packing for every l
     random: () => Math.floor(random() * 256),
   };
   for (const [kind, value] of Object.entries(kinds)) {
-    // Lengths on both sides of every word and byte boundary; offsets give views that are not 4-byte aligned.
+    // Lengths on both sides of every word and byte boundary. Offsets 1 to 3 give views that are not 4-byte aligned;
+    // 4 and 8 give aligned views that do not start at the start of their buffer.
     for (const length of [...Array(41).keys(), 1027, 4096]) {
-      for (const offset of [0, 1, 2, 3]) {
+      for (const offset of [0, 1, 2, 3, 4, 8]) {
         const buffer = new Uint8Array(offset + length + 3);
         for (let i = 0; i < buffer.length; i++) buffer[i] = value(i - offset);
         const data = buffer.subarray(offset, offset + length);
         const before = data.slice();
         const packed = packAux(data);
-        assert.deepEqual(packed, referencePackAux(data), `${kind}, length ${length}, offset ${offset}`);
+        assertSameBytes(packed, referencePackAux(data), `${kind}, length ${length}, offset ${offset}`);
         assert.deepEqual(data, before, 'the input is not modified');
         assert.deepEqual(unpackAux(packed, length), data, `${kind}, length ${length}, offset ${offset}: round trip`);
       }
@@ -94,5 +101,5 @@ test('packAux matches the byte-at-a-time packing on full 512 x 512 masks', () =>
     Uint8Array.from({ length: n }, (_, i) => ((i % 512) + Math.floor(i / 512) * 0.7 > 400 ? 1 : 0)),
     Uint8Array.from({ length: n }, (_, i) => i % 7),
   ];
-  for (const mask of masks) assert.deepEqual(packAux(mask), referencePackAux(mask));
+  for (const [i, mask] of masks.entries()) assertSameBytes(packAux(mask), referencePackAux(mask), `mask ${i}`);
 });
