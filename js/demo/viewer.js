@@ -58,6 +58,8 @@ const STRETCH_SAMPLES_PER_CELL = 300;
 const URL_SYNC_MS = 300;
 const CHART_BATCH = 4;
 const CHART_RENDER_MS = 120;
+// While the user scrubs or plays, the chart waits between batches and looks again this often.
+const CHART_YIELD_MS = 250;
 // A time change of more than this many steps is a jump: the speculative fetches around the old position are dropped.
 const SEEK_DISTANCE = 4;
 const PERF_UPDATE_MS = 250;
@@ -1963,6 +1965,12 @@ class Viewer {
       .sort((a, b) => Math.abs(a - this.t) - Math.abs(b - this.t));
     const { signal } = chart.controller;
     for (let i = 0; i < missing.length; i += CHART_BATCH) {
+      // The chart's reads are at demand priority, so they queue next to the chunks of the frames that a scrub (its timer runs from
+      // the first step to the end) or a movie is waiting for: wait until neither is going on.
+      while (this.#playing || this.#scrubTimer !== 0) {
+        await delay(CHART_YIELD_MS, signal);
+        if (signal.aborted) return;
+      }
       await Promise.all(
         missing.slice(i, i + CHART_BATCH).map(async (t) => {
           const observed = chart.coverage && chart.coverage[t] === undefined ? this.#loadChartCoverage(chart, t, coverageOffset) : null;
