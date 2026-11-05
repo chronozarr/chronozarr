@@ -1521,7 +1521,8 @@ export class ChronoStore {
         if (done) return;
         finish();
         reject(abortError());
-        if (entry.waiters === 0 && !entry.sticky) this.#uncount(entry);
+        // A seek's own timestep is a demand request without a waiter: it counts until it settles or is aborted.
+        if (entry.waiters === 0 && !entry.sticky && entry.background) this.#uncount(entry);
         this.#cancelIfUnwanted(entry);
       };
       if (signal.aborted) {

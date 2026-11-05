@@ -598,6 +598,27 @@ test('workers of a movie that wait for a slot start when a read joins the reques
   await Promise.all([read, movie]);
 });
 
+test('a reader that joins the request for a seek\'s own timestep and leaves does not release the rest of its window', async () => {
+  const { store, started, release, openAll } = await openGated();
+  const abort = new AbortController();
+  const jump = store.prefetch({ lod: 0, cells: [[0, 0]], t: 45, seek: true, maxSteps: 8, signal: abort.signal });
+  await settled();
+  assert.deepEqual(started, [45], 'the timestep of the seek is fetched first, the rest of the window waits');
+  const reader = new AbortController();
+  const read = store.getRaw(0, 0, 0, 45, { signal: reader.signal }).catch((error) => error.name);
+  await settled();
+  reader.abort();
+  assert.equal(await read, 'AbortError');
+  await settled();
+  assert.deepEqual(started, [45], 'the window still waits for its timestep');
+  release(45);
+  await settled();
+  assert.ok(started.length > 1, 'and goes on once it has landed');
+  abort.abort();
+  openAll();
+  await jump;
+});
+
 /** A small seeded generator, so that a failing run can be repeated. */
 function seeded(seed) {
   let state = seed >>> 0;
