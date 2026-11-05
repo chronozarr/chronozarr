@@ -376,6 +376,8 @@ export class ChronoStore {
   #slotWaiters = [];
   /** The signals of the running movie jobs (playing, not ambient): the owners whose requests a demand read can join without holding prefetch back. */
   #movieJobs = new WeakSet();
+  /** The signals of the ambient jobs (the coarse loop): the owners whose requests a seek leaves running. */
+  #ambientJobs = new WeakSet();
   #limiter;
   #bandwidth;
   #speculative;
@@ -813,7 +815,8 @@ export class ChronoStore {
    * fits. Otherwise it stops at the horizon, `horizonSteps` timesteps either side of t (12 by default); when scrubbing it reaches further in the scrub direction within that. If nothing has
    * moved t for `idleMs` (3 s), the viewer is idle, and prefetch also stops once it has started `idleBytes` (64 MiB)
    * of speculative traffic for this view and timestep; a scrub, playback or new view starts a new allowance. A
-   * `seek` (the view just jumped) does not widen anything: it only cancels the other speculative requests.
+   * `seek` (the view just jumped) does not widen anything: it only cancels the speculative requests that neither it nor an
+   * ambient job wants (it takes over the ones in its own plan).
    *
    * Speculative traffic is metered: 16 MB may start at once, after that half the measured bandwidth. Prefetch
    * waits while any demand fetch is in flight (a speculative request that a demand read joins counts as one from then
@@ -849,21 +852,24 @@ export class ChronoStore {
     const wholeAxis = playing || loop;
     const movie = wholeAxis && !ambient;
     if (movie) this.#movieJobs.add(signal);
+    if (ambient) this.#ambientJobs.add(signal);
     const withMasks = masks && this.hasMask;
     if (!ambient) this.#noteActivity({ lod, cells, t, wholeAxis });
-    if (seek) this.#cancelSpeculative();
     const targets = new Set([t]);
     const horizon = wholeAxis ? null : this.#policy.horizonSteps;
     const queue = this.#windowPlan(level, cells, t, { direction, behindFactor, loop }, horizon, withMasks, maxSteps).map(([row, col, ct]) => ({ row, col, t: ct, free: seek && targets.has(ct) }));
     const inherited = new Set();
-    for (const { row, col, t: ct } of queue) {
+    for (const { row, col, t: ct, free } of queue) {
       const running = this.#liveEntry(chunkKey(lod, row, col, ct));
       const mask = withMasks ? this.#liveEntry(this.#auxKey('mask', lod, row, col, ct)) : null;
       if (running || mask) inherited.add(chunkKey(lod, row, col, ct));
       // Claim both parts synchronously, before the caller aborts its previous plan.
       if (running) this.#own(running, signal);
       if (mask) this.#own(mask, signal);
+      // A seek fetches the chunks of t at demand priority: one that is already running as speculation is promoted.
+      if (running && free) this.#promote(running);
     }
+    if (seek) this.#cancelSpeculative(signal);
     const result = { planned: queue.length, fetched: 0, skipped: 0, compressedOnly: 0, masks: 0, budgetReached: false, errors: [] };
     let next = 0;
     // With no `concurrency` named, the link limits the speculative requests in flight (#speculativeSlots); a number is taken as it is.
@@ -1162,20 +1168,24 @@ export class ChronoStore {
   #join(entry) {
     this.#counters.cache.joins++;
     this.#network.deduped++;
-    if (entry.priority.value !== 0) {
-      entry.priority.value = 0;
-      const index = this.#shardIndexes.get(entry.indexKey);
-      if (index) index.priority.value = 0;
-      this.#limiter.reprioritize();
-      this.#decoder.reprioritize?.();
-      // A frame now waits for a request that was speculative: it counts as demand until it settles, and prefetch holds back as it does for
-      // a read of its own. A movie's prefetch is the exception: its pump joins the chunks it plans all the time, and holding the movie back
-      // for each would give up the speed that letting speculation use the link while nothing waits bought (adc26d5).
-      if (![...entry.owners].some((owner) => this.#movieJobs.has(owner))) {
-        entry.promoted = true;
-        this.#demandInflight++;
-        this.#updateSpeculativeShare();
-      }
+    this.#promote(entry);
+  }
+
+  /** Move a speculative request to demand priority. */
+  #promote(entry) {
+    if (entry.priority.value === 0) return;
+    entry.priority.value = 0;
+    const index = this.#shardIndexes.get(entry.indexKey);
+    if (index) index.priority.value = 0;
+    this.#limiter.reprioritize();
+    this.#decoder.reprioritize?.();
+    // A frame now waits for a request that was speculative: it counts as demand until it settles, and prefetch holds back as it does for
+    // a read of its own. A movie's prefetch is the exception: its pump joins the chunks it plans all the time, and holding the movie back
+    // for each would give up the speed that letting speculation use the link while nothing waits bought (adc26d5).
+    if (![...entry.owners].some((owner) => this.#movieJobs.has(owner))) {
+      entry.promoted = true;
+      this.#demandInflight++;
+      this.#updateSpeculativeShare();
     }
   }
 
@@ -1239,11 +1249,16 @@ export class ChronoStore {
     entry.controller.abort();
   }
 
-  /** The view jumped: cancel every speculative fetch nobody is waiting for. */
-  #cancelSpeculative() {
+  /**
+   * The view jumped: cancel every speculative fetch nobody is waiting for, except those the plan of `signal` has claimed and those
+   * of an ambient job. A job that plans once, as the coarse loop does, never asks for a chunk that was cancelled under it again.
+   */
+  #cancelSpeculative(signal) {
     for (const entry of this.#inflight.values()) {
       if (!entry.background) continue;
-      entry.owners.clear();
+      for (const owner of entry.owners) {
+        if (owner !== signal && !this.#ambientJobs.has(owner)) entry.owners.delete(owner);
+      }
       this.#cancelIfUnwanted(entry);
     }
   }

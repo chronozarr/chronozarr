@@ -296,9 +296,9 @@ const settled = async () => {
 
 /**
  * A store whose data chunks are answered only when the test lets them through (the gate is armed after the link has been
- * measured). `started` lists the timesteps requested since, in order; `release(t)` answers one, an aborted request is
- * rejected. With a `rate` the link is measured at that many bytes/s on the simulated clock, which fixes how many
- * speculative requests may be in flight (0.2 MB/s leaves one).
+ * measured). `started` lists the timesteps requested since, in order; `release(t, row, col)` answers one request and
+ * `openAll()` all of them, now and from then on; an aborted request is rejected. With a `rate` the link is measured at that
+ * many bytes/s on the simulated clock, which fixes how many speculative requests may be in flight (0.2 MB/s leaves one).
  */
 async function openGated({ rate = 400_000_000, ...options } = {}) {
   const readable = buildSyntheticStore(LARGE);
@@ -307,12 +307,12 @@ async function openGated({ rate = 400_000_000, ...options } = {}) {
   const started = [];
   let armed = false;
   const gate = (read) => async (key, o, ...rest) => {
-    const t = /\/data\/c\/(\d+)\//.exec(key)?.[1];
-    if (t !== undefined && armed) started.push(Number(t));
+    const chunk = /\/data\/c\/(\d+)\/0\/(\d+\/\d+)$/.exec(key);
+    if (chunk && armed) started.push(Number(chunk[1]));
     const bytes = await read(key, o, ...rest);
-    if (t === undefined || !armed) return bytes;
+    if (!chunk || !armed) return bytes;
     await new Promise((resolve, reject) => {
-      waiting.set(Number(t), resolve);
+      waiting.set(`${chunk[1]}/${chunk[2]}`, resolve);
       o?.signal?.addEventListener('abort', () => reject(o.signal.reason), { once: true });
     });
     return bytes;
@@ -320,11 +320,16 @@ async function openGated({ rate = 400_000_000, ...options } = {}) {
   const store = await openStore('memory://gated', { store: { get: gate(link.store.get), getRange: gate(link.store.getRange) }, workers: 0, clock: link.clock, speculativeBytesInitial: 1e12, idleBytes: 1e12, ...options });
   for (let t = 0; t < 30 && !(store.bandwidthEstimate() > 0); t++) await store.getRaw(0, 0, 0, t);
   armed = true;
-  const release = (t) => {
-    waiting.get(t)();
-    waiting.delete(t);
+  const release = (t, row = 0, col = 0) => {
+    waiting.get(`${t}/${row}/${col}`)();
+    waiting.delete(`${t}/${row}/${col}`);
   };
-  return { store, readable, started, release };
+  const openAll = () => {
+    armed = false;
+    for (const resolve of waiting.values()) resolve();
+    waiting.clear();
+  };
+  return { store, readable, started, release, openAll };
 }
 
 test('a demand read that joins a speculative request holds speculative starts back until that request settles', async () => {
@@ -393,4 +398,61 @@ test('a movie is not held back by a demand read that joins its requests or begin
   await pump;
   abortParked.abort();
   await other;
+});
+
+test('a seek does not cancel the requests of an ambient job: its plan is complete once both jobs have finished', async () => {
+  const { store, readable, started, openAll } = await openGated();
+  const mark = readable.log.length;
+  const loopAbort = new AbortController();
+  const landed = [];
+  const loop = store.prefetch({ lod: 0, cells: [[0, 0]], t: 10, loop: true, playing: true, ambient: true, behindFactor: 8, maxSteps: 30, signal: loopAbort.signal, onChunk: (l, r, c, t) => landed.push(t) });
+  await settled();
+  assert.equal(started.length, 6, 'the coarse loop has six requests in flight');
+  const jump = store.prefetch({ lod: 0, cells: [[1, 0]], t: 10, seek: true });
+  await settled();
+  assert.ok(readable.log.slice(mark, mark + 6).every(({ signal }) => !signal.aborted), 'the seek left them running');
+  openAll();
+  const [result] = await Promise.all([loop, jump]);
+  assert.equal(result.fetched, 30, 'the coarse loop fetched every chunk it planned');
+  assert.equal(landed.length, 30);
+  for (const t of landed) assert.ok(store.hasCachedRaw(0, 0, 0, t), `t=${t} is cached`);
+});
+
+test('a seek takes over the speculative requests its plan wants and cancels the others', async () => {
+  const { store, readable, started, openAll } = await openGated();
+  const mark = readable.log.length;
+  const horizon = new AbortController();
+  const old = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, signal: horizon.signal });
+  await settled();
+  assert.deepEqual(started, [30, 31, 29, 32, 33, 28]);
+  const jump = new AbortController();
+  const next = store.prefetch({ lod: 0, cells: [[0, 0]], t: 31, seek: true, maxSteps: 2, signal: jump.signal });
+  horizon.abort();
+  await settled();
+  const aborted = (t) => readable.log.slice(mark).find(({ key }) => key.includes(`/c/${t}/0/0/0`)).signal.aborted;
+  for (const t of [31, 32]) assert.equal(aborted(t), false, `t=${t} is in the seek's plan: it keeps running`);
+  for (const t of [30, 29, 33, 28]) assert.equal(aborted(t), true, `t=${t} is not: it is cancelled`);
+  openAll();
+  const [, result] = await Promise.all([old, next]);
+  assert.equal(result.errors.length, 0);
+  for (const t of [31, 32]) assert.ok(store.peekRaw(0, 0, 0, t), `t=${t} loaded`);
+  assert.equal(started.filter((t) => t === 31 || t === 32).length, 2, 'each was requested once');
+});
+
+test('a seek promotes the request for its own timestep that was running as speculation: the rest of its window waits for it', async () => {
+  const { store, started, release, openAll } = await openGated();
+  const horizon = new AbortController();
+  const old = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, signal: horizon.signal });
+  await settled();
+  assert.deepEqual(started, [30, 31, 29, 32, 33, 28]);
+  const jump = new AbortController();
+  const next = store.prefetch({ lod: 0, cells: [[0, 0]], t: 31, seek: true, maxSteps: 8, signal: jump.signal });
+  horizon.abort();
+  await settled();
+  assert.equal(started.length, 6, 'the six requests of the window are all taken over, and nothing else starts while t=31 is outstanding');
+  release(31);
+  await settled();
+  assert.ok(started.length > 6, 'the window goes on once it has landed');
+  openAll();
+  await Promise.all([old, next]);
 });
