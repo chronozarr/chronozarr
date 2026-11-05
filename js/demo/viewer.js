@@ -1,7 +1,7 @@
 // chronozarr viewer: renders a chronozarr store with WebGL2, scrubs through time, switches
 // products on the GPU and shows decoded values on click. Opens ?store=<base url>.
 
-import { chunkKey, openStore, samplePixelFrom, scrubCost, windowOrder } from '../chronozarr/decoder.js';
+import { chunkKey, openStore, scrubCost, windowOrder } from '../chronozarr/decoder.js';
 import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, validAt, windowPixels, xFromTime } from './chart.js';
 import { ASSUMED_BANDWIDTH, ancestorCells, coarseLoopDrifted, coarseLoopSteps, planCoarseStages, stageLeadMs } from './coarse.js';
 import { fetchWithEarlyReads, takeEarlyRootMs } from './early.js';
@@ -665,7 +665,7 @@ class Viewer {
       prepare: async (t, signal) => {
         requireStartingStore();
         try {
-          return await Promise.all([...chunksFor(t).map(([row, col, ct]) => store.getRaw(lod, row, col, ct, { signal })), ...cells.map(([row, col]) => this.#maskRead(lod, row, col, t, signal))]);
+          return await Promise.all([...chunksFor(t).map(([row, col, ct]) => store.ensureRaw(lod, row, col, ct, { signal })), ...cells.map(([row, col]) => this.#maskRead(lod, row, col, t, signal))]);
         } catch (error) {
           requireStartingStore();
           throw error;
@@ -1734,7 +1734,7 @@ class Viewer {
 
   /** The chunks of timestep t for these cells of one level, and their validity masks, decoded and in the cache when this resolves. */
   async #loadFrame(lod, cells, t, signal) {
-    await Promise.all([this.store.getCoarseFrame(lod, cells, t, { signal }), ...cells.map(([row, col]) => this.#maskRead(lod, row, col, t, signal))]);
+    await Promise.all([this.store.getCoarseFrame(lod, cells, t, { signal, materialize: false }), ...cells.map(([row, col]) => this.#maskRead(lod, row, col, t, signal))]);
   }
 
   /** Fetch the target-level cells of a wave; the frame is painted when the last one has arrived (earlier ones only change what is ready). */
@@ -1877,7 +1877,7 @@ class Viewer {
     const cellY = y - row * level.chunkHeight;
     let mask = null;
     try {
-      [, mask] = await Promise.all([store.getRaw(lod, row, col, t), this.#maskRead(lod, row, col, t)]);
+      [, mask] = await Promise.all([store.ensureRaw(lod, row, col, t), this.#maskRead(lod, row, col, t)]);
     } catch (error) {
       if (request === this.#inspectRequest) {
         this.#showError('Chunk load failed', redactText(error?.message ?? error), { code: 'chunk_load_failed' });
@@ -1944,15 +1944,16 @@ class Viewer {
     const { store } = this;
     const { lod, row, col } = chart.cell;
     const level = store.levels[lod];
-    const sample = (data, mask) => ({
-      pixels: chart.window.map(([x, y]) => samplePixelFrom(data, level, x, y)),
+    // The window pixels are read where they lie in the cached chunk: a packed chunk (compact mode) is not expanded to read nine pixels.
+    const pixelsAt = (t) => chart.window.map(([x, y]) => store.samplePixel(lod, row, col, t, x, y));
+    const readingOf = (pixels, mask) => ({
+      pixels,
       ...(mask ? { valid: validAt(mask, level.chunkWidth, chart.window) } : {}),
     });
     const coverageOffset = chart.pixel.y * level.chunkWidth + chart.pixel.x;
     for (let t = 0; t < chart.readings.length; t++) {
-      const data = store.peekRaw(lod, row, col, t);
       const mask = store.hasMask ? store.peekMask(lod, row, col, t) : null;
-      if (data && (!store.hasMask || mask)) chart.readings[t] = sample(data, mask);
+      if (store.hasCachedRaw(lod, row, col, t) && (!store.hasMask || mask)) chart.readings[t] = readingOf(pixelsAt(t), mask);
       if (chart.coverage) {
         const coverage = store.peekCoverage(lod, row, col, t);
         if (coverage) chart.coverage[t] = coverage[coverageOffset];
@@ -1976,11 +1977,16 @@ class Viewer {
           const observed = chart.coverage && chart.coverage[t] === undefined ? this.#loadChartCoverage(chart, t, coverageOffset) : null;
           if (!chart.readings[t]) {
             try {
-              const [data, mask] = await Promise.all([
-                store.getRaw(lod, row, col, t, { signal }),
+              const [pixels, mask] = await Promise.all([
+                // Read in the turn that the chunk lands in: the mask may take longer, and another chunk can push this one out of the cache meanwhile.
+                store.ensureRaw(lod, row, col, t, { signal }).then(() => {
+                  const values = pixelsAt(t);
+                  if (values.includes(null)) throw new Error('the chunk left the cache before its pixels were read');
+                  return values;
+                }),
                 this.#maskRead(lod, row, col, t, signal),
               ]);
-              chart.readings[t] = sample(data, mask);
+              chart.readings[t] = readingOf(pixels, mask);
             } catch (error) {
               if (error.name === 'AbortError') return;
               chart.failed++;

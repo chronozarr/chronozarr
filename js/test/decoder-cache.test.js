@@ -405,6 +405,16 @@ test('getCoarseFrame holds its chunks against eviction until it resolves, even w
   assert.equal(frame.cells.length, 3);
 });
 
+test('getCoarseFrame without materialize holds its chunks against eviction until it resolves, and returns no data', async () => {
+  const store = await openStore('memory://coarse-pinned-bare', { store: buildSyntheticStore(PYRAMID), workers: 0, maxCacheBytes: 2 * 2 * 32 * 32 * 2, compressedBytes: 0 });
+  const cells = [[0, 0], [0, 1], [1, 0]];
+  const frame = await store.getCoarseFrame(1, cells, 6, { materialize: false });
+  for (const [row, col] of cells) {
+    assert.equal(store.hasCachedRaw(1, row, col, 6), true, `cell ${row},${col} resident although the budget holds 2 chunks`);
+  }
+  assert.deepEqual(frame.cells, [{ row: 0, col: 0 }, { row: 0, col: 1 }, { row: 1, col: 0 }]);
+});
+
 test('getCoarseFrame rejects when its signal aborts, and on bad cells', async () => {
   const readable = buildSyntheticStore({ ...PYRAMID, delayMs: 30 });
   const store = await openStore('memory://coarse-abort', { store: readable, workers: 0 });

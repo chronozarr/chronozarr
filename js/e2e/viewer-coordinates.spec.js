@@ -69,14 +69,13 @@ test('a delayed sample cannot replace a newer pixel selection', async ({ page, s
   await openViewer(page, servers, await storeUrl('u16_plain'));
   await page.evaluate(() => {
     const { store } = window.chronozarr.viewer;
-    const original = store.getRaw.bind(store);
+    const original = store.ensureRaw.bind(store);
     const gate = new Promise((resolve) => { window.releaseFirstSample = resolve; });
-    store.getRaw = async (...args) => {
-      store.getRaw = original;
+    store.ensureRaw = async (...args) => {
+      store.ensureRaw = original;
       window.firstSampleWaiting = true;
-      const result = await original(...args);
+      await original(...args);
       await gate;
-      return result;
     };
   });
   await clickStorePixel(page, 50, 40);

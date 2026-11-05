@@ -740,12 +740,16 @@ export class ChronoStore {
    * Rejects when `signal` aborts or a chunk cannot be loaded. Meant for a coarse-first cold open: ask for the
    * deepest level's few cells, paint, then refine.
    *
+   * With `materialize: false` the cells carry no `data`: the chunks are in the cache when this resolves, and a packed one
+   * (compact mode) is not expanded into an array that the caller then does not read.
+   *
    * @param {number} lod
    * @param {Array<[number, number]>} cells  [row, col] pairs, loaded in this order
    * @param {number} t
-   * @returns {Promise<{lod:number, t:number, cells:Array<{row:number, col:number, data:ArrayBufferView}>}>}
+   * @param {{signal?: AbortSignal, materialize?: boolean}} [options]
+   * @returns {Promise<{lod:number, t:number, cells:Array<{row:number, col:number, data?:ArrayBufferView}>}>}
    */
-  async getCoarseFrame(lod, cells, t, { signal } = {}) {
+  async getCoarseFrame(lod, cells, t, { signal, materialize = true } = {}) {
     const level = this.level(lod);
     for (const [row, col] of cells) this.#checkCell(level, row, col);
     const keys = cells.map(([row, col]) => chunkKey(lod, row, col, t));
@@ -753,6 +757,10 @@ export class ChronoStore {
     try {
       const loaded = await Promise.all(
         cells.map(async ([row, col]) => {
+          if (!materialize) {
+            await this.ensureRaw(lod, row, col, t, { signal });
+            return { row, col };
+          }
           const data = await this.getRaw(lod, row, col, t, { signal });
           return { row, col, data };
         }),
