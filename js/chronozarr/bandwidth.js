@@ -3,6 +3,8 @@
 // low by the concurrency factor, and the speculative budget needs what the whole link delivers. Idle time
 // counts for nothing, so the estimate is link capacity, not utilisation, and survives pauses. A stretch of
 // busy time in which every request was aborted counts for nothing either: the bytes it moved were never seen.
+// A stretch in which one request finished and another was aborted still counts in full, and so reads low by what
+// the aborted one received; counting that needs a body that is read as a stream, not as one buffer.
 
 const TAU_MS = 4000;
 const MIN_BYTES = 64 * 1024;
@@ -18,7 +20,7 @@ export class BandwidthEstimator {
   #busyMs = 0;
   #totalBusyMs = 0;
   #rate = null;
-  /** The state when the link last went from idle to busy, and whether a request has finished since. */
+  /** The state when the link last went from idle to busy, and whether a request has delivered bytes or been aborted since. */
   #period = null;
 
   constructor(clock = () => performance.now()) {
@@ -28,7 +30,7 @@ export class BandwidthEstimator {
   /** A transfer is starting. */
   begin() {
     this.#advance();
-    if (this.#inflight === 0) this.#period = { at: this.#last, bytes: this.#bytes, busyMs: this.#busyMs, totalBusyMs: this.#totalBusyMs, finished: false };
+    if (this.#inflight === 0) this.#period = { at: this.#last, bytes: this.#bytes, busyMs: this.#busyMs, totalBusyMs: this.#totalBusyMs, rate: this.#rate, finished: false, aborted: false };
     this.#inflight++;
   }
 
@@ -36,24 +38,33 @@ export class BandwidthEstimator {
   end(bytes) {
     this.#advance();
     this.#inflight--;
-    this.#period.finished = true;
+    if (bytes > 0) this.#period.finished = true;
     this.#bytes += bytes;
     if (this.#bytes >= MIN_BYTES && this.#busyMs >= MIN_BUSY_MS) this.#rate = (this.#bytes / this.#busyMs) * 1000;
+    this.#dropUnseen();
   }
 
   /**
    * A transfer was aborted: the bytes it had received are not known. When it was the last request in a stretch of busy time
-   * in which none finished, that stretch is dropped, as if the link had been idle; otherwise its time stays in the estimate.
+   * in which every request was aborted or delivered nothing (a 404, a HEAD, a failed attempt), that stretch is dropped, as if the
+   * link had been idle; otherwise its time stays in the estimate.
    */
   abort() {
     this.#advance();
     this.#inflight--;
+    this.#period.aborted = true;
+    this.#dropUnseen();
+  }
+
+  /** At the end of a stretch of busy time with an abort in it and no bytes delivered, go back to the state before it. */
+  #dropUnseen() {
     const period = this.#period;
-    if (this.#inflight > 0 || period.finished) return;
+    if (this.#inflight > 0 || period.finished || !period.aborted) return;
     const decay = Math.exp(-(this.#last - period.at) / TAU_MS);
     this.#bytes = period.bytes * decay;
     this.#busyMs = period.busyMs * decay;
     this.#totalBusyMs = period.totalBusyMs;
+    this.#rate = period.rate;
   }
 
   /** Bytes per second, or null before enough data has arrived to measure. */
