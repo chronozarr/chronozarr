@@ -155,6 +155,7 @@ export class HttpStore {
     this.#network.requests++;
     this.#bandwidth.begin();
     let received = 0;
+    let aborted = false;
     try {
       const response = await this.#fetch(request);
       if (response.status === 416 && rangeMiss) {
@@ -180,10 +181,14 @@ export class HttpStore {
       }
       return { ok: true, status: response.status, bytes };
     } catch (error) {
-      if (isAbort(error)) throw error;
+      if (isAbort(error)) {
+        aborted = true;
+        throw error;
+      }
       return { ok: false, cause: error };
     } finally {
-      this.#bandwidth.end(received);
+      if (aborted) this.#bandwidth.abort();
+      else this.#bandwidth.end(received);
     }
   }
 }
@@ -219,13 +224,18 @@ export class LimitedReadable {
       this.#network.requests++;
       this.#bandwidth.begin();
       let received = 0;
+      let aborted = false;
       try {
         const bytes = await read();
         received = bytes?.length ?? 0;
         this.#network.bytes += received;
         return bytes;
+      } catch (error) {
+        aborted = isAbort(error);
+        throw error;
       } finally {
-        this.#bandwidth.end(received);
+        if (aborted) this.#bandwidth.abort();
+        else this.#bandwidth.end(received);
       }
     });
   }

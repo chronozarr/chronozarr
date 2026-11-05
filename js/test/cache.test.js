@@ -257,6 +257,41 @@ test('bandwidth follows the link: an exponential average that weights longer sam
   assert.ok(Math.abs(bw.estimate - 10_000_000) / 10_000_000 < 0.05, `converged: ${bw.estimate}`);
 });
 
+test('busy time in which every request was aborted counts as idle time: it neither lowers the estimate nor ages it', () => {
+  const run = (between) => {
+    const clock = clockAt();
+    const bw = new BandwidthEstimator(clock.read);
+    bw.begin();
+    clock.now += 1000;
+    bw.end(1_000_000);
+    between(bw, clock);
+    bw.begin();
+    clock.now += 1000;
+    bw.end(2_000_000);
+    return bw;
+  };
+  const idle = run((bw, clock) => { clock.now += 3000; });
+  const aborted = run((bw, clock) => {
+    for (let i = 0; i < 3; i++) bw.begin();
+    clock.now += 3000;
+    for (let i = 0; i < 3; i++) bw.abort();
+  });
+  assert.equal(aborted.estimate, idle.estimate);
+  assert.equal(aborted.mature, idle.mature);
+  assert.ok(aborted.estimate > 1_000_000, `${aborted.estimate}`);
+});
+
+test('an aborted request in a stretch of busy time where another one finished does not erase that stretch', () => {
+  const clock = clockAt();
+  const bw = new BandwidthEstimator(clock.read);
+  bw.begin();
+  bw.begin();
+  clock.now += 1000;
+  bw.end(1_000_000);
+  bw.abort();
+  assert.equal(Math.round(bw.estimate), 1_000_000, 'the second of transfer time is still in the estimate');
+});
+
 // ---- limiter ----
 
 /** Let queued microtasks and a timer tick run. */
