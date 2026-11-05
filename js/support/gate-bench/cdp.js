@@ -1,15 +1,17 @@
 // The network of a page as Chrome's DevTools protocol sees it: a log of the requests to some origins (what they cost on the
-// wire and when each started), and the throttling of the link. A runner throttles after the viewer has opened its store: with
-// the HTTP cache off, each decode worker fetches its own copy of its script and codec, and a link that slowed those would
-// measure the start of the workers, not the chunks the scenario reads.
+// wire and when each started), and the throttling of the link. The page's own session sees the requests of the page; a request
+// that a dedicated worker makes itself is neither in the log nor, without Target.setAutoAttach, slowed by the throttling.
+// The reader fetches chunks on the main thread, so what a scenario counts and what the link limits are the chunks.
 
 /** Per-request log of `origins` ({ url, type, startedAt, endedAt, bytes, failed }, times in CDP's monotonic seconds). */
 export class NetworkLog {
   #requests = new Map();
 
   constructor(cdp, origins) {
+    // An origin matches by its path prefix with the slash: http://127.0.0.1:5000 is not the origin of http://127.0.0.1:50001/.
+    const prefixes = origins.map((origin) => (origin.endsWith('/') ? origin : `${origin}/`));
     cdp.on('Network.requestWillBeSent', (event) => {
-      if (!origins.some((origin) => event.request.url.startsWith(origin))) return;
+      if (!prefixes.some((prefix) => event.request.url.startsWith(prefix))) return;
       this.#requests.set(event.requestId, { url: event.request.url, type: event.type, startedAt: event.timestamp, endedAt: null, bytes: 0, failed: false });
     });
     cdp.on('Network.dataReceived', (event) => {

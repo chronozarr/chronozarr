@@ -142,7 +142,7 @@ function firstVisitLines({ rows, unavailable }) {
   return [
     '### First visit (informational, not gated)',
     '',
-    'A new browser with an empty profile and the HTTP cache on, once per run: the page, the viewer, its workers and the first open of the store, which the gates measure only after all of it is warm. Milliseconds from the start of the navigation, unless the row says otherwise; medians over the pairs, with the range.',
+    'A new browser with an empty profile, once per run: the page, the viewer, its workers and the first open of the store, which the gates measure only after all of it is warm. The local server sends no cache headers, so the page and each worker download the codec themselves. Milliseconds from the start of the navigation, unless the row says otherwise; medians over the pairs, with the range.',
     '',
     '| Mark | Base | Head | Head / base |',
     '|---|---|---|---|',

@@ -1,5 +1,6 @@
-// The first visit to the viewer, measured from outside: a new browser with an empty profile and the HTTP cache on loads the
-// page, which opens the store named in its address. The gates (run.mjs) run on a page whose workers, shader programs and
+// The first visit to the viewer, measured from outside: a new browser with an empty profile loads the page, which opens the
+// store named in its address. The HTTP cache is on, as a visitor's is, but the local server sends no cache headers, so it
+// holds nothing: the page and each decode worker download the codec themselves, as from a host that sent none. The gates (run.mjs) run on a page whose workers, shader programs and
 // connections are warm from the opens before, so they cannot see what the first open pays for. What this reports, in ms, none
 // of it gated:
 //
@@ -77,7 +78,8 @@ export async function firstVisit({ gpu, appUrl, storeUrl }) {
     const context = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1, serviceWorkers: 'block' });
     const page = await context.newPage();
     await page.addInitScript(installMarks);
-    // The cache stays on, as a visitor's does: its first visit has nothing in it, but a worker and the main thread share a codec download.
+    // The cache stays on, as a visitor's does. The static server sends no Cache-Control, ETag or Last-Modified, so Chrome may reuse nothing:
+    // codecMs and workerReadyMs include a download that a CDN with caching headers lets the page and its workers share.
     const { log } = await attachNetworkLog(context, page, [new URL(appUrl).origin, new URL(storeUrl).origin], { cacheDisabled: false });
     await withTimeout(
       (async () => {
