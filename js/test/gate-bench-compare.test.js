@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { COMPACT_METRICS, METRICS, compareBuilds, summaryMarkdown } from '../support/gate-bench/compare.js';
+import { guardsMode, invalidRunsNotice, overloadedRuns } from '../support/gate-bench/guards.js';
 
 const QUIET = { serverRequests: 0, readerRequests: 0, readerBytes: 0, incomplete: 0 };
 const BASE_FIGURES = { coldOpenMs: 400, decodeMs: 6, warmStepMs: 20, warmJumpMs: 40 };
@@ -170,4 +171,15 @@ test('a mark that no run produced shows a dash, and runs without a first visit l
   const plain = compareBuilds(runs(3));
   assert.equal(plain.firstVisit, null);
   assert.doesNotMatch(summaryMarkdown(plain), /First visit/);
+});
+
+test('the notice of the runs that were invalid for their load comes under the verdict, which still stands', () => {
+  // The machine passed the check at the start of the process (load 6), and in the fourth pair the head ran while the load went to 84.
+  const records = runs(5).map((record) => ({ ...record, load: record.variant === 'head' && record.pair === 3 ? { start: 6, end: 83.9, max: 84 } : { start: 6, end: 7, max: 7 } }));
+  const overloaded = overloadedRuns(records, { mode: guardsMode({ env: {} }), cores: 16 });
+  const invalid = invalidRunsNotice(overloaded, { total: records.length, cores: 16, label: (record) => `pair ${record.pair + 1} ${record.variant}` });
+  const text = summaryMarkdown(compareBuilds(records), { invalid });
+  assert.match(text, /\*\*Invalid: 1 of 10 runs had a 1-minute load above 8 \(half of 16 logical cores\) while they ran:\*\* pair 4 head \(load 84\)/);
+  assert.ok(text.indexOf('**Pass.**') < text.indexOf('Invalid:') && text.indexOf('Invalid:') < text.indexOf('Medians over 5 pairs'), 'under the verdict, above the tables');
+  assert.doesNotMatch(summaryMarkdown(compareBuilds(records)), /Invalid/);
 });

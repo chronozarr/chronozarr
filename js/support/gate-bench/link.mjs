@@ -37,7 +37,8 @@
 // that fails after 20 minutes keeps what was measured before it.
 //
 // A run refuses to start on a machine whose load or power source would make the timings noise, and discards a run whose
-// browser was not drawing at 60 Hz (guards.js); `--ignore-guards` measures anyway.
+// browser was not drawing at 60 Hz (guards.js). It samples the load while each run goes, and the summary marks a run whose
+// load rose above the limit as invalid. `--ignore-guards` measures anyway.
 //
 // Not a CI job: five scenarios on two links, three pairs of two builds, is about 30 minutes (CONTRIBUTING.md).
 
@@ -50,7 +51,7 @@ import { parseArgs } from 'node:util';
 import { startStaticServer } from '../static-server.js';
 import { BROWSER_ARGS, LOOPBACK_ONLY, VIEWPORT, launchBrowser, measureFrameInterval, rendererInfo, withTimeout } from './browser.mjs';
 import { attachNetworkLog, setLink } from './cdp.js';
-import { guardsMode, guardsSummary, measureGuarded, readMachine, refuseNoisyMachine } from './guards.js';
+import { guardsMode, guardsSummary, invalidRunsNotice, measureGuarded, overloadedRuns, readMachine, refuseNoisyMachine, watchLoad } from './guards.js';
 import { LINKS, SCENARIOS, compareLinks, linkSummaryMarkdown, runFigures } from './link-compare.js';
 import { runScenario } from './link-scenarios.js';
 
@@ -106,6 +107,7 @@ function selfSignedCertificate() {
 
 async function measure({ variant, pair, link, scenario, appUrl, storeUrl, dataOrigin }) {
   const browser = await launchBrowser(args.gpu, [LOOPBACK_ONLY]);
+  const loadWatch = watchLoad();
   const errors = [];
   try {
     const frameBefore = guards ? await measureFrameInterval(browser) : null;
@@ -115,7 +117,6 @@ async function measure({ variant, pair, link, scenario, appUrl, storeUrl, dataOr
     page.on('pageerror', (error) => errors.push(`uncaught: ${error.stack || error.message}`));
     const { cdp, log } = await attachNetworkLog(context, page, [dataOrigin]);
     await setLink(cdp, LINKS[link]);
-    const loadAtStart = load();
     await page.goto(`${appUrl}/demo/index.html?store=${encodeURIComponent(storeUrl)}`);
     await page.waitForFunction(() => window.chronozarr?.ready, null, { timeout: 120_000 });
     const opened = await page.evaluate(() => window.chronozarr.ready);
@@ -134,7 +135,7 @@ async function measure({ variant, pair, link, scenario, appUrl, storeUrl, dataOr
       pair,
       link,
       scenario,
-      load: { start: Number(loadAtStart), end: Number(load()) },
+      load: loadWatch.stop(),
       browser: await page.evaluate(rendererInfo),
       figures,
       timedOut,
@@ -145,11 +146,12 @@ async function measure({ variant, pair, link, scenario, appUrl, storeUrl, dataOr
       ...(guards && { frameInterval: { before: frameBefore, after: frameAfter } }),
     };
   } finally {
+    loadWatch.stop();
     await browser.close();
   }
 }
 
-const describe = (record) => `${Object.entries(record.figures).map(([key, value]) => `${key} ${value}`).join(', ')}${record.timedOut.length ? `; hit the wait: ${record.timedOut}` : ''}; ${record.errors.length} page errors (load ${record.load.start} to ${record.load.end})`;
+const describe = (record) => `${Object.entries(record.figures).map(([key, value]) => `${key} ${value}`).join(', ')}${record.timedOut.length ? `; hit the wait: ${record.timedOut}` : ''}; ${record.errors.length} page errors (load ${record.load.start} to ${record.load.end}, at most ${record.load.max})`;
 
 const tls = selfSignedCertificate();
 const data = await startStaticServer(path.resolve(args.store), 0, { tls });
@@ -163,11 +165,12 @@ const groups = links.flatMap((link) => scenarios.map((scenario) => ({ link, scen
 
 function environmentLines() {
   const { browser } = records[0];
+  const cores = os.cpus().length;
   return [
     `${browser.userAgent.match(/(?:Headless)?Chrome\/[\d.]+/)?.[0] ?? browser.userAgent}, WebGL renderer: ${browser.renderer}`,
-    `${os.cpus().length} × ${os.cpus()[0]?.model ?? 'unknown CPU'}, ${(os.totalmem() / 1024 ** 3).toFixed(0)} GB; 1-minute load ${loadBefore} at the start, ${load()} at the end`,
+    `${cores} × ${os.cpus()[0]?.model ?? 'unknown CPU'}, ${(os.totalmem() / 1024 ** 3).toFixed(0)} GB; 1-minute load ${loadBefore} at the start, ${load()} at the end, up to ${Math.max(...records.map((record) => record.load.max))} during a run`,
     `Viewport ${VIEWPORT.width} × ${VIEWPORT.height} at pixel ratio 1; a store of ${records[0].detail.steps} timesteps over HTTP/2; per run the link is throttled before the page loads, the viewer idles ${IDLE_MS / 1000} s after its first frame, then the scenario (${playMs / 1000} s of playback, at most ${SETTLE_CAP_MS / 1000} s for the last frame of a drag or a jump)`,
-    guardsSummary({ mode: guardMode, cores: os.cpus().length, discarded: discarded.length }),
+    guardsSummary({ mode: guardMode, cores, discarded: discarded.length, invalid: overloadedRuns(records, { mode: guardMode, cores }).length }),
   ];
 }
 
@@ -198,7 +201,9 @@ for (let pair = 0; pair < pairs; pair++) {
 
 const result = compareLinks(records);
 const environment = environmentLines();
-const summary = linkSummaryMarkdown(result, { environment, records });
+const cores = os.cpus().length;
+const invalid = invalidRunsNotice(overloadedRuns(records, { mode: guardMode, cores }), { total: records.length, cores, label: (record) => `pair ${record.pair + 1} ${record.link} ${record.scenario} ${record.variant}` });
+const summary = linkSummaryMarkdown(result, { environment, records, invalid });
 console.log(`\n${summary}`);
 await writeResults(result);
 if (args.summary) await appendFile(args.summary, summary);

@@ -3,6 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { invalidRunsNotice, overloadedRuns, guardsMode } from '../support/gate-bench/guards.js';
 import { LINKS, LINK_METRICS, SCENARIOS, compareLinks, distinctFrames, dragFigures, heldMs, jumpFigures, linkSummaryMarkdown, playFigures, runFigures } from '../support/gate-bench/link-compare.js';
 
 const paint = (at, t, lod, kind = 'target') => ({ type: 'paint', at, t, lod, kind });
@@ -92,7 +93,6 @@ test('an interval is held when the frame on screen at its end is older than the 
   assert.equal(heldMs([one(0, 3, 1), one(20, 3, 3)], 0, 100), 0, 'asked for at its start and drawn by its end: the one frame that a draw takes');
 });
 
-test('an interval in which the timestep asked for changes is held too: that is where a stalled main thread leaves the canvas', () => {
 test('the one animation frame that each step needs to be drawn is not held, and every frame beyond it is: a viewer that draws at once scores 0', () => {
   // Ten steps, one every 4 animation frames of 20 ms; the sampler runs before the render of its frame, so the frame that first
   // sees a step asked for cannot show it, and a viewer that draws it on the next render has it on screen by the next sample.
@@ -113,6 +113,7 @@ test('the label of the held time says that the animation frame of each step is n
   assert.ok(linkSummaryMarkdown(result).includes(`| ${label} |`), 'the summary shows the label as it is');
 });
 
+test('an interval in which the timestep asked for changes is held too: that is where a stalled main thread leaves the canvas', () => {
   const one = (at, t, shownT) => ({ at, t, shownT });
   // Asked for 2 at 20 and for 3 at 40 (a timer that ran late), still showing 1 at 40 and at 60 (when 2 is drawn): 20 to 40 and 40 to 60 are both held.
   assert.equal(heldMs([one(0, 1, 1), one(20, 2, 1), one(40, 3, 1), one(60, 3, 2)], 0, 100), 40);
@@ -344,4 +345,14 @@ test('the summary has a table per link and scenario with both builds and the fla
 
 test('the links are the two the benchmark states', () => {
   assert.deepEqual(Object.values(LINKS).map(({ mbps, latencyMs }) => [mbps, latencyMs]), [[50, 40], [8, 80]]);
+});
+
+test('the notice of the runs that were invalid for their load comes under the headline, before the tables', () => {
+  const records = runs(3, { head: { settleMs: (v) => v * 2 } }).map((record) => ({ ...record, load: { start: 6, end: record.variant === 'head' && record.pair === 1 ? 84 : 7, max: record.variant === 'head' && record.pair === 1 ? 84 : 7 } }));
+  const overloaded = overloadedRuns(records, { mode: guardsMode({ env: {} }), cores: 16 });
+  const invalid = invalidRunsNotice(overloaded, { total: records.length, cores: 16, label: (record) => `pair ${record.pair + 1} ${record.link} ${record.scenario} ${record.variant}` });
+  const text = linkSummaryMarkdown(compareLinks(records), { records, invalid });
+  assert.match(text, /\*\*Invalid: 1 of 6 runs had a 1-minute load above 8 \(half of 16 logical cores\) while they ran:\*\* pair 2 8mbit-80ms drag150 head \(load 84\)/);
+  assert.ok(text.indexOf('metric is worse') < text.indexOf('Invalid:') && text.indexOf('Invalid:') < text.indexOf('### 8 Mbit/s'), 'under the headline, above the tables');
+  assert.doesNotMatch(linkSummaryMarkdown(compareLinks(records), { records }), /Invalid/);
 });

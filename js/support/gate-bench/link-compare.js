@@ -258,13 +258,17 @@ function formatValue(value, unit) {
 }
 const formatRange = (stat, unit) => `${formatValue(stat.median, unit)} (${formatValue(stat.min, unit)} to ${formatValue(stat.max, unit)})`;
 
-/** The step summary of a run: for each link and scenario, both builds' medians with their range, head / base and the flags. */
-export function linkSummaryMarkdown(result, { environment = [], records = [] } = {}) {
+/**
+ * The step summary of a run: for each link and scenario, both builds' medians with their range, head / base and the flags.
+ * `invalid` is the notice of the runs that were invalid for their load (guards.js: invalidRunsNotice), shown under the headline.
+ */
+export function linkSummaryMarkdown(result, { environment = [], records = [], invalid = '' } = {}) {
   const worse = result.flagged.length;
   const lines = [
     '## Link A/B: head against base',
     '',
     worse ? `**${worse} ${worse === 1 ? 'metric is' : 'metrics are'} worse in the head** beyond their tolerance and floor.` : 'No metric is worse in the head beyond its tolerance and floor.',
+    ...(invalid ? ['', invalid] : []),
     '',
     'Medians over the pairs of runs, with the range. Head / base is the median of the ratios of the pairs. A flag needs the ratio beyond the tolerance and the change in the median beyond the floor (a pair whose base is 0 and head is not counts as beyond every tolerance, and the median ratio is then shown as "from 0"); both are provisional, and a run with fewer than three pairs gets no flags.',
   ];

@@ -27,7 +27,8 @@
 // load of a shared runner falls on both, and each pair is compared on its own.
 //
 // A local run refuses to start on a machine whose load or power source would make the timings noise, and discards a run whose
-// browser was not drawing at 60 Hz (guards.js); `--ignore-guards` measures anyway. CI is not guarded.
+// browser was not drawing at 60 Hz (guards.js). It samples the load while each run goes, and the summary marks a run whose load rose above
+// the limit as invalid. `--ignore-guards` measures anyway. CI is not guarded.
 //
 // --gpu swiftshader (the default) draws on the CPU, as the browser tests and a runner without a GPU do; --gpu metal draws on
 // the GPU of a Mac, for the gates' own figures on a quiet machine.
@@ -47,7 +48,7 @@ import { startStaticServer } from '../static-server.js';
 import { BROWSER_ARGS, VIEWPORT, launchBrowser, measureFrameInterval, rendererInfo, withTimeout } from './browser.mjs';
 import { COMPACT_METRICS, METRICS, compareBuilds, median, summaryMarkdown } from './compare.js';
 import { firstVisit } from './first-visit.mjs';
-import { guardsMode, guardsSummary, measureGuarded, readMachine, refuseNoisyMachine } from './guards.js';
+import { guardsMode, guardsSummary, invalidRunsNotice, measureGuarded, overloadedRuns, readMachine, refuseNoisyMachine, watchLoad } from './guards.js';
 
 // Five cold opens per run: with three, one slow open moved a run's median by up to 59 % on GitHub's runners.
 const COLD_RUNS = 5;
@@ -184,6 +185,7 @@ async function measure({ variant, pair, appUrl, storeUrl, data }) {
           return { error: error.message };
         });
   const browser = await launchBrowser(args.gpu);
+  const loadWatch = watchLoad();
   const errors = [];
   try {
     const frameBefore = guards ? await measureFrameInterval(browser) : null;
@@ -191,7 +193,6 @@ async function measure({ variant, pair, appUrl, storeUrl, data }) {
     page.on('console', (message) => message.type() === 'error' && errors.push(`console.error: ${message.text()}`));
     page.on('pageerror', (error) => errors.push(`uncaught: ${error.stack || error.message}`));
     await page.route((url) => !['127.0.0.1', 'localhost'].includes(url.hostname), (route) => route.abort('blockedbyclient'));
-    const loadAtStart = load();
     await page.goto(`${appUrl}/demo/index.html?store=${encodeURIComponent(storeUrl)}`);
     await page.waitForFunction(() => window.chronozarr?.ready, null, { timeout: 120_000 });
     if (!(await page.evaluate(() => window.chronozarr.ready))) throw new Error('the viewer did not open the store');
@@ -223,7 +224,7 @@ async function measure({ variant, pair, appUrl, storeUrl, data }) {
     return {
       variant,
       pair,
-      load: { start: Number(loadAtStart), end: Number(load()) },
+      load: loadWatch.stop(),
       browser: browserInfo,
       figures: {
         coldOpenMs: median(coldOpens.map((row) => row.firstPaintMs)),
@@ -248,13 +249,14 @@ async function measure({ variant, pair, appUrl, storeUrl, data }) {
       ...(guards && { frameInterval: { before: frameBefore, after: frameAfter } }),
     };
   } finally {
+    loadWatch.stop();
     await browser.close();
   }
 }
 
 const describe = (r) =>
   `cold ${r.figures.coldOpenMs.toFixed(0)} ms, step ${r.figures.warmStepMs.toFixed(1)} ms, jump ${r.figures.warmJumpMs.toFixed(1)} ms${compact ? '' : `, decode ${r.figures.decodeMs.toFixed(1)} ms`}; ` +
-  `warm loop ${r.warmLoop.serverRequests} server requests, ${r.warmLoop.readerBytes} bytes, ${r.warmLoop.incomplete} incomplete (load ${r.load.start} to ${r.load.end})`;
+  `warm loop ${r.warmLoop.serverRequests} server requests, ${r.warmLoop.readerBytes} bytes, ${r.warmLoop.incomplete} incomplete (load ${r.load.start} to ${r.load.end}, at most ${r.load.max})`;
 
 const data = await startStaticServer(path.resolve(args.store));
 const apps = { base: await startStaticServer(path.resolve(args.base)), head: await startStaticServer(path.resolve(args.head)) };
@@ -279,18 +281,21 @@ try {
 
 const result = compareBuilds(records, { metrics: compact ? COMPACT_METRICS : METRICS });
 const { browser, loaded } = records[0];
+const cores = os.cpus().length;
+const overloaded = overloadedRuns(records, { mode: guardMode, cores });
 const environment = [
   `${browser.userAgent.match(/(?:Headless)?Chrome\/[\d.]+/)?.[0] ?? browser.userAgent}, WebGL renderer: ${browser.renderer}`,
-  `${os.cpus().length} × ${os.cpus()[0]?.model ?? 'unknown CPU'}, ${(os.totalmem() / 1024 ** 3).toFixed(0)} GB; 1-minute load ${loadBefore} at the start, ${load()} at the end`,
+  `${cores} × ${os.cpus()[0]?.model ?? 'unknown CPU'}, ${(os.totalmem() / 1024 ** 3).toFixed(0)} GB; 1-minute load ${loadBefore} at the start, ${load()} at the end, up to ${Math.max(...records.map((record) => record.load.max))} during a run`,
   `Viewport ${VIEWPORT.width} × ${VIEWPORT.height} at pixel ratio 1; per run ${COLD_RUNS} cold opens, ${SWITCHES} steps and ${SWITCHES} jumps on a fully loaded level 0${
     compact
       ? `, held packed: cap ${COMPACT_TOTAL_BYTES / 1024 ** 2} MiB, level 0 of ${loaded.timesteps} timesteps ${Math.round(loaded.loopBytes / 1024 ** 2)} MiB unpacked, packed to ${Math.round(loaded.compactRatio * 100)} % of it`
       : ', decode of 80 chunks'
   }`,
-  guardsSummary({ mode: guardMode, cores: os.cpus().length, discarded: discarded.length }),
+  guardsSummary({ mode: guardMode, cores, discarded: discarded.length, invalid: overloaded.length }),
   ...(!compact && records.some((record) => record.loaded.compact) ? [`Warning: ${records.filter((record) => record.loaded.compact).length} runs held the default pass's cache packed, so they measured the compact path`] : []),
 ];
-const summary = summaryMarkdown(result, { environment, ...(compact && { title: 'Speed gates, compact cache: head against base' }) });
+const invalid = invalidRunsNotice(overloaded, { total: records.length, cores, label: (record) => `pair ${record.pair + 1} ${record.variant}` });
+const summary = summaryMarkdown(result, { environment, invalid, ...(compact && { title: 'Speed gates, compact cache: head against base' }) });
 console.log(`\n${summary}`);
 if (args.out) {
   await mkdir(path.dirname(path.resolve(args.out)), { recursive: true });

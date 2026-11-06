@@ -3,7 +3,10 @@
 // runs at a load of 265 to 314 could not establish a gate (docs/evidence.md), and a machine that dropped to 33 ms frames in the
 // middle of a matrix went on measuring. So a local run refuses to start when the 1-minute load average is above half the
 // logical cores or the machine is on battery power, and discards a run whose animation frame interval, taken on a blank page
-// in its browser before and after it, is above RAF_MAX_MS, repeating it up to ATTEMPTS times before it refuses.
+// in its browser before and after it, is above RAF_MAX_MS, repeating it up to ATTEMPTS times before it refuses. The load is read
+// only when a process starts, and other work has been seen taking a machine from a load of 6 to 84 during a run, so each run
+// also samples the load while it goes (watchLoad) and keeps the highest in its record, and the summary marks a run whose highest
+// load was above the limit as invalid. That run stays in the comparison and in the JSON: only the summary says its timings are noise.
 // `--ignore-guards` measures anyway, and the summary and the JSON of a run say whether the guards were on.
 //
 // None of this applies on CI. A shared runner has no battery and a load of other jobs that the job cannot lower, so the guards
@@ -27,10 +30,48 @@ export function guardsMode({ env = process.env, ignore = false } = {}) {
   return { enabled: true, off: null };
 }
 
-/** The line of a summary that says what was guarded; `discarded` is the number of runs that were discarded. */
-export function guardsSummary({ mode, cores, discarded }) {
-  if (!mode.enabled) return `Guards: off (${mode.off}): the load, the power source and the animation frame interval were not checked, and no run was discarded for them`;
-  return `Guards: a 1-minute load of at most ${loadLimit(cores)} (half of ${cores} logical cores) and no battery power at the start; the median animation frame interval before and after each run at most ${RAF_MAX_MS} ms (${discarded} runs discarded)`;
+/** The line of a summary that says what was guarded; `discarded` is the number of runs that were discarded, `invalid` the number marked invalid for their load. */
+export function guardsSummary({ mode, cores, discarded, invalid }) {
+  if (!mode.enabled) return `Guards: off (${mode.off}): the load, the power source and the animation frame interval were not checked, and no run was discarded or marked invalid for them`;
+  return `Guards: a 1-minute load of at most ${loadLimit(cores)} (half of ${cores} logical cores) and no battery power at the start; the median animation frame interval before and after each run at most ${RAF_MAX_MS} ms (${discarded} runs discarded); the highest 1-minute load sampled during each run at most ${loadLimit(cores)} (${invalid} runs invalid)`;
+}
+
+const round = (load) => Math.round(load * 10) / 10;
+
+/**
+ * Sample the 1-minute load while a run goes, every `intervalMs` and when `stop()` is called (a second call returns the same
+ * figures): `{ start, end, max }` as `uptime` shows them, to one decimal. The timer does not keep the process alive.
+ */
+export function watchLoad({ read = () => os.loadavg()[0], intervalMs = 1000 } = {}) {
+  const seen = [read()];
+  const timer = setInterval(() => seen.push(read()), intervalMs);
+  timer.unref();
+  let result = null;
+  return {
+    stop() {
+      if (!result) {
+        clearInterval(timer);
+        seen.push(read());
+        result = { start: round(seen[0]), end: round(seen.at(-1)), max: round(Math.max(...seen)) };
+      }
+      return result;
+    },
+  };
+}
+
+/** The records (each with `load.max`, from watchLoad) whose highest load was above the limit while they ran; none with the guards off. */
+export function overloadedRuns(records, { mode, cores }) {
+  return mode.enabled ? records.filter(({ load }) => load.max > loadLimit(cores)) : [];
+}
+
+const MAX_LISTED = 8;
+
+/** The notice at the top of a summary that names the runs `overloaded` (of `total`) as invalid, each as `label(record)`; empty when there are none. */
+export function invalidRunsNotice(overloaded, { total, cores, label }) {
+  if (!overloaded.length) return '';
+  const listed = overloaded.slice(0, MAX_LISTED).map((record) => `${label(record)} (load ${record.load.max})`);
+  const more = overloaded.length > MAX_LISTED ? `, and ${overloaded.length - MAX_LISTED} more` : '';
+  return `**Invalid: ${overloaded.length} of ${total} runs had a 1-minute load above ${loadLimit(cores)} (half of ${cores} logical cores) while they ran:** ${listed.join(', ')}${more}. Other work was loading the machine, so their timings are noise. They are in the comparison below, which should not be trusted, and in the JSON (\`load.max\`); measure again on a quiet machine.`;
 }
 
 /** Whether `pmset -g batt` says the Mac is drawing from its battery; null when it says nothing about the power source. */
