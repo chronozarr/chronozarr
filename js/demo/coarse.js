@@ -27,19 +27,31 @@ export const COARSE_MIN_DIRECT_MS = 1000;
 /** Bandwidth assumed before any transfer has been measured: 50 Mbit/s. */
 export const ASSUMED_BANDWIDTH = (50 * 1e6) / 8;
 
-/** Each stage starts this many store round trips after the previous one, so its request latency overlaps the previous stage's transfer. */
+/** The latency lead is this many store round trips, so the next stage's request latency overlaps the end of this stage's transfer. */
 export const STAGE_LEAD_ROUND_TRIPS = 2;
+
+/** The latency lead is at least this: a store that answers in a few ms (a local one) gets hardly any lead. */
 export const STAGE_LEAD_MIN_MS = 30;
-export const STAGE_LEAD_MAX_MS = 400;
+
+/** And at most this: a slow first response does not delay the stages for seconds. */
+export const STAGE_LEAD_LATENCY_MAX_MS = 400;
+
+/** The lead never exceeds this: a stage that has not landed by then is stalled, or on a link slower than measured, and the next one starts anyway. */
+export const STAGE_LEAD_MAX_MS = 2000;
 
 /**
- * How long after a stage starts the next one may start, if the stage has not landed by then. A chunk takes a few
- * sequential requests (the object's size, the shard index, then the bytes) and only the last one moves much data, so
- * starting the next stage about two round trips after this one lets its requests reach the point of moving bytes just as
- * this stage's bytes are done. `roundTripMs` is what it took to fetch the store's metadata.
+ * How long after a stage starts the next one may start, if the stage has not landed by then. Stores are unsharded by default,
+ * so a chunk is one request that carries all its bytes. A stage that starts while the previous one's bytes are still arriving
+ * shares the link with them, and the previous one lands later. The lead is the latency lead, STAGE_LEAD_ROUND_TRIPS times
+ * `roundTripMs` (what it took to open the store, which is more than one round trip) within the limits above, when this stage's
+ * transfer is shorter than that, and else the transfer time: `wireBytes` (what the stage still has to fetch) at `bandwidth`
+ * (bytes per second), at most STAGE_LEAD_MAX_MS. The estimate of the bandwidth includes each request's wait for its first byte,
+ * so the transfer time already holds the latency. A stage with no bytes to fetch, or no usable bandwidth, has the latency lead.
  */
-export function stageLeadMs(roundTripMs) {
-  return Math.min(STAGE_LEAD_MAX_MS, Math.max(STAGE_LEAD_MIN_MS, STAGE_LEAD_ROUND_TRIPS * roundTripMs));
+export function stageLeadMs({ wireBytes, bandwidth, roundTripMs }) {
+  const latency = Math.min(STAGE_LEAD_LATENCY_MAX_MS, Math.max(STAGE_LEAD_MIN_MS, STAGE_LEAD_ROUND_TRIPS * roundTripMs));
+  const transfer = wireBytes > 0 && bandwidth > 0 && Number.isFinite(bandwidth) ? (wireBytes * 1000) / bandwidth : 0;
+  return Math.min(STAGE_LEAD_MAX_MS, Math.max(latency, transfer));
 }
 
 /**

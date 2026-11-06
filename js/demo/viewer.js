@@ -1665,19 +1665,20 @@ class Viewer {
 
   /**
    * The cells a wave still needs, coarse first: the small coarse levels (see coarse.js), each shown once it is
-   * complete, then the target level, which is shown when all of its cells are in. A stage starts when the previous one lands or, sooner, a
-   * couple of round trips after the previous one started (stageLeadMs), so the requests of one stage wait on the
-   * network while the bytes of the one before are still arriving instead of after them.
+   * complete, then the target level, which is shown when all of its cells are in. A stage starts when the previous one lands or, sooner,
+   * its leadMs after the previous one started (see stageLeadMs): a couple of round trips, so the requests of one stage wait on the
+   * network while the bytes of the one before are still arriving instead of after them, or the time those bytes take when that is longer.
    */
   async #loadWanted(wave, wanted) {
     const { lod } = wave;
     const { signal } = wave.controller;
-    const lead = stageLeadMs(this.#roundTripMs);
     let previous = null;
+    let lead = 0;
     for (const stage of this.#coarseStages(lod, wanted, wave.t)) {
       if (previous) await Promise.race([previous, delay(lead, signal)]);
       if (signal.aborted) return;
       previous = this.#loadStage(wave, stage);
+      lead = stage.leadMs;
     }
     if (previous) await Promise.race([previous, delay(lead, signal)]);
     if (!signal.aborted) this.#loadCells(wave, wanted);
@@ -1700,20 +1701,28 @@ class Viewer {
   }
 
   /**
-   * Levels to show before `lod` for the cells about to load at timestep t, coarsest first, as {lod, cells}; none for
+   * Levels to show before `lod` for the cells about to load at timestep t, coarsest first, as {lod, cells, leadMs}; none for
    * a pinned level or a movie. A stage is skipped by the plan when its frame is in memory already (the coarse loop
-   * got there first) or when the frame asked for would arrive soon anyway.
+   * got there first) or when the frame asked for would arrive soon anyway. `leadMs` is how long the next stage waits for this one
+   * (stageLeadMs), given the time its cells' chunks that are not in memory take to arrive at the measured or assumed bandwidth.
    */
   #coarseStages(lod, cells, t) {
     if (this.lodOverride !== null || this.#playing) return [];
+    const { store } = this;
+    const bandwidth = store.bandwidthEstimate() ?? ASSUMED_BANDWIDTH;
     const levels = planCoarseStages({
       targetLod: lod,
-      coarsestLod: this.store.levels.length - 1,
+      coarsestLod: store.levels.length - 1,
       frameBytes: (level) => this.#frameBytes(level, ancestorCells(cells, lod, level), t),
-      bandwidth: this.store.bandwidthEstimate() ?? ASSUMED_BANDWIDTH,
-      wireRatio: wireRatio(readStats(this.store)),
+      bandwidth,
+      wireRatio: wireRatio(readStats(store)),
     });
-    return levels.map((level) => ({ lod: level, cells: ancestorCells(cells, lod, level) }));
+    return levels.map((level) => {
+      const stageCells = ancestorCells(cells, lod, level);
+      const missing = stageCells.filter(([row, col]) => !store.hasCachedRaw(level, row, col, t));
+      const wireBytes = missing.length * store.chunkWireBytes(level);
+      return { lod: level, cells: stageCells, leadMs: stageLeadMs({ wireBytes, bandwidth, roundTripMs: this.#roundTripMs }) };
+    });
   }
 
   /** Decoded bytes of the valid pixels of the chunks of timestep t  that these cells of one level do not have in memory yet. */
