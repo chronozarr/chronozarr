@@ -469,7 +469,11 @@ class Viewer {
     if (!playing) {
       this.#beginView('time');
       this.#noteScrubStep(Math.abs(next - this.t));
-      if (Math.abs(next - this.t) > SEEK_DISTANCE) this.#dropSpeculativeFetches({ coarseLoop: true });
+      if (Math.abs(next - this.t) > SEEK_DISTANCE) {
+        // The pumps' timesteps are demand reads for the old position: they would hold their link and slots until they land.
+        this.#stopBufferPumps();
+        this.#dropSpeculativeFetches({ coarseLoop: true });
+      }
     }
     this.#direction = direction ?? (next > this.t ? 1 : -1);
     this.t = next;

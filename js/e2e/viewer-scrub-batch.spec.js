@@ -74,7 +74,7 @@ async function startScrub({ page, servers, stores }, bandwidth) {
           open = false;
         }, 0);
       }
-      calls.push({ lod, t, turn, ahead: t > viewer.t });
+      calls.push({ lod, t, turn, ahead: t > viewer.t, signal: options?.signal });
       return ensureRaw(lod, row, col, t, options);
     };
     window.__calls = calls;
@@ -124,4 +124,20 @@ test('on a fast link three timesteps stay in flight: the next is asked for as so
   await asked(15);
   expect(await notAsked(16), 'three again, with 13 and 14 still on the wire').toBe(true);
   for (let t = FIRST_HELD; t < N_TIME; t++) release(t);
+});
+
+test('a jump cancels what the pump has on the wire for the old position', async ({ page, servers, stores }) => {
+  const { release, asked } = await startScrub({ page, servers, stores }, 1e12);
+  await asked(12, 13, 14);
+  const before = await page.evaluate(() => window.__calls.filter(({ t }) => t >= 12 && t <= 14).map(({ signal }) => signal.aborted));
+  expect(before, 'the three timesteps are wanted while the scrub goes on').not.toContain(true);
+
+  // A jump to the last timestep, far from the scrub's: the three steps ahead of the old position are not wanted any more.
+  const after = await page.evaluate((t) => {
+    clearInterval(window.__keys);
+    window.chronozarr.viewer.goToTime(t);
+    return window.__calls.filter((call) => call.t >= 12 && call.t <= 14).map(({ signal }) => signal.aborted);
+  }, N_TIME - 1);
+  for (let t = FIRST_HELD; t < N_TIME; t++) release(t);
+  expect(after, 'the pump cancelled its three timesteps on the wire').not.toContain(false);
 });
