@@ -370,7 +370,7 @@ export class ChronoStore {
   /** Clock time of the last root re-read that brought no new `shard_bytes`, or null. */
   #noNewHintsAt = null;
   #recoveries = { rootRefetches: 0, retried: 0, suffixFallbacks: 0, suppressed: 0 };
-  /** Requests a demand read waits for (see #count). */
+  /** Requests a demand read waits for (see #count), and the holds of holdDemand(). */
   #demandInflight = 0;
   #demandIdleWaiters = [];
   #slotWaiters = [];
@@ -804,6 +804,23 @@ export class ChronoStore {
   }
 
   /**
+   * Hold prefetch back as a demand read does, for a caller whose reads come back to back with short gaps between them (a scrub that
+   * reads each frame as the last one lands): while any hold is active, speculative work waits as if a read were in flight, and a
+   * movie's prefetch is not held, as for a read. Returns the function that releases the hold (calling it again does nothing); the
+   * parked workers go on when the last hold is released.
+   */
+  holdDemand() {
+    if (this.#closeController.signal.aborted) throw new Error('ChronoStore is closed');
+    this.#demandBegin();
+    let held = true;
+    return () => {
+      if (!held) return;
+      held = false;
+      this.#demandEnd();
+    };
+  }
+
+  /**
    * Background fetch of a time window around t for the given cells at one level, nearest first
    * (scrubCost order, so the scrub direction reaches further). Chunks near t are decoded; chunks the decoded tier cannot hold are kept as compressed
    * bytes when the cache has room. A new chunk only displaces cached ones that score worse (see `evictionScore`).
@@ -818,8 +835,9 @@ export class ChronoStore {
    * cancelled under it after the rest of its plan.
    *
    * Speculative traffic is metered: 16 MB may start at once, after that half the measured bandwidth. Prefetch
-   * waits while any demand fetch is in flight (a speculative request that a demand read joins counts as one from then
-   * on, unless a movie's prefetch is fetching it; a movie's prefetch itself never waits for demand reads) and never takes the last request slots. A cell whose chunk
+   * waits while any demand fetch is in flight or a `holdDemand()` hold is active (a speculative request that a demand read joins
+   * counts as one from then on, unless a movie's prefetch is fetching it; a movie's prefetch itself never waits for demand reads)
+   * and never takes the last request slots. A cell whose chunk
    * failed is left alone for PREFETCH_COOLDOWN_MS. Aborting `signal` cancels this job's fetches that nobody else
    * waits for. With `seek`, the chunks of timestep `t` itself (its data) are fetched at demand
    * priority outside the allowance before the rest of the window. Resolves with counts and per-chunk errors
@@ -1239,8 +1257,7 @@ export class ChronoStore {
   #count(entry) {
     if (entry.counted || [...entry.owners].some((owner) => this.#movieJobs.has(owner))) return;
     entry.counted = true;
-    this.#demandInflight++;
-    this.#updateSpeculativeShare();
+    this.#demandBegin();
   }
 
   /** An owner left: a request that a read waits for and that was not counted because a movie owned it counts now, unless another movie owns it. */
@@ -1251,6 +1268,16 @@ export class ChronoStore {
   #uncount(entry) {
     if (!entry.counted) return;
     entry.counted = false;
+    this.#demandEnd();
+  }
+
+  #demandBegin() {
+    this.#demandInflight++;
+    this.#updateSpeculativeShare();
+  }
+
+  /** When the count drops to zero, parked workers look again, though no request may have settled. */
+  #demandEnd() {
     if (--this.#demandInflight === 0) {
       this.#updateSpeculativeShare();
       for (const wake of this.#demandIdleWaiters.splice(0)) wake();

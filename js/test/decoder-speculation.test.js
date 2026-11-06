@@ -808,6 +808,68 @@ test('a movie starts its requests while a demand read is pending, and a horizon 
   await Promise.all([movie, horizon]);
 });
 
+test('holdDemand holds speculative work back as a demand read does, through the gaps between reads, until the last hold is released', async () => {
+  const { store, started, release, openAll } = await openGated({ rate: 400_000, mature: true });
+  assert.equal(store.stats().cache.speculativeShare, 1, 'idle and measured');
+  const releaseFirst = store.holdDemand();
+  const releaseSecond = store.holdDemand();
+  assert.equal(store.stats().cache.speculativeShare, 0.5, 'speculation earns as it does while a frame waits');
+  const abort = new AbortController();
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, signal: abort.signal });
+  await settled();
+  assert.deepEqual(started, [], 'nothing starts under a hold');
+  const read = store.getRaw(0, 0, 0, 50);
+  await settled();
+  release(50);
+  await read;
+  await settled();
+  assert.deepEqual(started, [50], 'nor in the gap after a read has landed');
+  releaseFirst();
+  releaseFirst();
+  await settled();
+  assert.deepEqual(started, [50], 'a hold released twice is released once: the second one is still held');
+  releaseSecond();
+  await settled();
+  assert.ok(started.length > 1, 'the parked workers start when the last hold is released');
+  assert.equal(store.stats().cache.speculativeShare, 1);
+  abort.abort();
+  openAll();
+  await job;
+});
+
+test('workers that wait for a request slot start when the last hold is released, though no request has settled', async () => {
+  const { store, started, release, openAll } = await openGated({ rate: 200_000, idleSeconds: 1000 });
+  const abort = new AbortController();
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, signal: abort.signal });
+  await settled();
+  assert.deepEqual(started, [30], 'one slot: the other workers wait for it');
+  const hold = store.holdDemand();
+  release(30);
+  await settled();
+  assert.deepEqual(started, [30], 'the slot is free, and the hold keeps it unused');
+  hold();
+  await settled();
+  assert.ok(started.length > 1);
+  abort.abort();
+  openAll();
+  await job;
+});
+
+test('holdDemand does not hold a movie back, and refuses a closed store', async () => {
+  const { store, started, openAll } = await openGated();
+  const hold = store.holdDemand();
+  const stop = new AbortController();
+  const movie = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, playing: true, maxSteps: 3, signal: stop.signal });
+  await settled();
+  assert.deepEqual(started, [30, 31, 29]);
+  stop.abort();
+  openAll();
+  await movie;
+  hold();
+  store.close();
+  assert.throws(() => store.holdDemand(), /closed/);
+});
+
 /** A small seeded generator, so that a failing run can be repeated. */
 function seeded(seed) {
   let state = seed >>> 0;
