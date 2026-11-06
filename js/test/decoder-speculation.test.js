@@ -300,8 +300,9 @@ const settled = async () => {
  * one and `openAll()` answers all of them, now and from then on; an aborted request is rejected. With a `rate` the link is measured
  * at that many bytes/s on the simulated clock, which fixes how many speculative requests may be in flight (0.2 MB/s leaves one);
  * with `mature` it is measured for over a second of transfer time, the estimate the speculative share needs to rise to its idle value.
+ * `measure: false` leaves the link unmeasured (with a clock that does not move, the allowance never earns anything).
  */
-async function openGated({ rate = 400_000_000, mature = false, ...options } = {}) {
+async function openGated({ rate = 400_000_000, mature = false, measure = true, ...options } = {}) {
   const readable = buildSyntheticStore(LARGE);
   const link = simulatedLink(readable, rate);
   const waiting = new Map();
@@ -328,7 +329,7 @@ async function openGated({ rate = 400_000_000, mature = false, ...options } = {}
     return bytes;
   };
   const store = await openStore('memory://gated', { store: { get: gate(link.store.get), getRange: gate(link.store.getRange) }, workers: 0, clock: link.clock, speculativeBytesInitial: 1e12, idleBytes: 1e12, ...options });
-  for (let t = 0; t < 60 && !(store.bandwidthEstimate() > 0 && (!mature || store.stats().cache.speculativeShare === 1)); t++) await store.getRaw(0, 0, 0, t);
+  for (let t = 0; measure && t < 60 && !(store.bandwidthEstimate() > 0 && (!mature || store.stats().cache.speculativeShare === 1)); t++) await store.getRaw(0, 0, 0, t);
   armed = true;
   const take = (t, row, col) => {
     const request = waiting.get(`${t}/${row}/${col}`);
@@ -766,6 +767,26 @@ test('a job whose signal was already aborted claims no request it could not rele
   assert.equal(request.signal.aborted, true, 'nobody wants the request any more: it is cancelled');
   openAll();
   await Promise.all([old, dead]);
+});
+
+test('an ambient chunk that a seek cancelled is not charged to the speculative allowance twice', async () => {
+  // The allowance holds one chunk (about 92 KB) and earns nothing: the clock does not move and the link is not measured.
+  const { store, started, release, openAll } = await openGated({ measure: false, clock: () => 0, speculativeBytesInitial: 150_000 });
+  const abort = new AbortController();
+  const loop = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, loop: true, playing: true, ambient: true, maxSteps: 1, concurrency: 1, signal: abort.signal });
+  await settled();
+  assert.deepEqual(started, [30]);
+  const jump = store.prefetch({ lod: 0, cells: [[1, 0]], t: 10, seek: true, maxSteps: 1 });
+  try {
+    await settled();
+    release(10, 1, 0);
+    await sleep(150);
+    assert.deepEqual(started, [30, 10, 30], 'the cancelled attempt gave its charge back, so the chunk is fetched again');
+  } finally {
+    abort.abort();
+    openAll();
+    await Promise.all([loop, jump]);
+  }
 });
 
 /** A small seeded generator, so that a failing run can be repeated. */

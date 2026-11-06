@@ -883,8 +883,17 @@ export class ChronoStore {
         const key = chunkKey(lod, row, col, tt);
         const failedAt = this.#cellFailures.get(`${lod}/${row}/${col}`);
         const failed = failedAt !== undefined && this.#now() - failedAt < PREFETCH_COOLDOWN_MS;
+        // What this attempt has charged to the speculative allowance and to the idle allowance, and its request once it has started one.
+        let spent = 0;
         let idleCharge = 0;
+        let dataEntry = null;
         let skipped = false;
+        const giveBack = () => {
+          this.#speculative.spend(-spent);
+          this.#refundIdle(idleCharge);
+          spent = 0;
+          idleCharge = 0;
+        };
         // Another job or a read started this chunk while this worker waited: own its request and wait for it, as for a chunk that was
         // running when the worker took it, so that the request is not cancelled with the job that started it and an ambient job hears of a cancel.
         const joinRunning = async () => {
@@ -932,17 +941,20 @@ export class ChronoStore {
           if (!free) {
             const estimate = this.chunkWireBytes(lod);
             await this.#awaitSpeculative(estimate, signal);
-            if (signal?.aborted) return;
+            spent = estimate;
+            if (signal?.aborted) {
+              giveBack();
+              return;
+            }
             idleCharge = wholeAxis ? 0 : this.#chargeIdle(estimate);
             if (idleCharge === null) {
-              this.#speculative.spend(-estimate);
+              idleCharge = 0;
+              giveBack();
               result.budgetReached = true;
               return;
             }
             if (this.#cache.has(key) || this.#liveEntry(key)) {
-              this.#speculative.spend(-estimate);
-              this.#refundIdle(idleCharge);
-              idleCharge = 0;
+              giveBack();
               await joinRunning();
               continue;
             }
@@ -953,15 +965,12 @@ export class ChronoStore {
               while ((limitInflight && this.#speculativeInflight() >= this.#speculativeSlots(level)) || (!movie && this.#demandInflight > 0)) {
                 await this.#slotFreed(signal);
                 if (signal?.aborted) {
-                  this.#speculative.spend(-estimate);
-                  this.#refundIdle(idleCharge);
+                  giveBack();
                   return;
                 }
               }
               if (this.#cache.has(key) || this.#liveEntry(key)) {
-                this.#speculative.spend(-estimate);
-                this.#refundIdle(idleCharge);
-                idleCharge = 0;
+                giveBack();
                 await joinRunning();
                 continue;
               }
@@ -972,7 +981,7 @@ export class ChronoStore {
           if (maskRunning) this.#own(maskRunning, signal);
           const maskStarted = withMasks && !maskRunning ? this.#prefetchMask(lod, row, col, tt, signal) : null;
           const maskEntry = maskRunning ?? maskStarted;
-          const dataEntry = this.#start(key, meta, { background: !free, owner: signal ?? true });
+          dataEntry = this.#start(key, meta, { background: !free, owner: signal ?? true });
           const [data] = await this.#settle([dataEntry.promise, maskEntry?.promise]);
           if (maskStarted) {
             this.#chargeMask(maskStarted, wholeAxis);
@@ -988,6 +997,8 @@ export class ChronoStore {
             // not started, and is counted when it is dealt with again.
             if (ambient && !signal.aborted) {
               if (skipped) result.skipped--;
+              // A request cancelled before its body arrived is charged again when the chunk is started again.
+              if (dataEntry?.fetchedBytes === undefined) this.#speculative.spend(-spent);
               const at = queue.findIndex((other, i) => i >= next && other.rank > item.rank);
               queue.splice(at < 0 ? queue.length : at, 0, item);
             }
