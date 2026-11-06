@@ -198,7 +198,7 @@ test('describePixel validity without a mask: invalid only when every band is at 
   assert.equal(describePixel(Float32Array.of(-9999), [{ name: 'depth' }], -9999).valid, false);
 });
 
-// The comparator sorts that computeStretchLo and percentileRange replaced with typed-array sorts, kept as the reference for their results.
+// The results computeStretchLo and percentileRange must give, computed with ordinary arrays sorted by a comparator.
 function referenceStretchLo(rgbSamples) {
   const tones = [];
   for (const [r, g, b] of rgbSamples) {

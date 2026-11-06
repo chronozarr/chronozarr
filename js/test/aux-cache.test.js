@@ -31,7 +31,7 @@ test('mixed masks survive decoded eviction across repeated full loops within the
   assert.ok(cache.usedBytes <= 64, 'resizing promptly frees compact and decoded storage');
 });
 
-// The byte-at-a-time algorithm that packAux replaced, kept as the reference for its output.
+// The packing of an auxiliary chunk written one byte at a time, which packAux must match byte for byte: [0, value] when every byte is equal, else [2, bytes] when any byte exceeds 1, else [1, bits], eight mask bytes to an output byte, lowest first.
 function referencePackAux(data) {
   let uniform = true;
   let binary = true;

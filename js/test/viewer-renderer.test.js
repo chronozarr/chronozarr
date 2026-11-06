@@ -70,7 +70,7 @@ function recordingGl() {
   return { gl, uploads };
 }
 
-// What a chunk that packUint16 declined was turned into on every upload before it became a view of the same bytes: two values per word, one 16-bit block of minimum 0 per 128 values.
+// The words and blocks of a raw chunk that packUint16 declined, built one value at a time: two values per word, one 16-bit block of minimum 0 per 128 values.
 function referenceRawPacked(data) {
   const words = new Uint32Array(Math.ceil(data.length / 2));
   for (let i = 0; i < data.length; i++) words[i >> 1] |= data[i] << ((i & 1) * 16);
