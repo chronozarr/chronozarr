@@ -1,0 +1,9 @@
+# Crawlers and agents are welcome on every page of chronozarr.org.
+# https://chronozarr.org/llms.txt lists every page as raw Markdown;
+# https://chronozarr.org/llms-full.txt is the whole site in one file.
+
+User-agent: *
+Content-Signal: search=yes, ai-input=yes, ai-train=yes
+Allow: /
+
+Sitemap: https://chronozarr.org/sitemap.xml
