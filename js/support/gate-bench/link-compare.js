@@ -39,7 +39,7 @@ export const LINK_METRICS = {
   drag: [
     { key: 'framesAtTarget', label: 'Frames at the target level', unit: '', better: 'higher', tolerance: 0.1, floor: 2 },
     { key: 'framesCoarser', label: 'Frames at a coarser level', unit: '', better: null },
-    { key: 'heldMs', label: 'Time on an older timestep than asked for (a coarser frame of it is not older)', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 100 },
+    { key: 'heldMs', label: 'Time on an older timestep than asked for, beyond the one animation frame each step needs (a coarser frame of it is not older)', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 100 },
     { key: 'skipped', label: 'Timesteps between the ends never shown', unit: '', better: 'lower', tolerance: 0.1, floor: 2 },
     { key: 'lagMedianMs', label: 'Input to frame, median', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 20 },
     { key: 'lagP95Ms', label: 'Input to frame, 95th percentile', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 50 },
@@ -93,6 +93,11 @@ export function distinctFrames(paints) {
  * the same frame, so a request made before the interval has had the render of its first frame by the end of it, and a request
  * that came in during it is not held against the viewer until the interval after. A frame of the timestep asked for at a coarser
  * level is not older: that is the frames at a coarser level and the time to the target level.
+ *
+ * The one animation frame that a step needs to be drawn is not counted: an interval in which the viewer is asked for a timestep
+ * and draws it by the end of the interval is not held, so a viewer that draws every step on the next frame scores 0, and the
+ * figure is the time beyond that frame. (Counting it would put a floor of one frame per step, about 17 ms times the steps of the
+ * drag, under every build.)
  */
 export function heldMs(samples, beginAt, endAt) {
   let held = 0;

@@ -93,6 +93,26 @@ test('an interval is held when the frame on screen at its end is older than the 
 });
 
 test('an interval in which the timestep asked for changes is held too: that is where a stalled main thread leaves the canvas', () => {
+test('the one animation frame that each step needs to be drawn is not held, and every frame beyond it is: a viewer that draws at once scores 0', () => {
+  // Ten steps, one every 4 animation frames of 20 ms; the sampler runs before the render of its frame, so the frame that first
+  // sees a step asked for cannot show it, and a viewer that draws it on the next render has it on screen by the next sample.
+  const drawnAfter = (frames) => {
+    const rows = [];
+    for (let i = 0; i <= 10 * 4 + frames + 1; i++) rows.push({ at: i * 20, t: Math.min(10, Math.floor(i / 4)), shownT: Math.max(0, Math.min(10, Math.floor((i - frames) / 4))) });
+    return heldMs(rows, 0, 1000);
+  };
+  assert.equal(drawnAfter(1), 0, 'drawn on the next render');
+  assert.equal(drawnAfter(2), 10 * 20, 'one frame late: one frame held for each of the ten steps');
+  assert.equal(drawnAfter(3), 10 * 40);
+});
+
+test('the label of the held time says that the animation frame of each step is not counted', () => {
+  const { label } = LINK_METRICS.drag.find((metric) => metric.key === 'heldMs');
+  assert.match(label, /beyond the one animation frame each step needs/);
+  const result = compareLinks(runs(3));
+  assert.ok(linkSummaryMarkdown(result).includes(`| ${label} |`), 'the summary shows the label as it is');
+});
+
   const one = (at, t, shownT) => ({ at, t, shownT });
   // Asked for 2 at 20 and for 3 at 40 (a timer that ran late), still showing 1 at 40 and at 60 (when 2 is drawn): 20 to 40 and 40 to 60 are both held.
   assert.equal(heldMs([one(0, 1, 1), one(20, 2, 1), one(40, 3, 1), one(60, 3, 2)], 0, 100), 40);

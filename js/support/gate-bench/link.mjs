@@ -20,16 +20,18 @@
 //   3. The scenario (link-compare.js: SCENARIOS; link-scenarios.js drives the page): a drag of the timeline over the whole
 //      time axis at 40 or 150 ms per step, a press on the timeline half the axis away, or Play at 4 or 30 steps/s for 30 s.
 //
-// Its figures: for a drag, the frames it drew at the target level and at a coarser one (a repaint of the frame on screen is not one), the time the frame on screen was older than the timestep asked for (a coarser frame of the
-// right timestep is not older), the timesteps never shown, the delay from each input to a frame that shows it (a step that no
-// frame answered counts as the wait of the run) and the time from the release to the frame at the target level; for a
-// jump, the time to the first whole frame of the timestep at any level and at the target level; for playback, the steps it
-// took, the rate it kept, the wait before the first step and the pauses to buffer; for every scenario the requests and the
-// bytes on the wire (CDP). The builds alternate (base then head, then head then base) in pairs of runs of one scenario on one
-// link, and a pair is compared on its own, as run.mjs does. Throttled runs are limited by the link, so they are less sensitive
-// to a busy machine than the gates, but not insensitive: look at the load in the log, and run --base and --head on the same
-// build once to see the noise of a metric before reading a difference. One pair of the first scenario on the first link
-// is run first and not counted, as run.mjs does, so that the first browsers do not pay for cold file and GPU caches.
+// Its figures: for a drag, the frames it drew at the target level and at a coarser one (a repaint of the frame on screen is not
+// one), the time the frame on screen was older than the timestep asked for (not counting the one animation frame that each step
+// needs to be drawn, and a coarser frame of the right timestep is not older), the timesteps never shown, the delay from each
+// input to a frame that shows it (a step that no frame answered counts as the wait of the run) and the time from the release to
+// the frame at the target level; for a jump, the time to the first whole frame of the timestep at any level and at the target
+// level; for playback, the steps it took, the rate it kept, the wait before the first step and the pauses to buffer; for every
+// scenario the requests and the bytes on the wire (CDP). The builds alternate (base then head, then head then base) in pairs
+// of runs of one scenario on one link, and a pair is compared on its own, as run.mjs does. Throttled runs are limited by the
+// link, so they are less sensitive to a busy machine than the gates, but not insensitive: look at the load in the log, and run
+// --base and --head on the same build once to see the noise of a metric before reading a difference. One pair of the first
+// scenario on the first link is run first and not counted, as run.mjs does, so that the first browsers do not pay for cold
+// file and GPU caches.
 //
 // The raw page results of every run are written to --out as each run ends, and the comparison is added at the end: a run
 // that fails after 20 minutes keeps what was measured before it.
