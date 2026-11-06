@@ -183,3 +183,36 @@ test('removing a MapLibre layer cancels its opening request', async () => {
   await assert.rejects(layer.opened, /removed/);
   assert.equal(signal.aborted, true);
 });
+
+test('requests that are aborted mid-transfer do not pull the bandwidth estimate below what the link delivered', async () => {
+  // A 5 MB/s link on a clock the test owns. Every round, a wave of three 1 MB requests is aborted after 100 ms, then one
+  // 1 MB request completes (200 ms): the completed ones alone say 5 MB/s.
+  const rate = 5_000_000;
+  const clock = { now: 0 };
+  const bandwidth = new BandwidthEstimator(() => clock.now);
+  const limiter = new RequestLimiter(8);
+  const store = new HttpStore('https://example.test/', {
+    fetch: async (request) => {
+      if (request.url.endsWith('/slow')) {
+        await new Promise((_, reject) => request.signal.addEventListener('abort', () => reject(request.signal.reason), { once: true }));
+      }
+      clock.now += (1_000_000 / rate) * 1000;
+      return new Response(new Uint8Array(1_000_000));
+    },
+    limiter,
+    network: { requests: 0, bytes: 0 },
+    bandwidth,
+    retryDelaysMs: [],
+  });
+  for (let round = 0; round < 10; round++) {
+    const abort = new AbortController();
+    const wave = Array.from({ length: 3 }, () => store.get('/slow', { signal: abort.signal }).catch((error) => error.name));
+    await new Promise((resolve) => setImmediate(resolve));
+    clock.now += 100;
+    abort.abort();
+    assert.deepEqual(await Promise.all(wave), ['AbortError', 'AbortError', 'AbortError']);
+    await store.get('/done');
+    clock.now += 1000;
+  }
+  assert.ok(Math.abs(bandwidth.estimate - rate) / rate < 0.01, `the link delivered ${rate} B/s, the estimate is ${Math.round(bandwidth.estimate)}`);
+});
