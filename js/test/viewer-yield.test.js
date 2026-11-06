@@ -45,6 +45,17 @@ test('cancelling after the task ran, or twice, does nothing', async () => {
   assert.equal(runs, 1);
 });
 
+test('a canceller kept after its task ran does not cancel a later yield of the same function', async () => {
+  let runs = 0;
+  const job = () => runs++;
+  const first = yieldToMain(job);
+  await settle();
+  yieldToMain(job);
+  first();
+  await settle();
+  assert.equal(runs, 2);
+});
+
 /** Animation frames that the test runs: `runFrame` calls what was asked for since the previous one, and nothing runs before it. */
 function fakeFrames() {
   const queued = new Map();

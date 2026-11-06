@@ -12,14 +12,16 @@ export function yieldToMain(task) {
   if (channel === null) {
     channel = new MessageChannel();
     // A message that finds the queue empty belongs to a task that was cancelled: nothing to run.
-    channel.port1.onmessage = () => waiting.shift()?.();
+    channel.port1.onmessage = () => waiting.shift()?.task();
     // Node, which runs the tests, does not exit while a port listens; browsers have no unref.
     channel.port1.unref?.();
   }
-  waiting.push(task);
+  // The canceller removes this entry, not whichever entry holds the same function.
+  const entry = { task };
+  waiting.push(entry);
   channel.port2.postMessage(null);
   return () => {
-    const index = waiting.indexOf(task);
+    const index = waiting.indexOf(entry);
     if (index >= 0) waiting.splice(index, 1);
   };
 }
