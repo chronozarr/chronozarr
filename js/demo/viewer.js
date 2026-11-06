@@ -1450,8 +1450,8 @@ class Viewer {
   }
 
   /** The validity mask of a cell at t, fetched at the priority of the cell's data; resolves null for a store without a mask. */
-  #maskRead(lod, row, col, t, signal) {
-    return this.store.hasMask ? this.store.getMask(lod, row, col, t, { signal }) : null;
+  #maskRead(lod, row, col, t, signal, background = false) {
+    return this.store.hasMask ? this.store.getMask(lod, row, col, t, { signal, background }) : null;
   }
 
   #slotForChunk(lod, row, col, t, renderer) {
@@ -1928,11 +1928,11 @@ class Viewer {
    * chunk (compact mode) is not expanded for them. A cache that cannot keep what loads at once can have dropped the chunk already (loads
    * that finish in one turn push each other out); it is then read again whole, which holds it for the caller.
    */
-  async #pixelsOfLoaded(lod, row, col, t, pixels, signal) {
+  async #pixelsOfLoaded(lod, row, col, t, pixels, signal, background = false) {
     const { store } = this;
     const sampled = pixels.map(([x, y]) => store.samplePixel(lod, row, col, t, x, y));
     if (!sampled.includes(null)) return sampled;
-    const data = await store.getRaw(lod, row, col, t, { signal });
+    const data = await store.getRaw(lod, row, col, t, { signal, background });
     return pixels.map(([x, y]) => samplePixelFrom(data, store.levels[lod], x, y));
   }
 
@@ -2001,8 +2001,8 @@ class Viewer {
             try {
               const [pixels, mask] = await Promise.all([
                 // Read in the turn that the chunk lands in: the mask may take longer, and another chunk can push this one out of the cache meanwhile.
-                store.ensureRaw(lod, row, col, t, { signal }).then(() => this.#pixelsOfLoaded(lod, row, col, t, chart.window, signal)),
-                this.#maskRead(lod, row, col, t, signal),
+                store.ensureRaw(lod, row, col, t, { signal, background: true }).then(() => this.#pixelsOfLoaded(lod, row, col, t, chart.window, signal, true)),
+                this.#maskRead(lod, row, col, t, signal, true),
               ]);
               chart.readings[t] = this.#chartReading(chart, pixels, mask);
             } catch (error) {
@@ -2059,12 +2059,12 @@ class Viewer {
   }
 
   /**
-   * How many timesteps the chart reads next, 0 when the chart is cleared first. The chart's reads are at demand priority, so they queue
-   * next to the chunks of the frame that a scrub (its timer runs from the first step to the end) or a movie is waiting for: they wait
-   * until neither is going on, and on every look in the meantime take what the scrub or the movie has loaded from the cache, so the chart
-   * advances with it and is done when it holds all of `pending` (a looping movie holds every frame sooner or later). While the frame the
-   * user stopped on loads they go one timestep at a time, a small share of the link whatever it takes the frame to arrive, and in batches
-   * again once it is in.
+   * How many timesteps the chart reads next, 0 when the chart is cleared first. The chart reads in the background: it does not hold
+   * prefetch back and a seek does not cancel it. Its chunks still share the link with the frames that a scrub (its timer runs from the
+   * first step to the end) or a movie is waiting for, so it waits until neither is going on, and on every look in the meantime takes what
+   * the scrub or the movie has loaded from the cache, so the chart advances with it and is done when it holds all of `pending` (a looping
+   * movie holds every frame sooner or later). While the frame the user stopped on loads it goes one timestep at a time, a small share of
+   * the link whatever it takes the frame to arrive, and in batches again once it is in.
    */
   async #chartBatchSize(chart, pending) {
     const { signal } = chart.controller;
@@ -2080,7 +2080,7 @@ class Viewer {
   async #loadChartCoverage(chart, t, offset) {
     const { lod, row, col } = chart.cell;
     try {
-      const coverage = await this.store.getCoverage(lod, row, col, t, { signal: chart.controller.signal });
+      const coverage = await this.store.getCoverage(lod, row, col, t, { signal: chart.controller.signal, background: true });
       chart.coverage[t] = coverage ? coverage[offset] : null;
     } catch (error) {
       if (error.name === 'AbortError') return;
