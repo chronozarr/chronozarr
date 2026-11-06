@@ -864,8 +864,12 @@ export class ChronoStore {
       // Claim both parts synchronously, before the caller aborts its previous plan.
       if (running) this.#own(running, signal);
       if (mask) this.#own(mask, signal);
-      // A seek fetches the chunks of t at demand priority: one that is already running as speculation is promoted.
-      if (running && free) this.#promote(running);
+      // A seek fetches the chunks of t at demand priority: one that is already running as speculation is promoted. Like a request the
+      // seek starts for itself, it counts until it settles or is aborted, whether or not a reader waits for it.
+      if (running && free) {
+        this.#promote(running);
+        running.seekTarget = true;
+      }
     }
     if (seek) this.#cancelSpeculative(signal);
     const result = { planned: queue.length, fetched: 0, skipped: 0, compressedOnly: 0, masks: 0, budgetReached: false, errors: [] };
@@ -881,6 +885,17 @@ export class ChronoStore {
         const failed = failedAt !== undefined && this.#now() - failedAt < PREFETCH_COOLDOWN_MS;
         let idleCharge = 0;
         let skipped = false;
+        // Another job or a read started this chunk while this worker waited: own its request and wait for it, as for a chunk that was
+        // running when the worker took it, so that the request is not cancelled with the job that started it and an ambient job hears of a cancel.
+        const joinRunning = async () => {
+          result.skipped++;
+          skipped = true;
+          const live = this.#liveEntry(key);
+          if (!live) return;
+          this.#own(live, signal);
+          const [data] = await this.#settle([live.promise]);
+          if (data && !signal.aborted && (!withMasks || this.peekMask(lod, row, col, tt))) onChunk?.(lod, row, col, tt);
+        };
         try {
           const running = this.#liveEntry(key);
           if (this.#cache.has(key) || running || failed) {
@@ -890,7 +905,7 @@ export class ChronoStore {
             if (running) this.#own(running, signal);
             const maskRunning = withMasks ? this.#liveEntry(this.#auxKey('mask', lod, row, col, tt)) : null;
             if (maskRunning) this.#own(maskRunning, signal);
-            const maskStarted = withMasks && !maskRunning && this.#maskAllowed(wholeAxis) ? this.#prefetchMask(lod, row, col, tt, signal) : null;
+            const maskStarted = withMasks && !maskRunning && (movie || this.#demandInflight === 0) && this.#maskAllowed(wholeAxis) ? this.#prefetchMask(lod, row, col, tt, signal) : null;
             if (running || maskRunning || maskStarted || inherited.has(key)) {
               const [data] = await this.#settle([running?.promise ?? this.#cache.decoded(key), (maskRunning ?? maskStarted)?.promise]);
               if (maskStarted) {
@@ -906,7 +921,7 @@ export class ChronoStore {
           // While this worker waited, a demand read (or another job) may have started or finished this chunk: fetching it
           // again would send the same request twice.
           if (this.#cache.has(key) || this.#liveEntry(key)) {
-            result.skipped++;
+            await joinRunning();
             continue;
           }
           const meta = { kind: 'data', lod, row, col, t: tt };
@@ -927,7 +942,8 @@ export class ChronoStore {
             if (this.#cache.has(key) || this.#liveEntry(key)) {
               this.#speculative.spend(-estimate);
               this.#refundIdle(idleCharge);
-              result.skipped++;
+              idleCharge = 0;
+              await joinRunning();
               continue;
             }
             if (limitInflight || !movie) {
@@ -945,7 +961,8 @@ export class ChronoStore {
               if (this.#cache.has(key) || this.#liveEntry(key)) {
                 this.#speculative.spend(-estimate);
                 this.#refundIdle(idleCharge);
-                result.skipped++;
+                idleCharge = 0;
+                await joinRunning();
                 continue;
               }
             }
@@ -1213,6 +1230,11 @@ export class ChronoStore {
     this.#updateSpeculativeShare();
   }
 
+  /** An owner left: a request that a read waits for and that was not counted because a movie owned it counts now, unless another movie owns it. */
+  #recount(entry) {
+    if (!entry.counted && !entry.controller.signal.aborted && (entry.waiters > 0 || entry.sticky)) this.#count(entry);
+  }
+
   #uncount(entry) {
     if (!entry.counted) return;
     entry.counted = false;
@@ -1230,7 +1252,7 @@ export class ChronoStore {
    */
   #start(key, meta, { background, owner = null }) {
     const controller = new AbortController();
-    const entry = { controller, kind: meta.kind, waiters: 0, sticky: false, owners: new Set(), releases: [], background, counted: false, priority: { value: background ? 1 : 0 }, promise: null };
+    const entry = { controller, kind: meta.kind, waiters: 0, sticky: false, owners: new Set(), releases: [], background, seekTarget: false, counted: false, priority: { value: background ? 1 : 0 }, promise: null };
     this.#own(entry, owner);
     if (!background) this.#count(entry);
     entry.promise = this.#load(key, meta, entry)
@@ -1251,10 +1273,13 @@ export class ChronoStore {
    */
   #own(entry, owner) {
     if (owner === null || entry.owners.has(owner)) return;
+    // An owner that has aborted already will never release the request: it would stay owned for good.
+    if (owner !== true && owner.aborted) return;
     entry.owners.add(owner);
     if (owner === true) return;
     const release = () => {
       entry.owners.delete(owner);
+      this.#recount(entry);
       this.#cancelIfUnwanted(entry);
     };
     owner.addEventListener('abort', release, { once: true });
@@ -1286,6 +1311,7 @@ export class ChronoStore {
     for (const entry of this.#inflight.values()) {
       if (!entry.background) continue;
       for (const owner of entry.owners) if (owner !== signal) entry.owners.delete(owner);
+      this.#recount(entry);
       this.#cancelIfUnwanted(entry);
     }
   }
@@ -1528,8 +1554,8 @@ export class ChronoStore {
         if (done) return;
         finish();
         reject(abortError());
-        // A seek's own timestep is a demand request without a waiter: it counts until it settles or is aborted.
-        if (entry.waiters === 0 && !entry.sticky && entry.background) this.#uncount(entry);
+        // A joined speculative request stops counting when its last reader leaves; a seek's own timestep counts until it settles or is aborted.
+        if (entry.waiters === 0 && !entry.sticky && entry.background && !entry.seekTarget) this.#uncount(entry);
         this.#cancelIfUnwanted(entry);
       };
       if (signal.aborted) {

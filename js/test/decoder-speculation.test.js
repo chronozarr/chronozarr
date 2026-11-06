@@ -653,6 +653,121 @@ test('a chunk that an ambient job took over from another job and a seek cancelle
   assert.equal(result.fetched + result.skipped, result.planned, 'every planned chunk is dealt with once');
 });
 
+test('a job that has a chunk already starts no mask request while a demand read waits', async () => {
+  const readable = buildSyntheticStore({ nTime: 12, nBand: 1, height: 16, width: 16, chunk: 32, sharded: false, mask: true });
+  let releaseRead;
+  const held = new Promise((resolve) => { releaseRead = resolve; });
+  const fetching = { async get(key, options) {
+    const bytes = await readable.get(key, options);
+    if (key.includes('/data/c/9/')) await held;
+    return bytes;
+  } };
+  const store = await openStore('memory://mask-gate', { store: fetching, workers: 0, speculativeBytesInitial: 1e12, idleBytes: 1e12 });
+  await store.getRaw(0, 0, 0, 0);
+  const maskRequests = () => readable.log.filter(({ key }) => key.includes('/mask/c/')).length;
+  const demand = store.getRaw(0, 0, 0, 9);
+  await settled();
+  const job = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, masks: true, maxSteps: 1 });
+  assert.equal(maskRequests(), 0, 'the mask of a chunk the store has waits for the frame, as the chunks do');
+  assert.equal(job.masks, 0);
+  releaseRead();
+  await demand;
+  const later = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, masks: true, maxSteps: 1 });
+  assert.equal(maskRequests(), 1, 'and is fetched when nothing waits');
+  assert.equal(later.masks, 1);
+  store.close();
+});
+
+test('a read that joined a movie\'s request counts as demand once the movie has ended', async () => {
+  const { store, started, release, openAll } = await openGated();
+  const stop = new AbortController();
+  const movie = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, playing: true, signal: stop.signal });
+  await settled();
+  assert.deepEqual(started, [30, 31, 29, 32, 33, 28]);
+  const reader = new AbortController();
+  const read = store.getRaw(0, 0, 0, 31, { signal: reader.signal });
+  await settled();
+  stop.abort();
+  await settled();
+  const horizon = new AbortController();
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 10, maxSteps: 1, concurrency: 1, signal: horizon.signal });
+  await settled();
+  assert.deepEqual(started.slice(6), [], 'the pause ended the movie: a frame waits for t=31 and holds the job back');
+  release(31);
+  await read;
+  await settled();
+  assert.deepEqual(started.slice(6), [10], 'and the job goes on once it has landed');
+  horizon.abort();
+  openAll();
+  await Promise.all([movie, job]);
+});
+
+test('a request that a seek promoted to its own timestep keeps counting as demand when a reader that joined it leaves', async () => {
+  const { store, started, release, openAll } = await openGated();
+  const first = new AbortController();
+  const old = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, maxSteps: 1, signal: first.signal });
+  await settled();
+  assert.deepEqual(started, [30]);
+  const second = new AbortController();
+  const seek = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, seek: true, maxSteps: 1, signal: second.signal });
+  first.abort();
+  await settled();
+  const reader = new AbortController();
+  const read = store.getRaw(0, 0, 0, 30, { signal: reader.signal }).catch((error) => error.name);
+  await settled();
+  reader.abort();
+  assert.equal(await read, 'AbortError');
+  await settled();
+  const other = store.prefetch({ lod: 0, cells: [[0, 0]], t: 40, maxSteps: 1, concurrency: 1 });
+  await settled();
+  assert.deepEqual(started, [30], 'the seek still waits for its timestep: the other job has not started');
+  release(30);
+  await settled();
+  assert.deepEqual(started, [30, 40], 'and starts once it has landed');
+  openAll();
+  await Promise.all([old, seek, other]);
+});
+
+test('an ambient job that finds a chunk running when its worker wakes owns the request, so aborting the job that started it does not cancel it', async () => {
+  const { store, started, waiting, release, openAll } = await openGated();
+  const read = store.getRaw(0, 0, 0, 50);
+  await settled();
+  const abortHorizon = new AbortController();
+  const horizon = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, maxSteps: 1, concurrency: 1, signal: abortHorizon.signal });
+  const ambient = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, loop: true, playing: true, ambient: true, maxSteps: 1, concurrency: 1 });
+  await settled();
+  assert.deepEqual(started, [50], 'both jobs wait for the read');
+  release(50);
+  await read;
+  await settled();
+  assert.deepEqual(started, [50, 30], 'the horizon job started t=30 and the ambient job found it running');
+  abortHorizon.abort();
+  await settled();
+  assert.ok(waiting.has('30/0/0'), 'the request is still in flight');
+  release(30);
+  const [result] = await Promise.all([ambient, horizon]);
+  assert.ok(store.hasCachedRaw(0, 0, 0, 30), 'the request went on, owned by the ambient job');
+  assert.deepEqual([result.fetched, result.skipped], [0, 1]);
+  assert.deepEqual(started, [50, 30], 'requested once');
+  openAll();
+});
+
+test('a job whose signal was already aborted claims no request it could not release', async () => {
+  const { store, readable, started, openAll } = await openGated();
+  const mark = readable.log.length;
+  const first = new AbortController();
+  const old = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, maxSteps: 1, signal: first.signal });
+  await settled();
+  assert.deepEqual(started, [30]);
+  const dead = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, maxSteps: 1, signal: AbortSignal.abort() });
+  first.abort();
+  await settled();
+  const request = readable.log.slice(mark).find(({ key }) => key.includes('/c/30/0/0/0'));
+  assert.equal(request.signal.aborted, true, 'nobody wants the request any more: it is cancelled');
+  openAll();
+  await Promise.all([old, dead]);
+});
+
 /** A small seeded generator, so that a failing run can be repeated. */
 function seeded(seed) {
   let state = seed >>> 0;
