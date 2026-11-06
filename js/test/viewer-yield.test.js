@@ -1,6 +1,6 @@
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SliceScheduler, yieldAfterPaint, yieldToMain } from '../demo/yield.js';
+import { SliceScheduler, yieldToMain } from '../demo/yield.js';
 import { framesInSequence } from '../demo/scrub.js';
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
@@ -84,61 +84,6 @@ function fakeFrames() {
 afterEach(() => {
   delete globalThis.requestAnimationFrame;
   delete globalThis.cancelAnimationFrame;
-});
-
-test('a task yielded after paint waits for the next frame, then runs in a task of its own after the frame, with the time of the frame', async () => {
-  const frames = fakeFrames();
-  const order = [];
-  yieldAfterPaint((start) => order.push(`slice of the frame at ${start}`));
-  await settle();
-  assert.deepEqual(order, [], 'no frame, no slice');
-  frames.runFrame(250);
-  order.push('frame');
-  assert.deepEqual(order, ['frame'], 'the slice is not run by the frame');
-  await settle();
-  assert.deepEqual(order, ['frame', 'slice of the frame at 250']);
-});
-
-test('a job that continues itself after paint runs one slice per frame; one that yields to main does not wait for frames', async () => {
-  const frames = fakeFrames();
-  const run = async (yielding) => {
-    let slices = 0;
-    const job = () => {
-      if (++slices < 5) yielding(job);
-    };
-    yielding(job);
-    await settle();
-    return () => slices;
-  };
-
-  const paced = await run(yieldAfterPaint);
-  assert.equal(paced(), 0, 'no frame yet');
-  for (let frame = 1; frame <= 3; frame++) {
-    frames.runFrame();
-    await settle();
-    assert.equal(paced(), frame, `after frame ${frame}`);
-  }
-  await settle();
-  assert.equal(paced(), 3, 'none between frames');
-
-  const idle = await run(yieldToMain);
-  assert.equal(idle(), 5, 'all five slices ran with no frame');
-});
-
-test('a cancelled task after paint never runs, whether it is cancelled before its frame or between the frame and its task', async () => {
-  const frames = fakeFrames();
-  const order = [];
-  const beforeFrame = yieldAfterPaint(() => order.push('before the frame'));
-  assert.equal(frames.pending(), 1);
-  beforeFrame();
-  assert.equal(frames.pending(), 0, 'the frame that was asked for is cancelled');
-  const afterFrame = yieldAfterPaint(() => order.push('after the frame'));
-  frames.runFrame();
-  afterFrame();
-  yieldAfterPaint(() => order.push('kept'));
-  frames.runFrame();
-  await settle();
-  assert.deepEqual(order, ['kept']);
 });
 
 const FRAME_MS = 1000 / 60;
@@ -253,21 +198,36 @@ test('a slice that is waiting for the other way is replaced; one that waits in t
   assert.equal(fill.left, 0, 'the way it waited changed, so it ran with no frame');
 });
 
-test('cancelUnpaced drops a slice that waits for a message and leaves one that waits for a paint', async () => {
+test('cancelQueuedTask drops a slice that waits for a message and leaves one that waits for a frame', async () => {
   const frames = fakeFrames();
   const unpaced = fakeFill({ paced: () => false });
   unpaced.left = 10;
   unpaced.scheduler.schedule();
-  unpaced.scheduler.cancelUnpaced();
+  unpaced.scheduler.cancelQueuedTask();
   await settle();
   assert.equal(unpaced.uploaded, 0);
 
   const paced = fakeFill();
   paced.left = 10;
   paced.scheduler.schedule();
-  paced.scheduler.cancelUnpaced();
+  paced.scheduler.cancelQueuedTask();
   await paced.frame(frames, 0);
   assert.equal(paced.left, 0);
+});
+
+test('a view change after the frame callback cancels its queued first slice', async () => {
+  const frames = fakeFrames();
+  const fill = fakeFill();
+  fill.left = 10;
+  fill.scheduler.schedule();
+  frames.runFrame();
+  assert.equal(fill.uploaded, 0, 'the frame only queues the slice');
+  fill.scheduler.cancelQueuedTask();
+  await settle();
+  assert.equal(fill.uploaded, 0, 'the old slice did not run');
+  fill.scheduler.schedule();
+  await fill.frame(frames, FRAME_MS);
+  assert.equal(fill.left, 0, 'the new frame still fills');
 });
 
 test('a gesture that moves the view in every frame cannot keep a paced job from running', async () => {
@@ -276,7 +236,7 @@ test('a gesture that moves the view in every frame cannot keep a paced job from 
   fill.scheduler.schedule();
   for (let frame = 0; frame < 30; frame++) {
     // The input of the frame (a pointer move) drops what waits for a message, then the frame runs, then it draws and asks for the job.
-    fill.scheduler.cancelUnpaced();
+    fill.scheduler.cancelQueuedTask();
     fill.left += 14;
     await fill.frame(frames, frame * FRAME_MS);
     fill.scheduler.schedule();

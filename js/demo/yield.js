@@ -27,21 +27,6 @@ export function yieldToMain(task) {
 }
 
 /**
- * Run `task` in a task of its own after the next animation frame has been painted, and return a function that cancels it
- * while it is still pending. `task` gets the time of that frame (the timestamp of its animation frame callbacks).
- */
-export function yieldAfterPaint(task) {
-  let cancelTask = null;
-  const frame = requestAnimationFrame((frameStart) => {
-    cancelTask = yieldToMain(() => task(frameStart));
-  });
-  return () => {
-    cancelAnimationFrame(frame);
-    cancelTask?.();
-  };
-}
-
-/**
  * A job of short slices that waits for its turn between them. `slice()` does one slice and says whether work is left;
  * `isPaced()` says whether frames are being drawn one after the other, and `budgetMs()` how long after the start of a
  * frame the job may go on working.
@@ -69,11 +54,14 @@ export class SliceScheduler {
   /** Have the job run, in the way that suits the moment, unless a slice is waiting in that way already. */
   schedule() {
     const paced = this.#isPaced();
-    if (this.#pending?.paced === paced) return;
+    if (this.#pending && (this.#pending.kind !== 'unpaced') === paced) return;
     this.cancel();
-    this.#pending = paced
-      ? { paced, cancel: yieldAfterPaint((frameStart) => this.#runPaced(frameStart, false)) }
-      : { paced, cancel: yieldToMain(() => this.#runUnpaced()) };
+    if (paced) {
+      const frame = requestAnimationFrame((frameStart) => this.#queuePacedSlice(frameStart, false));
+      this.#pending = { kind: 'frame', cancel: () => cancelAnimationFrame(frame) };
+    } else {
+      this.#pending = { kind: 'unpaced', cancel: yieldToMain(() => this.#runUnpaced()) };
+    }
   }
 
   cancel() {
@@ -81,14 +69,18 @@ export class SliceScheduler {
     this.#pending = null;
   }
 
-  /** Cancel a slice that waits for a message: it could run before the frame of a view that has just changed, where one that waits for a paint comes after it. */
-  cancelUnpaced() {
-    if (this.#pending?.paced === false) this.cancel();
+  /** Drop a slice already queued as a task. A slice still waiting for a frame can use the new view once it paints. */
+  cancelQueuedTask() {
+    if (this.#pending?.kind !== 'frame') this.cancel();
   }
 
   #runUnpaced() {
     this.#pending = null;
     if (this.#slice()) this.schedule();
+  }
+
+  #queuePacedSlice(frameStart, continuing) {
+    this.#pending = { kind: 'paced', cancel: yieldToMain(() => this.#runPaced(frameStart, continuing)) };
   }
 
   #runPaced(frameStart, continuing) {
@@ -98,7 +90,7 @@ export class SliceScheduler {
       return;
     }
     if (!this.#slice()) return;
-    if (this.#isPaced() && !this.#overBudget(frameStart)) this.#pending = { paced: true, cancel: yieldToMain(() => this.#runPaced(frameStart, true)) };
+    if (this.#isPaced() && !this.#overBudget(frameStart)) this.#queuePacedSlice(frameStart, true);
     else this.schedule();
   }
 

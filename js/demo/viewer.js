@@ -530,7 +530,7 @@ class Viewer {
    */
   #dropSpeculativeFetches({ coarseLoop = false } = {}) {
     this.#seekPending = true;
-    this.#gpuFill.cancelUnpaced();
+    this.#gpuFill.cancelQueuedTask();
     clearTimeout(this.#prefetchTimer);
     this.#prefetchTimer = 0;
     this.#prefetchAbort?.abort();
