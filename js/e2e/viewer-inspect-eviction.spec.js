@@ -4,11 +4,12 @@
 //
 // A single-cell store whose cache holds one decoded chunk.
 
-import { mkdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { buildSyntheticStore, defaultValues } from '../support/synthetic-store.js';
 import { formatValue } from '../demo/inspector.js';
 import { expect, test } from './fixtures.js';
+import { writeTree } from './make-node-fixtures.mjs';
 import { clickStorePixel, openViewer, readSidebar } from './viewer-helpers.js';
 
 const CHUNK_BYTES = 128 * 128;
@@ -30,11 +31,8 @@ const SPEC = {
 
 /** Write the store, open it in the viewer and reopen it with a cache that holds one chunk. */
 async function openWithOneChunk({ page, servers, stores }) {
-  for (const [key, bytes] of buildSyntheticStore(SPEC).files) {
-    const file = path.join(stores.dir, 'inspect-eviction', key);
-    await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, bytes);
-  }
+  const dir = path.join(stores.dir, 'inspect-eviction');
+  if (!existsSync(dir)) await writeTree(dir, buildSyntheticStore(SPEC).files);
   const url = `${servers.dataUrl}/inspect-eviction/`;
   await openViewer(page, servers, url);
   await page.evaluate(({ url, maxCacheBytes }) => window.chronozarr.viewer.loadStore(url, { maxCacheBytes }), { url, maxCacheBytes: CHUNK_BYTES + 4096 });

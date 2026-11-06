@@ -9,8 +9,8 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { buildSyntheticStore } from '../support/synthetic-store.js';
-import { writeTree } from './make-node-fixtures.mjs';
 import { expect, test } from './fixtures.js';
+import { writeTree } from './make-node-fixtures.mjs';
 
 const STEPS = 8;
 const STEP_PAUSE_MS = 120;

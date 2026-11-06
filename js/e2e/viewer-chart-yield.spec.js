@@ -6,10 +6,11 @@
 // A single-cell store of 60 timesteps with every chunk answered after 120 ms, so the chart's batches of four take a good
 // second to cover it and a scrub of a second and a half falls inside that time.
 
-import { mkdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { buildSyntheticStore } from '../support/synthetic-store.js';
 import { expect, test } from './fixtures.js';
+import { writeTree } from './make-node-fixtures.mjs';
 
 const N_TIME = 60;
 const CHART_BATCH = 4;
@@ -19,11 +20,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const SPEC = { nTime: N_TIME, nBand: 1, height: 128, width: 128, chunk: 128, sharded: false, nLevels: 1, consolidated: true, specVersion: '0.3.0', nodata: 0 };
 
 async function writeChartStore(dir) {
-  for (const [key, bytes] of buildSyntheticStore(SPEC).files) {
-    const file = path.join(dir, 'chart-yield', key);
-    await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, bytes);
-  }
+  const store = path.join(dir, 'chart-yield');
+  if (!existsSync(store)) await writeTree(store, buildSyntheticStore(SPEC).files);
 }
 
 /** How many timesteps the chart has loaded: the number in its status line. */

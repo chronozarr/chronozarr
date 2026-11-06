@@ -7,10 +7,11 @@
 // scrub that starts at the first timestep, with the coarse level of the ones before 12 in memory, has timesteps to load
 // ahead of it and the pump's requests stay on the wire.
 
-import { mkdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { buildSyntheticStore } from '../support/synthetic-store.js';
 import { expect, test } from './fixtures.js';
+import { writeTree } from './make-node-fixtures.mjs';
 
 const N_TIME = 20;
 const FIRST_HELD = 12;
@@ -18,11 +19,8 @@ const FIRST_HELD = 12;
 const SPEC = { nTime: N_TIME, nBand: 1, height: 512, width: 512, chunk: 256, sharded: false, nLevels: 2, consolidated: true, specVersion: '0.3.0', nodata: 0 };
 
 async function writeScrubStore(dir) {
-  for (const [key, bytes] of buildSyntheticStore(SPEC).files) {
-    const file = path.join(dir, 'scrub-batch', key);
-    await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, bytes);
-  }
+  const store = path.join(dir, 'scrub-batch');
+  if (!existsSync(store)) await writeTree(store, buildSyntheticStore(SPEC).files);
 }
 
 /**
