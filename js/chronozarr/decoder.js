@@ -819,7 +819,7 @@ export class ChronoStore {
    *
    * Speculative traffic is metered: 16 MB may start at once, after that half the measured bandwidth. Prefetch
    * waits while any demand fetch is in flight (a speculative request that a demand read joins counts as one from then
-   * on, unless a movie's prefetch is fetching it) and never takes the last request slots. A cell whose chunk
+   * on, unless a movie's prefetch is fetching it; a movie's prefetch itself never waits for demand reads) and never takes the last request slots. A cell whose chunk
    * failed is left alone for PREFETCH_COOLDOWN_MS. Aborting `signal` cancels this job's fetches that nobody else
    * waits for. With `seek`, the chunks of timestep `t` itself (its data) are fetched at demand
    * priority outside the allowance before the rest of the window. Resolves with counts and per-chunk errors
@@ -925,7 +925,9 @@ export class ChronoStore {
             }
             continue;
           }
-          if (!free) await this.#demandIdle(signal);
+          // A movie does not wait for demand reads at all: its buffer pump keeps one pending almost all the time, and holding the movie
+          // back for each would stall it.
+          if (!free && !movie) await this.#demandIdle(signal);
           if (signal?.aborted) return;
           // While this worker waited, a demand read (or another job) may have started or finished this chunk: fetching it
           // again would send the same request twice.
@@ -960,8 +962,8 @@ export class ChronoStore {
             }
             if (limitInflight || !movie) {
               // The test and the start below are one synchronous step: a slot that frees up goes to whichever worker runs first. A demand
-              // read that began while this worker waited for the allowance or a slot holds it back, as it would have before it waited;
-              // a movie is not held, its buffer pump keeps demand pending almost all the time.
+              // read that began while this worker waited for the allowance or a slot holds it back, as it would have before it waited,
+              // unless this is a movie (see above).
               while ((limitInflight && this.#speculativeInflight() >= this.#speculativeSlots(level)) || (!movie && this.#demandInflight > 0)) {
                 await this.#slotFreed(signal);
                 if (signal?.aborted) {

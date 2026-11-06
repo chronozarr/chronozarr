@@ -789,6 +789,25 @@ test('an ambient chunk that a seek cancelled is not charged to the speculative a
   }
 });
 
+test('a movie starts its requests while a demand read is pending, and a horizon job waits for it', async () => {
+  const { store, started, release, openAll } = await openGated();
+  const read = store.getRaw(0, 0, 0, 50);
+  await settled();
+  assert.deepEqual(started, [50]);
+  const stop = new AbortController();
+  const movie = store.prefetch({ lod: 0, cells: [[1, 0]], t: 30, playing: true, maxSteps: 3, signal: stop.signal });
+  const horizon = store.prefetch({ lod: 0, cells: [[0, 1]], t: 10, maxSteps: 3, signal: stop.signal });
+  await settled();
+  assert.deepEqual(started, [50, 30, 31, 29], 'the movie started its three chunks, the horizon job none');
+  release(50);
+  await read;
+  await settled();
+  assert.ok(started.includes(10), 'the horizon job goes on once the read has landed');
+  stop.abort();
+  openAll();
+  await Promise.all([movie, horizon]);
+});
+
 /** A small seeded generator, so that a failing run can be repeated. */
 function seeded(seed) {
   let state = seed >>> 0;
