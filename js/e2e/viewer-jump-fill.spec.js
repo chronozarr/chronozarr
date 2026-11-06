@@ -27,21 +27,22 @@ async function holdRequests(page, pattern) {
 
 const LEVEL_0_CELLS = [[0, 0], [0, 1], [1, 0], [1, 1]];
 
-/** Resolves once the decoded cache holds every chunk of every level, so that the fill has the whole store to upload from and nothing is left to load. */
-const waitForStoreInMemory = (page) =>
-  page.waitForFunction(
-    () => {
-      const { store } = window.chronozarr.viewer;
-      return store.levels.every((level, lod) => {
-        for (let row = 0; row < level.gridRows; row++)
-          for (let col = 0; col < level.gridCols; col++)
-            for (let t = 0; t < store.times.length; t++) if (!store.hasCachedRaw(lod, row, col, t)) return false;
-        return true;
-      });
-    },
-    undefined,
-    { timeout: 20_000 },
-  );
+/** Load the decoded fixture for the pacing tests, independent of what idle prefetch can warm. */
+const loadStoreIntoMemory = (page) =>
+  page.evaluate(async () => {
+    const { store } = window.chronozarr.viewer;
+    const chunks = [];
+    for (const [lod, level] of store.levels.entries()) {
+      for (let row = 0; row < level.gridRows; row++) {
+        for (let col = 0; col < level.gridCols; col++) {
+          for (let t = 0; t < store.times.length; t++) chunks.push([lod, row, col, t]);
+        }
+      }
+    }
+    await Promise.all(chunks.map((chunk) => store.ensureRaw(...chunk)));
+    const missing = chunks.find((chunk) => !store.hasCachedRaw(...chunk));
+    if (missing) throw new Error(`pacing fixture did not retain chunk ${missing.join('/')}`);
+  });
 
 /** Open with the GPU fill messages held, then control frames and upload costs independently of the runner's speed. */
 async function openControlledViewer(page, servers, url) {
@@ -70,7 +71,7 @@ async function openControlledViewer(page, servers, url) {
     };
   });
   await openViewer(page, servers, url);
-  await waitForStoreInMemory(page);
+  await loadStoreIntoMemory(page);
   // Let the initial camera settle and freeze wall-clock timers, including the scrub timer.
   await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1000);
   await page.evaluate(async () => {
