@@ -1,0 +1,293 @@
+// The figures of the link A/B (link.mjs) and the comparison of its two builds. link.mjs runs scenarios in a page whose link is
+// throttled and returns what the page saw (the viewer's paint events, the inputs it was given, playback's statistics);
+// this file turns that into the figures of a run and compares the figures of the base and the head pair by pair, with the
+// ratio logic of compare.js: the median over the pairs of head / base, a metric flagged only when it is beyond its tolerance
+// and its floor. Nothing here is a gate: the tolerances are provisional (no same-build noise has been measured for these
+// metrics yet, see CONTRIBUTING.md), and a flag is a reason to look, not a verdict that fails a job.
+
+import { MIN_PAIRS, median, stats } from './compare.js';
+
+/** The links of the runs: CDP's download rate and the delay before each response (cdp.js). */
+export const LINKS = {
+  '50mbit-40ms': { mbps: 50, latencyMs: 40, label: '50 Mbit/s, 40 ms' },
+  '8mbit-80ms': { mbps: 8, latencyMs: 80, label: '8 Mbit/s, 80 ms' },
+};
+
+/**
+ * What a run does after the store is open and the link is throttled. A drag moves the pointer along the timeline one
+ * timestep every `stepMs`, from the first timestep to the last; a jump presses the timeline half the time axis away;
+ * playback plays for a fixed time at the requested speed.
+ */
+export const SCENARIOS = {
+  drag40: { kind: 'drag', label: 'Drag the slider, one step every 40 ms', stepMs: 40 },
+  drag150: { kind: 'drag', label: 'Drag the slider, one step every 150 ms', stepMs: 150 },
+  jump: { kind: 'jump', label: 'Far jump, half the time axis' },
+  play4: { kind: 'play', label: 'Play, 4 steps/s requested', stepsPerSecond: 4 },
+  play30: { kind: 'play', label: 'Play, 30 steps/s requested', stepsPerSecond: 30 },
+};
+
+const TRAFFIC = [
+  { key: 'requests', label: 'Requests to the store', unit: '', better: 'lower', tolerance: 0.1, floor: 5 },
+  { key: 'wireMB', label: 'Wire bytes', unit: 'MB', better: 'lower', tolerance: 0.1, floor: 1 },
+];
+
+/**
+ * `better` says which way is better ('lower', 'higher'; null: shown, never flagged), `tolerance` the relative change
+ * of the median ratio, `floor` the change in the metric's own unit below which a ratio means nothing.
+ */
+export const LINK_METRICS = {
+  drag: [
+    { key: 'framesAtTarget', label: 'Frames at the target level', unit: '', better: 'higher', tolerance: 0.1, floor: 2 },
+    { key: 'framesCoarser', label: 'Frames at a coarser level', unit: '', better: null },
+    { key: 'heldMs', label: 'Time on an older timestep than asked for, beyond the one animation frame each step needs (a coarser frame of it is not older)', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 100 },
+    { key: 'skipped', label: 'Timesteps between the ends never shown', unit: '', better: 'lower', tolerance: 0.1, floor: 2 },
+    { key: 'lagMedianMs', label: 'Input to frame, median', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 20 },
+    { key: 'lagP95Ms', label: 'Input to frame, 95th percentile', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 50 },
+    { key: 'stepsNeverAnswered', label: 'Steps no frame answered (counted at the wait in the lag)', unit: '', better: 'lower', tolerance: 0.1, floor: 1 },
+    { key: 'settleMs', label: 'Release to the frame at the target level', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 200 },
+    ...TRAFFIC,
+  ],
+  jump: [
+    { key: 'firstFrameMs', label: 'First whole frame, any level', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 100 },
+    { key: 'targetFrameMs', label: 'Frame at the target level', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 200 },
+    ...TRAFFIC,
+  ],
+  play: [
+    { key: 'steps', label: 'Steps taken', unit: '', better: 'higher', tolerance: 0.1, floor: 2 },
+    { key: 'stepsPerSecond', label: 'Steps per second, first to last step', unit: '/s', better: 'higher', tolerance: 0.1, floor: 0.2 },
+    { key: 'firstStepMs', label: 'Play to first step', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 200 },
+    { key: 'pauses', label: 'Buffering pauses', unit: '', better: 'lower', tolerance: 0.1, floor: 1 },
+    { key: 'pausedMs', label: 'Time paused to buffer', unit: 'ms', better: 'lower', tolerance: 0.2, floor: 200 },
+    ...TRAFFIC,
+  ],
+};
+
+const round = (value, digits = 1) => Math.round(value * 10 ** digits) / 10 ** digits;
+
+function quantile(values, q) {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+}
+
+/**
+ * The frames among the paints of the viewer, in order. The viewer paints whenever it is asked to render, so a paint is not a
+ * frame: one with kind 'previous' is the frame on screen drawn again because nothing newer was whole (it carries the old
+ * timestep), and a paint of the level and timestep that the last frame had is the same frame again. Neither is counted.
+ */
+export function distinctFrames(paints) {
+  const frames = [];
+  for (const paint of paints) {
+    if (paint.kind === 'previous') continue;
+    const last = frames.at(-1);
+    if (last && last.t === paint.t && last.lod === paint.lod) continue;
+    frames.push(paint);
+  }
+  return frames;
+}
+
+/**
+ * How long, between the animation frames from `beginAt` to `endAt`, the frame on screen was of an earlier timestep than the
+ * viewer was asked for: whether it redrew the old frame, drew nothing or was busy. `samples` hold, per animation frame, the
+ * timestep asked for (`t`) and the one shown (`shownT`). An interval is held when the frame on screen at its end is older than
+ * the timestep asked for at its start, whatever the timestep asked for at its end: the sampler runs before the viewer's render of
+ * the same frame, so a request made before the interval has had the render of its first frame by the end of it, and a request
+ * that came in during it is not held against the viewer until the interval after. A frame of the timestep asked for at a coarser
+ * level is not older: that is the frames at a coarser level and the time to the target level.
+ *
+ * The one animation frame that a step needs to be drawn is not counted: an interval in which the viewer is asked for a timestep
+ * and draws it by the end of the interval is not held, so a viewer that draws every step on the next frame scores 0, and the
+ * figure is the time beyond that frame. (Counting it would put a floor of one frame per step, about 17 ms times the steps of the
+ * drag, under every build.)
+ */
+export function heldMs(samples, beginAt, endAt) {
+  let held = 0;
+  for (let i = 1; i < samples.length; i++) {
+    const [before, after] = [samples[i - 1], samples[i]];
+    if (before.at < beginAt || after.at > endAt) continue;
+    if (after.shownT !== null && after.shownT < before.t) held += after.at - before.at;
+  }
+  return held;
+}
+
+/**
+ * The raw result of a drag, from the page: every paint of the viewer (`events`, each with its time `at` and `t`, `lod`, `kind`),
+ * the `inputs` it was given (when each timestep was due, and when it was dispatched), a sample per animation frame, when the drag
+ * began and when the pointer was released, and the level the store shows at rest (`normalLod`). `capMs` is the time the page
+ * waited for the last frame after the release.
+ */
+export function dragFigures({ events, inputs, samples, beginAt, releaseAt, normalLod, from, to, capMs }) {
+  const frames = distinctFrames(events.filter((event) => event.type === 'paint'));
+  const duringDrag = frames.filter((frame) => frame.at <= releaseAt);
+  // The timesteps strictly between the ends: the first is on screen when the drag starts, and the last is asked for as the pointer is released.
+  const shownBetween = new Set(duringDrag.map((frame) => frame.t).filter((t) => t > from && t < to));
+  // A step is answered by the first frame that shows its timestep or a later one, so a step that was skipped over waits for the next frame.
+  // Its wait counts from when it was due: a main thread that ran the timer late made the step late, and that is the viewer's cost too.
+  // A step that no frame answered counts as the wait of the run (`capMs`), so that a build that shows nothing after a few steps does
+  // not report the small lags of the few it answered.
+  const lags = [];
+  let unanswered = 0;
+  for (const input of inputs) {
+    const answer = frames.find((frame) => frame.at >= input.at && frame.t >= input.t);
+    if (answer) lags.push(answer.at - input.due);
+    else {
+      lags.push(capMs);
+      unanswered++;
+    }
+  }
+  const settled = frames.find((frame) => frame.t === to && frame.lod === normalLod && frame.kind === 'target');
+  const timedOut = [];
+  if (!settled) timedOut.push('settleMs');
+  if (unanswered) timedOut.push('lagMs');
+  const figures = {
+    framesAtTarget: duringDrag.filter((frame) => frame.lod === normalLod).length,
+    framesCoarser: duringDrag.filter((frame) => frame.lod > normalLod).length,
+    heldMs: round(heldMs(samples, beginAt, releaseAt)),
+    skipped: Math.max(0, to - from - 1) - shownBetween.size,
+    lagMedianMs: lags.length ? round(median(lags)) : capMs,
+    lagP95Ms: lags.length ? round(quantile(lags, 0.95)) : capMs,
+    stepsNeverAnswered: unanswered,
+    settleMs: settled ? round(Math.max(0, settled.at - releaseAt)) : capMs,
+  };
+  return { figures, timedOut, detail: { normalLod, paintedDuringDrag: duringDrag.length } };
+}
+
+/** The raw result of a jump: when the timeline was pressed (`at`), the frames drawn since, the level at rest and the wait `capMs`. */
+export function jumpFigures({ events, at, to, normalLod, capMs }) {
+  const paints = events.filter((event) => event.type === 'paint' && event.at >= at && event.t === to);
+  const first = paints[0];
+  const target = paints.find((paint) => paint.lod === normalLod && paint.kind === 'target');
+  const timedOut = [];
+  if (!first) timedOut.push('firstFrameMs');
+  if (!target) timedOut.push('targetFrameMs');
+  const figures = { firstFrameMs: first ? round(first.at - at) : capMs, targetFrameMs: target ? round(target.at - at) : capMs };
+  return { figures, timedOut, detail: { normalLod, firstFrameLod: first?.lod ?? null } };
+}
+
+/**
+ * The raw result of playback: its statistics after `windowMs` of playing, the level it chose for the movie and, if playback was
+ * waiting for frames after it had started when the window ended, since when (`stallOpenSince`). Playback adds a pause to its
+ * total only when the pause ends, so the stall that is still open is added here.
+ */
+export function playFigures({ stats: playback, startAt, endAt, stallOpenSince, windowMs, normalLod, movieLod }) {
+  const timedOut = playback.firstStepAt === null ? ['firstStepMs'] : [];
+  const playedMs = playback.lastStepAt - playback.firstStepAt;
+  const stalledAtEndMs = stallOpenSince === null ? 0 : endAt - stallOpenSince;
+  const figures = {
+    steps: playback.steps,
+    stepsPerSecond: playback.steps > 1 && playedMs > 0 ? round(((playback.steps - 1) / playedMs) * 1000, 2) : 0,
+    firstStepMs: playback.firstStepAt === null ? windowMs : round(playback.firstStepAt - startAt),
+    pauses: playback.bufferingPauses,
+    pausedMs: round(playback.bufferingMs + stalledAtEndMs),
+  };
+  return { figures, timedOut, detail: { normalLod, movieLod, stalledAtEndMs: round(stalledAtEndMs), longestPauseMs: round(Math.max(playback.longestBufferingMs, stalledAtEndMs)), initialBufferMs: playback.initialBufferMs === null ? null : round(playback.initialBufferMs) } };
+}
+
+const FIGURES = { drag: dragFigures, jump: jumpFigures, play: playFigures };
+
+/** The figures of one run: those of its scenario, and what the network log counted between the start of the scenario and its end. */
+export function runFigures(scenario, raw, traffic) {
+  const { figures, timedOut, detail } = FIGURES[SCENARIOS[scenario].kind](raw);
+  return {
+    figures: { ...figures, requests: traffic.requests, wireMB: round(traffic.bytes / 1e6) },
+    timedOut,
+    detail: { ...detail, failedRequests: traffic.failed, start: raw.start },
+  };
+}
+
+/** head / base of one pair; a pair whose base is 0 is 1 if the head is 0 too, and otherwise beyond any ratio (Infinity). */
+function pairRatio(head, base) {
+  if (base > 0) return head / base;
+  return head === 0 ? 1 : Infinity;
+}
+
+function verdictOf(metric, base, head, ratio) {
+  if (!metric.better) return '';
+  const up = ratio === null ? Infinity : ratio;
+  const rise = head.median - base.median;
+  const bigger = up > 1 + metric.tolerance && rise > metric.floor;
+  const smaller = up < 1 - metric.tolerance && -rise > metric.floor;
+  if (metric.better === 'lower') return bigger ? 'worse' : smaller ? 'better' : '';
+  return smaller ? 'worse' : bigger ? 'better' : '';
+}
+
+/**
+ * @param {{variant: 'base'|'head', pair: number, link: string, scenario: string, figures: Record<string, number>, timedOut: string[]}[]} records
+ *   one per run, as link.mjs writes them.
+ */
+export function compareLinks(records) {
+  const groups = new Map();
+  for (const record of records) {
+    const metrics = LINK_METRICS[SCENARIOS[record.scenario].kind];
+    for (const { key } of metrics) {
+      const value = record.figures[key];
+      if (!(Number.isFinite(value) && value >= 0)) {
+        throw new Error(`${key} of the ${record.variant} run of pair ${record.pair + 1} (${record.link}, ${record.scenario}) is ${value}, not a count or a time: did a field of the scenario change name?`);
+      }
+    }
+    const id = `${record.link}/${record.scenario}`;
+    const group = groups.get(id) ?? { link: record.link, scenario: record.scenario, pairs: new Map() };
+    group.pairs.set(record.pair, { ...group.pairs.get(record.pair), [record.variant]: record });
+    groups.set(id, group);
+  }
+  const timeouts = { base: 0, head: 0 };
+  for (const record of records) timeouts[record.variant] += record.timedOut.length;
+
+  const compared = [...groups.values()].map((group) => {
+    const pairs = [...group.pairs.values()].filter((pair) => pair.base && pair.head);
+    const decided = pairs.length >= MIN_PAIRS;
+    const rows = LINK_METRICS[SCENARIOS[group.scenario].kind].map((metric) => {
+      const base = stats(pairs.map((pair) => pair.base.figures[metric.key]));
+      const head = stats(pairs.map((pair) => pair.head.figures[metric.key]));
+      // A pair whose base is 0 and head is not counts as beyond every tolerance, so that a count that is usually 0 (buffering pauses,
+      // steps never answered) is flagged when most pairs go from 0 to something; the floor decides whether the change matters.
+      // The median of the ratios is null when it falls on such a pair.
+      const middle = median(pairs.map((pair) => pairRatio(pair.head.figures[metric.key], pair.base.figures[metric.key])));
+      const ratio = Number.isFinite(middle) ? middle : null;
+      return { ...metric, base, head, ratio, verdict: decided ? verdictOf(metric, base, head, ratio) : '' };
+    });
+    return { link: group.link, scenario: group.scenario, pairs: pairs.length, decided, rows };
+  });
+  return { groups: compared, timeouts, flagged: compared.flatMap((group) => group.rows.filter((row) => row.verdict === 'worse').map((row) => ({ link: group.link, scenario: group.scenario, key: row.key }))) };
+}
+
+const formatMs = (ms) => (ms >= 100 ? `${Math.round(ms)}` : ms.toFixed(1));
+function formatValue(value, unit) {
+  if (unit === 'ms') return `${formatMs(value)} ms`;
+  const text = Number.isInteger(value) ? String(value) : value.toFixed(unit === '/s' ? 2 : 1);
+  return unit ? `${text} ${unit}` : text;
+}
+const formatRange = (stat, unit) => `${formatValue(stat.median, unit)} (${formatValue(stat.min, unit)} to ${formatValue(stat.max, unit)})`;
+
+/**
+ * The step summary of a run: for each link and scenario, both builds' medians with their range, head / base and the flags.
+ * `invalid` explains why the runner skipped the comparison.
+ */
+export function linkSummaryMarkdown(result, { environment = [], records = [], invalid = '' } = {}) {
+  const title = '## Link A/B: head against base';
+  if (invalid) return [title, '', invalid, '', ...environment.map((line) => `- ${line}`), ''].join('\n');
+  const worse = result.flagged.length;
+  const lines = [
+    title,
+    '',
+    worse ? `**${worse} ${worse === 1 ? 'metric is' : 'metrics are'} worse in the head** beyond their tolerance and floor.` : 'No metric is worse in the head beyond its tolerance and floor.',
+    '',
+    'Medians over the pairs of runs, with the range. Head / base is the median of the ratios of the pairs. A flag needs the ratio beyond the tolerance and the change in the median beyond the floor (a pair whose base is 0 and head is not counts as beyond every tolerance, and the median ratio is then shown as "from 0"); both are provisional, and a run with fewer than three pairs gets no flags.',
+  ];
+  const links = [...new Set(result.groups.map((group) => group.link))];
+  for (const link of links) {
+    lines.push('', `### ${LINKS[link].label}`);
+    for (const group of result.groups.filter((candidate) => candidate.link === link)) {
+      lines.push('', `**${SCENARIOS[group.scenario].label}** (${group.pairs} ${group.pairs === 1 ? 'pair' : 'pairs'})`, '', '| Metric | Base | Head | Head / base | |', '|---|---|---|---|---|');
+      for (const row of group.rows) {
+        const flag = row.verdict === 'worse' ? '**worse**' : row.verdict;
+        lines.push(`| ${row.label} | ${formatRange(row.base, row.unit)} | ${formatRange(row.head, row.unit)} | ${row.ratio === null ? 'from 0' : row.ratio.toFixed(2)} | ${flag} |`);
+      }
+    }
+  }
+  const capped = result.timeouts.base + result.timeouts.head;
+  if (capped) lines.push('', `${capped} ${capped === 1 ? 'figure is' : 'figures are'} the wait of the scenario, not a measurement (${result.timeouts.base} of the base, ${result.timeouts.head} of the head): the run did not show the frame or take the step in time. They are listed per run in the JSON as \`timedOut\`.`);
+  const withErrors = records.filter((record) => record.errors?.length).length;
+  if (withErrors) lines.push('', `${withErrors} runs logged errors in the page; they are in the JSON as \`errors\`.`);
+  if (environment.length) lines.push('', ...environment.map((line) => `- ${line}`));
+  return `${lines.join('\n')}\n`;
+}
