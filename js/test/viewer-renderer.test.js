@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TEXTURE_FORMATS, fragmentShader } from '../demo/renderer.js';
+import { Renderer, TEXTURE_FORMATS, fragmentShader } from '../demo/renderer.js';
+import { packUint16 } from '../chronozarr/compact.js';
 import { PRODUCT_GLSL } from '../shared/products-glsl.js';
 import { GAIN, PRODUCTS } from '../shared/products.js';
 
@@ -46,4 +47,103 @@ test('the mask variant of each shader reads one mask layer per slot, writes the 
     const withoutMask = masked.replace(/  if \(texelFetch\(u_mask[\s\S]*?\n  \}\n/, '').split('\n').filter((line) => !/u_mask/.test(line));
     assert.deepEqual(withoutMask.filter(Boolean), plain.split('\n').filter(Boolean), `${dtype}: apart from the mask lines the two programs are the same`);
   }
+});
+
+// A GL context that records what is handed to texSubImage3D, so an upload can be checked without a browser or GPU.
+function recordingGl() {
+  const constants = new Map();
+  const uploads = [];
+  const gl = new Proxy({}, {
+    get(_, name) {
+      if (name === 'getParameter') return () => 4096;
+      if (name === 'getShaderParameter' || name === 'getProgramParameter') return () => true;
+      if (name === 'getUniformLocation') return (_program, uniform) => uniform;
+      if (name === 'texSubImage3D') return (...args) => uploads.push({ format: args[8], values: args[10] });
+      if (/^create/.test(name)) return () => ({});
+      if (/^[A-Z_0-9]+$/.test(name)) {
+        if (!constants.has(name)) constants.set(name, constants.size + 1);
+        return constants.get(name);
+      }
+      return () => {};
+    },
+  });
+  return { gl, uploads };
+}
+
+// The words and blocks of a raw chunk that packUint16 declined, built one value at a time: two values per word, one 16-bit block of minimum 0 per 128 values.
+function referenceRawPacked(data) {
+  const words = new Uint32Array(Math.ceil(data.length / 2));
+  for (let i = 0; i < data.length; i++) words[i >> 1] |= data[i] << ((i & 1) * 16);
+  const blocks = new Uint32Array(Math.ceil(data.length / 128) * 2);
+  for (let b = 0; b < blocks.length / 2; b++) {
+    blocks[b * 2] = b * 64;
+    blocks[b * 2 + 1] = 16 << 16;
+  }
+  return { words, blocks };
+}
+
+function compactRenderer(chunkWidth, chunkHeight) {
+  const { gl, uploads } = recordingGl();
+  const renderer = new Renderer({ getContext: () => gl });
+  renderer.configure({ dtype: 'uint16', nBand: 1, chunkWidth, chunkHeight, slots: 8, compact: true });
+  const uploaded = (format) => {
+    const parts = uploads.filter((upload) => upload.format === gl[format]).map((upload) => upload.values);
+    return { parts, all: Uint32Array.from(parts.flatMap((part) => [...part])) };
+  };
+  return { renderer, uploads, words: () => uploaded('RED_INTEGER'), blocks: () => uploaded('RG_INTEGER') };
+}
+
+function randomUint16(length, offsetBytes = 0) {
+  let seed = 7 + length;
+  const buffer = new ArrayBuffer(offsetBytes + length * 2);
+  const data = new Uint16Array(buffer, offsetBytes, length);
+  for (let i = 0; i < length; i++) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    data[i] = seed >>> 16;
+  }
+  return data;
+}
+
+test('compact upload of a raw chunk sends the same words and blocks as the per-value packing, for even and odd lengths and an unaligned view', () => {
+  const cases = [
+    ['even length, 4-aligned', 64 * 128, 0],
+    ['odd length', 63 * 65, 0],
+    ['even length, view starting 2 bytes into its buffer', 64 * 128, 2],
+    ['even length, 4-aligned view starting 8 bytes into its buffer', 64 * 128, 8],
+    ['even length, partial last block', 70 * 74, 0],
+  ];
+  // One renderer takes every chunk, so the reused block table must also follow a change in length.
+  const upload = compactRenderer(64, 128);
+  for (const [name, length, offsetBytes] of cases) {
+    const data = randomUint16(length, offsetBytes);
+    assert.ok(data.some((value) => value >= 0x8000), `${name}: values with the top bit set are covered`);
+    const { words, blocks } = referenceRawPacked(data);
+    upload.uploads.length = 0;
+    assert.ok(upload.renderer.upload(name, { lod: 0, row: 0, col: 0, t: 0 }, data) >= 0, name);
+    assert.deepEqual(upload.words().all, words, `${name}: words`);
+    assert.deepEqual(upload.blocks().all, blocks, `${name}: blocks`);
+  }
+});
+
+test('compact upload of an even, 4-aligned raw chunk hands its own bytes to the GPU and reuses one block table', () => {
+  const upload = compactRenderer(64, 128);
+  const first = randomUint16(64 * 128);
+  const second = randomUint16(64 * 128);
+  upload.renderer.upload('a', { lod: 0, row: 0, col: 0, t: 0 }, first);
+  upload.renderer.upload('b', { lod: 0, row: 0, col: 0, t: 1 }, second);
+  const words = upload.words().parts;
+  assert.ok(words.every((part) => part.buffer === first.buffer || part.buffer === second.buffer), 'the words are views of the decoded arrays, not copies');
+  const blocks = upload.blocks().parts;
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0].buffer, blocks[1].buffer, 'the block table of a raw chunk does not depend on its values');
+});
+
+test('compact upload of a packed chunk sends its own words and blocks', () => {
+  const data = new Uint16Array(64 * 128).map((_, i) => 3000 + (i % 127));
+  const packed = packUint16(data);
+  assert.ok(packed);
+  const upload = compactRenderer(64, 128);
+  upload.renderer.upload('a', { lod: 0, row: 0, col: 0, t: 0 }, packed);
+  assert.deepEqual(upload.words().all, packed.words);
+  assert.deepEqual(upload.blocks().all, packed.blocks);
 });
