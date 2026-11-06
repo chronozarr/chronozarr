@@ -66,7 +66,7 @@ test('coarse stages: limits can be overridden', () => {
   assert.deepEqual(planCoarseStages({ targetLod: 1, coarsestLod: 3, frameBytes: ucayali, minDirectMs: 1e9 }), []);
 });
 
-// The lead of a stage with a short transfer is the one the viewer had before bytes counted: two store round trips (the time to open the store), 30 to 400 ms.
+// The lead of a stage with a short transfer is two store round trips (the time to open the store), held to 30 to 400 ms.
 const lead = (roundTripMs, bandwidth, wireBytes = 0.7e6) => stageLeadMs({ wireBytes, bandwidth, roundTripMs }); // 0.7 MB: the level-3 chunk of the Ucayali store on the wire
 
 test('stage lead: two round trips, 30 to 400 ms, while the stage\'s transfer is shorter than that', () => {

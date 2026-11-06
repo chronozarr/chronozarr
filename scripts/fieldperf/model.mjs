@@ -156,7 +156,7 @@ const L3_WEIGHT = { value: 1 };
 /**
  * What the reader estimates a level-3 chunk to take on the wire when nothing has been fetched yet: 2 MiB decoded (1 x 4 bands x 512 x 512 x uint16)
  * times its INITIAL_COMPRESSION_RATIO of 0.7. A first visit has measured no bandwidth either, so it leads by the transfer of this at ASSUMED_BANDWIDTH:
- * 235 ms, under the 2 x open time that the stored browser runs (made before the transfer term) led by whenever the open took 118 ms or more.
+ * 235 ms. Two round trips (2 x the open time, at most 400 ms) are the longer lead whenever the open takes 118 ms or more.
  */
 const COLD_L3_WIRE_BYTES = 2 * 1024 * 1024 * 0.7;
 
