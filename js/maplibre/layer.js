@@ -28,7 +28,7 @@ const FAILURE_COOLDOWN_MS = 5000; // a cell whose fetch failed is left alone thi
 const MESH_CACHE_LIMIT = 512;
 const STRETCH_SAMPLES_PER_CELL = 300;
 const PREFETCH_DELAY_MS = 250;
-const STALE_LOAD_GRACE_MS = 400; // a load that nothing in view needs is cancelled only after this long, so a pan back or a zoom wobble keeps it
+const STALE_LOAD_GRACE_MS = 400; // a load that nothing in view needs is cancelled only after this long, so a pan back or a zoom wobble keeps it, and only while a load that the view needs is pending
 const STAND_IN_FINER_LEVELS = 2; // levels below the target that a stand-in may come from: 4 + 16 cell lookups at most per cell and frame
 const SEEK_DISTANCE = 4; // a time change of more than this many steps drops queued speculative fetches (as the viewer does)
 const EVENTS = ['open', 'loading', 'ready', 'error'];
@@ -238,7 +238,8 @@ export class ChronozarrLayer {
 
   /**
    * Listen for 'open' (store metadata read), 'loading' (the view needs data), 'ready' (everything the view needs is
-   * on the GPU; fires again after every pan, zoom or time change that had to wait for data) and 'error'
+   * on the GPU and no load is running, including a load that nothing in view needs any more; fires again after every
+   * pan, zoom or time change that had to wait for data) and 'error'
    * (`event.error`; the layer keeps running). Returns a function that removes the listener.
    */
   on(type, listener) {
@@ -1082,9 +1083,11 @@ export class ChronozarrLayer {
    * Cancels the loads that nothing in view needs, so the loads of the cells in view do not queue behind them. A load is
    * needed by a visible cell at the current level and timestep, or by a coarser level that stands in for one. It is
    * cancelled once it has been unneeded for STALE_LOAD_GRACE_MS, measured between frames, so a pan back or a wobble across a
-   * level boundary keeps it. No frame follows a view that has settled, so one timer asks for a frame when the first grace
-   * ends. The prefetch is cancelled with it: the reader keeps a request that a prefetch owns, and that plan was made for a
-   * view that is gone; the next 'ready' plans it again.
+   * level boundary keeps it. It is cancelled only while a load that the view needs is pending, whether the reader has
+   * started it or still holds it in its queue: with none, nothing waits behind the stale load, and cancelling it would
+   * throw away a half-transferred chunk that a pan back finds in the cache. No frame follows a view that has settled, so
+   * one timer asks for a frame when the first grace ends. The prefetch is cancelled with it: the reader keeps a request
+   * that a prefetch owns, and that plan was made for a view that is gone; the next 'ready' plans it again.
    */
   #cancelStale(lod, visible, t) {
     if (this.#pending.size === 0) return;
@@ -1096,14 +1099,21 @@ export class ChronozarrLayer {
         wanted.add(chunkId(level, Math.floor(cell.row / scale), Math.floor(cell.col / scale), t));
       }
     }
-    let soonest = Infinity;
+    const stale = [];
+    let wantedPending = false;
     for (const [key, load] of this.#pending) {
       if (!load) continue;
       if (wanted.has(key)) {
         load.unwantedSince = null;
-        continue;
+        wantedPending = true;
+      } else {
+        load.unwantedSince ??= now;
+        stale.push(load);
       }
-      load.unwantedSince ??= now;
+    }
+    if (!wantedPending) return;
+    let soonest = Infinity;
+    for (const load of stale) {
       const remaining = STALE_LOAD_GRACE_MS - (now - load.unwantedSince);
       if (remaining > 0) {
         soonest = Math.min(soonest, remaining);

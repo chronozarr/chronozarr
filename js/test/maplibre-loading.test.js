@@ -254,6 +254,70 @@ test('a coarser load stays while a visible cell stands in on it, and goes once n
   assert.deepEqual(idsOf(requests.filter((request) => !request.aborted)), [...ids(1, [0, 1, 2], [1, 2], 0), ...ids(0, ALL, [3, 4, 5], 0)].sort());
 });
 
+test('a stale load that no load of the view waits behind runs to the end, and a pan back finds its chunk', async (t) => {
+  const advance = skewClock(t);
+  const { layer, memory, view, frame, settle, width, height } = await openLayer(t, { cells: 6, nTime: 2, delayMs: 150, storeOptions: { maxRequests: 64 } });
+  const left = viewMatrix({ left: 0, right: 0.4 }, width, height); // columns 0 to 2
+  const right = viewMatrix({ left: 0.6, right: 1 }, width, height); // columns 3 to 5
+  view.matrix = right;
+  await settle();
+  view.matrix = left;
+  frame();
+  await flush();
+  view.matrix = right; // on the GPU already: the view has no load of its own
+  frame();
+  advance(PAST_GRACE_MS);
+  frame();
+  await flush();
+  assert.deepEqual(chunkRequests(memory).filter((request) => request.aborted), [], 'the loads of columns 0 to 2 were left running');
+  assert.equal(layer.stats.pending, 18);
+  assert.equal(layer.stats.state, 'loading', 'ready waits for the loads that nothing needs');
+  view.matrix = left;
+  await settle();
+  const requests = chunkRequests(memory);
+  assert.deepEqual(idsOf(requests), ids(0, ALL, ALL, 0), 'every chunk was requested once');
+  assert.deepEqual(requests.filter((request) => request.aborted), []);
+  assert.deepEqual(drawn(frame().draws), ids(0, ALL, [0, 1, 2], 0), 'the pan back draws the chunks that kept loading');
+});
+
+test('a stale load is cancelled after the grace while a load that the view needs is in flight', async (t) => {
+  const advance = skewClock(t);
+  const { memory, view, frame, settle, width, height } = await openLayer(t, { cells: 6, nTime: 2, delayMs: 100, storeOptions: { maxRequests: 64 } });
+  const aborted = () => idsOf(chunkRequests(memory).filter((request) => request.aborted));
+  view.matrix = viewMatrix({ left: 0.6, right: 1 }, width, height); // columns 3 to 5
+  await settle();
+  memory.delayMs = HANG_MS;
+  view.matrix = viewMatrix({ left: 0, right: 0.4 }, width, height); // columns 0 to 2
+  frame();
+  await flush();
+  view.matrix = viewMatrix({ left: 0.45, right: 1 }, width, height); // columns 2 to 5: column 2 is still loading, columns 0 and 1 are not needed
+  frame();
+  await flush();
+  assert.deepEqual(aborted(), [], 'the grace has not passed');
+  advance(PAST_GRACE_MS);
+  frame();
+  await flush();
+  assert.deepEqual(aborted(), ids(0, ALL, [0, 1], 0), 'columns 0 and 1 were cancelled, column 2 still loads');
+});
+
+test('a stale load stays once the loads that the view needs have landed', async (t) => {
+  const advance = skewClock(t);
+  const { layer, memory, view, frame, width, height } = await openLayer(t, { cells: 6, nTime: 2, hang: true, storeOptions: { maxRequests: 64 } });
+  view.matrix = viewMatrix({ left: 0, right: 0.4 }, width, height); // columns 0 to 2, which never land
+  frame();
+  await flush();
+  memory.delayMs = 20;
+  view.matrix = viewMatrix({ left: 0.6, right: 1 }, width, height); // columns 3 to 5
+  frame();
+  for (let i = 0; i < 100 && layer.stats.pending > 18; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(layer.stats.pending, 18, 'the loads of the view have landed; those of columns 0 to 2 hang');
+  advance(PAST_GRACE_MS);
+  frame();
+  await flush();
+  assert.deepEqual(chunkRequests(memory).filter((request) => request.aborted), [], 'nothing waits behind the old loads any more');
+  assert.equal(layer.stats.pending, 18);
+});
+
 test('the grace ends in a frame of its own, so a map that draws only when asked still cancels the stale loads', async (t) => {
   const { view, frame, memory, width, height } = await openLayer(t, { cells: 6, levels: 2, nTime: 2, hang: true, storeOptions: { maxRequests: 8 } });
   t.mock.timers.enable({ apis: ['setTimeout'] });
