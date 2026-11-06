@@ -29,7 +29,7 @@ import { createArrayReader } from './array-reader.js';
 import { ChunkCache, SpeculativeBudget } from './cache.js';
 import { packAux, unpackAux } from './aux-cache.js';
 import { packUint16, compactUint16At } from './compact.js';
-import { FetchError, HttpStore, LimitedReadable, abortError, isAbort, sleep } from './http.js';
+import { FetchError, HttpStore, LimitedReadable, abortError, anySignal, isAbort, sleep } from './http.js';
 import { redactText } from './redact.js';
 import { RequestLimiter } from './limiter.js';
 import { DTYPES, decodeSpec, isCellStorage, normalizeBands, parseSpatial, parseRoot, parseStorage, requireStore, sameCrs } from './metadata.js';
@@ -868,7 +868,7 @@ export class ChronoStore {
   async prefetch({ lod, cells, t, direction = 1, behindFactor = 2, loop = false, playing = false, seek = false, masks = false, maxSteps = Infinity, ambient = false, concurrency, signal, onChunk }) {
     if (this.#closeController.signal.aborted) throw new Error('ChronoStore is closed');
     if (maxSteps !== Infinity && (!Number.isInteger(maxSteps) || maxSteps < 1)) throw new RangeError('maxSteps must be an integer >= 1');
-    signal = AbortSignal.any(signal ? [signal, this.#closeController.signal] : [this.#closeController.signal]);
+    signal = anySignal(signal ? [signal, this.#closeController.signal] : [this.#closeController.signal]);
     const level = this.level(lod);
     const wholeAxis = playing || loop;
     const movie = wholeAxis && !ambient;

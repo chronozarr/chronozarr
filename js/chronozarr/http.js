@@ -7,6 +7,28 @@ import { redactText, redactUrl } from './redact.js';
 export const abortError = () => new DOMException('Aborted', 'AbortError');
 export const isAbort = (error) => error?.name === 'AbortError';
 
+/**
+ * A signal that aborts when any of `signals` does, with the reason of the one that aborted (the first of those already aborted, in
+ * order). AbortSignal.any exists from Chrome 116, Firefox 124 and Safari 17.4; where it does not, the signal is an AbortController's and
+ * a listener on every input feeds it. There a listener on an input that lives long (a store's close signal) stays until one of the
+ * inputs aborts, so each call leaves one behind.
+ */
+export function anySignal(signals) {
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any(signals);
+  const controller = new AbortController();
+  const aborted = signals.find((signal) => signal.aborted);
+  if (aborted) {
+    controller.abort(aborted.reason);
+    return controller.signal;
+  }
+  const onAbort = (event) => {
+    for (const signal of signals) signal.removeEventListener('abort', onAbort);
+    controller.abort(event.target.reason);
+  };
+  for (const signal of signals) signal.addEventListener('abort', onAbort);
+  return controller.signal;
+}
+
 /** A request to the store that failed for good: carries the URL, HTTP status (if any) and attempt count. */
 export class FetchError extends Error {
   constructor({ url, method, range, status, statusText, cause, attempts }) {
