@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openStore } from '../chronozarr/decoder.js';
-import { buildSyntheticStore } from '../support/synthetic-store.js';
+import { buildSyntheticStore, coverageValue, defaultValues, maskValue } from '../support/synthetic-store.js';
 
 // What speculative fetching spends: the idle allowance follows the measured link, a job that is not the user does not
 // count as activity, a request is never sent twice, a new plan takes over the requests of the one it replaces, and the
@@ -868,6 +868,166 @@ test('holdDemand does not hold a movie back, and refuses a closed store', async 
   hold();
   store.close();
   assert.throws(() => store.holdDemand(), /closed/);
+});
+
+// ---- background reads: { background: true } on getRaw, ensureRaw, getMask and getCoverage ----
+
+test('a background read is not demand: speculation goes on while it is pending, and a demand read that joins it counts', async () => {
+  const { store, started, release, openAll } = await openGated({ rate: 400_000, mature: true });
+  const read = store.getRaw(0, 0, 0, 50, { background: true });
+  await settled();
+  assert.deepEqual(started, [50]);
+  assert.equal(store.stats().cache.speculativeShare, 1, 'nothing counts as demand');
+  const abort = new AbortController();
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, signal: abort.signal });
+  await settled();
+  assert.ok(started.length > 1, 'prefetch starts while the read is pending');
+  const frame = store.getRaw(0, 0, 0, 50);
+  assert.equal(store.stats().cache.speculativeShare, 0.5, 'a frame that joins the request waits for it');
+  release(50);
+  const [background, joined] = await Promise.all([read, frame]);
+  assert.equal(background[5], defaultValues('uint16')(50, 0, 0, 5, 0));
+  assert.equal(joined, background, 'one request served both');
+  assert.equal(started.filter((t) => t === 50).length, 1);
+  abort.abort();
+  openAll();
+  await job;
+});
+
+test('a background read takes none of the speculative requests that prefetch holds to the link', async () => {
+  const { store, started, release, openAll } = await openGated({ rate: 200_000, idleSeconds: 1000 });
+  const read = store.getRaw(0, 0, 0, 50, { background: true });
+  await settled();
+  const abort = new AbortController();
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, signal: abort.signal });
+  await settled();
+  assert.deepEqual(started, [50, 30], 'the slow link leaves prefetch one request, and the read is not it');
+  release(50);
+  await read;
+  abort.abort();
+  openAll();
+  await job;
+});
+
+test('a background read that joins a speculative request leaves it speculative: the job goes on while it is pending', async () => {
+  const { store, started, release, openAll } = await openGated();
+  const abort = new AbortController();
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, signal: abort.signal });
+  await settled();
+  assert.deepEqual(started, [30, 31, 29, 32, 33, 28], 'six speculative requests in flight, nearest first');
+  const read = store.ensureRaw(0, 0, 0, 32, { background: true });
+  for (const t of [30, 31, 29, 33, 28]) release(t);
+  await settled();
+  assert.ok(started.length > 6, 'a demand read of t=32 would have held the job back');
+  release(32);
+  await read;
+  abort.abort();
+  openAll();
+  await job;
+});
+
+test('a background read leaves the last request slot to demand reads', async () => {
+  // Four request slots, one of them reserved for frames: speculative priority gets three.
+  const { store, started, release, openAll } = await openGated({ maxRequests: 4 });
+  const reads = [40, 41, 42, 43].map((t) => store.getRaw(0, 0, 0, t, { background: true }));
+  await settled();
+  assert.deepEqual(started, [40, 41, 42], 'the fourth waits: the last slot is for a frame');
+  const frame = store.getRaw(0, 0, 0, 44);
+  await settled();
+  assert.deepEqual(started, [40, 41, 42, 44], 'and the frame takes it');
+  release(44);
+  await frame;
+  openAll();
+  await Promise.all(reads);
+});
+
+test('a background read is decoded after the frames that wait, and its chunk is decoded though the decoded tier would not keep it', async () => {
+  const readable = buildSyntheticStore({ nTime: 6, nBand: 1, height: 32, width: 32, chunk: 32, sharded: false });
+  const decodes = [];
+  const worker = {
+    postMessage(message) {
+      if (message.type === 'init') queueMicrotask(() => worker.onmessage({ data: { type: 'ready' } }));
+      if (message.type === 'decode') decodes.push(message);
+    },
+    terminate() {},
+  };
+  const answer = ({ id }) => worker.onmessage({ data: { type: 'decoded', id, data: new Uint16Array(32 * 32) } });
+  const chunkOf = (message) => [...readable.files].find(([key, bytes]) => key.includes('/data/c/') && Buffer.from(bytes).equals(Buffer.from(message.bytes)))?.[0];
+  const store = await openStore('memory://decode-priority', { store: readable, workers: 1, spawnWorker: () => worker, speculativeBytesInitial: 1e12 });
+  const first = store.getRaw(0, 0, 0, 0);
+  await settled();
+  assert.equal(decodes.length, 1, 'the worker is busy with the first frame');
+  const background = store.getRaw(0, 0, 0, 1, { background: true });
+  const frame = store.getRaw(0, 0, 0, 2);
+  await settled();
+  answer(decodes[0]);
+  await first;
+  await settled();
+  assert.equal(decodes.length, 2);
+  assert.equal(chunkOf(decodes[1]), '/0/data/c/2/0/0/0', 'the frame that was asked for later goes first');
+  answer(decodes[1]);
+  await frame;
+  await settled();
+  answer(decodes[2]);
+  await background;
+  store.close();
+
+  const compressedOnly = await openStore('memory://compressed-only', { store: buildSyntheticStore({ nTime: 6, nBand: 1, height: 32, width: 32, chunk: 32, sharded: false }), workers: 0, decodedBytes: 0, compressedBytes: 32 * 32 * 2 * 10 });
+  const timeout = new Promise((resolve, reject) => setTimeout(() => reject(new Error('hung: a background read of a chunk the decoded tier cannot hold')), 2000));
+  const data = await Promise.race([compressedOnly.getRaw(0, 0, 0, 2, { background: true }), timeout]);
+  assert.equal(data[5], defaultValues('uint16')(2, 0, 0, 5, 0), 'the read still gets its values');
+  compressedOnly.close();
+});
+
+test('a background read is not cancelled by a seek, is cancelled when its caller aborts and nobody else wants it, and spends none of the allowance', async () => {
+  // The allowance holds one chunk and earns nothing: the clock does not move and the link is not measured.
+  const { store, readable, started, release, waiting, openAll } = await openGated({ measure: false, clock: () => 0, speculativeBytesInitial: 150_000 });
+  const mark = readable.log.length;
+  const reader = new AbortController();
+  const aborted = store.getRaw(0, 0, 0, 50, { background: true, signal: reader.signal }).catch((error) => error.name);
+  const kept = store.getRaw(0, 0, 0, 51, { background: true });
+  await settled();
+  const jump = store.prefetch({ lod: 0, cells: [[1, 0]], t: 10, seek: true, maxSteps: 1 });
+  await settled();
+  const requestOf = (t) => readable.log.slice(mark).find(({ key }) => key.includes(`/c/${t}/0/0/0`)).signal;
+  assert.equal(requestOf(50).aborted, false, 'a seek cancels speculation, not a read that waits');
+  assert.equal(requestOf(51).aborted, false);
+  reader.abort();
+  assert.equal(await aborted, 'AbortError');
+  assert.equal(requestOf(50).aborted, true, 'nobody wants t=50 any more');
+  release(10, 1, 0);
+  release(51);
+  const data = await kept;
+  assert.equal(data[5], defaultValues('uint16')(51, 0, 0, 5, 0), 'a read without a signal completes');
+  await jump;
+  const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, maxSteps: 1, concurrency: 1 });
+  await settled();
+  assert.ok(started.includes(30), 'the allowance of one chunk is all there: the read took none of it');
+  assert.equal(waiting.size, 1);
+  openAll();
+  await job;
+});
+
+test('getMask and getCoverage take the option: a pending background read does not hold a job back', async () => {
+  const readable = buildSyntheticStore({ nTime: 12, nBand: 1, height: 16, width: 16, chunk: 32, sharded: false, mask: true, coverage: true });
+  const releases = [];
+  const fetching = { async get(key, options) {
+    const bytes = await readable.get(key, options);
+    if (/\/(mask|coverage)\/c\/9\//.test(key)) await new Promise((resolve) => releases.push(resolve));
+    return bytes;
+  } };
+  const store = await openStore('memory://aux-background', { store: fetching, workers: 0, speculativeBytesInitial: 1e12, idleBytes: 1e12 });
+  const mask = store.getMask(0, 0, 0, 9, { background: true });
+  const coverage = store.getCoverage(0, 0, 0, 9, { background: true });
+  await settled();
+  assert.equal(releases.length, 2, 'both requests are in flight');
+  const timeout = new Promise((resolve, reject) => setTimeout(() => reject(new Error('hung: the job waits for a background read')), 2000));
+  const job = await Promise.race([store.prefetch({ lod: 0, cells: [[0, 0]], t: 3, maxSteps: 1, concurrency: 1 }), timeout]);
+  assert.equal(job.fetched, 1);
+  for (const resolve of releases) resolve();
+  assert.equal((await mask)[5], maskValue(9, 0, 5, 0));
+  assert.equal((await coverage)[5], coverageValue(9, 0, 5, 0));
+  store.close();
 });
 
 /** A small seeded generator, so that a failing run can be repeated. */

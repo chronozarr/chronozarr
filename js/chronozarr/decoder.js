@@ -657,6 +657,10 @@ export class ChronoStore {
    *
    * With a `signal`, aborting rejects this call with an AbortError, and the network request is
    * cancelled once no caller wants it any more (a caller without a signal keeps it alive).
+   *
+   * With `background: true` the read is not one a frame waits for (the chart of a pixel over time): it still completes, but its
+   * request is queued and decoded at the priority of prefetch, prefetch does not wait for it, and it is not charged to the speculative
+   * allowance, nor does it take one of the speculative requests that prefetch holds to the link. A seek does not cancel it. A demand read that joins it makes it a demand request, at demand priority and counted as demand until it settles.
    */
   async getRaw(lod, row, col, t, options = {}) {
     const data = await this.#readRaw(lod, row, col, t, options);
@@ -664,12 +668,12 @@ export class ChronoStore {
   }
 
   /** Load a true-value chunk into the cache without materializing a CPU array.
-   * Uses the same demand priority, cancellation and shared fetches as getRaw(). */
+   * Uses the same priority, cancellation and shared fetches as getRaw(), `background` included. */
   async ensureRaw(lod, row, col, t, options = {}) {
     await this.#readRaw(lod, row, col, t, options);
   }
 
-  async #readRaw(lod, row, col, t, { signal } = {}) {
+  async #readRaw(lod, row, col, t, { signal, background = false } = {}) {
     if (this.#closeController.signal.aborted) throw new Error('ChronoStore is closed');
     const level = this.level(lod);
     this.#checkCell(level, row, col);
@@ -686,18 +690,18 @@ export class ChronoStore {
     const meta = { kind: 'data', lod, row, col, t };
     let entry = this.#inflight.get(key);
     if (entry && !entry.controller.signal.aborted) {
-      this.#join(entry);
+      this.#join(entry, background);
     } else if (this.#cache.get(key)?.compressed) {
       counters.hits++;
       counters.compressedHits++;
-      entry = this.#start(key, meta, { background: false });
+      entry = this.#start(key, meta, { background, read: true });
     } else {
       counters.misses++;
-      entry = this.#start(key, meta, { background: false });
+      entry = this.#start(key, meta, { background, read: true });
     }
-    const data = await this.#subscribe(entry, signal);
+    const data = await this.#subscribe(entry, signal, background);
     // A prefetch that joined above kept only compressed bytes: decode them now.
-    return data ?? this.#readRaw(lod, row, col, t, { signal });
+    return data ?? this.#readRaw(lod, row, col, t, { signal, background });
   }
 
   /**
@@ -766,14 +770,14 @@ export class ChronoStore {
     }
   }
 
-  /** The validity mask chunk of a cell (uint8 [y][x] over the padded chunk, 1 = valid), or null when the store has no mask. */
-  getMask(lod, row, col, t, { signal } = {}) {
-    return this.#getAux('mask', lod, row, col, t, signal);
+  /** The validity mask chunk of a cell (uint8 [y][x] over the padded chunk, 1 = valid), or null when the store has no mask. `background` is as for getRaw(). */
+  getMask(lod, row, col, t, { signal, background = false } = {}) {
+    return this.#getAux('mask', lod, row, col, t, signal, background);
   }
 
   /** The coverage chunk of a cell (uint8 [y][x], observations behind each pixel, 0 = gap-filled), or null when the store has none. */
-  getCoverage(lod, row, col, t, { signal } = {}) {
-    return this.#getAux('coverage', lod, row, col, t, signal);
+  getCoverage(lod, row, col, t, { signal, background = false } = {}) {
+    return this.#getAux('coverage', lod, row, col, t, signal, background);
   }
 
   /** Cached mask chunk, undefined when not loaded yet, null when the store has no mask. Never fetches. */
@@ -1033,11 +1037,11 @@ export class ChronoStore {
     return result;
   }
 
-  /** Speculative data requests in flight, over all jobs: a request that a demand read has joined is not speculative any more. */
+  /** Speculative data requests in flight, over all jobs: a request that a demand read has joined is not speculative any more, and one that a background read started is not prefetch's. */
   #speculativeInflight() {
     let count = 0;
     for (const entry of this.#inflight.values()) {
-      if (entry.background && entry.kind === 'data' && entry.priority.value !== 0 && !entry.controller.signal.aborted) count++;
+      if (entry.background && !entry.read && entry.kind === 'data' && entry.priority.value !== 0 && !entry.controller.signal.aborted) count++;
     }
     return count;
   }
@@ -1210,7 +1214,7 @@ export class ChronoStore {
     return restored;
   }
 
-  async #getAux(kind, lod, row, col, t, signal) {
+  async #getAux(kind, lod, row, col, t, signal, background) {
     if (this.#closeController.signal.aborted) throw new Error('ChronoStore is closed');
     if (this.#storage[kind] === null) return null;
     const level = this.level(lod);
@@ -1220,18 +1224,18 @@ export class ChronoStore {
     const cached = this.#peekAux(kind, lod, row, col, t);
     if (cached) return cached;
     let entry = this.#inflight.get(key);
-    if (entry && !entry.controller.signal.aborted) this.#join(entry);
-    else entry = this.#start(key, { kind, lod, row, col, t }, { background: false });
-    return this.#subscribe(entry, signal);
+    if (entry && !entry.controller.signal.aborted) this.#join(entry, background);
+    else entry = this.#start(key, { kind, lod, row, col, t }, { background });
+    return this.#subscribe(entry, signal, background);
   }
 
   // ---- loading ----
 
-  /** A demand caller joins a fetch that is already running: count it, and move it to demand priority. */
-  #join(entry) {
+  /** A caller joins a fetch that is already running. A demand caller counts it and moves it to demand priority; a background reader takes it as it is. */
+  #join(entry, background) {
     this.#counters.cache.joins++;
     this.#network.deduped++;
-    this.#promote(entry);
+    if (!background) this.#promote(entry);
   }
 
   /** Move a speculative request to demand priority and count it as demand. */
@@ -1260,9 +1264,9 @@ export class ChronoStore {
     this.#demandBegin();
   }
 
-  /** An owner left: a request that a read waits for and that was not counted because a movie owned it counts now, unless another movie owns it. */
+  /** An owner left: a request that a demand read waits for and that was not counted because a movie owned it counts now, unless another movie owns it. */
   #recount(entry) {
-    if (!entry.counted && !entry.controller.signal.aborted && (entry.waiters > 0 || entry.sticky)) this.#count(entry);
+    if (!entry.counted && !entry.controller.signal.aborted && entry.demandReaders > 0) this.#count(entry);
   }
 
   #uncount(entry) {
@@ -1288,11 +1292,13 @@ export class ChronoStore {
   /**
    * Begin loading a chunk (fetch then decode, or decode alone for a chunk held compressed) and register it as in
    * flight. `owner` is the prefetch signal (or true) that wants a background chunk; the fetch is cancelled when
-   * its owner aborts and no caller is waiting on it.
+   * its owner aborts and no caller is waiting on it. `read` says a read started it: a reader waits for the decoded chunk, so a background
+   * one is decoded even where a prefetch would keep only its compressed bytes, and it is none of the speculative requests that prefetch
+   * holds to the link (see #speculativeInflight).
    */
-  #start(key, meta, { background, owner = null }) {
+  #start(key, meta, { background, owner = null, read = false }) {
     const controller = new AbortController();
-    const entry = { controller, kind: meta.kind, waiters: 0, sticky: false, owners: new Set(), releases: [], background, seekTarget: false, counted: false, priority: { value: background ? 1 : 0 }, promise: null };
+    const entry = { controller, kind: meta.kind, waiters: 0, demandReaders: 0, sticky: false, owners: new Set(), releases: [], background, read, seekTarget: false, counted: false, priority: { value: background ? 1 : 0 }, promise: null };
     this.#own(entry, owner);
     if (!background) this.#count(entry);
     entry.promise = this.#load(key, meta, entry)
@@ -1387,7 +1393,7 @@ export class ChronoStore {
       }
       // The pool takes ownership of what it decodes, so a copy goes in when the bytes are also being kept.
       retained = held ?? (keepCompressed ? (bytes.byteOffset === 0 && bytes.buffer.byteLength === bytes.byteLength ? bytes : bytes.slice()) : null);
-      const decodeNow = !entry.background || kind !== 'data' || !keepCompressed || this.#cache.canHoldDecoded(meta, size);
+      const decodeNow = !entry.background || entry.read || kind !== 'data' || !keepCompressed || this.#cache.canHoldDecoded(meta, size);
       // An abort while the chunk decodes is dealt with below, with the bytes in hand.
       if (decodeNow) {
         data = await this.#decoder.decode(retained ? retained.slice() : bytes, entry.priority, signal, spec, { compact: kind === 'data' && this.#compact }).catch((error) => {
@@ -1576,8 +1582,12 @@ export class ChronoStore {
     return refresh;
   }
 
-  /** Each caller gets its own promise; a caller that aborts is released, and the last one out cancels the fetch. */
-  #subscribe(entry, signal) {
+  /**
+   * Each caller gets its own promise; a caller that aborts is released, and the last one out cancels the fetch. A background reader keeps
+   * the fetch alive but is not a demand reader: it neither counts the request as demand nor holds the count up.
+   */
+  #subscribe(entry, signal, background = false) {
+    if (!background) entry.demandReaders++;
     if (!signal) {
       entry.sticky = true;
       return entry.promise;
@@ -1589,13 +1599,14 @@ export class ChronoStore {
         done = true;
         signal.removeEventListener('abort', onAbort);
         entry.waiters--;
+        if (!background) entry.demandReaders--;
       };
       const onAbort = () => {
         if (done) return;
         finish();
         reject(abortError());
-        // A joined speculative request stops counting when its last reader leaves; a seek's own timestep counts until it settles or is aborted.
-        if (entry.waiters === 0 && !entry.sticky && entry.background && !entry.seekTarget) this.#uncount(entry);
+        // A joined speculative request stops counting when its last demand reader leaves; a seek's own timestep counts until it settles or is aborted.
+        if (entry.demandReaders === 0 && entry.background && !entry.seekTarget) this.#uncount(entry);
         this.#cancelIfUnwanted(entry);
       };
       if (signal.aborted) {
