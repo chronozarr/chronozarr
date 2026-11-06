@@ -10,6 +10,7 @@
 // mercator projection.
 
 import { openStore } from '../chronozarr/decoder.js';
+import { anySignal } from '../chronozarr/http.js';
 import { redactText } from '../chronozarr/redact.js';
 import { COLORMAPS, colormapIndex } from '../shared/colormaps.js';
 import { channelBounds, computeStretchLo, describePixel, displayMode, dualPolRanges, findBand, inputConversion, inputIndices, nodataToCompare, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../shared/products.js';
@@ -388,7 +389,7 @@ export class ChronozarrLayer {
     let store;
     try {
       const options = this.#options.storeOptions ?? {};
-      const signal = options.signal ? AbortSignal.any([options.signal, this.#openController.signal]) : this.#openController.signal;
+      const signal = options.signal ? anySignal([options.signal, this.#openController.signal]) : this.#openController.signal;
       store = await openStore(this.#options.url, { ...options, signal });
       if (this.#disposed) {
         store.close();
@@ -1056,7 +1057,7 @@ export class ChronozarrLayer {
     if (failedAt !== undefined && performance.now() - failedAt < FAILURE_COOLDOWN_MS) return;
     const store = this.#store;
     const controller = new AbortController();
-    const signal = AbortSignal.any([controller.signal, this.#controller.signal]);
+    const signal = anySignal([controller.signal, this.#controller.signal]);
     const reads = [store.getRaw(lod, row, col, t, { signal })];
     if (store.hasMask) reads.push(store.getMask(lod, row, col, t, { signal }));
     this.#pending.set(key, { controller, unwantedSince: null });

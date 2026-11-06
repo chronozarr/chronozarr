@@ -318,6 +318,50 @@ test('a stale load stays once the loads that the view needs have landed', async 
   assert.equal(layer.stats.pending, 18);
 });
 
+/** Runs `body` with the global AbortSignal.any removed, as in Chrome before 116, Firefox before 124 and Safari before 17.4. */
+async function withoutNativeAny(body) {
+  const native = AbortSignal.any;
+  delete AbortSignal.any;
+  try {
+    assert.equal(AbortSignal.any, undefined);
+    await body();
+  } finally {
+    AbortSignal.any = native;
+  }
+}
+
+test('without AbortSignal.any a layer with default options loads, cancels stale loads and is removed', (t) =>
+  withoutNativeAny(async () => {
+    const advance = skewClock(t);
+    const { layer, memory, view, frame, settle, width, height } = await openLayer(t, { cells: 6, nTime: 2, delayMs: 20, storeOptions: { maxRequests: 64 } });
+    view.matrix = viewMatrix({ left: 0.6, right: 1 }, width, height); // columns 3 to 5
+    await settle();
+    assert.deepEqual(drawn(frame().draws), ids(0, ALL, [3, 4, 5], 0));
+    memory.delayMs = HANG_MS;
+    view.matrix = viewMatrix({ left: 0, right: 0.4 }, width, height); // columns 0 to 2, which never land
+    frame();
+    await flush();
+    view.matrix = viewMatrix({ left: 0.45, right: 1 }, width, height); // columns 2 to 5
+    frame();
+    advance(PAST_GRACE_MS);
+    frame();
+    await flush();
+    const aborted = (requests) => idsOf(requests.filter((request) => request.aborted));
+    assert.deepEqual(aborted(chunkRequests(memory)), ids(0, ALL, [0, 1], 0), 'columns 0 and 1 were cancelled, column 2 still loads');
+    layer.remove();
+    await flush();
+    assert.deepEqual(aborted(chunkRequests(memory)), ids(0, ALL, [0, 1, 2], 0), 'removing the layer cancelled the rest');
+  }));
+
+test('without AbortSignal.any a layer opens with a signal from its caller', (t) =>
+  withoutNativeAny(async () => {
+    const caller = new AbortController();
+    const { layer, frame, settle } = await openLayer(t, { cells: 2, nTime: 2, storeOptions: { signal: caller.signal } });
+    await settle();
+    assert.deepEqual(drawn(frame().draws), ids(0, [0, 1], [0, 1], 0));
+    layer.remove();
+  }));
+
 test('the grace ends in a frame of its own, so a map that draws only when asked still cancels the stale loads', async (t) => {
   const { view, frame, memory, width, height } = await openLayer(t, { cells: 6, levels: 2, nTime: 2, hang: true, storeOptions: { maxRequests: 8 } });
   t.mock.timers.enable({ apis: ['setTimeout'] });
