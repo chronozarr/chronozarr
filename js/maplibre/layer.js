@@ -132,7 +132,8 @@ export class ChronozarrLayer {
   #pending = new Map(); // loads in flight by key: a cell's load maps to {controller, unwantedSince}, the sample recovery to null
   #failed = new Map();
   #shown = new Map();
-  #levelT = new Map(); // the timestep of the last frame drawn at each level
+  #levelT = new Map(); // the latest requested timestep that actually drew at each target level
+  #lastPaintedT = null;
   #controller = new AbortController();
   #openController = new AbortController();
   #retired = [];
@@ -704,17 +705,16 @@ export class ChronozarrLayer {
 
     const lod = selectLod({ mercatorPerTexel0: this.#geo.mercatorPerTexel0, levelCount: store.levels.length, zoom: this.#map.getZoom(), bias: this.#options.lodBias });
     const visible = this.#visibleCells(lod, matrix);
-    // Back at a level after the timestep changed, what it showed on the earlier visit says nothing about the frame that was just on screen: a stand-in from it would be the wrong timestep.
-    if (lod !== this.#lastView.lod && this.#levelT.get(lod) !== t) {
+    // Drop stale holds only after a different timestep actually drew elsewhere. A zoom wobble before data arrives
+    // still needs the previous frame when it returns to the original level.
+    if (lod !== this.#lastView.lod && this.#levelT.get(lod) !== this.#lastPaintedT) {
       for (const key of this.#shown.keys()) if (key.startsWith(`${lod}/`)) this.#shown.delete(key);
     }
-    this.#levelT.set(lod, t);
     this.#lastView = { lod, cells: visible.map((c) => [c.row, c.col]) };
     if (!this.#seeded) this.#seeded = this.#seedCoarse(lod, matrix);
 
     const fine = [];
-    const fallback = [];
-    let allResident = true;
+    const missing = [];
     for (const cell of visible) {
       const slots = this.#slotsFor(lod, cell.row, cell.col, t, true);
       if (slots) {
@@ -722,19 +722,27 @@ export class ChronozarrLayer {
         this.#shown.set(`${lod}/${cell.row}/${cell.col}`, t);
         continue;
       }
-      allResident = false;
+      missing.push(cell);
       if (!this.#seeding) this.#request(lod, cell.row, cell.col, t);
-      fallback.push(...this.#standIn(cell, lod, t));
     }
     this.#cancelStale(lod, visible, t);
+    // A finer stand-in can protect several slots for this frame. Give every ready target cell its slot first.
+    const fallback = missing.flatMap((cell) => this.#standIn(cell, lod, t));
     fallback.sort((a, b) => b.lod - a.lod);
 
     const view = this.#productView();
-    if (allResident && fine.length > 0) {
+    if (missing.length === 0 && fine.length > 0) {
       this.#measureView(lod, fine, t, view);
     }
 
-    if (fine.length + fallback.length > 0) this.#draw(gl, matrix, [...fallback, ...fine], this.#productView());
+    if (fine.length + fallback.length > 0) {
+      this.#draw(gl, matrix, [...fallback, ...fine], this.#productView());
+      // Stand-ins from other levels also show the requested timestep. Same-level stand-ins hold an older one.
+      if (fine.length > 0 || fallback.some((item) => item.lod !== lod)) {
+        this.#levelT.set(lod, t);
+        this.#lastPaintedT = t;
+      }
+    }
 
     for (const controller of this.#retired.splice(0)) controller.abort();
     if (this.#deferredUpload) this.#repaint();

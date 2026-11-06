@@ -476,6 +476,33 @@ test('the first frame after a zoom out draws every finer cell that is on the GPU
   assertPlaced(final.draws, WIDE);
 });
 
+test('a zoom out gives decoded target cells GPU slots before finer stand-ins', async (t) => {
+  const { layer, store, memory, view, frame, settle, width, height } = await openLayer(t, {
+    width: CHUNK * 4, height: CHUNK * 2, levels: 2, nTime: 2,
+    layerOptions: { gpuBudgetBytes: 4 * CHUNK * CHUNK * Float32Array.BYTES_PER_ELEMENT },
+  });
+  // Two fine cells fit in each view. Together the two pans leave all four slots holding children of the same coarse cell.
+  view.matrix = viewMatrix({ right: 0.45, bottom: 0.45 }, width, height);
+  await settle();
+  layer.setTime(1);
+  await settle();
+  assert.deepEqual(drawn(frame().draws), ids(0, [0], [0, 1], 1));
+  view.matrix = viewMatrix({ right: 0.45, top: 0.55 }, width, height);
+  await settle();
+  assert.deepEqual(drawn(frame().draws), ids(0, [1], [0, 1], 1));
+
+  const get = memory.get.bind(memory);
+  memory.get = (key, options) => key === '/1/data/c/1/0/0/0'
+    ? new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }))
+    : get(key, options);
+  view.zoom = 12;
+  view.matrix = viewMatrix({ right: 0.92 }, width, height);
+  assert.equal(frame().draws.length, 4, 'all four fine cells stand in while the target level loads');
+  await flush();
+  assert.ok(store.hasCachedRaw(1, 0, 1, 1), 'the right target is already decoded while the left target waits');
+  assert.ok(drawn(frame().draws).includes('1/0/1/1'), 'the ready target replaces a finer fallback slot');
+});
+
 test('a zoom out over two levels draws the finest cells on the GPU that cover each cell', async (t) => {
   const { view, frame, settle } = await openLayer(t, { ...WIDE, mask: true });
   await settle();
@@ -536,6 +563,17 @@ test('a wobble across a level boundary during a time change still holds the prev
   frame();
   view.zoom = 13;
   assert.deepEqual(drawn(frame().draws), ids(0, ALL, ALL, 0), 'and again after the round trip through level 1');
+});
+
+test('a wobble before the first render of a new timestep preserves the previous frame on return', async (t) => {
+  const { layer, memory, view, frame, settle } = await openLayer(t, { cells: 6, levels: 2, nTime: 2 });
+  await settle();
+  memory.delayMs = HANG_MS;
+  layer.setTime(1);
+  view.zoom = 12;
+  assert.deepEqual(frame().draws, [], 'the other level has drawn no new timestep');
+  view.zoom = 13;
+  assert.deepEqual(drawn(frame().draws), ids(0, ALL, ALL, 0), 'the original level still holds the last painted frame');
 });
 
 for (const [direction, from, to, expected] of [['backwards', 10, 9, [8, 7, 6]], ['forwards', 10, 11, [12, 13, 14]]]) {
