@@ -23,3 +23,18 @@ export function yieldToMain(task) {
     if (index >= 0) waiting.splice(index, 1);
   };
 }
+
+/**
+ * Run `task` in a task of its own after the next animation frame has been painted, and return a function that cancels it
+ * while it is still pending. A job that continues itself this way runs one slice per frame and none between frames.
+ */
+export function yieldAfterPaint(task) {
+  let cancelTask = null;
+  const frame = requestAnimationFrame(() => {
+    cancelTask = yieldToMain(task);
+  });
+  return () => {
+    cancelAnimationFrame(frame);
+    cancelTask?.();
+  };
+}

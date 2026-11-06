@@ -1,6 +1,6 @@
-import { test } from 'node:test';
+import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { yieldToMain } from '../demo/yield.js';
+import { yieldAfterPaint, yieldToMain } from '../demo/yield.js';
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -43,4 +43,85 @@ test('cancelling after the task ran, or twice, does nothing', async () => {
   cancel();
   cancel();
   assert.equal(runs, 1);
+});
+
+/** Animation frames that the test runs: `runFrame` calls what was asked for since the previous one, and nothing runs before it. */
+function fakeFrames() {
+  const queued = new Map();
+  let nextId = 1;
+  globalThis.requestAnimationFrame = (callback) => {
+    queued.set(nextId, callback);
+    return nextId++;
+  };
+  globalThis.cancelAnimationFrame = (id) => {
+    queued.delete(id);
+  };
+  return {
+    pending: () => queued.size,
+    runFrame() {
+      const callbacks = [...queued.values()];
+      queued.clear();
+      for (const callback of callbacks) callback(0);
+    },
+  };
+}
+
+afterEach(() => {
+  delete globalThis.requestAnimationFrame;
+  delete globalThis.cancelAnimationFrame;
+});
+
+test('a task yielded after paint waits for the next frame, then runs in a task of its own after the frame', async () => {
+  const frames = fakeFrames();
+  const order = [];
+  yieldAfterPaint(() => order.push('slice'));
+  await settle();
+  assert.deepEqual(order, [], 'no frame, no slice');
+  frames.runFrame();
+  order.push('frame');
+  assert.deepEqual(order, ['frame'], 'the slice is not run by the frame');
+  await settle();
+  assert.deepEqual(order, ['frame', 'slice']);
+});
+
+test('a job that continues itself after paint runs one slice per frame; one that yields to main does not wait for frames', async () => {
+  const frames = fakeFrames();
+  const run = async (yielding) => {
+    let slices = 0;
+    const job = () => {
+      if (++slices < 5) yielding(job);
+    };
+    yielding(job);
+    await settle();
+    return () => slices;
+  };
+
+  const paced = await run(yieldAfterPaint);
+  assert.equal(paced(), 0, 'no frame yet');
+  for (let frame = 1; frame <= 3; frame++) {
+    frames.runFrame();
+    await settle();
+    assert.equal(paced(), frame, `after frame ${frame}`);
+  }
+  await settle();
+  assert.equal(paced(), 3, 'none between frames');
+
+  const idle = await run(yieldToMain);
+  assert.equal(idle(), 5, 'all five slices ran with no frame');
+});
+
+test('a cancelled task after paint never runs, whether it is cancelled before its frame or between the frame and its task', async () => {
+  const frames = fakeFrames();
+  const order = [];
+  const beforeFrame = yieldAfterPaint(() => order.push('before the frame'));
+  assert.equal(frames.pending(), 1);
+  beforeFrame();
+  assert.equal(frames.pending(), 0, 'the frame that was asked for is cancelled');
+  const afterFrame = yieldAfterPaint(() => order.push('after the frame'));
+  frames.runFrame();
+  afterFrame();
+  yieldAfterPaint(() => order.push('kept'));
+  frames.runFrame();
+  await settle();
+  assert.deepEqual(order, ['kept']);
 });

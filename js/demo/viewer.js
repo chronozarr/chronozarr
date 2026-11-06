@@ -18,7 +18,7 @@ import { redactText, redactUrl } from '../chronozarr/redact.js';
 import { toggleExportPanel } from './export.js';
 import { FrameMonitor, formatBytes, formatMs, formatRate, hitRate, readStats } from './perf.js';
 import { Renderer } from './renderer.js';
-import { yieldToMain } from './yield.js';
+import { yieldAfterPaint, yieldToMain } from './yield.js';
 import { prepareMovieCache } from './cache-policy.js';
 import { MAX_SCALE, bindViewerInput } from './input.js';
 import { escapeHtml, formatValue, pixelLocation, sidebarHtml } from './inspector.js';
@@ -185,7 +185,8 @@ class Viewer {
   #rafId = 0;
   #prefetchTimer = 0;
   #prefetchStartedAt = -Infinity;
-  #cancelGpuFill = () => {};
+  /** The GPU fill that waits for its turn: `{paced, cancel}`, or null. */
+  #gpuFill = null;
   #prefetchAbort = null;
   #painted = [];
   #storeGeneration = 0;
@@ -513,9 +514,11 @@ class Viewer {
   /**
    * After a jump in time or a camera move the prefetch window around the old view is stale: cancel what it still has
    * in flight (what the demand fetches for the new view also need stays), and have the next prefetch say so with `seek`.
+   * The GPU fill waiting for the old window goes too; the frame of the new view schedules it again.
    */
   #dropSpeculativeFetches({ coarseLoop = false } = {}) {
     this.#seekPending = true;
+    this.#cancelGpuFill();
     clearTimeout(this.#prefetchTimer);
     this.#prefetchTimer = 0;
     this.#prefetchAbort?.abort();
@@ -1436,15 +1439,38 @@ class Viewer {
     return data ? renderer.upload(key, { lod, row, col, t }, data) : -1;
   }
 
+  /** Whether frames are drawn one after the other: a scrub is in progress (a manual step within SCRUB_WINDOW_MS) or a movie plays. */
+  get #framesInSequence() {
+    return this.#scrubTimer !== 0 || this.#playing;
+  }
+
+  /**
+   * Have the GPU window filled in a task of its own. While frames follow one another (a scrub, a movie) the task waits for
+   * the paint of the next frame and runs one slice, so an input waits for at most one slice per frame; when nothing moves the
+   * slices follow each other without waiting for a frame. A fill that is waiting already stays as it is: it reads the view
+   * when it runs, so another call has nothing to add.
+   */
   #scheduleGpuFill() {
+    const paced = this.#framesInSequence;
+    if (this.#gpuFill?.paced === paced) return;
     this.#cancelGpuFill();
-    this.#cancelGpuFill = yieldToMain(() => this.#fillGpuWindow());
+    const run = () => {
+      this.#gpuFill = null;
+      this.#fillGpuWindow();
+    };
+    this.#gpuFill = { paced, cancel: paced ? yieldAfterPaint(run) : yieldToMain(run) };
+  }
+
+  #cancelGpuFill() {
+    this.#gpuFill?.cancel();
+    this.#gpuFill = null;
   }
 
   /**
    * Keep a window of timesteps around t resident in the texture pool, as wide as the pool holds for the
    * visible cells and reaching further in the scrub direction (wrapping past the last timestep while a movie plays), so the next steps are uniform changes
-   * instead of uploads. Uploads come from the decoded cache in slices of GPU_UPLOAD_SLICE_MS.
+   * instead of uploads. Uploads come from the decoded cache in slices of GPU_UPLOAD_SLICE_MS; a slice that leaves work
+   * schedules the next one (#scheduleGpuFill).
    */
   #fillGpuWindow() {
     const { lod, cells } = this.#view;
