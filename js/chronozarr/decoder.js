@@ -868,6 +868,7 @@ export class ChronoStore {
   async prefetch({ lod, cells, t, direction = 1, behindFactor = 2, loop = false, playing = false, seek = false, masks = false, maxSteps = Infinity, ambient = false, concurrency, signal, onChunk }) {
     if (this.#closeController.signal.aborted) throw new Error('ChronoStore is closed');
     if (maxSteps !== Infinity && (!Number.isInteger(maxSteps) || maxSteps < 1)) throw new RangeError('maxSteps must be an integer >= 1');
+    // Every job has a signal of its own, whether or not the caller passed one: #cancelSpeculative and #movieJobs identify a job by it.
     signal = anySignal(signal ? [signal, this.#closeController.signal] : [this.#closeController.signal]);
     const level = this.level(lod);
     const wholeAxis = playing || loop;
@@ -1255,8 +1256,8 @@ export class ChronoStore {
   /**
    * A request that a frame waits for counts as demand, once, and prefetch holds back as it does for a read of its own: from the read's
    * start or the join until the request settles, is aborted, or its last demand waiter leaves. A movie's prefetch is the exception when
-   * a read joins one of its requests: its pump joins the chunks it plans all the time, and holding the movie back for each would give up
-   * the speed that letting speculation use the link while nothing waits bought (adc26d5).
+   * a read joins one of its requests: its pump joins the chunks it plans all the time, and holding the movie back for each joined chunk
+   * would stall its buffer.
    */
   #count(entry) {
     if (entry.counted || [...entry.owners].some((owner) => this.#movieJobs.has(owner))) return;
