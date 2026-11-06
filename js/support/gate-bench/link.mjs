@@ -37,8 +37,8 @@
 // that fails after 20 minutes keeps what was measured before it.
 //
 // A run refuses to start on a machine whose load or power source would make the timings noise, and discards a run whose
-// browser was not drawing at 60 Hz (guards.js). It samples the load while each run goes, and the summary marks a run whose
-// load rose above the limit as invalid. `--ignore-guards` measures anyway.
+// browser was not drawing at 60 Hz (guards.js). If the load exceeds the limit during a counted run, the runner keeps the raw
+// measurements and skips the comparison. `--ignore-guards` measures anyway.
 //
 // Not a CI job: five scenarios on two links, three pairs of two builds, is about 30 minutes.
 
@@ -51,7 +51,7 @@ import { parseArgs } from 'node:util';
 import { startStaticServer } from '../static-server.js';
 import { BROWSER_ARGS, LOOPBACK_ONLY, VIEWPORT, launchBrowser, measureFrameInterval, rendererInfo, withTimeout } from './browser.mjs';
 import { attachNetworkLog, setLink } from './cdp.js';
-import { guardsMode, guardsSummary, invalidRunsNotice, measureGuarded, overloadedRuns, readMachine, refuseNoisyMachine, watchLoad } from './guards.js';
+import { GUARD_EXIT_CODE, guardsMode, guardsSummary, invalidRunsNotice, measureGuarded, overloadedRuns, readMachine, refuseNoisyMachine, watchLoad } from './guards.js';
 import { LINKS, SCENARIOS, compareLinks, linkSummaryMarkdown, runFigures } from './link-compare.js';
 import { runScenario } from './link-scenarios.js';
 
@@ -199,13 +199,13 @@ for (let pair = 0; pair < pairs; pair++) {
   }
 }
 
-const result = compareLinks(records);
 const environment = environmentLines();
 const cores = os.cpus().length;
 const invalid = invalidRunsNotice(overloadedRuns(records, { mode: guardMode, cores }), { total: records.length, cores, label: (record) => `pair ${record.pair + 1} ${record.link} ${record.scenario} ${record.variant}` });
+const result = invalid ? null : compareLinks(records);
 const summary = linkSummaryMarkdown(result, { environment, records, invalid });
 console.log(`\n${summary}`);
 await writeResults(result);
 if (args.summary) await appendFile(args.summary, summary);
 // An HTTP/2 server's close() waits for the browsers' sessions to end; exiting is what stops the three.
-process.exit(0);
+process.exit(invalid ? GUARD_EXIT_CODE : 0);

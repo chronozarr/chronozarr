@@ -3,8 +3,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { Playback } from '../demo/playback.js';
 import { invalidRunsNotice, overloadedRuns, guardsMode } from '../support/gate-bench/guards.js';
 import { LINKS, LINK_METRICS, SCENARIOS, compareLinks, distinctFrames, dragFigures, heldMs, jumpFigures, linkSummaryMarkdown, playFigures, runFigures } from '../support/gate-bench/link-compare.js';
+import { runScenario } from '../support/gate-bench/link-scenarios.js';
 
 const paint = (at, t, lod, kind = 'target') => ({ type: 'paint', at, t, lod, kind });
 
@@ -220,6 +222,66 @@ test('playback that never took a step reports a rate of 0 and the window as its 
   assert.deepEqual(timedOut, ['firstStepMs']);
 });
 
+for (const closes of [true, false]) {
+  test(`playback stall ${closes ? 'closing' : 'starting'} after the last frame sample is accounted for once`, async (t) => {
+    const frames = [];
+    const requestFrame = (callback) => frames.push(callback);
+    let now = 1000;
+    let index = 0;
+    let ready = true;
+    const playback = new Playback({
+      count: 8,
+      stepsPerSecond: 4,
+      getIndex: () => index,
+      goTo: (next) => (index = next),
+      isReady: () => ready,
+      now: () => now,
+      requestFrame,
+      cancelFrame: () => {},
+    });
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    t.mock.method(performance, 'now', () => now);
+    const track = {};
+    globalThis.document = { getElementById: () => track };
+    globalThis.requestAnimationFrame = requestFrame;
+    const viewer = {
+      playback,
+      play: () => playback.play(),
+      pause: () => playback.pause(),
+      setSpeed: (speed) => playback.setSpeed(speed),
+      shownFrame: { kind: 'target', lod: 0, t: 0 },
+      movieInfo: { lod: 0 },
+      store: { times: Array(8), stats: { network: {} }, cacheInfo: () => ({}) },
+    };
+    globalThis.window = { chronozarr: { viewer } };
+    t.after(() => {
+      delete globalThis.window;
+      delete globalThis.document;
+      delete globalThis.requestAnimationFrame;
+    });
+    const frame = (at) => {
+      now = at;
+      for (const callback of frames.splice(0)) callback(at);
+    };
+
+    const pending = runScenario({ kind: 'play', stepsPerSecond: 4, windowMs: 10_000 });
+    ready = false;
+    frame(1250);
+    if (closes) {
+      frame(1266);
+      ready = true;
+      frame(10_250);
+    }
+    now = 11_000;
+    t.mock.timers.tick(10_000);
+    const raw = await pending;
+    const { figures } = playFigures(raw);
+    assert.equal(raw.stallOpenSince, closes ? null : 1250);
+    assert.equal(figures.pauses, 1);
+    assert.equal(figures.pausedMs, closes ? 9000 : 9750);
+  });
+}
+
 test('every scenario adds the requests and the megabytes the network log counted', () => {
   const raw = { events: [paint(150, 12, 1)], at: 120, to: 12, normalLod: 1, capMs: 60000 };
   const { figures, detail } = runFigures('jump', raw, { requests: 14, bytes: 7_350_000, failed: 2 });
@@ -347,12 +409,14 @@ test('the links are the two the benchmark states', () => {
   assert.deepEqual(Object.values(LINKS).map(({ mbps, latencyMs }) => [mbps, latencyMs]), [[50, 40], [8, 80]]);
 });
 
-test('the notice of the runs that were invalid for their load comes under the headline, before the tables', () => {
+test('an overloaded link run gets an invalid summary without comparison flags', () => {
   const records = runs(3, { head: { settleMs: (v) => v * 2 } }).map((record) => ({ ...record, load: { start: 6, end: record.variant === 'head' && record.pair === 1 ? 84 : 7, max: record.variant === 'head' && record.pair === 1 ? 84 : 7 } }));
   const overloaded = overloadedRuns(records, { mode: guardsMode({ env: {} }), cores: 16 });
   const invalid = invalidRunsNotice(overloaded, { total: records.length, cores: 16, label: (record) => `pair ${record.pair + 1} ${record.link} ${record.scenario} ${record.variant}` });
-  const text = linkSummaryMarkdown(compareLinks(records), { records, invalid });
+  const text = linkSummaryMarkdown(null, { records, invalid, environment: ['Chromium 153, Metal'] });
   assert.match(text, /\*\*Invalid: 1 of 6 runs had a 1-minute load above 8 \(half of 16 logical cores\) while they ran:\*\* pair 2 8mbit-80ms drag150 head \(load 84\)/);
-  assert.ok(text.indexOf('metric is worse') < text.indexOf('Invalid:') && text.indexOf('Invalid:') < text.indexOf('### 8 Mbit/s'), 'under the headline, above the tables');
+  assert.match(text, /The comparison was skipped/);
+  assert.match(text, /Chromium 153, Metal/);
+  assert.doesNotMatch(text, /metric is worse|### 8 Mbit\/s/);
   assert.doesNotMatch(linkSummaryMarkdown(compareLinks(records), { records }), /Invalid/);
 });

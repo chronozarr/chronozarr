@@ -32,18 +32,23 @@ export async function runScenario(spec) {
     if (event.type === 'paint') events.push({ type: 'paint', at: event.at, t: event.t, lod: event.lod, kind: event.kind });
     else if (event.type === 'kept') events.push({ type: 'kept', at: event.at, t: event.t });
   };
-  // At every animation frame: the timestep the viewer was asked for, the one on screen, and whether playback waits for frames.
-  // A stall that is open when the scenario ends shows in `stallOpenSince` (playback counts a stall only when it ends).
   const samples = [];
-  let stallOpenSince = null;
+  let lastSampleAt = null;
+  let sampledStall = null;
   let sampling = true;
   const sample = (at) => {
-    const frame = viewer.shownFrame;
-    samples.push({ at, t: viewer.t, shownT: frame ? frame.t : null });
-    const { buffering, stats } = viewer.playback;
-    if (buffering && stats.firstStepAt !== null) stallOpenSince ??= at;
-    else stallOpenSince = null;
-    if (sampling) requestAnimationFrame(sample);
+    if (!sampling) return;
+    if (spec.kind === 'play') {
+      const { buffering, stats } = viewer.playback;
+      // The sampler queues before playback. A stall first seen now started in the preceding playback callback.
+      if (buffering && stats.firstStepAt !== null && sampledStall?.pause !== stats.bufferingPauses) {
+        sampledStall = { pause: stats.bufferingPauses, since: lastSampleAt ?? at };
+      }
+      lastSampleAt = at;
+    } else {
+      samples.push({ at, t: viewer.t, shownT: viewer.shownFrame?.t ?? null });
+    }
+    requestAnimationFrame(sample);
   };
   requestAnimationFrame(sample);
   const track = document.getElementById('timeline-track');
@@ -91,7 +96,13 @@ export async function runScenario(spec) {
     viewer.play();
     await sleep(spec.windowMs);
     const endAt = performance.now();
-    const stats = { ...viewer.playback.stats };
+    const { buffering, stats: playbackStats } = viewer.playback;
+    const stats = { ...playbackStats };
+    // Playback can enter or leave a stall after the last sample, in its callback for that same frame.
+    let stallOpenSince = null;
+    if (buffering && stats.firstStepAt !== null) {
+      stallOpenSince = sampledStall?.pause === stats.bufferingPauses ? sampledStall.since : (lastSampleAt ?? endAt);
+    }
     const movieLod = viewer.movieInfo.lod;
     viewer.pause();
     return { kind: 'play', start, stats, startAt, endAt, stallOpenSince, windowMs: spec.windowMs, normalLod, movieLod };

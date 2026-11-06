@@ -48,7 +48,7 @@ node js/support/gate-bench/run.mjs --cache compact --base /tmp/gates/viewers/bas
 
 Before each counted run of the default pass, a first visit in a browser with an empty profile adds its marks (first chunk request, shader compile, decode worker start, first frame) to the summary for information; no gate reads them.
 
-A local run of either runner refuses to start when the 1-minute load is above half the logical cores or the Mac is on battery power, discards a run whose browser did not draw at 60 Hz, and marks a run whose load rose above that limit while it ran as invalid in the summary. `--ignore-guards` measures anyway; CI is not guarded (`js/support/gate-bench/guards.js`).
+A local run of either runner refuses to start when the 1-minute load is above half the logical cores or the Mac is on battery power. It discards a run whose browser did not draw at 60 Hz. If the load exceeds the limit during a counted run, the runner saves raw records when `--out` is set, skips the comparison, and exits with status 3. `--ignore-guards` measures anyway. CI is unguarded (`js/support/gate-bench/guards.js`).
 
 `js/support/gate-bench/link.mjs` measures the same two builds on throttled links (a drag of the timeline, a far jump, playback), for a change to what the viewer fetches or shows while it waits; its flags are provisional (see the script header) and it is not a CI job. It needs `openssl` (and `--gpu swiftshader` off a Mac) and a store with more timesteps than the viewer holds, which `store.mjs --times` writes:
 

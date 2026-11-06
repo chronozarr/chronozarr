@@ -27,8 +27,8 @@
 // load of a shared runner falls on both, and each pair is compared on its own.
 //
 // A local run refuses to start on a machine whose load or power source would make the timings noise, and discards a run whose
-// browser was not drawing at 60 Hz (guards.js). It samples the load while each run goes, and the summary marks a run whose load rose above
-// the limit as invalid. `--ignore-guards` measures anyway. CI is not guarded.
+// browser was not drawing at 60 Hz (guards.js). If the load exceeds the limit during a counted run, the runner keeps the raw
+// measurements and skips the verdict. `--ignore-guards` measures anyway. CI is not guarded.
 //
 // --gpu swiftshader (the default) draws on the CPU, as the browser tests and a runner without a GPU do; --gpu metal draws on
 // the GPU of a Mac, for the gates' own figures on a quiet machine.
@@ -48,7 +48,7 @@ import { startStaticServer } from '../static-server.js';
 import { BROWSER_ARGS, VIEWPORT, launchBrowser, measureFrameInterval, rendererInfo, withTimeout } from './browser.mjs';
 import { COMPACT_METRICS, METRICS, compareBuilds, median, summaryMarkdown } from './compare.js';
 import { firstVisit } from './first-visit.mjs';
-import { guardsMode, guardsSummary, invalidRunsNotice, measureGuarded, overloadedRuns, readMachine, refuseNoisyMachine, watchLoad } from './guards.js';
+import { GUARD_EXIT_CODE, guardsMode, guardsSummary, invalidRunsNotice, measureGuarded, overloadedRuns, readMachine, refuseNoisyMachine, watchLoad } from './guards.js';
 
 // Five cold opens per run: with three, one slow open moved a run's median by up to 59 % on GitHub's runners.
 const COLD_RUNS = 5;
@@ -279,10 +279,11 @@ try {
   await Promise.all([data.close(), apps.base.close(), apps.head.close()]);
 }
 
-const result = compareBuilds(records, { metrics: compact ? COMPACT_METRICS : METRICS });
-const { browser, loaded } = records[0];
 const cores = os.cpus().length;
 const overloaded = overloadedRuns(records, { mode: guardMode, cores });
+const invalid = invalidRunsNotice(overloaded, { total: records.length, cores, label: (record) => `pair ${record.pair + 1} ${record.variant}` });
+const result = invalid ? null : compareBuilds(records, { metrics: compact ? COMPACT_METRICS : METRICS });
+const { browser, loaded } = records[0];
 const environment = [
   `${browser.userAgent.match(/(?:Headless)?Chrome\/[\d.]+/)?.[0] ?? browser.userAgent}, WebGL renderer: ${browser.renderer}`,
   `${cores} × ${os.cpus()[0]?.model ?? 'unknown CPU'}, ${(os.totalmem() / 1024 ** 3).toFixed(0)} GB; 1-minute load ${loadBefore} at the start, ${load()} at the end, up to ${Math.max(...records.map((record) => record.load.max))} during a run`,
@@ -294,7 +295,6 @@ const environment = [
   guardsSummary({ mode: guardMode, cores, discarded: discarded.length, invalid: overloaded.length }),
   ...(!compact && records.some((record) => record.loaded.compact) ? [`Warning: ${records.filter((record) => record.loaded.compact).length} runs held the default pass's cache packed, so they measured the compact path`] : []),
 ];
-const invalid = invalidRunsNotice(overloaded, { total: records.length, cores, label: (record) => `pair ${record.pair + 1} ${record.variant}` });
 const summary = summaryMarkdown(result, { environment, invalid, ...(compact && { title: 'Speed gates, compact cache: head against base' }) });
 console.log(`\n${summary}`);
 if (args.out) {
@@ -302,4 +302,4 @@ if (args.out) {
   await writeFile(args.out, `${JSON.stringify({ startedAt, pairs, guards: guardMode, environment, result, records, discarded }, null, 1)}\n`);
 }
 if (args.summary) await appendFile(args.summary, summary);
-process.exitCode = result.failures.length ? 1 : 0;
+process.exitCode = invalid ? GUARD_EXIT_CODE : result.failures.length ? 1 : 0;

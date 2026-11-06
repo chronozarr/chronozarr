@@ -173,13 +173,15 @@ test('a mark that no run produced shows a dash, and runs without a first visit l
   assert.doesNotMatch(summaryMarkdown(plain), /First visit/);
 });
 
-test('the notice of the runs that were invalid for their load comes under the verdict, which still stands', () => {
+test('an overloaded run gets an invalid summary instead of a gate verdict', () => {
   // The machine passed the check at the start of the process (load 6), and in the fourth pair the head ran while the load went to 84.
   const records = runs(5).map((record) => ({ ...record, load: record.variant === 'head' && record.pair === 3 ? { start: 6, end: 83.9, max: 84 } : { start: 6, end: 7, max: 7 } }));
   const overloaded = overloadedRuns(records, { mode: guardsMode({ env: {} }), cores: 16 });
   const invalid = invalidRunsNotice(overloaded, { total: records.length, cores: 16, label: (record) => `pair ${record.pair + 1} ${record.variant}` });
-  const text = summaryMarkdown(compareBuilds(records), { invalid });
+  const text = summaryMarkdown(null, { invalid, environment: ['Chromium 153, Metal'] });
   assert.match(text, /\*\*Invalid: 1 of 10 runs had a 1-minute load above 8 \(half of 16 logical cores\) while they ran:\*\* pair 4 head \(load 84\)/);
-  assert.ok(text.indexOf('**Pass.**') < text.indexOf('Invalid:') && text.indexOf('Invalid:') < text.indexOf('Medians over 5 pairs'), 'under the verdict, above the tables');
+  assert.match(text, /The comparison was skipped/);
+  assert.match(text, /Chromium 153, Metal/);
+  assert.doesNotMatch(text, /\*\*(?:Pass|Fail)\.\*\*|Medians over/);
   assert.doesNotMatch(summaryMarkdown(compareBuilds(records)), /Invalid/);
 });

@@ -5,8 +5,8 @@
 // logical cores or the machine is on battery power, and discards a run whose animation frame interval, taken on a blank page
 // in its browser before and after it, is above RAF_MAX_MS, repeating it up to ATTEMPTS times before it refuses. The load is read
 // only when a process starts, and other work has been seen taking a machine from a load of 6 to 84 during a run, so each run
-// also samples the load while it goes (watchLoad) and keeps the highest in its record, and the summary marks a run whose highest
-// load was above the limit as invalid. That run stays in the comparison and in the JSON: only the summary says its timings are noise.
+// also samples the load while it goes (watchLoad) and keeps the highest in its record. If a counted run exceeds the limit,
+// the runner saves the raw records but exits without comparing the builds.
 // `--ignore-guards` measures anyway, and the summary and the JSON of a run say whether the guards were on.
 //
 // None of this applies on CI. A shared runner has no battery and a load of other jobs that the job cannot lower, so the guards
@@ -22,6 +22,7 @@ export const loadLimit = (cores) => cores / 2;
 // 60 Hz is 16.7 ms, and 18 ms leaves half a frame of slack; a faster frame source adds no noise, so nothing is refused below.
 export const RAF_MAX_MS = 18;
 export const ATTEMPTS = 3;
+export const GUARD_EXIT_CODE = 3;
 
 /** Whether a run is guarded, and if not, why: `off` is 'CI' or '--ignore-guards'. */
 export function guardsMode({ env = process.env, ignore = false } = {}) {
@@ -71,7 +72,7 @@ export function invalidRunsNotice(overloaded, { total, cores, label }) {
   if (!overloaded.length) return '';
   const listed = overloaded.slice(0, MAX_LISTED).map((record) => `${label(record)} (load ${record.load.max})`);
   const more = overloaded.length > MAX_LISTED ? `, and ${overloaded.length - MAX_LISTED} more` : '';
-  return `**Invalid: ${overloaded.length} of ${total} runs had a 1-minute load above ${loadLimit(cores)} (half of ${cores} logical cores) while they ran:** ${listed.join(', ')}${more}. Other work was loading the machine, so their timings are noise. They are in the comparison below, which should not be trusted, and in the JSON (\`load.max\`); measure again on a quiet machine.`;
+  return `**Invalid: ${overloaded.length} of ${total} runs had a 1-minute load above ${loadLimit(cores)} (half of ${cores} logical cores) while they ran:** ${listed.join(', ')}${more}. The comparison was skipped. With \`--out\`, raw measurements are saved in the JSON (\`load.max\`). Measure again on a quiet machine.`;
 }
 
 /** Whether `pmset -g batt` says the Mac is drawing from its battery; null when it says nothing about the power source. */
@@ -117,7 +118,7 @@ export function refuseNoisyMachine(machine, { log = console.error, exit = proces
   const problems = machineProblems(machine);
   if (!problems.length) return;
   log(`Refusing to measure on this machine:\n${problems.map((problem) => `- ${problem}`).join('\n')}\nRun with --ignore-guards to measure anyway; the figures will be noise.`);
-  exit(3);
+  exit(GUARD_EXIT_CODE);
 }
 
 /**

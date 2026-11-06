@@ -112,14 +112,14 @@ export function compareBuilds(records, { metrics = METRICS } = {}) {
   return { rows, traffic, pairs: pairs.length, failures, firstVisit: firstVisitRows(pairs) };
 }
 
-/** The step summary of the job: the verdict, the notice of the runs that were invalid for their load (guards.js: invalidRunsNotice) if there is one, then the absolute figures of both builds next to the gates. */
+/** The step summary of the job, with the comparison or the reason it was skipped. */
 export function summaryMarkdown(result, { environment = [], title = 'Speed gates: head against base', invalid = '' } = {}) {
+  if (invalid) return [`## ${title}`, '', invalid, '', ...environment.map((line) => `- ${line}`), ''].join('\n');
   const lines = [
     `## ${title}`,
     '',
     result.failures.length ? `**Fail.** ${result.failures.length === 1 ? 'One regression' : `${result.failures.length} regressions`}:` : '**Pass.** The head is not slower than the base beyond the tolerances, and its warm switches used no network.',
     ...result.failures.map((failure) => `- ${failure}`),
-    ...(invalid ? ['', invalid] : []),
     '',
     `Medians over ${result.pairs} pairs of runs, with the range. Head / base is the median of the ratios of the pairs.`,
     '',
