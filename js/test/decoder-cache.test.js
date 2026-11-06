@@ -38,6 +38,43 @@ test('a chunk demoted from the decoded tier is decoded again from its compressed
   assert.ok(store.peekRaw(0, 0, 0, 1), 'decoded again, so resident');
 });
 
+test('a pixel read joins prefetch without refetching when neither cache tier keeps the chunk', async () => {
+  const readable = buildSyntheticStore({ ...SMALL, sharded: false });
+  const key = '/0/data/c/1/0/0/0';
+  let started;
+  let release;
+  const requested = new Promise((resolve) => { started = resolve; });
+  const held = new Promise((resolve) => { release = resolve; });
+  const gated = {
+    async get(k, options) {
+      if (k === key) {
+        started();
+        await held;
+      }
+      return readable.get(k, options);
+    },
+  };
+  const store = await openStore('memory://chart-joins', { store: gated, workers: 0, totalBytes: SMALL_CHUNK, maxCacheBytes: SMALL_CHUNK, compressedBytes: SMALL_CHUNK });
+  try {
+    store.evictionScore = ({ t }) => t;
+    const prefetch = store.prefetch({ lod: 0, cells: [[0, 0]], t: 1, maxSteps: 1 });
+    await requested;
+    const controller = new AbortController();
+    const read = store.readPixels(0, 0, 0, 1, [[5, 0]], { background: true, signal: controller.signal });
+    await store.ensureRaw(0, 0, 0, 0);
+    store.setBudgets({ totalBytes: SMALL_CHUNK });
+    release();
+    assert.deepEqual(await read, [Uint16Array.of(defaultValues('uint16')(1, 0, 0, 5))]);
+    assert.deepEqual((await prefetch).errors, []);
+    assert.equal(readable.log.filter((request) => request.key === key).length, 1);
+    assert.equal(store.hasCachedRaw(0, 0, 0, 1), false);
+    assert.equal(store.cacheInfo().compressedEntries, 0);
+  } finally {
+    release();
+    store.close();
+  }
+});
+
 test('a chunk that is cancelled while it decodes keeps the bytes it downloaded: the next read decodes them with no new request', async () => {
   const readable = buildSyntheticStore({ nTime: 4, nBand: 1, height: 32, width: 32, chunk: 32, sharded: false });
   // A stand-in worker that holds every decode until the test answers it.
@@ -527,6 +564,16 @@ test('getCoarseFrame holds its chunks against eviction until it resolves, even w
     assert.ok(store.peekRaw(1, row, col, 6), `cell ${row},${col} resident although the budget holds 2 chunks`);
   }
   assert.equal(frame.cells.length, 3);
+});
+
+test('getCoarseFrame without materialize holds its chunks against eviction until it resolves, and returns no data', async () => {
+  const store = await openStore('memory://coarse-pinned-bare', { store: buildSyntheticStore(PYRAMID), workers: 0, maxCacheBytes: 2 * 2 * 32 * 32 * 2, compressedBytes: 0 });
+  const cells = [[0, 0], [0, 1], [1, 0]];
+  const frame = await store.getCoarseFrame(1, cells, 6, { materialize: false });
+  for (const [row, col] of cells) {
+    assert.equal(store.hasCachedRaw(1, row, col, 6), true, `cell ${row},${col} resident although the budget holds 2 chunks`);
+  }
+  assert.deepEqual(frame.cells, [{ row: 0, col: 0 }, { row: 0, col: 1 }, { row: 1, col: 0 }]);
 });
 
 test('getCoarseFrame rejects when its signal aborts, and on bad cells', async () => {

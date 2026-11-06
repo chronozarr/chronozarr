@@ -151,8 +151,13 @@ export function bindTimelineInput(viewer) {
   window.addEventListener('pointercancel', endScrub);
 }
 
-/** Keyboard shortcuts respect form focus: a focused select, field or button keeps its own Space (a button clicks on it). */
-function bindKeyboardInput(viewer) {
+/**
+ * Keyboard shortcuts respect form focus: a focused select, field or button keeps its own Space (a button clicks on it).
+ * A held arrow key is a scrub that ends when the key is released, as a pointer scrub ends on pointerup, not 300 ms later.
+ * A tap is not held: its release ends nothing, so taps in a row still add up to a scrub speed.
+ */
+export function bindKeyboardInput(viewer) {
+  let held = false;
   document.addEventListener('keydown', (e) => {
     if (e.target.closest('dialog[open]')) return;
     if (e.key === 'Escape' && viewer.inspectorOpen) {
@@ -168,7 +173,13 @@ function bindKeyboardInput(viewer) {
       return;
     }
     if (typing) return;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') held = e.repeat;
     dispatchNavigationShortcut(viewer, e);
+  });
+  document.addEventListener('keyup', (e) => {
+    if (!held || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+    held = false;
+    viewer.endScrub();
   });
 }
 

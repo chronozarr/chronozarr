@@ -145,10 +145,15 @@ export function windowOrder(nTime, t, { direction = 1, behindFactor = 2, loop = 
   return Array.from({ length: nTime }, (_, i) => i).sort((a, b) => cost(a) - cost(b) || Math.abs(a - t) - Math.abs(b - t));
 }
 
-/** Stored values of one pixel per band, sampled directly from a true-value chunk. */
+/** Stored values of one pixel per band, sampled directly from a raw or packed true-value chunk. */
 export function samplePixelFrom(data, { nBand, chunkWidth, chunkHeight }, x, y) {
   const plane = chunkHeight * chunkWidth;
   const offset = y * chunkWidth + x;
+  if (data.words) {
+    const values = new Uint16Array(nBand);
+    for (let b = 0; b < nBand; b++) values[b] = compactUint16At(data, b * plane + offset);
+    return values;
+  }
   const values = new data.constructor(nBand);
   for (let b = 0; b < nBand; b++) values[b] = data[b * plane + offset];
   return values;
@@ -731,16 +736,36 @@ export class ChronoStore {
    */
   samplePixel(lod, row, col, t, x, y) {
     const level = this.level(lod);
-    const packed = this.peekCompact(lod, row, col, t);
-    if (packed) {
-      const values = new Uint16Array(level.nBand);
-      const offset = y * level.chunkWidth + x;
-      const plane = level.chunkHeight * level.chunkWidth;
-      for (let b = 0; b < level.nBand; b++) values[b] = compactUint16At(packed, b * plane + offset);
-      return values;
-    }
-    const data = this.peekRaw(lod, row, col, t);
+    const data = this.peekCompact(lod, row, col, t) ?? this.peekRaw(lod, row, col, t);
     return data ? samplePixelFrom(data, level, x, y) : null;
+  }
+
+  /**
+   * Read per-band values of pixels ([x, y] offsets in one cell), with the priority and cancellation of getRaw().
+   * Samples the delivered chunk even if the cache cannot retain it, without expanding packed backing.
+   */
+  async readPixels(lod, row, col, t, pixels, options = {}) {
+    const data = await this.#readRaw(lod, row, col, t, options);
+    if (options.signal?.aborted) throw abortError();
+    const level = this.level(lod);
+    return pixels.map(([x, y]) => samplePixelFrom(data, level, x, y));
+  }
+
+  /**
+   * Keep any pending data and mask reads of a cell alive for a replacement view until its signal aborts.
+   * A later getRaw(), ensureRaw() or getMask() shares that work. No missing chunk is started here.
+   */
+  retainCell(lod, row, col, t, signal) {
+    if (signal.aborted) return;
+    const keys = [chunkKey(lod, row, col, t)];
+    if (this.hasMask) keys.push(this.#auxKey('mask', lod, row, col, t));
+    for (const key of keys) {
+      const entry = this.#liveEntry(key);
+      if (!entry) continue;
+      this.#promote(entry);
+      // The frame's read handles any failure. The subscription here only owns the in-flight work.
+      this.#subscribe(entry, signal).catch(() => {});
+    }
   }
 
   /**
@@ -749,12 +774,16 @@ export class ChronoStore {
    * Rejects when `signal` aborts or a chunk cannot be loaded. Meant for a coarse-first cold open: ask for the
    * deepest level's few cells, paint, then refine.
    *
+   * With `materialize: false` the cells carry no `data`: the chunks are in the cache when this resolves, and a packed one
+   * (compact mode) is not expanded into an array that the caller then does not read.
+   *
    * @param {number} lod
    * @param {Array<[number, number]>} cells  [row, col] pairs, loaded in this order
    * @param {number} t
-   * @returns {Promise<{lod:number, t:number, cells:Array<{row:number, col:number, data:ArrayBufferView}>}>}
+   * @param {{signal?: AbortSignal, materialize?: boolean}} [options]
+   * @returns {Promise<{lod:number, t:number, cells:Array<{row:number, col:number, data?:ArrayBufferView}>}>}
    */
-  async getCoarseFrame(lod, cells, t, { signal } = {}) {
+  async getCoarseFrame(lod, cells, t, { signal, materialize = true } = {}) {
     const level = this.level(lod);
     for (const [row, col] of cells) this.#checkCell(level, row, col);
     const keys = cells.map(([row, col]) => chunkKey(lod, row, col, t));
@@ -762,6 +791,10 @@ export class ChronoStore {
     try {
       const loaded = await Promise.all(
         cells.map(async ([row, col]) => {
+          if (!materialize) {
+            await this.ensureRaw(lod, row, col, t, { signal });
+            return { row, col };
+          }
           const data = await this.getRaw(lod, row, col, t, { signal });
           return { row, col, data };
         }),
@@ -1426,7 +1459,9 @@ export class ChronoStore {
       }
       // The pool takes ownership of what it decodes, so a copy goes in when the bytes are also being kept.
       retained = held ?? (keepCompressed ? (bytes.byteOffset === 0 && bytes.buffer.byteLength === bytes.byteLength ? bytes : bytes.slice()) : null);
-      const decodeNow = !entry.background || entry.read || kind !== 'data' || !keepCompressed || this.#cache.canHoldDecoded(meta, size);
+      // A reader may have joined a speculative request after it started. Return decoded data to it even if neither tier can keep the chunk.
+      const hasReader = entry.read || entry.waiters > 0 || entry.sticky;
+      const decodeNow = !entry.background || hasReader || kind !== 'data' || !keepCompressed || this.#cache.canHoldDecoded(meta, size);
       // An abort while the chunk decodes is dealt with below, with the bytes in hand.
       if (decodeNow) {
         data = await this.#decoder.decode(retained ? retained.slice() : bytes, entry.priority, signal, spec, { compact: kind === 'data' && this.#compact }).catch((error) => {
