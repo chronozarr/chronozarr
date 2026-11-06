@@ -462,11 +462,10 @@ class Viewer {
     if (!playing) this.#playback?.pause();
     const next = clamp(t, 0, this.store.times.length - 1);
     if (next === this.t) return;
-    const jump = !playing && Math.abs(next - this.t) > SEEK_DISTANCE;
     if (!playing) {
       this.#beginView('time');
       this.#noteScrubStep(Math.abs(next - this.t));
-      if (jump) this.#dropSpeculativeFetches({ coarseLoop: true });
+      if (Math.abs(next - this.t) > SEEK_DISTANCE) this.#dropSpeculativeFetches({ coarseLoop: true });
     }
     this.#direction = direction ?? (next > this.t ? 1 : -1);
     this.t = next;
@@ -475,20 +474,9 @@ class Viewer {
     this.#updateTimeUi();
     if (playing) this.renderNow();
     else {
-      // A jump that stands alone (a click on the timeline, a link, the API) asks the store for its cells now instead of when the next
-      // animation frame runs (8 ms away on average); the frame is still drawn on that one. In a scrub (a second step within SCRUB_WINDOW_MS)
-      // the next step replaces this one, so a request made now would only be cancelled: it waits for the frame, which coalesces the steps.
-      if (jump && this.#scrub.speed(performance.now()) === 0) this.#requestTargetCells();
       this.requestRender();
       this.#scheduleUrlSync();
     }
-  }
-
-  /** Request the cells that the frame at the target level of the current timestep still lacks, without drawing anything. */
-  #requestTargetCells() {
-    const lod = this.#targetLod();
-    const missing = this.#visibleCells(lod).filter(([row, col]) => !this.#cellReady(lod, row, col, this.t));
-    if (missing.length > 0) this.#requestCells(lod, missing, this.t);
   }
 
   /** A manual step of `distance` timesteps: it counts toward the scrub speed, and the scrub ends SCRUB_WINDOW_MS after the last one. */
