@@ -189,10 +189,10 @@ export function runFigures(scenario, raw, traffic) {
   };
 }
 
-/** head / base of one pair; a pair whose base is 0 has no ratio unless the head is 0 too. */
+/** head / base of one pair; a pair whose base is 0 is 1 if the head is 0 too, and otherwise beyond any ratio (Infinity). */
 function pairRatio(head, base) {
   if (base > 0) return head / base;
-  return head === 0 ? 1 : null;
+  return head === 0 ? 1 : Infinity;
 }
 
 function verdictOf(metric, base, head, ratio) {
@@ -233,9 +233,11 @@ export function compareLinks(records) {
     const rows = LINK_METRICS[SCENARIOS[group.scenario].kind].map((metric) => {
       const base = stats(pairs.map((pair) => pair.base.figures[metric.key]));
       const head = stats(pairs.map((pair) => pair.head.figures[metric.key]));
-      const ratios = pairs.map((pair) => pairRatio(pair.head.figures[metric.key], pair.base.figures[metric.key])).filter((ratio) => ratio !== null);
-      // Pairs without a ratio are those whose base is 0 and head is not: the metric has no ratio only if every pair is like that.
-      const ratio = ratios.length ? median(ratios) : null;
+      // A pair whose base is 0 and head is not counts as beyond every tolerance, so that a count that is usually 0 (buffering pauses,
+      // steps never answered) is flagged when most pairs go from 0 to something; the floor decides whether the change matters.
+      // The median of the ratios is null when it falls on such a pair.
+      const middle = median(pairs.map((pair) => pairRatio(pair.head.figures[metric.key], pair.base.figures[metric.key])));
+      const ratio = Number.isFinite(middle) ? middle : null;
       return { ...metric, base, head, ratio, verdict: decided ? verdictOf(metric, base, head, ratio) : '' };
     });
     return { link: group.link, scenario: group.scenario, pairs: pairs.length, decided, rows };
@@ -259,7 +261,7 @@ export function linkSummaryMarkdown(result, { environment = [], records = [] } =
     '',
     worse ? `**${worse} ${worse === 1 ? 'metric is' : 'metrics are'} worse in the head** beyond their tolerance and floor.` : 'No metric is worse in the head beyond its tolerance and floor.',
     '',
-    'Medians over the pairs of runs, with the range. Head / base is the median of the ratios of the pairs. A flag needs the ratio beyond the tolerance and the change in the median beyond the floor; both are provisional, and a run with fewer than three pairs gets no flags.',
+    'Medians over the pairs of runs, with the range. Head / base is the median of the ratios of the pairs. A flag needs the ratio beyond the tolerance and the change in the median beyond the floor (a pair whose base is 0 and head is not counts as beyond every tolerance, and the median ratio is then shown as "from 0"); both are provisional, and a run with fewer than three pairs gets no flags.',
   ];
   const links = [...new Set(result.groups.map((group) => group.link))];
   for (const link of links) {
@@ -268,7 +270,7 @@ export function linkSummaryMarkdown(result, { environment = [], records = [] } =
       lines.push('', `**${SCENARIOS[group.scenario].label}** (${group.pairs} ${group.pairs === 1 ? 'pair' : 'pairs'})`, '', '| Metric | Base | Head | Head / base | |', '|---|---|---|---|---|');
       for (const row of group.rows) {
         const flag = row.verdict === 'worse' ? '**worse**' : row.verdict;
-        lines.push(`| ${row.label} | ${formatRange(row.base, row.unit)} | ${formatRange(row.head, row.unit)} | ${row.ratio === null ? 'n/a' : row.ratio.toFixed(2)} | ${flag} |`);
+        lines.push(`| ${row.label} | ${formatRange(row.base, row.unit)} | ${formatRange(row.head, row.unit)} | ${row.ratio === null ? 'from 0' : row.ratio.toFixed(2)} | ${flag} |`);
       }
     }
   }

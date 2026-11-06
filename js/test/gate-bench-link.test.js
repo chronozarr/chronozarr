@@ -252,7 +252,37 @@ test('a head with something where the base had nothing is flagged beyond the flo
   const row = result.groups[0].rows.find((candidate) => candidate.key === 'heldMs');
   assert.equal(row.verdict, 'worse');
   assert.equal(row.ratio, null);
-  assert.match(linkSummaryMarkdown(result), /\| Time on an older timestep than asked for \(a coarser frame of it is not older\) \| 0\.0 ms \(0\.0 ms to 0\.0 ms\) \| 500 ms \(500 ms to 500 ms\) \| n\/a \| \*\*worse\*\* \|/);
+  assert.match(linkSummaryMarkdown(result), /\| 0\.0 ms \(0\.0 ms to 0\.0 ms\) \| 500 ms \(500 ms to 500 ms\) \| from 0 \| \*\*worse\*\* \|/);
+});
+
+/** Pairs of runs of one scenario on one link: `key` takes `baseValues[pair]` in the base and `headValues[pair]` in the head, every other metric 1000 in both. */
+function pairsOf(key, baseValues, headValues, scenario = 'play4') {
+  const figures = (value) => Object.fromEntries(LINK_METRICS[SCENARIOS[scenario].kind].map((metric) => [metric.key, metric.key === key ? value : 1000]));
+  return baseValues.flatMap((value, pair) => [
+    { variant: 'base', pair, link: '8mbit-80ms', scenario, figures: figures(value), timedOut: [] },
+    { variant: 'head', pair, link: '8mbit-80ms', scenario, figures: figures(headValues[pair]), timedOut: [] },
+  ]);
+}
+
+test('a count that goes from 0 in most pairs is flagged: those pairs are beyond every tolerance, and the floor decides', () => {
+  // Buffering pauses: the base paused once in the third pair and never before, the head three times in the first two and once in the third.
+  const result = compareLinks(pairsOf('pauses', [0, 0, 1], [3, 3, 1]));
+  assert.deepEqual(flags(result), ['pauses:worse']);
+  const row = result.groups[0].rows.find((candidate) => candidate.key === 'pauses');
+  assert.equal(row.ratio, null, 'the median pair is one that has no finite ratio');
+  assert.match(linkSummaryMarkdown(result), /\| Buffering pauses \| 0 \(0 to 1\) \| 3 \(1 to 3\) \| from 0 \| \*\*worse\*\* \|/);
+});
+
+test('a count that goes from 0 in one pair of three is not flagged: the median pair did not change', () => {
+  assert.deepEqual(flags(compareLinks(pairsOf('pauses', [0, 0, 0], [0, 0, 5]))), []);
+  assert.deepEqual(flags(compareLinks(pairsOf('pauses', [0, 0, 1], [0, 3, 1]))), []);
+});
+
+test('a change from 0 that does not pass the floor is not flagged, and one that does is, whichever way is better', () => {
+  assert.deepEqual(flags(compareLinks(pairsOf('pauses', [0, 0, 0], [1, 1, 1]))), [], 'one pause more is the floor, not above it');
+  assert.deepEqual(flags(compareLinks(pairsOf('pauses', [0, 0, 0], [2, 2, 2]))), ['pauses:worse']);
+  assert.deepEqual(flags(compareLinks(pairsOf('framesAtTarget', [0, 0, 1], [4, 4, 1], 'drag150'))), ['framesAtTarget:better']);
+  assert.deepEqual(flags(compareLinks(pairsOf('framesAtTarget', [3, 3, 3], [0, 0, 0], 'drag150'))), ['framesAtTarget:worse'], 'from something to 0 has a ratio of 0');
 });
 
 test('zero on both sides is a ratio of 1', () => {
