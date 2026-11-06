@@ -1,4 +1,4 @@
-// What a jump in time puts on the GPU before the frame is drawn, and what a jump to a frame in memory asks for.
+// The GPU fill: what a jump in time has on the GPU before its frame is drawn, how the slices of the fill are paced against animation frames, and what a jump to a frame in memory asks for.
 
 import { expect, test } from './fixtures.js';
 import { openViewer, waitForPaintedTime } from './viewer-helpers.js';
@@ -283,3 +283,71 @@ for (const [change, act] of [
     expect(slices, 'the fill of the old window did not run').toBe(0);
   });
 }
+
+test('the order of the GPU window is worked out once for all the slices of a fill, and again when t changes', async ({ page, servers, storeUrl }) => {
+  await openViewer(page, servers, await storeUrl('link_plain'));
+  await waitForStoreInMemory(page);
+  await controlFrames(page);
+
+  const fills = await page.evaluate(
+    async (cells) => {
+      const { viewer } = window.chronozarr;
+      const { renderer } = viewer;
+      // windowOrder sorts an array with one entry per timestep. Its sorts count when the task that made one also uploads for the
+      // fill: the prefetch plans with windowOrder too, in tasks of its own.
+      const nTime = viewer.store.times.length;
+      let sortsInTask = 0;
+      let sortsOfFill = 0;
+      let taskOpen = false;
+      const openTask = () => {
+        if (taskOpen) return;
+        taskOpen = true;
+        queueMicrotask(() => {
+          taskOpen = false;
+          sortsInTask = 0;
+        });
+      };
+      const sort = Array.prototype.sort;
+      Array.prototype.sort = function (...args) {
+        if (this.length === nTime) {
+          openTask();
+          sortsInTask++;
+        }
+        return sort.apply(this, args);
+      };
+      const upload = renderer.upload;
+      renderer.upload = function (...args) {
+        if (args[3]?.background) {
+          sortsOfFill += sortsInTask;
+          sortsInTask = 0;
+        }
+        return upload.apply(this, args);
+      };
+
+      // The fill of the window ahead of timestep t, started from an empty GPU with t drawn and no scrub going on.
+      const fill = async (t) => {
+        const slicesBefore = window.fillSlices[0];
+        sortsOfFill = 0;
+        viewer.goToTime(t);
+        viewer.endScrub();
+        renderer.clearResident();
+        viewer.renderNow();
+        const isFilled = () => cells.every(([row, col]) => [-1, 1, 2, 3].every((step) => renderer.isResident(`0/${row}/${col}/${t + step}`)));
+        for (const started = performance.now(); !isFilled() && performance.now() - started < 10_000; ) await new Promise((resolve) => setTimeout(resolve, 10));
+        return { filled: isFilled(), sorts: sortsOfFill, slices: window.fillSlices[0] - slicesBefore };
+      };
+      const result = [await fill(7), await fill(3)];
+      Array.prototype.sort = sort;
+      return result;
+    },
+    LEVEL_0_CELLS,
+  );
+  for (const { filled, slices } of fills) {
+    expect(filled, 'the window around t was filled').toBe(true);
+    expect(slices, 'in several slices').toBeGreaterThanOrEqual(4);
+  }
+  expect(
+    fills.map(({ sorts }) => sorts),
+    'one sort of the time axis for each window, not one for each slice',
+  ).toEqual([1, 1]);
+});

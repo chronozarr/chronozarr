@@ -203,6 +203,7 @@ class Viewer {
   #urlTimer = 0;
   #viewTiming = null;
   #movieMemo = null;
+  #windowMemo = null;
   /** The link's verdict on the playback speed, {at, steps}, and when it was reached. */
   #linkVerdict = null;
   #playEpoch = 0;
@@ -1467,6 +1468,22 @@ class Viewer {
   }
 
   /**
+   * The first `steps` timesteps of the GPU window, cheapest first. windowOrder sorts the whole time axis, and the fill asks
+   * for it in every slice and again for every cell that lands, so the answer is kept until t, the direction, the behind
+   * factor, the loop or the width of the window changes.
+   */
+  #windowTimesteps(steps) {
+    const nTime = this.store.times.length;
+    const { t } = this;
+    const direction = this.#direction;
+    const behindFactor = this.#behindFactor;
+    const loop = this.#playing;
+    const key = `${nTime}|${t}|${direction}|${behindFactor}|${loop}|${steps}`;
+    if (this.#windowMemo?.key !== key) this.#windowMemo = { key, timesteps: windowOrder(nTime, t, { direction, behindFactor, loop }).slice(0, steps) };
+    return this.#windowMemo.timesteps;
+  }
+
+  /**
    * Keep a window of timesteps around t resident in the texture pool, as wide as the pool holds for the
    * visible cells and reaching further in the scrub direction (wrapping past the last timestep while a movie plays), so the next steps are uniform changes
    * instead of uploads. Uploads come from the decoded cache in slices of GPU_UPLOAD_SLICE_MS; a slice that leaves work
@@ -1474,10 +1491,10 @@ class Viewer {
    */
   #fillGpuWindow() {
     const { lod, cells } = this.#view;
-    const { store, renderer, t } = this;
+    const { store, renderer } = this;
     if (cells.size === 0) return;
     const steps = Math.max(1, Math.floor((renderer.slots * GPU_FILL_FRACTION) / (cells.size)));
-    const timesteps = windowOrder(store.times.length, t, { direction: this.#direction, behindFactor: this.#behindFactor, loop: this.#playing }).slice(0, steps);
+    const timesteps = this.#windowTimesteps(steps);
     const frameMs = this.#playback?.frameMs ?? 1000 / 60;
     const sliceMs = Math.min(GPU_UPLOAD_SLICE_MS, frameMs * GPU_SLICE_FRACTION_OF_FRAME);
     const started = performance.now();
