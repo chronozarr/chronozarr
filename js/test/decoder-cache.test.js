@@ -72,6 +72,30 @@ test('a chunk that is cancelled while it decodes keeps the bytes it downloaded: 
   store.close();
 });
 
+test('a late-aborted chunk does not exceed the compressed cache limit', async () => {
+  const readable = buildSyntheticStore({ nTime: 2, nBand: 1, height: 32, width: 32, chunk: 32, sharded: false });
+  let posted;
+  const decoding = new Promise((resolve) => { posted = resolve; });
+  const worker = {
+    postMessage(message) {
+      if (message.type === 'init') queueMicrotask(() => worker.onmessage({ data: { type: 'ready' } }));
+      if (message.type === 'decode') posted(message);
+    },
+    terminate() {},
+  };
+  const compressedBytes = SMALL_CHUNK / 2;
+  const store = await openStore('memory://oversize-abort', { store: readable, workers: 1, spawnWorker: () => worker, compressedBytes });
+  const abort = new AbortController();
+  const read = store.getRaw(0, 0, 0, 1, { signal: abort.signal });
+  const { bytes } = await decoding;
+  assert.ok(bytes.byteLength > compressedBytes);
+  abort.abort();
+  await assert.rejects(read, { name: 'AbortError' });
+  await new Promise(setImmediate);
+  assert.equal(store.cacheInfo().compressedBytes, 0);
+  store.close();
+});
+
 test('kept bytes that do not decode are forgotten, so the next read fetches the chunk again', async () => {
   const readable = buildSyntheticStore({ nTime: 4, nBand: 1, height: 32, width: 32, chunk: 32, sharded: false });
   const key = '/0/data/c/1/0/0/0';

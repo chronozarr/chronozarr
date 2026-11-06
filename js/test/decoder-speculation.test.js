@@ -433,6 +433,22 @@ test('a seek cancels the requests of an ambient job so its own timestep has the 
   for (const t of landed) assert.ok(store.hasCachedRaw(0, 0, 0, t), `t=${t} is cached`);
 });
 
+test('ambient prefetch moves on when its store cancels a request independently of a seek', async () => {
+  const readable = buildSyntheticStore({ nTime: 3, nBand: 1, height: 8, width: 8, chunk: 8, sharded: false });
+  let attempts = 0;
+  const fetching = { async get(key, options) {
+    // Eventually succeed to keep the regression test bounded even if the job wrongly retries.
+    if (key.includes('/data/c/0/') && ++attempts < 3) throw new DOMException('Upstream cancelled the attempt', 'AbortError');
+    return readable.get(key, options);
+  } };
+  const store = await openStore('memory://ambient-upstream-abort', { store: fetching, workers: 0 });
+  const result = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, playing: true, ambient: true, concurrency: 1 });
+  assert.equal(attempts, 1);
+  assert.equal(result.fetched, 2);
+  assert.ok(store.hasCachedRaw(0, 0, 0, 2));
+  store.close();
+});
+
 test('a seek takes over the speculative requests its plan wants and cancels the others', async () => {
   const { store, readable, started, openAll } = await openGated();
   const mark = readable.log.length;
@@ -654,30 +670,37 @@ test('a chunk that an ambient job took over from another job and a seek cancelle
   assert.equal(result.fetched + result.skipped, result.planned, 'every planned chunk is dealt with once');
 });
 
-test('a job that has a chunk already starts no mask request while a demand read waits', async () => {
-  const readable = buildSyntheticStore({ nTime: 12, nBand: 1, height: 16, width: 16, chunk: 32, sharded: false, mask: true });
-  let releaseRead;
-  const held = new Promise((resolve) => { releaseRead = resolve; });
-  const fetching = { async get(key, options) {
-    const bytes = await readable.get(key, options);
-    if (key.includes('/data/c/9/')) await held;
-    return bytes;
-  } };
-  const store = await openStore('memory://mask-gate', { store: fetching, workers: 0, speculativeBytesInitial: 1e12, idleBytes: 1e12 });
-  await store.getRaw(0, 0, 0, 0);
-  const maskRequests = () => readable.log.filter(({ key }) => key.includes('/mask/c/')).length;
-  const demand = store.getRaw(0, 0, 0, 9);
-  await settled();
-  const job = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, masks: true, maxSteps: 1 });
-  assert.equal(maskRequests(), 0, 'the mask of a chunk the store has waits for the frame, as the chunks do');
-  assert.equal(job.masks, 0);
-  releaseRead();
-  await demand;
-  const later = await store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, masks: true, maxSteps: 1 });
-  assert.equal(maskRequests(), 1, 'and is fetched when nothing waits');
-  assert.equal(later.masks, 1);
-  store.close();
-});
+for (const evict of [false, true]) {
+  test(`one prefetch job fills the missing mask after demand${evict ? ' evicts the cached data' : ' ends'}`, async () => {
+    const chunk = 32;
+    const readable = buildSyntheticStore({ nTime: 12, nBand: 1, height: 16, width: 16, chunk, sharded: false, mask: true });
+    let releaseRead;
+    const held = new Promise((resolve) => { releaseRead = resolve; });
+    const fetching = { async get(key, options) {
+      const bytes = await readable.get(key, options);
+      if (key.includes('/data/c/9/')) await held;
+      return bytes;
+    } };
+    const budget = evict ? { decodedBytes: chunk * chunk * Uint16Array.BYTES_PER_ELEMENT, compressedBytes: 0 } : {};
+    const store = await openStore('memory://mask-gate', { store: fetching, workers: 0, speculativeBytesInitial: 1e12, idleBytes: 1e12, ...budget });
+    await store.getRaw(0, 0, 0, 0);
+    const maskRequests = () => readable.log.filter(({ key }) => key.includes('/mask/c/')).length;
+    const demand = store.getRaw(0, 0, 0, 9);
+    await settled();
+    const job = store.prefetch({ lod: 0, cells: [[0, 0]], t: 0, masks: true, maxSteps: 1 });
+    await settled();
+    assert.equal(maskRequests(), 0, 'the mask of a chunk the store has waits for the frame, as the chunks do');
+    releaseRead();
+    await demand;
+    const result = await job;
+    assert.equal(result.masks, 1);
+    assert.equal(result.fetched, evict ? 1 : 0, 'data is reloaded if it was evicted while the mask waited');
+    assert.equal(maskRequests(), 1, 'the original job fetched the mask once demand ended');
+    assert.ok(store.hasCachedRaw(0, 0, 0, 0));
+    assert.ok(store.hasCachedMask(0, 0, 0, 0));
+    store.close();
+  });
+}
 
 test('a read that joined a movie\'s request counts as demand once the movie has ended', async () => {
   const { store, started, release, openAll } = await openGated();
@@ -729,6 +752,21 @@ test('a request that a seek promoted to its own timestep keeps counting as deman
   await Promise.all([old, seek, other]);
 });
 
+test('a seek counts its own timestep as demand even when it takes over a movie request', async () => {
+  const { store, started, release, openAll } = await openGated();
+  const movie = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, playing: true, maxSteps: 1 });
+  await settled();
+  const seek = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, seek: true, maxSteps: 2 });
+  await settled();
+  assert.deepEqual(started, [30], 'the movie request is kept, and t=31 waits for it');
+  release(30);
+  await settled();
+  assert.deepEqual(started, [30, 31]);
+  openAll();
+  await Promise.all([movie, seek]);
+  store.close();
+});
+
 test('an ambient job that finds a chunk running when its worker wakes owns the request, so aborting the job that started it does not cancel it', async () => {
   const { store, started, waiting, release, openAll } = await openGated();
   const read = store.getRaw(0, 0, 0, 50);
@@ -753,17 +791,18 @@ test('an ambient job that finds a chunk running when its worker wakes owns the r
   openAll();
 });
 
-test('a job whose signal was already aborted claims no request it could not release', async () => {
+test('a seek whose signal was already aborted leaves the running plan alone', async () => {
   const { store, readable, started, openAll } = await openGated();
   const mark = readable.log.length;
   const first = new AbortController();
   const old = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, maxSteps: 1, signal: first.signal });
   await settled();
   assert.deepEqual(started, [30]);
-  const dead = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, maxSteps: 1, signal: AbortSignal.abort() });
+  const dead = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, seek: true, maxSteps: 1, signal: AbortSignal.abort() });
+  const request = readable.log.slice(mark).find(({ key }) => key.includes('/c/30/0/0/0'));
+  assert.equal(request.signal.aborted, false, 'the cancelled seek does not take over or cancel a request');
   first.abort();
   await settled();
-  const request = readable.log.slice(mark).find(({ key }) => key.includes('/c/30/0/0/0'));
   assert.equal(request.signal.aborted, true, 'nobody wants the request any more: it is cancelled');
   openAll();
   await Promise.all([old, dead]);
@@ -892,6 +931,25 @@ test('a background read is not demand: speculation goes on while it is pending, 
   abort.abort();
   openAll();
   await job;
+});
+
+test('a background read keeps a demand-started request alive without keeping it counted after the frame leaves', async () => {
+  const { store, started, release, openAll } = await openGated({ rate: 400_000, mature: true });
+  const frame = new AbortController();
+  const demand = store.getRaw(0, 0, 0, 50, { signal: frame.signal });
+  const chart = store.getRaw(0, 0, 0, 50, { background: true });
+  const prefetch = store.prefetch({ lod: 0, cells: [[0, 0]], t: 40, maxSteps: 1, playing: true, ambient: true });
+  await settled();
+  assert.deepEqual(started, [50]);
+  frame.abort();
+  await assert.rejects(demand, { name: 'AbortError' });
+  await settled();
+  assert.deepEqual(started, [50, 40], 'the chart still needs t=50 and coarse prefetch can proceed');
+  release(50);
+  assert.ok(await chart instanceof Uint16Array);
+  openAll();
+  await prefetch;
+  store.close();
 });
 
 test('a background read takes none of the speculative requests that prefetch holds to the link', async () => {

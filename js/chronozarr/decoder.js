@@ -49,6 +49,7 @@ const WINDOW_BUDGET_FRACTION = 0.9;
 const MAX_DEFAULT_WORKERS = 8;
 const DEFAULT_MAX_REQUESTS = 12;
 const PREFETCH_COOLDOWN_MS = 30000;
+const SEEK_ABORT = Object.assign(new Error('Prefetch request cancelled by a seek'), { name: 'AbortError' });
 /**
  * A shard whose index read disagreed with `shard_bytes` may have the root zarr.json re-read for it once per this interval,
  * and once a re-read has brought no new lengths (root unchanged, or unreadable) none is started for any shard for as long.
@@ -660,7 +661,8 @@ export class ChronoStore {
    *
    * With `background: true` the read is not one a frame waits for (the chart of a pixel over time): it still completes, but its
    * request is queued and decoded at the priority of prefetch, prefetch does not wait for it, and it is not charged to the speculative
-   * allowance, nor does it take one of the speculative requests that prefetch holds to the link. A seek does not cancel it. A demand read that joins it makes it a demand request, at demand priority and counted as demand until it settles.
+   * allowance, nor does it take one of the speculative requests that prefetch holds to the link. A seek does not cancel it. A demand
+   * read that joins it moves it to demand priority and counts it while the frame waits.
    */
   async getRaw(lod, row, col, t, options = {}) {
     const data = await this.#readRaw(lod, row, col, t, options);
@@ -873,12 +875,14 @@ export class ChronoStore {
     const level = this.level(lod);
     const wholeAxis = playing || loop;
     const movie = wholeAxis && !ambient;
-    if (movie) this.#movieJobs.add(signal);
     const withMasks = masks && this.hasMask;
-    if (!ambient) this.#noteActivity({ lod, cells, t, wholeAxis });
     const targets = new Set([t]);
     const horizon = wholeAxis ? null : this.#policy.horizonSteps;
     const queue = this.#windowPlan(level, cells, t, { direction, behindFactor, loop }, horizon, withMasks, maxSteps).map(([row, col, ct], rank) => ({ row, col, t: ct, rank, free: seek && targets.has(ct) }));
+    const result = { planned: queue.length, fetched: 0, skipped: 0, compressedOnly: 0, masks: 0, budgetReached: false, errors: [] };
+    if (signal.aborted) return result;
+    if (movie) this.#movieJobs.add(signal);
+    if (!ambient) this.#noteActivity({ lod, cells, t, wholeAxis });
     const inherited = new Set();
     for (const { row, col, t: ct, free } of queue) {
       const running = this.#liveEntry(chunkKey(lod, row, col, ct));
@@ -890,12 +894,11 @@ export class ChronoStore {
       // A seek fetches the chunks of t at demand priority: one that is already running as speculation is promoted. Like a request the
       // seek starts for itself, it counts until it settles or is aborted, whether or not a reader waits for it.
       if (running && free) {
-        this.#promote(running);
         running.seekTarget = true;
+        this.#promote(running);
       }
     }
     if (seek) this.#cancelSpeculative(signal);
-    const result = { planned: queue.length, fetched: 0, skipped: 0, compressedOnly: 0, masks: 0, budgetReached: false, errors: [] };
     let next = 0;
     // With no `concurrency` named, the link limits the speculative requests in flight (#speculativeSlots); a number is taken as it is.
     const limitInflight = concurrency === undefined;
@@ -917,35 +920,52 @@ export class ChronoStore {
           spent = 0;
           idleCharge = 0;
         };
-        // Another job or a read started this chunk while this worker waited: own its request and wait for it, as for a chunk that was
-        // running when the worker took it, so that the request is not cancelled with the job that started it and an ambient job hears of a cancel.
-        const joinRunning = async () => {
+        const requeue = () => {
+          const at = queue.findIndex((other, i) => i >= next && other.rank > item.rank);
+          queue.splice(at < 0 ? queue.length : at, 0, item);
+        };
+        // A chunk already cached or in flight still needs its mask. Own any running requests, and wait for demand to finish
+        // before starting a missing mask on its own.
+        const joinExisting = async (running) => {
+          if (running) this.#own(running, signal);
+          const maskKey = withMasks ? this.#auxKey('mask', lod, row, col, tt) : null;
+          let maskRunning = withMasks ? this.#liveEntry(maskKey) : null;
+          if (withMasks && !maskRunning && !this.#auxCache.has(maskKey) && !movie) {
+            while (this.#demandInflight > 0 && !signal.aborted) await this.#demandIdle(signal);
+            if (signal.aborted) return;
+            if (!running && !this.#cache.has(key)) {
+              running = this.#liveEntry(key);
+              // Demand evicted the data while the mask waited. Load the pair as a fresh chunk if nothing has replaced it.
+              if (!running) {
+                requeue();
+                return;
+              }
+              this.#own(running, signal);
+            }
+            maskRunning = this.#liveEntry(maskKey);
+          }
           result.skipped++;
           skipped = true;
-          const live = this.#liveEntry(key);
-          if (!live) return;
-          this.#own(live, signal);
-          const [data] = await this.#settle([live.promise]);
-          if (data && !signal.aborted && (!withMasks || this.peekMask(lod, row, col, tt))) onChunk?.(lod, row, col, tt);
+          if (maskRunning) this.#own(maskRunning, signal);
+          const maskStarted = withMasks && !maskRunning && this.#maskAllowed(wholeAxis) ? this.#prefetchMask(lod, row, col, tt, signal) : null;
+          if (running || maskRunning || maskStarted || inherited.has(key)) {
+            const data = await this.#settle(running, maskRunning ?? maskStarted, running ? undefined : this.#cache.decoded(key));
+            if (maskStarted) {
+              this.#chargeMask(maskStarted, wholeAxis);
+              result.masks++;
+            }
+            if (data && !signal.aborted && (!withMasks || this.peekMask(lod, row, col, tt))) onChunk?.(lod, row, col, tt);
+          }
         };
         try {
-          const running = this.#liveEntry(key);
-          if (this.#cache.has(key) || running || failed) {
+          let running = this.#liveEntry(key);
+          const cached = this.#cache.has(key);
+          if (failed || (cached && !running && !withMasks && !inherited.has(key))) {
             result.skipped++;
-            skipped = true;
-            if (failed) continue;
-            if (running) this.#own(running, signal);
-            const maskRunning = withMasks ? this.#liveEntry(this.#auxKey('mask', lod, row, col, tt)) : null;
-            if (maskRunning) this.#own(maskRunning, signal);
-            const maskStarted = withMasks && !maskRunning && (movie || this.#demandInflight === 0) && this.#maskAllowed(wholeAxis) ? this.#prefetchMask(lod, row, col, tt, signal) : null;
-            if (running || maskRunning || maskStarted || inherited.has(key)) {
-              const [data] = await this.#settle([running?.promise ?? this.#cache.decoded(key), (maskRunning ?? maskStarted)?.promise]);
-              if (maskStarted) {
-                this.#chargeMask(maskStarted, wholeAxis);
-                result.masks++;
-              }
-              if (data && !signal.aborted && (!withMasks || this.peekMask(lod, row, col, tt))) onChunk?.(lod, row, col, tt);
-            }
+            continue;
+          }
+          if (cached || running) {
+            await joinExisting(running);
             continue;
           }
           // A movie does not wait for demand reads at all: its buffer pump keeps one pending almost all the time, and holding the movie
@@ -954,8 +974,9 @@ export class ChronoStore {
           if (signal?.aborted) return;
           // While this worker waited, a demand read (or another job) may have started or finished this chunk: fetching it
           // again would send the same request twice.
-          if (this.#cache.has(key) || this.#liveEntry(key)) {
-            await joinRunning();
+          running = this.#liveEntry(key);
+          if (this.#cache.has(key) || running) {
+            await joinExisting(running);
             continue;
           }
           const meta = { kind: 'data', lod, row, col, t: tt };
@@ -978,9 +999,10 @@ export class ChronoStore {
               result.budgetReached = true;
               return;
             }
-            if (this.#cache.has(key) || this.#liveEntry(key)) {
+            running = this.#liveEntry(key);
+            if (this.#cache.has(key) || running) {
               giveBack();
-              await joinRunning();
+              await joinExisting(running);
               continue;
             }
             if (limitInflight || !movie) {
@@ -994,9 +1016,10 @@ export class ChronoStore {
                   return;
                 }
               }
-              if (this.#cache.has(key) || this.#liveEntry(key)) {
+              running = this.#liveEntry(key);
+              if (this.#cache.has(key) || running) {
                 giveBack();
-                await joinRunning();
+                await joinExisting(running);
                 continue;
               }
             }
@@ -1006,8 +1029,8 @@ export class ChronoStore {
           if (maskRunning) this.#own(maskRunning, signal);
           const maskStarted = withMasks && !maskRunning ? this.#prefetchMask(lod, row, col, tt, signal) : null;
           const maskEntry = maskRunning ?? maskStarted;
-          dataEntry = this.#start(key, meta, { background: !free, owner: signal ?? true });
-          const [data] = await this.#settle([dataEntry.promise, maskEntry?.promise]);
+          dataEntry = this.#start(key, meta, { background: !free, owner: signal, seekTarget: free });
+          const data = await this.#settle(dataEntry, maskEntry);
           if (maskStarted) {
             this.#chargeMask(maskStarted, wholeAxis);
             result.masks++;
@@ -1020,12 +1043,11 @@ export class ChronoStore {
           if (isAbort(error)) {
             // A seek cancelled this chunk under an ambient job, which plans once: it goes back to its place among the chunks that have
             // not started, and is counted when it is dealt with again.
-            if (ambient && !signal.aborted) {
+            if (ambient && !signal.aborted && error === SEEK_ABORT) {
               if (skipped) result.skipped--;
               // A request cancelled before its body arrived is charged again when the chunk is started again.
               if (dataEntry?.fetchedBytes === undefined) this.#speculative.spend(-spent);
-              const at = queue.findIndex((other, i) => i >= next && other.rank > item.rank);
-              queue.splice(at < 0 ? queue.length : at, 0, item);
+              requeue();
             }
             continue;
           }
@@ -1080,12 +1102,16 @@ export class ChronoStore {
     });
   }
 
-  /** Wait for every promise (absent ones count as resolved with undefined), then throw the first rejection or return the values. */
-  async #settle(promises) {
-    const outcomes = await Promise.allSettled(promises);
+  /** Wait for both parts, preserving which request a seek cancelled. Return the data chunk or throw the first rejection. */
+  async #settle(data, mask, cachedData) {
+    const outcomes = await Promise.allSettled([data?.promise ?? cachedData, mask?.promise]);
     const failure = outcomes.find((outcome) => outcome.status === 'rejected');
-    if (failure) throw failure.reason;
-    return outcomes.map((outcome) => outcome.value);
+    if (failure) {
+      const entry = failure === outcomes[0] ? data : mask;
+      if (entry?.abortedBySeek && isAbort(failure.reason)) throw SEEK_ABORT;
+      throw failure.reason;
+    }
+    return outcomes[0].value;
   }
 
   /** Start the mask of a chunk at speculative priority, unless it is cached, in flight, or would not be kept. Returns the in-flight entry or null. */
@@ -1260,7 +1286,7 @@ export class ChronoStore {
    * would stall its buffer.
    */
   #count(entry) {
-    if (entry.counted || [...entry.owners].some((owner) => this.#movieJobs.has(owner))) return;
+    if (entry.counted || (!entry.seekTarget && [...entry.owners].some((owner) => this.#movieJobs.has(owner)))) return;
     entry.counted = true;
     this.#demandBegin();
   }
@@ -1297,9 +1323,9 @@ export class ChronoStore {
    * one is decoded even where a prefetch would keep only its compressed bytes, and it is none of the speculative requests that prefetch
    * holds to the link (see #speculativeInflight).
    */
-  #start(key, meta, { background, owner = null, read = false }) {
+  #start(key, meta, { background, owner = null, read = false, seekTarget = false }) {
     const controller = new AbortController();
-    const entry = { controller, kind: meta.kind, waiters: 0, demandReaders: 0, sticky: false, owners: new Set(), releases: [], background, read, seekTarget: false, counted: false, priority: { value: background ? 1 : 0 }, promise: null };
+    const entry = { controller, kind: meta.kind, waiters: 0, demandReaders: 0, sticky: false, owners: new Set(), releases: [], background, read, seekTarget, counted: false, abortedBySeek: false, priority: { value: background ? 1 : 0 }, promise: null };
     this.#own(entry, owner);
     if (!background) this.#count(entry);
     entry.promise = this.#load(key, meta, entry)
@@ -1339,8 +1365,10 @@ export class ChronoStore {
     return entry && !entry.controller.signal.aborted ? entry : null;
   }
 
-  #cancelIfUnwanted(entry) {
-    if (entry.waiters === 0 && !entry.sticky && entry.owners.size === 0) this.#abortEntry(entry);
+  #cancelIfUnwanted(entry, bySeek = false) {
+    if (entry.controller.signal.aborted || entry.waiters > 0 || entry.sticky || entry.owners.size > 0) return;
+    entry.abortedBySeek = bySeek;
+    this.#abortEntry(entry);
   }
 
   /**
@@ -1359,7 +1387,7 @@ export class ChronoStore {
       if (!entry.background) continue;
       for (const owner of entry.owners) if (owner !== signal) entry.owners.delete(owner);
       this.#recount(entry);
-      this.#cancelIfUnwanted(entry);
+      this.#cancelIfUnwanted(entry, true);
     }
   }
 
@@ -1408,7 +1436,7 @@ export class ChronoStore {
     const decodedAt = performance.now();
     if (signal.aborted) {
       // The body arrived whole before the chunk was let go (a seek, a new plan): keep it as a speculative copy, which displaces nothing better.
-      if (retained && !held && !this.#closeController.signal.aborted) {
+      if (retained && !held && !this.#compact && retained.byteLength <= this.#cache.compressedLimit && !this.#closeController.signal.aborted) {
         this.#cache.insert(key, { kind, lod, row: meta.row, col: meta.col, t: meta.t }, { compressed: retained }, { background: true });
       }
       throw abortError();
@@ -1606,8 +1634,8 @@ export class ChronoStore {
         if (done) return;
         finish();
         reject(abortError());
-        // A joined speculative request stops counting when its last demand reader leaves; a seek's own timestep counts until it settles or is aborted.
-        if (entry.demandReaders === 0 && entry.background && !entry.seekTarget) this.#uncount(entry);
+        // A seek's own timestep counts until it settles or is aborted. Other requests stop counting when no frame waits for them.
+        if (entry.demandReaders === 0 && !entry.seekTarget) this.#uncount(entry);
         this.#cancelIfUnwanted(entry);
       };
       if (signal.aborted) {
