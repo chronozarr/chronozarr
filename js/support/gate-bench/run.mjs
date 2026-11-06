@@ -45,7 +45,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { startStaticServer } from '../static-server.js';
 import { BROWSER_ARGS, VIEWPORT, launchBrowser, measureFrameInterval, rendererInfo, withTimeout } from './browser.mjs';
-import { COMPACT_METRICS, METRICS, compareBuilds, summaryMarkdown } from './compare.js';
+import { COMPACT_METRICS, METRICS, compareBuilds, median, summaryMarkdown } from './compare.js';
 import { firstVisit } from './first-visit.mjs';
 import { guardsMode, guardsSummary, measureGuarded, readMachine, refuseNoisyMachine } from './guards.js';
 
@@ -85,7 +85,6 @@ const guardMode = guardsMode({ ignore: args['ignore-guards'] });
 const guards = guardMode.enabled;
 if (guards) refuseNoisyMachine(readMachine());
 
-const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 const load = () => os.loadavg()[0].toFixed(1);
 
 /** In the page: the cold opens of bench(), with the cache budgets of the compact pass (the viewer opens a store with the cap it is given). */

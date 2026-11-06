@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ATTEMPTS, RAF_MAX_MS, frameIntervalProblem, guardsEnabled, guardsMode, guardsSummary, loadLimit, machineProblems, measureGuarded, onBattery, refuseNoisyMachine } from '../support/gate-bench/guards.js';
+import { ATTEMPTS, RAF_MAX_MS, frameIntervalProblem, guardsMode, guardsSummary, loadLimit, machineProblems, measureGuarded, onBattery, refuseNoisyMachine } from '../support/gate-bench/guards.js';
 
 const BATTERY = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1234567)\t81%; discharging; 6:12 remaining present: true\n";
 const AC = "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1234567)\t100%; charged; 0:00 remaining present: true\n";
@@ -50,15 +50,9 @@ test('a median frame interval up to 18 ms is fine, a faster display too, and a s
   for (const bad of [18.1, 33.3, Number.NaN, undefined]) assert.match(frameIntervalProblem(bad, 'after'), /interval after the run was .* above 18 ms/, String(bad));
 });
 
-test('CI is never guarded, and a local run is guarded unless it says otherwise', () => {
-  assert.equal(guardsEnabled({ env: { CI: 'true' } }), false);
-  assert.equal(guardsEnabled({ env: {} }), true);
-  assert.equal(guardsEnabled({ env: {}, ignore: true }), false);
-  assert.equal(guardsEnabled({ env: { CI: '' } }), true);
-});
-
-test('the mode says why the guards are off, so that a summary does not look like a guarded one', () => {
+test('CI is never guarded, a local run is unless it says otherwise, and the mode says why the guards are off, so that a summary does not look like a guarded one', () => {
   assert.deepEqual(guardsMode({ env: {} }), { enabled: true, off: null });
+  assert.deepEqual(guardsMode({ env: { CI: '' } }), { enabled: true, off: null });
   assert.deepEqual(guardsMode({ env: { CI: 'true' } }), { enabled: false, off: 'CI' });
   assert.deepEqual(guardsMode({ env: {}, ignore: true }), { enabled: false, off: '--ignore-guards' });
   assert.deepEqual(guardsMode({ env: { CI: 'true' }, ignore: true }), { enabled: false, off: 'CI' });

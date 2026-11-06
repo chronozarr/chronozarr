@@ -27,8 +27,6 @@ export function guardsMode({ env = process.env, ignore = false } = {}) {
   return { enabled: true, off: null };
 }
 
-export const guardsEnabled = (options) => guardsMode(options).enabled;
-
 /** The line of a summary that says what was guarded; `discarded` is the number of runs that were discarded. */
 export function guardsSummary({ mode, cores, discarded }) {
   if (!mode.enabled) return `Guards: off (${mode.off}): the load, the power source and the animation frame interval were not checked, and no run was discarded for them`;
