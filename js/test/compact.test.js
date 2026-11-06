@@ -113,6 +113,31 @@ test('ensureRaw fills packed cache without expanding it and getRaw remains exact
   } finally { store.close(); }
 });
 
+test('readPixels samples packed chunks without cache admission or expansion', async () => {
+  const { openStore } = await import('../chronozarr/decoder.js');
+  const { buildSyntheticStore, defaultValues } = await import('../support/synthetic-store.js');
+  const readable = buildSyntheticStore({ nTime: 2, nBand: 2, height: 128, width: 128, chunk: 128, sharded: false });
+  const store = await openStore('memory://pixels-packed', { store: readable, workers: 0 });
+  try {
+    store.enableCompactCache();
+    store.evictionScore = ({ t }) => t;
+    await store.ensureRaw(0, 0, 0, 0);
+    const first = store.peekCompact(0, 0, 0, 0);
+    assert.ok(first);
+    first.unpack = () => { throw new Error('readPixels must not expand a packed chunk'); };
+    store.setBudgets({ totalBytes: first.byteLength });
+    const pixels = [[17, 9], [44, 13]];
+    const value = defaultValues('uint16');
+    const expected = (t) => pixels.map(([x, y]) => Uint16Array.of(value(t, 0, y, x), value(t, 1, y, x)));
+    assert.deepEqual(await store.readPixels(0, 0, 0, 0, pixels), expected(0));
+    const before = store.stats.loads.count;
+    assert.deepEqual(await store.readPixels(0, 0, 0, 1, pixels, { background: true }), expected(1));
+    assert.equal(store.stats.loads.count - before, 1);
+    assert.equal(store.hasCachedRaw(0, 0, 0, 1), false);
+    assert.equal(store.peekCompact(0, 0, 0, 0), first);
+  } finally { store.close(); }
+});
+
 test('getCoarseFrame without materialize loads packed chunks and leaves them packed, and by default still returns the values', async () => {
   const { openStore } = await import('../chronozarr/decoder.js');
   const { buildSyntheticStore } = await import('../support/synthetic-store.js');

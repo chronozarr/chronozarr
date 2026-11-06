@@ -133,9 +133,63 @@ test('a jump cancels what the pump has on the wire for the old position', async 
   // A jump to the last timestep, far from the scrub's: the three steps ahead of the old position are not wanted any more.
   const after = await page.evaluate((t) => {
     clearInterval(window.__keys);
-    window.chronozarr.viewer.goToTime(t);
+    const { viewer } = window.chronozarr;
+    viewer.goToTime(t);
+    viewer.renderNow();
     return window.__calls.filter((call) => call.t >= 12 && call.t <= 14).map(({ signal }) => signal.aborted);
   }, N_TIME - 1);
   for (let t = FIRST_HELD; t < N_TIME; t++) release(t);
   expect(after, 'the pump cancelled its three timesteps on the wire').not.toContain(false);
 });
+
+for (const mode of ['seek', 'release']) {
+  test(`a scrub ${mode} keeps the frame's pending data and mask requests`, async ({ page, servers, stores }) => {
+    const dir = path.join(stores.dir, 'scrub-handoff');
+    if (!existsSync(dir)) await writeTree(dir, buildSyntheticStore({ ...SPEC, mask: true }).files);
+    const url = `${servers.dataUrl}/scrub-handoff/`;
+    const [lod, t] = mode === 'seek' ? [1, FIRST_HELD] : [0, 2];
+    await page.clock.install();
+    await page.goto(`${servers.appUrl}/demo/index.html?store=${encodeURIComponent(url)}`);
+    await page.waitForFunction(() => window.chronozarr?.viewer?.paintedT === 0);
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
+    await page.evaluate(async ({ url, count }) => {
+      const { viewer } = window.chronozarr;
+      await viewer.loadStore(url, { workers: 0 });
+      const { store } = viewer;
+      store.bandwidthEstimate = () => 1e12;
+      await Promise.all(Array.from({ length: count }, (_, t) => [
+        store.ensureRaw(1, 0, 0, t),
+        store.getMask(1, 0, 0, t),
+      ]).flat());
+    }, { url, count: mode === 'seek' ? FIRST_HELD : N_TIME });
+
+    const requests = [];
+    let release;
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    await page.route((url) => new RegExp(`/${lod}/(data|mask)/c/${t}/`).test(url.pathname), async (route) => {
+      requests.push(new URL(route.request().url()).pathname);
+      await held;
+      await route.continue().catch(() => {});
+    });
+    await page.evaluate(() => {
+      const { viewer } = window.chronozarr;
+      viewer.goToTime(1);
+      viewer.goToTime(2);
+      viewer.renderNow();
+    });
+    await expect.poll(() => requests.length).toBe(lod === 0 ? 8 : 2);
+    const pending = [...requests];
+
+    await page.evaluate(({ mode, t }) => {
+      const { viewer } = window.chronozarr;
+      if (mode === 'seek') viewer.goToTime(t);
+      else viewer.endScrub();
+      viewer.renderNow();
+    }, { mode, t });
+    release();
+    await expect.poll(() => page.evaluate((t) => window.chronozarr.viewer.isTimestepReady(t), t)).toBe(true);
+    expect(requests).toEqual(pending);
+  });
+}

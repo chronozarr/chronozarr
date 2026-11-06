@@ -1,6 +1,6 @@
 // A click reads its pixel in the turn that the chunk lands in. The mask and the coverage of the pixel arrive later, and the
-// chunk can leave the cache while they do; the sidebar must still show the values that were read. And when a cache too small
-// for what loads at once has dropped the chunk before the pixel is read, the chunk is read again.
+// chunk can leave the cache while they do; the sidebar must still show the values that were read. A chart also samples chunks
+// that lose cache admission without requesting them again.
 //
 // A single-cell store whose cache holds one decoded chunk.
 
@@ -70,32 +70,25 @@ test('the sidebar shows the pixel that was read although its chunk left the cach
   expect((await readSidebar(page)).Value).toEqual([['depth', expectedValue()]]);
 });
 
-test('a chunk that a cache of one chunk pushes out the moment it lands is read again for the click and the chart', async ({ page, servers, stores }) => {
-  await openWithOneChunk({ page, servers, stores });
-  await page.evaluate(() => {
-    const { store } = window.chronozarr.viewer;
-    const ensureRaw = store.ensureRaw.bind(store);
-    const getRaw = store.getRaw.bind(store);
-    // The viewer reads its pixel after getRaw only when the chunk is gone: count those reads.
-    window.__rereads = [];
-    store.getRaw = (lod, row, col, t, options) => {
-      window.__rereads.push(t);
-      return getRaw(lod, row, col, t, options);
-    };
-    // The click's read of timestep 0 resolves after timestep 1 has landed, which pushes timestep 0 out.
-    let pushed = false;
-    store.ensureRaw = async (lod, row, col, t, options) => {
-      await ensureRaw(lod, row, col, t, options);
-      if (t === 0 && !pushed) {
-        pushed = true;
-        await ensureRaw(lod, row, col, 1, options);
-      }
-    };
+test('the chart fetches each cold timestep once when the cache keeps the displayed chunk', async ({ page, servers, stores }) => {
+  const requested = [];
+  await page.route(`${servers.dataUrl}/**/data/c/**`, async (route) => {
+    requested.push(Number(/\/data\/c\/(\d+)\//.exec(route.request().url())[1]));
+    await route.continue().catch(() => {});
   });
+  await openWithOneChunk({ page, servers, stores });
+  const cached = () => page.evaluate(() => {
+    const { store } = window.chronozarr.viewer;
+    return store.times.flatMap((_, t) => store.hasCachedRaw(0, 0, 0, t) ? [t] : []);
+  });
+  await page.evaluate((chunkBytes) => window.chronozarr.viewer.store.setBudgets({ totalBytes: chunkBytes, decodedBytes: chunkBytes, compressedBytes: 0 }), CHUNK_BYTES);
+  expect(await cached()).toEqual([0]);
+  requested.length = 0;
 
   await clickStorePixel(page, 50, 40);
   await expect(page.locator('#sidebar-content')).toContainText('50, 40');
   expect((await readSidebar(page)).Value, 'the pixel the click read').toEqual([['depth', expectedValue()]]);
-  expect(await page.evaluate(() => window.__rereads), 'the chunk was read again for the pixel').toContain(0);
   await expect(page.locator('#chart-status'), 'every timestep charted, none failed').toHaveText(/^4 of 4 timesteps( · \d+ gap-filled)? · click to jump$/);
+  expect(requested.sort((a, b) => a - b)).toEqual([1, 2, 3]);
+  expect(await cached(), 'cold chart chunks did not evict the displayed chunk').toEqual([0]);
 });

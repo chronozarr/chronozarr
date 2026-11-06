@@ -1,8 +1,5 @@
-// The chart of a clicked pixel reads one chunk per timestep of its cell. Those reads wait while the user scrubs or plays, and go
-// one timestep at a time while the frame they stopped on loads: they would queue next to the chunks of the frames the user is
-// waiting for. The chart reads in batches again when the scrub or the movie is over and the frame is in. While it waits it takes
-// the timesteps that the scrub or the movie has put in the cache, so its count advances with them (no fetch of its own). Its reads
-// are background reads: they do not hold the reader's idle prefetch back.
+// The chart of a clicked pixel reads one chunk per timestep of its cell. It takes timesteps from the cache while a movie
+// plays or a scrub runs, and reads one missing timestep in the background if the cache stops providing them.
 //
 // A single-cell store of 60 timesteps with every chunk answered after 120 ms, so the chart's batches of four take a good
 // second to cover it and a scrub of a second and a half falls inside that time.
@@ -29,18 +26,19 @@ async function writeChartStore(dir) {
 const chartLoaded = (page) => page.evaluate(() => Number(/(\d+) of \d+ timesteps/.exec(document.getElementById('chart-status').textContent)?.[1] ?? NaN));
 
 /**
- * Record, from now on, the timesteps asked for through ensureRaw: the chart's reads, the frame of a scrub and a movie's (the reader's idle
- * prefetch fills the cache without it). A chart that is not held reads nearest-first from the timestep it was clicked at, about 33 a second here.
+ * Record requests from the chart and the visible frame. Prefetch does not call either of these methods.
  */
 const watchReads = (page) =>
   page.evaluate(() => {
     const { store } = window.chronozarr.viewer;
-    const ensureRaw = store.ensureRaw.bind(store);
     window.__asked = [];
-    store.ensureRaw = (lod, row, col, t, options) => {
-      window.__asked.push(t);
-      return ensureRaw(lod, row, col, t, options);
-    };
+    for (const method of ['ensureRaw', 'readPixels']) {
+      const read = store[method].bind(store);
+      store[method] = (...args) => {
+        window.__asked.push(args[3]);
+        return read(...args);
+      };
+    }
   });
 
 /** How far ahead of the timestep on screen the farthest timestep asked for lies. */
@@ -68,24 +66,24 @@ test.describe('chart over a slow single-cell store', () => {
     await expect(page.locator('#chart-status')).toContainText('loading');
   });
 
-  test('the chart does not read while the user scrubs, and takes what is in the cache: it is done while the scrub goes on', async ({ page }) => {
+  test('the chart takes what is in the cache and finishes while the scrub goes on', async ({ page }) => {
     await watchReads(page);
     // Arrow keys 90 ms apart, pressed by a timer in the page so that a busy runner cannot stretch the gaps past the 300 ms of a scrub.
     await page.evaluate(() => {
       window.__keys = setInterval(() => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })), 90);
     });
     // The reader's idle prefetch brings the other timesteps into the cache while the chart waits; the chart's own reads would have asked for them.
-    await expect(page.locator('#chart-status')).toContainText(`${N_TIME} of ${N_TIME} timesteps`, { timeout: 4000 });
+    await expect(page.locator('#chart-status')).toHaveText(`${N_TIME} of ${N_TIME} timesteps · click to jump`, { timeout: 4000 });
     const ahead = await farthestAhead(page);
     await page.evaluate(() => clearInterval(window.__keys));
     expect(ahead, 'timesteps asked for beyond the one on screen while the scrub went on').toBeLessThan(CHART_BATCH * 3);
   });
 
-  test('the chart does not read while a movie plays, and takes what is in the cache: it is done while the movie plays', async ({ page }) => {
+  test('the chart takes what is in the cache and finishes while the movie plays', async ({ page }) => {
     await watchReads(page);
     await page.keyboard.press('Space');
     await page.waitForFunction(() => window.chronozarr.viewer.playback.playing);
-    await expect(page.locator('#chart-status')).toContainText(`${N_TIME} of ${N_TIME} timesteps`, { timeout: 10_000 });
+    await expect(page.locator('#chart-status')).toHaveText(`${N_TIME} of ${N_TIME} timesteps · click to jump`, { timeout: 10_000 });
     expect(await page.evaluate(() => window.chronozarr.viewer.playback.playing), 'the movie is still playing').toBe(true);
     // The movie asks for its next frames (a buffer of a few seconds at 4 steps a second).
     expect(await farthestAhead(page), 'timesteps asked for beyond the one on screen while the movie played').toBeLessThan(N_TIME / 2);
@@ -96,18 +94,17 @@ test.describe('chart over a slow single-cell store', () => {
     lastTimestep.promise = new Promise((resolve) => {
       lastTimestep.release = resolve;
     });
-    // Count the chart's reads in flight: every ensureRaw but the one for the last timestep, which is the loading frame's.
-    await page.evaluate((last) => {
+    // Count only the chart's reads in flight.
+    await page.evaluate(() => {
       const { store } = window.chronozarr.viewer;
-      const ensureRaw = store.ensureRaw.bind(store);
+      const readPixels = store.readPixels.bind(store);
       const reads = { inflight: 0, max: 0 };
-      store.ensureRaw = (lod, row, col, t, options) => {
-        if (t === last) return ensureRaw(lod, row, col, t, options);
+      store.readPixels = (...args) => {
         reads.max = Math.max(reads.max, ++reads.inflight);
-        return ensureRaw(lod, row, col, t, options).finally(() => reads.inflight--);
+        return readPixels(...args).finally(() => reads.inflight--);
       };
       window.__reads = reads;
-    }, N_TIME - 1);
+    });
     // A jump to the last timestep: its frame cannot be drawn until its chunk arrives. The scrub of the jump is over 300 ms later,
     // and the batch of four that was in flight lands within a chunk delay.
     await page.evaluate((t) => window.chronozarr.viewer.goToTime(t), N_TIME - 1);
@@ -126,6 +123,36 @@ test.describe('chart over a slow single-cell store', () => {
     await expect(page.locator('#chart-status')).toContainText(`${N_TIME} of ${N_TIME} timesteps`, { timeout: 30_000 });
     expect(await page.evaluate(() => window.__reads.max), 'chart reads in flight once the frame was in').toBeGreaterThan(1);
   });
+});
+
+test('a chart with warm imagery reads cold coverage and finishes while playback continues', async ({ page, servers, stores }) => {
+  const nTime = 4;
+  const dir = path.join(stores.dir, 'chart-coverage');
+  await writeTree(dir, buildSyntheticStore({ ...SPEC, nTime, coverage: true }).files);
+  await page.goto(`${servers.appUrl}/demo/index.html?store=${encodeURIComponent(`${servers.dataUrl}/chart-coverage/`)}`);
+  await page.waitForFunction(() => window.chronozarr?.viewer?.paintedT === 0);
+  const state = await page.evaluate(async () => {
+    const { viewer } = window.chronozarr;
+    const { store } = viewer;
+    await Promise.all(store.times.map((_, t) => store.ensureRaw(0, 0, 0, t)));
+    const coverage = store.getCoverage.bind(store);
+    const reads = { count: 0, inflight: 0, max: 0 };
+    store.getCoverage = (lod, row, col, t, options) => {
+      if (!options?.background) return coverage(lod, row, col, t, options);
+      reads.count++;
+      reads.max = Math.max(reads.max, ++reads.inflight);
+      return coverage(lod, row, col, t, options).finally(() => reads.inflight--);
+    };
+    window.__coverageReads = reads;
+    viewer.play();
+    return { playing: viewer.playback.playing, warmCoverage: store.times.some((_, t) => store.peekCoverage(0, 0, 0, t)) };
+  });
+  expect(state).toEqual({ playing: true, warmCoverage: false });
+  const box = await page.locator('#gl-canvas').boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator('#chart-status')).toHaveText(/^4 of 4 timesteps( · \d+ gap-filled)? · click to jump$/, { timeout: 15_000 });
+  expect(await page.evaluate(() => window.chronozarr.viewer.playback.playing)).toBe(true);
+  expect(await page.evaluate(() => window.__coverageReads)).toEqual({ count: nTime - 1, inflight: 0, max: 1 });
 });
 
 test.describe('chart reads and the reader\'s idle prefetch', () => {
