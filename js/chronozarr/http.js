@@ -7,6 +7,28 @@ import { redactText, redactUrl } from './redact.js';
 export const abortError = () => new DOMException('Aborted', 'AbortError');
 export const isAbort = (error) => error?.name === 'AbortError';
 
+/**
+ * A signal that aborts when any of `signals` does, with the reason of the one that aborted (the first of those already aborted, in
+ * order). AbortSignal.any exists from Chrome 116, Firefox 124 and Safari 17.4; where it does not, the signal is an AbortController's and
+ * a listener on every input feeds it. There a listener on an input that lives long (a store's close signal) stays until one of the
+ * inputs aborts, so each call leaves one behind.
+ */
+export function anySignal(signals) {
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any(signals);
+  const controller = new AbortController();
+  const aborted = signals.find((signal) => signal.aborted);
+  if (aborted) {
+    controller.abort(aborted.reason);
+    return controller.signal;
+  }
+  const onAbort = (event) => {
+    for (const signal of signals) signal.removeEventListener('abort', onAbort);
+    controller.abort(event.target.reason);
+  };
+  for (const signal of signals) signal.addEventListener('abort', onAbort);
+  return controller.signal;
+}
+
 /** A request to the store that failed for good: carries the URL, HTTP status (if any) and attempt count. */
 export class FetchError extends Error {
   constructor({ url, method, range, status, statusText, cause, attempts }) {
@@ -155,6 +177,7 @@ export class HttpStore {
     this.#network.requests++;
     this.#bandwidth.begin();
     let received = 0;
+    let aborted = false;
     try {
       const response = await this.#fetch(request);
       if (response.status === 416 && rangeMiss) {
@@ -180,10 +203,14 @@ export class HttpStore {
       }
       return { ok: true, status: response.status, bytes };
     } catch (error) {
-      if (isAbort(error)) throw error;
+      if (isAbort(error)) {
+        aborted = true;
+        throw error;
+      }
       return { ok: false, cause: error };
     } finally {
-      this.#bandwidth.end(received);
+      if (aborted) this.#bandwidth.abort();
+      else this.#bandwidth.end(received);
     }
   }
 }
@@ -219,13 +246,18 @@ export class LimitedReadable {
       this.#network.requests++;
       this.#bandwidth.begin();
       let received = 0;
+      let aborted = false;
       try {
         const bytes = await read();
         received = bytes?.length ?? 0;
         this.#network.bytes += received;
         return bytes;
+      } catch (error) {
+        aborted = isAbort(error);
+        throw error;
       } finally {
-        this.#bandwidth.end(received);
+        if (aborted) this.#bandwidth.abort();
+        else this.#bandwidth.end(received);
       }
     });
   }
