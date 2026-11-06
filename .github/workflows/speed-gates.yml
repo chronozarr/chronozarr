@@ -3,7 +3,7 @@ name: Speed gates
 # The speed gates of the viewer (CLAUDE.md), the viewer of the pull request against the viewer of its base, built and
 # measured in the same job (js/support/gate-bench/run.mjs). A workflow of its own, not a job of ci.yml: it needs a base to
 # compare with, which a pull request has and a push does not; only a change under js/ can move the viewer, and ci.yml has
-# no path filter; and its 15 minutes run beside CI rather than in it, and can be re-run alone.
+# no path filter; and its 7 to 9 minutes of measuring run beside CI rather than in it, and can be re-run alone.
 
 on:
   pull_request:

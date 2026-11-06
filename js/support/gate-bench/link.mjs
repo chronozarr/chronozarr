@@ -40,7 +40,7 @@
 // browser was not drawing at 60 Hz (guards.js). It samples the load while each run goes, and the summary marks a run whose
 // load rose above the limit as invalid. `--ignore-guards` measures anyway.
 //
-// Not a CI job: five scenarios on two links, three pairs of two builds, is about 30 minutes (CONTRIBUTING.md).
+// Not a CI job: five scenarios on two links, three pairs of two builds, is about 30 minutes.
 
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
