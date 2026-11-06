@@ -10,6 +10,7 @@
 // mercator projection.
 
 import { openStore } from '../chronozarr/decoder.js';
+import { anySignal } from '../chronozarr/http.js';
 import { redactText } from '../chronozarr/redact.js';
 import { COLORMAPS, colormapIndex } from '../shared/colormaps.js';
 import { channelBounds, computeStretchLo, describePixel, displayMode, dualPolRanges, findBand, inputConversion, inputIndices, nodataToCompare, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../shared/products.js';
@@ -28,6 +29,8 @@ const FAILURE_COOLDOWN_MS = 5000; // a cell whose fetch failed is left alone thi
 const MESH_CACHE_LIMIT = 512;
 const STRETCH_SAMPLES_PER_CELL = 300;
 const PREFETCH_DELAY_MS = 250;
+const STALE_LOAD_GRACE_MS = 400; // a load that nothing in view needs is cancelled only after this long, so a pan back or a zoom wobble keeps it, and only while a load that the view needs is pending
+const STAND_IN_FINER_LEVELS = 2; // levels below the target that a stand-in may come from: 4 + 16 cell lookups at most per cell and frame
 const SEEK_DISTANCE = 4; // a time change of more than this many steps drops queued speculative fetches (as the viewer does)
 const EVENTS = ['open', 'loading', 'ready', 'error'];
 
@@ -114,6 +117,7 @@ export class ChronozarrLayer {
   #geo = null;
   #meshes = new Map();
   #t;
+  #direction = 1; // sign of the last time change: the way the viewer is scrubbing, which the prefetch window favours
   #productId;
   #band;
   #colormap;
@@ -125,15 +129,18 @@ export class ChronozarrLayer {
   #bandInfo = null;
   #frame = 0;
   #state = 'loading';
-  #pending = new Set();
+  #pending = new Map(); // loads in flight by key: a cell's load maps to {controller, unwantedSince}, the sample recovery to null
   #failed = new Map();
   #shown = new Map();
+  #levelT = new Map(); // the latest requested timestep that actually drew at each target level
+  #lastPaintedT = null;
   #controller = new AbortController();
   #openController = new AbortController();
   #retired = [];
   #lastView = { lod: 0, cells: [] };
   #reported = new Set();
   #prefetchTimer = null;
+  #graceTimer = null;
   #prefetchController = null;
   #prefetchedAt = 0;
   #seeded = false;
@@ -233,7 +240,8 @@ export class ChronozarrLayer {
 
   /**
    * Listen for 'open' (store metadata read), 'loading' (the view needs data), 'ready' (everything the view needs is
-   * on the GPU; fires again after every pan, zoom or time change that had to wait for data) and 'error'
+   * on the GPU and no load is running, including a load that nothing in view needs any more; fires again after every
+   * pan, zoom or time change that had to wait for data) and 'error'
    * (`event.error`; the layer keeps running). Returns a function that removes the listener.
    */
   on(type, listener) {
@@ -252,6 +260,7 @@ export class ChronozarrLayer {
       throw new RangeError(`ChronozarrLayer.setTime: timestep must be an integer in 0..${this.#store ? this.#store.times.length - 1 : 'n-1'}, got ${t}`);
     }
     if (t === this.#t) return;
+    this.#direction = t > this.#t ? 1 : -1;
     this.#t = t;
     this.#retired.push(this.#controller);
     this.#controller = new AbortController();
@@ -381,7 +390,7 @@ export class ChronozarrLayer {
     let store;
     try {
       const options = this.#options.storeOptions ?? {};
-      const signal = options.signal ? AbortSignal.any([options.signal, this.#openController.signal]) : this.#openController.signal;
+      const signal = options.signal ? anySignal([options.signal, this.#openController.signal]) : this.#openController.signal;
       store = await openStore(this.#options.url, { ...options, signal });
       if (this.#disposed) {
         store.close();
@@ -540,6 +549,7 @@ export class ChronozarrLayer {
     if (this.#disposed) return;
     this.#disposed = true;
     clearTimeout(this.#prefetchTimer);
+    clearTimeout(this.#graceTimer);
     this.#prefetchController?.abort();
     this.#controller.abort();
     this.#openController.abort();
@@ -695,12 +705,16 @@ export class ChronozarrLayer {
 
     const lod = selectLod({ mercatorPerTexel0: this.#geo.mercatorPerTexel0, levelCount: store.levels.length, zoom: this.#map.getZoom(), bias: this.#options.lodBias });
     const visible = this.#visibleCells(lod, matrix);
+    // Drop stale holds only after a different timestep actually drew elsewhere. A zoom wobble before data arrives
+    // still needs the previous frame when it returns to the original level.
+    if (lod !== this.#lastView.lod && this.#levelT.get(lod) !== this.#lastPaintedT) {
+      for (const key of this.#shown.keys()) if (key.startsWith(`${lod}/`)) this.#shown.delete(key);
+    }
     this.#lastView = { lod, cells: visible.map((c) => [c.row, c.col]) };
     if (!this.#seeded) this.#seeded = this.#seedCoarse(lod, matrix);
 
     const fine = [];
-    const fallback = [];
-    let allResident = true;
+    const missing = [];
     for (const cell of visible) {
       const slots = this.#slotsFor(lod, cell.row, cell.col, t, true);
       if (slots) {
@@ -708,19 +722,27 @@ export class ChronozarrLayer {
         this.#shown.set(`${lod}/${cell.row}/${cell.col}`, t);
         continue;
       }
-      allResident = false;
+      missing.push(cell);
       if (!this.#seeding) this.#request(lod, cell.row, cell.col, t);
-      const stand = this.#standIn(cell, lod, t);
-      if (stand) fallback.push(stand);
     }
+    this.#cancelStale(lod, visible, t);
+    // A finer stand-in can protect several slots for this frame. Give every ready target cell its slot first.
+    const fallback = missing.flatMap((cell) => this.#standIn(cell, lod, t));
     fallback.sort((a, b) => b.lod - a.lod);
 
     const view = this.#productView();
-    if (allResident && fine.length > 0) {
+    if (missing.length === 0 && fine.length > 0) {
       this.#measureView(lod, fine, t, view);
     }
 
-    if (fine.length + fallback.length > 0) this.#draw(gl, matrix, [...fallback, ...fine], this.#productView());
+    if (fine.length + fallback.length > 0) {
+      this.#draw(gl, matrix, [...fallback, ...fine], this.#productView());
+      // Stand-ins from other levels also show the requested timestep. Same-level stand-ins hold an older one.
+      if (fine.length > 0 || fallback.some((item) => item.lod !== lod)) {
+        this.#levelT.set(lod, t);
+        this.#lastPaintedT = t;
+      }
+    }
 
     for (const controller of this.#retired.splice(0)) controller.abort();
     if (this.#deferredUpload) this.#repaint();
@@ -832,23 +854,47 @@ export class ChronozarrLayer {
   }
 
   /**
-   * What to paint for a cell whose data for timestep t is not on the GPU yet: the last timestep shown there (time
-   * changes hold the previous frame), else the same area from a coarser level.
+   * What to paint for a cell whose data for timestep t is not on the GPU yet, as a list of items: the last timestep
+   * shown there (time changes hold the previous frame), else the same area from a coarser level, else the cells of a
+   * finer level that cover it and are still on the GPU (the frame that a zoom out just left; up to two levels finer). Empty when there is nothing.
    */
   #standIn(cell, lod, t) {
     const shownT = this.#shown.get(`${lod}/${cell.row}/${cell.col}`);
     if (shownT !== undefined && shownT !== t) {
       const slots = this.#slotsFor(lod, cell.row, cell.col, shownT, false);
-      if (slots) return { lod, row: cell.row, col: cell.col, extent: cell.extent, rect: { x0: 0, y0: 0, x1: cell.footprint.width, y1: cell.footprint.height }, slots };
+      if (slots) return [{ lod, row: cell.row, col: cell.col, extent: cell.extent, rect: { x0: 0, y0: 0, x1: cell.footprint.width, y1: cell.footprint.height }, slots }];
     }
     const store = this.#store;
     const level = store.levels[lod];
     for (let coarse = lod + 1; coarse < store.levels.length; coarse++) {
       const footprint = coarseFootprint({ lod, row: cell.row, col: cell.col, extent: cell.footprint }, coarse, { width: level.chunkWidth, height: level.chunkHeight }, (r, c) => this.#footprint(coarse, r, c));
       const slots = this.#slotsFor(coarse, footprint.row, footprint.col, t, true);
-      if (slots) return { lod: coarse, row: footprint.row, col: footprint.col, extent: store.cellExtent(coarse, footprint.row, footprint.col), rect: footprint.rect, slots };
+      if (slots) return [{ lod: coarse, row: footprint.row, col: footprint.col, extent: store.cellExtent(coarse, footprint.row, footprint.col), rect: footprint.rect, slots }];
     }
-    return null;
+    for (let finer = lod - 1; finer >= Math.max(0, lod - STAND_IN_FINER_LEVELS); finer--) {
+      const items = this.#residentWithin(cell, lod, finer, t);
+      if (items.length > 0) return items;
+    }
+    return [];
+  }
+
+  /**
+   * The cells of a finer level that lie inside a cell and are on the GPU at timestep t, each drawn whole. They tile
+   * the cell without overlap, and a missing one leaves its part blank. Nothing is uploaded for them.
+   */
+  #residentWithin(cell, lod, finer, t) {
+    const level = this.#store.levels[finer];
+    const scale = 2 ** (lod - finer);
+    const items = [];
+    for (let row = cell.row * scale; row < Math.min((cell.row + 1) * scale, level.gridRows); row++) {
+      for (let col = cell.col * scale; col < Math.min((cell.col + 1) * scale, level.gridCols); col++) {
+        const slots = this.#slotsFor(finer, row, col, t, false);
+        if (!slots) continue;
+        const { width, height } = this.#footprint(finer, row, col);
+        items.push({ lod: finer, row, col, extent: this.#store.cellExtent(finer, row, col), rect: { x0: 0, y0: 0, x1: width, y1: height }, slots });
+      }
+    }
+    return items;
   }
 
   /** What the shader needs for the current product: inputs, stored-to-physical conversion, and how the values reach the screen. */
@@ -939,7 +985,7 @@ export class ChronozarrLayer {
     if (failedAt !== undefined && performance.now() - failedAt < FAILURE_COOLDOWN_MS) return;
     const { signal } = this.#controller;
     const store = this.#store;
-    this.#pending.add('samples');
+    this.#pending.set('samples', null);
     const collect = async () => {
       const samples = [];
       for (const { row, col, extent } of items) {
@@ -1018,10 +1064,11 @@ export class ChronozarrLayer {
     const failedAt = this.#failed.get(key);
     if (failedAt !== undefined && performance.now() - failedAt < FAILURE_COOLDOWN_MS) return;
     const store = this.#store;
-    const { signal } = this.#controller;
+    const controller = new AbortController();
+    const signal = anySignal([controller.signal, this.#controller.signal]);
     const reads = [store.getRaw(lod, row, col, t, { signal })];
     if (store.hasMask) reads.push(store.getMask(lod, row, col, t, { signal }));
-    this.#pending.add(key);
+    this.#pending.set(key, { controller, unwantedSince: null });
     Promise.all(reads).then(
       () => {
         this.#pending.delete(key);
@@ -1039,6 +1086,58 @@ export class ChronozarrLayer {
         this.#repaint();
       },
     );
+  }
+
+  /**
+   * Cancels the loads that nothing in view needs, so the loads of the cells in view do not queue behind them. A load is
+   * needed by a visible cell at the current level and timestep, or by a coarser level that stands in for one. It is
+   * cancelled once it has been unneeded for STALE_LOAD_GRACE_MS, measured between frames, so a pan back or a wobble across a
+   * level boundary keeps it. It is cancelled only while a load that the view needs is pending, whether the reader has
+   * started it or still holds it in its queue: with none, nothing waits behind the stale load, and cancelling it would
+   * throw away a half-transferred chunk that a pan back finds in the cache. No frame follows a view that has settled, so
+   * one timer asks for a frame when the first grace ends. The prefetch is cancelled with it: the reader keeps a request
+   * that a prefetch owns, and that plan was made for a view that is gone; the next 'ready' plans it again.
+   */
+  #cancelStale(lod, visible, t) {
+    if (this.#pending.size === 0) return;
+    const now = performance.now();
+    const wanted = new Set();
+    for (const cell of visible) {
+      for (let level = lod; level < this.#store.levels.length; level++) {
+        const scale = 2 ** (level - lod);
+        wanted.add(chunkId(level, Math.floor(cell.row / scale), Math.floor(cell.col / scale), t));
+      }
+    }
+    const stale = [];
+    let wantedPending = false;
+    for (const [key, load] of this.#pending) {
+      if (!load) continue;
+      if (wanted.has(key)) {
+        load.unwantedSince = null;
+        wantedPending = true;
+      } else {
+        load.unwantedSince ??= now;
+        stale.push(load);
+      }
+    }
+    if (!wantedPending) return;
+    let soonest = Infinity;
+    for (const load of stale) {
+      const remaining = STALE_LOAD_GRACE_MS - (now - load.unwantedSince);
+      if (remaining > 0) {
+        soonest = Math.min(soonest, remaining);
+        continue;
+      }
+      load.controller.abort();
+      this.#prefetchController?.abort();
+    }
+    // A few ms late, so the clock has passed the end of the grace when the frame reads it.
+    if (soonest < Infinity && this.#graceTimer === null) {
+      this.#graceTimer = setTimeout(() => {
+        this.#graceTimer = null;
+        this.#repaint();
+      }, soonest + 10);
+    }
   }
 
   /** Once the view has settled, let the reader fill its caches around t for the visible cells (store.prefetch). */
@@ -1060,17 +1159,10 @@ export class ChronozarrLayer {
     const report = (error) => {
       if (!isAbort(error)) this.#emit('error', { error, prefetch: true });
     };
+    // The reader fetches each mask with its chunk, as a speculative read under the same allowances; a mask requested after
+    // the chunk landed would be a demand read that holds the prefetch workers back.
     store
-      .prefetch({
-        lod,
-        cells,
-        t: this.#t,
-        seek,
-        signal: controller.signal,
-        onChunk: (chunkLod, row, col, t) => {
-          if (store.hasMask) store.getMask(chunkLod, row, col, t, { signal: controller.signal }).catch(report);
-        },
-      })
+      .prefetch({ lod, cells, t: this.#t, direction: this.#direction, seek, masks: store.hasMask, signal: controller.signal })
       .then((result) => {
         if (result.errors.length > 0) this.#emit('error', { error: result.errors[0].error, prefetch: true, errors: result.errors });
       }, report);

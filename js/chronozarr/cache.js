@@ -76,6 +76,12 @@ export class ChunkCache {
     return this.#entries.has(key);
   }
 
+  /** Forget the compressed bytes of a key (they do not decode); its decoded array, if it has one, stays. */
+  dropCompressed(key) {
+    const entry = this.#entries.get(key);
+    if (entry?.compressed) this.#drop(entry, 'compressed', false);
+  }
+
   /** The decoded array for a key (counts as a use), or undefined. */
   decoded(key) {
     const data = this.resident(key);

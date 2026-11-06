@@ -38,4 +38,21 @@ node js/support/gate-bench/store.mjs /tmp/gates/store
 node js/support/gate-bench/run.mjs --base /tmp/gates/viewers/base --head /tmp/gates/viewers/head --store /tmp/gates/store
 ```
 
-The runner alternates the two builds in pairs of runs, each a new headless Chromium with software WebGL, and compares each pair on its own. The store is 36 cells at level 0. `--gpu metal` draws on the GPU of a Mac instead. Timings on a machine that other work loads are noise: check `uptime` first. Local and loopback results do not measure CDN performance.
+The runner alternates the two builds in pairs of runs, each a new headless Chromium with software WebGL, and compares each pair on its own. The store is 36 cells at level 0. `--gpu metal` draws on the GPU of a Mac instead. Local and loopback results do not measure CDN performance.
+
+`--cache compact` runs the comparison with the packed cache that the public demo store gets and the gate store's default pass never exercises; the workflow does not run it, so use it for a change to cache packing or to the compact shader:
+
+```bash
+node js/support/gate-bench/run.mjs --cache compact --base /tmp/gates/viewers/base --head /tmp/gates/viewers/head --store /tmp/gates/store
+```
+
+Before each counted run of the default pass, a first visit in a browser with an empty profile adds its marks (first chunk request, shader compile, decode worker start, first frame) to the summary for information; no gate reads them.
+
+A local run of either runner refuses to start when the 1-minute load is above half the logical cores or the Mac is on battery power. It discards a run whose browser did not draw at 60 Hz. If the load exceeds the limit during a counted run, the runner saves raw records when `--out` is set, skips the comparison, and exits with status 3. `--ignore-guards` measures anyway. CI is unguarded (`js/support/gate-bench/guards.js`).
+
+`js/support/gate-bench/link.mjs` measures the same two builds on throttled links (a drag of the timeline, a far jump, playback), for a change to what the viewer fetches or shows while it waits; its flags are provisional (see the script header) and it is not a CI job. It needs `openssl` (and `--gpu swiftshader` off a Mac) and a store with more timesteps than the viewer holds, which `store.mjs --times` writes:
+
+```bash
+node js/support/gate-bench/store.mjs /tmp/gates/store-long --times 48
+node js/support/gate-bench/link.mjs --base /tmp/gates/viewers/base --head /tmp/gates/viewers/head --store /tmp/gates/store-long --out /tmp/gates/link.json
+```
