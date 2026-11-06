@@ -46,16 +46,23 @@ const waitForStoreInMemory = (page) =>
 /**
  * Make the animation frames of the page the test's own: a frame runs when `window.runFrame()` is called and not before, and
  * `runFrame` returns after the tasks that the frame queued have run. The page is left with `window.frames` (frames run so
- * far) and `window.fillSlices`, the slices of the GPU fill (tasks that uploaded to the GPU in the background) counted per
- * frame: index n holds those that ran after n frames and before frame n + 1. Each background upload takes 1.5 ms more,
- * as on a slow GPU, so that the window is many slices of 4 ms and not one.
+ * far), `window.frameStarts` (the time each of them began, index n for frame n) and `window.fillSlices`, the slices of
+ * the GPU fill (tasks that uploaded to the GPU in the background) counted per frame: index n holds those that ran after n
+ * frames and before frame n + 1, and `window.fillSliceStarts` their start times with the frame they followed;
+ * `window.resetCounts()` starts them again. Each background upload takes 1.5 ms more, as on a slow GPU, so that the window
+ * is many slices of 4 ms and not one. Returns once the fill that the opening of the viewer started is over.
  */
 const controlFrames = (page) =>
   page.evaluate(async () => {
     const { viewer } = window.chronozarr;
     const { renderer } = viewer;
-    window.frames = 0;
-    window.fillSlices = [0];
+    window.resetCounts = () => {
+      window.frames = 0;
+      window.fillSlices = [0];
+      window.fillSliceStarts = [];
+      window.frameStarts = [0];
+    };
+    window.resetCounts();
     let inSlice = false;
     const upload = renderer.upload;
     renderer.upload = function (...args) {
@@ -63,6 +70,7 @@ const controlFrames = (page) =>
         if (!inSlice) {
           inSlice = true;
           window.fillSlices[window.frames]++;
+          window.fillSliceStarts.push({ frame: window.frames, at: performance.now() });
           // The microtask runs when the task that made the upload ends: the next upload in a task of its own is another slice.
           queueMicrotask(() => {
             inSlice = false;
@@ -73,35 +81,38 @@ const controlFrames = (page) =>
       return upload.apply(this, args);
     };
 
-    // The fill that the opening of the viewer started goes on until the window is on the GPU, and a frame that the viewer
-    // asked for already would run on its own and stand in for the ones the test runs: wait until neither is left.
-    viewer.endScrub();
-    for (let quiet = 0; quiet < 3; ) {
-      const before = window.fillSlices[0];
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      quiet = window.fillSlices[0] === before ? quiet + 1 : 0;
-    }
-    const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
-    await nextFrame();
-    await nextFrame();
-    window.fillSlices[0] = 0;
-
     const queued = new Map();
     let nextId = 1;
+    const realRequest = window.requestAnimationFrame.bind(window);
+    const realCancel = window.cancelAnimationFrame.bind(window);
     window.requestAnimationFrame = (callback) => {
       queued.set(nextId, callback);
       return nextId++;
     };
+    // A frame that was asked for before this point is a real one, which the viewer may still cancel.
     window.cancelAnimationFrame = (id) => {
-      queued.delete(id);
+      if (!queued.delete(id)) realCancel(id);
     };
     window.runFrame = async () => {
       const callbacks = [...queued.values()];
       queued.clear();
+      const start = performance.now();
       window.fillSlices[++window.frames] = 0;
-      for (const callback of callbacks) callback(performance.now());
+      window.frameStarts[window.frames] = start;
+      for (const callback of callbacks) callback(start);
       await new Promise((resolve) => setTimeout(resolve, 30));
     };
+
+    // A frame that the viewer asked for before the swap runs once, in a real frame, and so do the tasks it queues: let them
+    // run, so that they do not stand in for the frames of the test.
+    viewer.endScrub();
+    await new Promise((resolve) => realRequest(() => realRequest(resolve)));
+    // Then frames of the test until the fill that the opening of the viewer started has nothing left to do.
+    for (let quiet = 0, frames = 0; quiet < 3 && frames < 60; frames++) {
+      await window.runFrame();
+      quiet = window.fillSlices[window.frames] === 0 ? quiet + 1 : 0;
+    }
+    window.resetCounts();
   });
 
 test('behind a drawn frame the GPU window fills: the next timesteps are on the GPU before anyone steps to them', async ({ page, servers, storeUrl }) => {
@@ -204,33 +215,63 @@ test('a far jump to a frame that is in memory makes no request', async ({ page, 
 
 const FRAMES = 8;
 
-for (const interaction of ['a movie plays', 'the user scrubs']) {
-  test(`while ${interaction} the GPU fill runs at most one slice per frame, after the frame, and none between frames`, async ({ page, servers, storeUrl }) => {
+/** A movie at 30 steps/s, once it has the frames it starts with: until then it buffers, and the fill is not paced. */
+const PLAY = async (viewer) => {
+  viewer.setSpeed(30);
+  viewer.play();
+  for (let frames = 0; viewer.playback.buffering && frames < 20; frames++) await window.runFrame();
+};
+
+// What the user does in each frame while the fill runs, for 8 frames of the test's own making.
+const GESTURES = {
+  'a movie plays': { before: PLAY, each: () => {} },
+  'the user scrubs in steps of one': { each: (viewer, i) => viewer.goToTime(1 + (i % 2)) },
+  'the user drags the timeline in jumps': { each: (viewer, i) => viewer.goToTime(i % 2 === 0 ? 1 : 8) },
+  'the camera moves in every frame': { each: (viewer, i) => viewer.setView({ center: { row: 100 + (i % 2) * 20, col: 100 } }) },
+  'the camera moves in every frame while a movie plays': { before: PLAY, each: (viewer, i) => viewer.setView({ center: { row: 100 + (i % 2) * 20, col: 100 } }) },
+};
+
+for (const [gesture, { before, each }] of Object.entries(GESTURES)) {
+  test(`while ${gesture} the GPU fill runs after the paint of a frame, for no longer than its share of it, and never between frames`, async ({ page, servers, storeUrl }) => {
     await openViewer(page, servers, await storeUrl('link_plain'));
     await waitForStoreInMemory(page);
     await controlFrames(page);
 
-    const { perFrame, between } = await page.evaluate(
-      async ({ interaction, frames }) => {
+    const { perFrame, late, between, budgetMs } = await page.evaluate(
+      async ({ before, each, frames }) => {
         const { viewer } = window.chronozarr;
+        const run = (source) => new Function('viewer', 'i', `return (${source})(viewer, i);`); // eslint-disable-line no-new-func -- a function cannot cross into the page
+        if (before) await run(before)(viewer);
         // With nothing on the GPU the fill has the window to upload.
         viewer.renderer.clearResident();
-        if (interaction === 'a movie plays') viewer.play();
+        window.resetCounts();
+        // The fill works for half a frame; a movie measures its frame period from the frames it is given, which are the test's.
+        let budgetMs = 0;
         for (let i = 0; i < frames; i++) {
-          // Steps of one timestep, each within the scrub window of the one before, so the scrub goes on.
-          if (interaction === 'the user scrubs') viewer.goToTime(1 + (i % 2));
+          // Every frame leaves the whole window to upload, so that the fill has work in each of them.
+          viewer.renderer.clearResident();
+          run(each)(viewer, i);
+          budgetMs = Math.max(budgetMs, (viewer.playback?.frameMs ?? 1000 / 60) / 2);
           await window.runFrame();
         }
         const during = window.fillSlices.reduce((sum, n) => sum + n, 0);
-        // No frame runs now, and the scrub window (300 ms) is not over.
-        await new Promise((resolve) => setTimeout(resolve, 150));
-        return { perFrame: [...window.fillSlices], between: window.fillSlices.reduce((sum, n) => sum + n, 0) - during };
+        // No frame runs now, and neither the scrub window (300 ms) nor the camera's (250 ms) is over.
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        // The first slice after a frame may start at any time; the ones after it only inside the budget.
+        const seen = new Set();
+        const late = window.fillSliceStarts.filter(({ frame, at }) => {
+          const first = !seen.has(frame);
+          seen.add(frame);
+          return !first && at - window.frameStarts[frame] >= budgetMs;
+        });
+        return { perFrame: [...window.fillSlices], late, between: window.fillSlices.reduce((sum, n) => sum + n, 0) - during, budgetMs };
       },
-      { interaction, frames: FRAMES },
+      { before: before?.toString(), each: each.toString(), frames: FRAMES },
     );
     expect(perFrame[0], 'no slice ran before the first frame').toBe(0);
-    expect(Math.max(...perFrame), `slices per frame: ${perFrame}`).toBeLessThanOrEqual(1);
-    expect(perFrame.reduce((sum, n) => sum + n, 0), `the fill went on, a slice after the frames: ${perFrame}`).toBeGreaterThanOrEqual(FRAMES / 2);
+    expect(late, `slices that began after ${budgetMs} ms of their frame, other than the first`).toEqual([]);
+    // The frame that first asks for the fill is the first; from the second on there is a slice after every one.
+    expect(perFrame.slice(2).every((slices) => slices >= 1), `the fill kept running, slices after each frame: ${perFrame}`).toBe(true);
     expect(between, 'no slice ran while no frame did').toBe(0);
   });
 }
@@ -257,11 +298,32 @@ test('when nothing moves the GPU fill runs its slices one after the other, witho
   expect(slices, 'in more than one slice').toBeGreaterThan(1);
 });
 
+test('after a camera move the GPU fill is paced: it waits for the frames and runs after them', async ({ page, servers, storeUrl }) => {
+  await openViewer(page, servers, await storeUrl('link_plain'));
+  await waitForStoreInMemory(page);
+  await controlFrames(page);
+
+  const { beforeFrames, afterFrames } = await page.evaluate(async () => {
+    const { viewer } = window.chronozarr;
+    viewer.renderer.clearResident();
+    viewer.setView({ center: { row: 100, col: 100 } });
+    // The frame of the new view, drawn now: it asks for the fill, and the camera has just moved.
+    viewer.renderNow();
+    // The camera's window (250 ms) is not over, and no animation frame runs.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const beforeFrames = window.fillSlices[0];
+    for (let i = 0; i < 3; i++) await window.runFrame();
+    return { beforeFrames, afterFrames: window.fillSlices.slice(1) };
+  });
+  expect(beforeFrames, 'no slice ran with no frame').toBe(0);
+  expect(afterFrames.every((slices) => slices >= 1), `a slice after each of the frames: ${afterFrames}`).toBe(true);
+});
+
 for (const [change, act] of [
   ['a jump', (viewer) => viewer.goToTime(8)],
   ['a camera move', (viewer) => viewer.setView({ center: { row: 100, col: 100 } })],
 ]) {
-  test(`${change} drops the GPU fill that was waiting for the old window`, async ({ page, servers, storeUrl }) => {
+  test(`${change} drops the GPU fill that waits for a message: it could run before the frame of the new view`, async ({ page, servers, storeUrl }) => {
     await openViewer(page, servers, await storeUrl('link_plain'));
     await waitForStoreInMemory(page);
     await controlFrames(page);

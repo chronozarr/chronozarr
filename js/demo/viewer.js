@@ -1,14 +1,14 @@
 // chronozarr viewer: renders a chronozarr store with WebGL2, scrubs through time, switches
 // products on the GPU and shows decoded values on click. Opens ?store=<base url>.
 
-import { chunkKey, openStore, samplePixelFrom, scrubCost, windowOrder } from '../chronozarr/decoder.js';
+import { chunkKey, openStore, samplePixelFrom, scrubCost } from '../chronozarr/decoder.js';
 import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, validAt, windowPixels, xFromTime } from './chart.js';
 import { ASSUMED_BANDWIDTH, ancestorCells, coarseLoopDrifted, coarseLoopSteps, planCoarseStages, stageLeadMs } from './coarse.js';
 import { fetchWithEarlyReads, takeEarlyRootMs } from './early.js';
 import { chooseFrame } from './frames.js';
 import { BUFFER_BATCH, DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, START_BUFFER_SECONDS, bufferBatch, chooseMovieLevel, describeReason, linkAllows, linkSteps, roundSteps, snapSpeed, wireRatio } from './playback.js';
 import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js';
-import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrub, nextPumpBatch, readyRun, savesData, scrubPumpRequests, stepsAhead } from './scrub.js';
+import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrub, framesInSequence, nextPumpBatch, readyRun, savesData, scrubPumpRequests, stepsAhead } from './scrub.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
 import { bindOpenStoreForm, checkUniformChunks, explainOpenError, parseStoreUrl } from './open-store.js';
@@ -18,7 +18,8 @@ import { redactText, redactUrl } from '../chronozarr/redact.js';
 import { toggleExportPanel } from './export.js';
 import { FrameMonitor, formatBytes, formatMs, formatRate, hitRate, readStats } from './perf.js';
 import { Renderer } from './renderer.js';
-import { yieldAfterPaint, yieldToMain } from './yield.js';
+import { SliceScheduler } from './yield.js';
+import { GpuWindow } from './gpu-window.js';
 import { prepareMovieCache } from './cache-policy.js';
 import { MAX_SCALE, bindViewerInput } from './input.js';
 import { escapeHtml, formatValue, pixelLocation, sidebarHtml } from './inspector.js';
@@ -45,6 +46,8 @@ const PREFETCH_PLAYBACK_RESTART_MS = 250;
 const BEHIND_FACTOR = 2;
 const BEHIND_FACTOR_PLAYING = 8;
 const GPU_SLICE_FRACTION_OF_FRAME = 0.25;
+// While frames follow each other the fill works until this share of the frame has gone since the frame began, then waits for the next one.
+const GPU_FILL_BUDGET_FRACTION_OF_FRAME = 0.5;
 const POOL_BUDGET_BYTES = 384 * 1024 * 1024;
 const GPU_FILL_FRACTION = 0.9;
 const GPU_UPLOAD_SLICE_MS = 4;
@@ -185,8 +188,14 @@ class Viewer {
   #rafId = 0;
   #prefetchTimer = 0;
   #prefetchStartedAt = -Infinity;
-  /** The GPU fill that waits for its turn: `{paced, cancel}`, or null. */
-  #gpuFill = null;
+  /** The slices of the GPU fill: one per frame's budget while frames follow each other (#framesInSequence), back to back otherwise. */
+  #gpuFill = new SliceScheduler({
+    slice: () => this.#fillGpuWindow(),
+    isPaced: () => this.#framesInSequence,
+    budgetMs: () => this.#frameMs * GPU_FILL_BUDGET_FRACTION_OF_FRAME,
+  });
+  #gpuWindow = new GpuWindow();
+  #cameraMovedAt = -Infinity;
   #prefetchAbort = null;
   #painted = [];
   #storeGeneration = 0;
@@ -203,7 +212,6 @@ class Viewer {
   #urlTimer = 0;
   #viewTiming = null;
   #movieMemo = null;
-  #windowMemo = null;
   /** The link's verdict on the playback speed, {at, steps}, and when it was reached. */
   #linkVerdict = null;
   #playEpoch = 0;
@@ -375,6 +383,7 @@ class Viewer {
   #beginView(kind) {
     this.#viewTiming = { kind, startedAt: performance.now(), coarseAt: null, fullAt: null };
     if (kind === 'camera') {
+      this.#cameraMovedAt = performance.now();
       this.#stopBufferPumps();
       this.#dropSpeculativeFetches();
       this.#hook('view');
@@ -515,11 +524,13 @@ class Viewer {
   /**
    * After a jump in time or a camera move the prefetch window around the old view is stale: cancel what it still has
    * in flight (what the demand fetches for the new view also need stays), and have the next prefetch say so with `seek`.
-   * The GPU fill waiting for the old window goes too; the frame of the new view schedules it again.
+   * A GPU fill that waits for a message goes too, as it could run before the frame of the new view and fill the old window;
+   * one that waits for a paint comes after that frame and stays, so that a gesture that moves the view in every frame
+   * cannot keep it from ever running.
    */
   #dropSpeculativeFetches({ coarseLoop = false } = {}) {
     this.#seekPending = true;
-    this.#cancelGpuFill();
+    this.#gpuFill.cancelUnpaced();
     clearTimeout(this.#prefetchTimer);
     this.#prefetchTimer = 0;
     this.#prefetchAbort?.abort();
@@ -831,7 +842,7 @@ class Viewer {
       this.#wave?.controller.abort();
       this.#wave = null;
       this.#setProgress(1);
-      this.#scheduleGpuFill();
+      this.#gpuFill.schedule();
       this.#schedulePrefetch();
     } else if (missing.length === 0) {
       // Everything is in memory but a frame could not be drawn whole (a slot could not be had): try again next frame.
@@ -840,7 +851,7 @@ class Viewer {
       this.#requestCells(lod, missing, t);
       // Cells that failed for good no longer hold anything back: keep prefetching for the ones that work.
       if (missing.every(([row, col]) => this.#wave.failures.has(`${row}/${col}`))) {
-        this.#scheduleGpuFill();
+        this.#gpuFill.schedule();
         this.#schedulePrefetch();
       }
     }
@@ -1000,7 +1011,7 @@ class Viewer {
         seek,
         signal: abort.signal,
         onChunk: (chunkLod, row, col, t) => {
-          this.#scheduleGpuFill();
+          this.#gpuFill.schedule();
           this.#prefetchMask(chunkLod, row, col, t, abort.signal);
           this.#recheckFrame();
         },
@@ -1074,7 +1085,7 @@ class Viewer {
   #prefetchMask(lod, row, col, t, signal) {
     if (!this.store.hasMask) return;
     this.store.getMask(lod, row, col, t, { signal }).then(
-      () => this.#scheduleGpuFill(),
+      () => this.#gpuFill.schedule(),
       (error) => {
         if (error.name !== 'AbortError') console.error(`prefetch failed for the mask of chunk ${chunkKey(lod, row, col, t)}:`, redactText(error));
       },
@@ -1200,7 +1211,7 @@ class Viewer {
     this.#coarseLoop = null;
     this.#wave?.controller.abort();
     this.#wave = null;
-    this.#cancelGpuFill();
+    this.#gpuFill.cancel();
     clearTimeout(this.#prefetchTimer);
     this.#prefetchTimer = 0;
     this.#prefetchAbort?.abort();
@@ -1440,63 +1451,34 @@ class Viewer {
     return data ? renderer.upload(key, { lod, row, col, t }, data) : -1;
   }
 
-  /** Whether frames are drawn one after the other: a scrub is in progress (a manual step within SCRUB_WINDOW_MS) or a movie plays. */
+  /** Whether frames are drawn one after the other (see framesInSequence): a scrub, a movie that is not buffering, or a camera that is moving. */
   get #framesInSequence() {
-    return this.#scrubTimer !== 0 || this.#playing;
+    return framesInSequence({
+      scrubbing: this.#scrubTimer !== 0,
+      playing: this.#playing,
+      buffering: this.#playback?.buffering ?? false,
+      sinceCameraMoveMs: performance.now() - this.#cameraMovedAt,
+    });
   }
 
-  /**
-   * Have the GPU window filled in a task of its own. While frames follow one another (a scrub, a movie) the task waits for
-   * the paint of the next frame and runs one slice, so an input waits for at most one slice per frame; when nothing moves the
-   * slices follow each other without waiting for a frame. A fill that is waiting already stays as it is: it reads the view
-   * when it runs, so another call has nothing to add.
-   */
-  #scheduleGpuFill() {
-    const paced = this.#framesInSequence;
-    if (this.#gpuFill?.paced === paced) return;
-    this.#cancelGpuFill();
-    const run = () => {
-      this.#gpuFill = null;
-      this.#fillGpuWindow();
-    };
-    this.#gpuFill = { paced, cancel: paced ? yieldAfterPaint(run) : yieldToMain(run) };
-  }
-
-  #cancelGpuFill() {
-    this.#gpuFill?.cancel();
-    this.#gpuFill = null;
-  }
-
-  /**
-   * The first `steps` timesteps of the GPU window, cheapest first. windowOrder sorts the whole time axis, and the fill asks
-   * for it in every slice and again for every cell that lands, so the answer is kept until t, the direction, the behind
-   * factor, the loop or the width of the window changes.
-   */
-  #windowTimesteps(steps) {
-    const nTime = this.store.times.length;
-    const { t } = this;
-    const direction = this.#direction;
-    const behindFactor = this.#behindFactor;
-    const loop = this.#playing;
-    const key = `${nTime}|${t}|${direction}|${behindFactor}|${loop}|${steps}`;
-    if (this.#windowMemo?.key !== key) this.#windowMemo = { key, timesteps: windowOrder(nTime, t, { direction, behindFactor, loop }).slice(0, steps) };
-    return this.#windowMemo.timesteps;
+  /** The display's frame period: as measured while a movie plays, else 60 Hz. */
+  get #frameMs() {
+    return this.#playback?.frameMs ?? 1000 / 60;
   }
 
   /**
    * Keep a window of timesteps around t resident in the texture pool, as wide as the pool holds for the
    * visible cells and reaching further in the scrub direction (wrapping past the last timestep while a movie plays), so the next steps are uniform changes
-   * instead of uploads. Uploads come from the decoded cache in slices of GPU_UPLOAD_SLICE_MS; a slice that leaves work
-   * schedules the next one (#scheduleGpuFill).
+   * instead of uploads. Uploads come from the decoded cache in slices of GPU_UPLOAD_SLICE_MS, which #gpuFill spaces out. Returns
+   * whether the window has more to upload.
    */
   #fillGpuWindow() {
     const { lod, cells } = this.#view;
-    const { store, renderer } = this;
-    if (cells.size === 0) return;
+    const { store, renderer, t } = this;
+    if (cells.size === 0) return false;
     const steps = Math.max(1, Math.floor((renderer.slots * GPU_FILL_FRACTION) / (cells.size)));
-    const timesteps = this.#windowTimesteps(steps);
-    const frameMs = this.#playback?.frameMs ?? 1000 / 60;
-    const sliceMs = Math.min(GPU_UPLOAD_SLICE_MS, frameMs * GPU_SLICE_FRACTION_OF_FRAME);
+    const timesteps = this.#gpuWindow.timesteps(store.times.length, t, { direction: this.#direction, behindFactor: this.#behindFactor, loop: this.#playing }, steps);
+    const sliceMs = Math.min(GPU_UPLOAD_SLICE_MS, this.#frameMs * GPU_SLICE_FRACTION_OF_FRAME);
     const started = performance.now();
     for (const tt of timesteps) {
       for (const ct of [tt]) {
@@ -1513,13 +1495,11 @@ class Viewer {
             const mask = store.peekMask(lod, row, col, ct);
             if (mask) renderer.uploadMask(slot, mask);
           }
-          if (performance.now() - started > sliceMs) {
-            this.#scheduleGpuFill();
-            return;
-          }
+          if (performance.now() - started > sliceMs) return true;
         }
       }
     }
+    return false;
   }
 
   /** Eviction order for decoded chunks and texture slots: outside the view first, then by scrub cost from t. */
@@ -1792,7 +1772,7 @@ class Viewer {
           this.#emit({ type: 'cell-ready', t, row, col });
           this.#render({ force: false });
           // The cells that have landed go to the GPU while the rest of the frame is still on its way, so the paint that completes it has little left to upload.
-          this.#scheduleGpuFill();
+          this.#gpuFill.schedule();
         },
         (error) => {
           if (error.name === 'AbortError') return;

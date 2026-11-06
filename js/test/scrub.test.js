@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CAMERA_SETTLE_MS,
   FILL_LOOKAHEADS,
   LOOKAHEAD_SECONDS,
   LOW_MARK,
@@ -10,6 +11,7 @@ import {
   ScrubSpeed,
   chooseScrub,
   chooseScrubLevel,
+  framesInSequence,
   nextPumpBatch,
   planScrubLoads,
   readyRun,
@@ -408,4 +410,15 @@ test('nextPumpBatch: done when everything wanted is in memory, or when the cache
   const stuck = nextPumpBatch({ wanted: [30, 31, 32, 33], isReady: () => false, previous: '30,31,32', size: 3 });
   assert.equal(stuck.done, true, 'the same batch twice: it is not staying in memory, so loading it again would never end');
   assert.equal(nextPumpBatch({ wanted: [30, 31, 32, 33], isReady: (step) => step < 32, previous: '30,31,32', size: 3 }).done, false, 'the next batch is another one');
+});
+
+test('frames follow each other while a scrub is in progress, a movie plays and paints, or the camera has just moved', () => {
+  const idle = { scrubbing: false, playing: false, buffering: false, sinceCameraMoveMs: Infinity };
+  assert.equal(framesInSequence(idle), false);
+  assert.equal(framesInSequence({ ...idle, scrubbing: true }), true);
+  assert.equal(framesInSequence({ ...idle, playing: true }), true);
+  assert.equal(framesInSequence({ ...idle, playing: true, buffering: true }), false, 'a movie that buffers paints nothing');
+  assert.equal(framesInSequence({ ...idle, sinceCameraMoveMs: CAMERA_SETTLE_MS - 1 }), true);
+  assert.equal(framesInSequence({ ...idle, sinceCameraMoveMs: CAMERA_SETTLE_MS }), false, 'the camera has settled');
+  assert.equal(framesInSequence({ ...idle, playing: true, buffering: true, scrubbing: true }), true, 'a scrub paints, whatever the movie does');
 });
