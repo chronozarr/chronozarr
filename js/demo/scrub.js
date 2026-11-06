@@ -214,3 +214,15 @@ const SLOW_LINKS = new Set(['slow-2g', '2g', '3g']);
 export function savesData(connection) {
   return Boolean(connection && (connection.saveData === true || SLOW_LINKS.has(connection.effectiveType)));
 }
+
+/** A camera move this recently is part of a gesture that moves it again in a frame or two. */
+export const CAMERA_SETTLE_MS = 250;
+
+/**
+ * Whether frames are being drawn one after the other, so that background work must not delay one: a scrub is in progress,
+ * a movie plays (not while it buffers: nothing is painted then and the main thread waits for the network), or the camera
+ * moved `sinceCameraMoveMs` ago, less than CAMERA_SETTLE_MS.
+ */
+export function framesInSequence({ scrubbing, playing, buffering, sinceCameraMoveMs }) {
+  return scrubbing || (playing && !buffering) || sinceCameraMoveMs < CAMERA_SETTLE_MS;
+}

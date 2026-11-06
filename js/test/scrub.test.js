@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CAMERA_SETTLE_MS,
   FILL_LOOKAHEADS,
   LOOKAHEAD_SECONDS,
   LOW_MARK,
@@ -10,6 +11,7 @@ import {
   ScrubSpeed,
   chooseScrub,
   chooseScrubLevel,
+  framesInSequence,
   nextPumpSteps,
   planScrubLoads,
   readyRun,
@@ -425,4 +427,15 @@ test('nextPumpSteps: nothing when everything wanted is in memory or the list is 
   assert.deepEqual(next({ wanted: [] }), [], 'nothing wanted');
   assert.deepEqual(next({ unkept: new Set([30, 31, 32]) }), [33], 'loaded and not staying in memory: loading them again would never end');
   assert.deepEqual(next({ unkept: new Set([30, 31, 32, 33]) }), []);
+});
+
+test('frames follow each other while a scrub is in progress, a movie plays and paints, or the camera has just moved', () => {
+  const idle = { scrubbing: false, playing: false, buffering: false, sinceCameraMoveMs: Infinity };
+  assert.equal(framesInSequence(idle), false);
+  assert.equal(framesInSequence({ ...idle, scrubbing: true }), true);
+  assert.equal(framesInSequence({ ...idle, playing: true }), true);
+  assert.equal(framesInSequence({ ...idle, playing: true, buffering: true }), false, 'a movie that buffers paints nothing');
+  assert.equal(framesInSequence({ ...idle, sinceCameraMoveMs: CAMERA_SETTLE_MS - 1 }), true);
+  assert.equal(framesInSequence({ ...idle, sinceCameraMoveMs: CAMERA_SETTLE_MS }), false, 'the camera has settled');
+  assert.equal(framesInSequence({ ...idle, playing: true, buffering: true, scrubbing: true }), true, 'a scrub paints, whatever the movie does');
 });
