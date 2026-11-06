@@ -1,6 +1,7 @@
 // The chart of a clicked pixel reads one chunk per timestep of its cell. Those reads wait while the user scrubs or plays, and go
 // one timestep at a time while the frame they stopped on loads: they would queue next to the chunks of the frames the user is
-// waiting for. The chart reads in batches again when the scrub or the movie is over and the frame is in.
+// waiting for. The chart reads in batches again when the scrub or the movie is over and the frame is in. While it waits it takes
+// the timesteps that the scrub or the movie has put in the cache, so its count advances with them (no fetch of its own).
 //
 // A single-cell store of 60 timesteps with every chunk answered after 120 ms, so the chart's batches of four take a good
 // second to cover it and a scrub of a second and a half falls inside that time.
@@ -28,6 +29,24 @@ async function writeChartStore(dir) {
 /** How many timesteps the chart has loaded: the number in its status line. */
 const chartLoaded = (page) => page.evaluate(() => Number(/(\d+) of \d+ timesteps/.exec(document.getElementById('chart-status').textContent)?.[1] ?? NaN));
 
+/**
+ * Record, from now on, the timesteps asked for through ensureRaw: the chart's reads, the frame of a scrub and a movie's (the reader's idle
+ * prefetch fills the cache without it). A chart that is not held reads nearest-first from the timestep it was clicked at, about 33 a second here.
+ */
+const watchReads = (page) =>
+  page.evaluate(() => {
+    const { store } = window.chronozarr.viewer;
+    const ensureRaw = store.ensureRaw.bind(store);
+    window.__asked = [];
+    store.ensureRaw = (lod, row, col, t, options) => {
+      window.__asked.push(t);
+      return ensureRaw(lod, row, col, t, options);
+    };
+  });
+
+/** How far ahead of the timestep on screen the farthest timestep asked for lies. */
+const farthestAhead = (page) => page.evaluate(() => Math.max(...window.__asked) - window.chronozarr.viewer.t);
+
 test.describe('chart over a slow single-cell store', () => {
   // The chunks of the last timestep arrive when a test lets them, if it holds them: the frame of that timestep keeps loading.
   let lastTimestep;
@@ -50,34 +69,27 @@ test.describe('chart over a slow single-cell store', () => {
     await expect(page.locator('#chart-status')).toContainText('loading');
   });
 
-  test('the chart does not read while the user scrubs, and finishes once the scrub is over', async ({ page }) => {
+  test('the chart does not read while the user scrubs, and takes what is in the cache: it is done while the scrub goes on', async ({ page }) => {
+    await watchReads(page);
     // Arrow keys 90 ms apart, pressed by a timer in the page so that a busy runner cannot stretch the gaps past the 300 ms of a scrub.
     await page.evaluate(() => {
       window.__keys = setInterval(() => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })), 90);
     });
-    await sleep(500);
-    const during = await chartLoaded(page);
-    await sleep(1000);
-    const after = await chartLoaded(page);
+    // The reader's idle prefetch brings the other timesteps into the cache while the chart waits; the chart's own reads would have asked for them.
+    await expect(page.locator('#chart-status')).toContainText(`${N_TIME} of ${N_TIME} timesteps`, { timeout: 4000 });
+    const ahead = await farthestAhead(page);
     await page.evaluate(() => clearInterval(window.__keys));
-    expect(after - during, 'timesteps the chart loaded while the scrub went on (at most the batch that was already in flight)').toBeLessThanOrEqual(CHART_BATCH);
-    expect(after, 'the chart is not done yet').toBeLessThan(N_TIME);
-
-    await expect(page.locator('#chart-status')).toContainText(`${N_TIME} of ${N_TIME} timesteps`, { timeout: 30_000 });
+    expect(ahead, 'timesteps asked for beyond the one on screen while the scrub went on').toBeLessThan(CHART_BATCH * 3);
   });
 
-  test('the chart does not read while a movie plays, and finishes once it is paused', async ({ page }) => {
+  test('the chart does not read while a movie plays, and takes what is in the cache: it is done while the movie plays', async ({ page }) => {
+    await watchReads(page);
     await page.keyboard.press('Space');
     await page.waitForFunction(() => window.chronozarr.viewer.playback.playing);
-    await sleep(700);
-    const during = await chartLoaded(page);
-    await sleep(1200);
-    const after = await chartLoaded(page);
-    expect(after - during, 'timesteps the chart loaded while the movie played (at most the batch that was already in flight)').toBeLessThanOrEqual(CHART_BATCH);
-    expect(after, 'the chart is not done yet').toBeLessThan(N_TIME);
-
-    await page.keyboard.press('Space');
-    await expect(page.locator('#chart-status')).toContainText(`${N_TIME} of ${N_TIME} timesteps`, { timeout: 30_000 });
+    await expect(page.locator('#chart-status')).toContainText(`${N_TIME} of ${N_TIME} timesteps`, { timeout: 10_000 });
+    expect(await page.evaluate(() => window.chronozarr.viewer.playback.playing), 'the movie is still playing').toBe(true);
+    // The movie asks for its next frames (a buffer of a few seconds at 4 steps a second).
+    expect(await farthestAhead(page), 'timesteps asked for beyond the one on screen while the movie played').toBeLessThan(N_TIME / 2);
   });
 
   test('the chart reads one timestep at a time while the frame the user stopped on loads, and in batches again once it is in', async ({ page }) => {

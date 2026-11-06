@@ -58,7 +58,7 @@ const STRETCH_SAMPLES_PER_CELL = 300;
 const URL_SYNC_MS = 300;
 const CHART_BATCH = 4;
 const CHART_RENDER_MS = 120;
-// While the user scrubs or plays, the chart waits between batches and looks again this often.
+// While the user scrubs or plays, the chart waits between batches and looks at the cache again this often.
 const CHART_YIELD_MS = 250;
 // A time change of more than this many steps is a jump: the speculative fetches around the old position are dropped.
 const SEEK_DISTANCE = 4;
@@ -78,6 +78,9 @@ const CHART = { width: 264, height: 124, left: 34, right: 256, top: 8, bottom: 1
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/** Whether the chart holds what it needs of timestep t: its values and, with a coverage variable, its coverage. */
+const chartHolds = (chart, t) => Boolean(chart.readings[t]) && (!chart.coverage || chart.coverage[t] !== undefined);
 
 /** Resolves after `ms`, or as soon as `signal` aborts. */
 function delay(ms, signal) {
@@ -1969,33 +1972,18 @@ class Viewer {
   async #fillChart(chart) {
     const { store } = this;
     const { lod, row, col } = chart.cell;
-    const level = store.levels[lod];
-    // The window pixels are read where they lie in the cached chunk: a packed chunk (compact mode) is not expanded to read nine pixels.
-    const pixelsAt = (t) => chart.window.map(([x, y]) => store.samplePixel(lod, row, col, t, x, y));
-    const readingOf = (pixels, mask) => ({
-      pixels,
-      ...(mask ? { valid: validAt(mask, level.chunkWidth, chart.window) } : {}),
-    });
-    const coverageOffset = chart.pixel.y * level.chunkWidth + chart.pixel.x;
-    for (let t = 0; t < chart.readings.length; t++) {
-      const mask = store.hasMask ? store.peekMask(lod, row, col, t) : null;
-      if (store.hasCachedRaw(lod, row, col, t) && (!store.hasMask || mask)) chart.readings[t] = readingOf(pixelsAt(t), mask);
-      if (chart.coverage) {
-        const coverage = store.peekCoverage(lod, row, col, t);
-        if (coverage) chart.coverage[t] = coverage[coverageOffset];
-      }
-    }
+    const coverageOffset = chart.pixel.y * store.levels[lod].chunkWidth + chart.pixel.x;
+    this.#readChartCache(chart);
     this.#renderChart();
     // Timesteps still missing their values or (with a coverage variable) their coverage, nearest to the one on screen first.
-    const missing = chart.readings
-      .flatMap((reading, t) => (reading && (!chart.coverage || chart.coverage[t] !== undefined) ? [] : [t]))
-      .sort((a, b) => Math.abs(a - this.t) - Math.abs(b - this.t));
+    const missing = chart.readings.flatMap((_, t) => (chartHolds(chart, t) ? [] : [t])).sort((a, b) => Math.abs(a - this.t) - Math.abs(b - this.t));
     const { signal } = chart.controller;
     for (let next = 0; next < missing.length; ) {
-      const size = await this.#chartBatchSize(signal);
+      const size = await this.#chartBatchSize(chart, missing.slice(next));
       if (size === 0) return;
-      const batch = missing.slice(next, next + size);
-      next += size;
+      // What the cache gave while the chart waited is not read again.
+      const batch = [];
+      for (; next < missing.length && batch.length < size; next++) if (!chartHolds(chart, missing[next])) batch.push(missing[next]);
       await Promise.all(
         batch.map(async (t) => {
           const observed = chart.coverage && chart.coverage[t] === undefined ? this.#loadChartCoverage(chart, t, coverageOffset) : null;
@@ -2006,7 +1994,7 @@ class Viewer {
                 store.ensureRaw(lod, row, col, t, { signal }).then(() => this.#pixelsOfLoaded(lod, row, col, t, chart.window, signal)),
                 this.#maskRead(lod, row, col, t, signal),
               ]);
-              chart.readings[t] = readingOf(pixels, mask);
+              chart.readings[t] = this.#chartReading(chart, pixels, mask);
             } catch (error) {
               if (error.name === 'AbortError') return;
               chart.failed++;
@@ -2024,15 +2012,56 @@ class Viewer {
   }
 
   /**
-   * How many timesteps the chart reads next, 0 when `signal` aborts first. The chart's reads are at demand priority, so they queue next to
-   * the chunks of the frame that a scrub (its timer runs from the first step to the end) or a movie is waiting for: they wait until
-   * neither is going on. While the frame the user stopped on loads they go one timestep at a time, a small share of the link whatever
-   * it takes the frame to arrive, and in batches again once it is in.
+   * Take the timesteps that the cache holds from the chart's missing ones, with no fetch. The window pixels are read where they lie in
+   * the cached chunk: a packed chunk (compact mode) is not expanded to read nine pixels. True if it added anything.
    */
-  async #chartBatchSize(signal) {
-    while (this.#playing || this.#scrubTimer !== 0) {
+  #readChartCache(chart) {
+    const { store } = this;
+    const { lod, row, col } = chart.cell;
+    const coverageOffset = chart.pixel.y * store.levels[lod].chunkWidth + chart.pixel.x;
+    let added = false;
+    for (let t = 0; t < chart.readings.length; t++) {
+      if (!chart.readings[t]) {
+        const mask = store.hasMask ? store.peekMask(lod, row, col, t) : null;
+        if (store.hasCachedRaw(lod, row, col, t) && (!store.hasMask || mask)) {
+          chart.readings[t] = this.#chartReading(
+            chart,
+            chart.window.map(([x, y]) => store.samplePixel(lod, row, col, t, x, y)),
+            mask,
+          );
+          added = true;
+        }
+      }
+      if (chart.coverage && chart.coverage[t] === undefined) {
+        const coverage = store.peekCoverage(lod, row, col, t);
+        if (coverage) {
+          chart.coverage[t] = coverage[coverageOffset];
+          added = true;
+        }
+      }
+    }
+    return added;
+  }
+
+  /** What the chart keeps of one timestep: the values of its window pixels and, with a validity mask, which of them are valid. */
+  #chartReading(chart, pixels, mask) {
+    return { pixels, ...(mask ? { valid: validAt(mask, this.store.levels[chart.cell.lod].chunkWidth, chart.window) } : {}) };
+  }
+
+  /**
+   * How many timesteps the chart reads next, 0 when the chart is cleared first. The chart's reads are at demand priority, so they queue
+   * next to the chunks of the frame that a scrub (its timer runs from the first step to the end) or a movie is waiting for: they wait
+   * until neither is going on, and on every look in the meantime take what the scrub or the movie has loaded from the cache, so the chart
+   * advances with it and is done when it holds all of `pending` (a looping movie holds every frame sooner or later). While the frame the
+   * user stopped on loads they go one timestep at a time, a small share of the link whatever it takes the frame to arrive, and in batches
+   * again once it is in.
+   */
+  async #chartBatchSize(chart, pending) {
+    const { signal } = chart.controller;
+    while ((this.#playing || this.#scrubTimer !== 0) && !pending.every((t) => chartHolds(chart, t))) {
       await delay(CHART_YIELD_MS, signal);
       if (signal.aborted) return 0;
+      if (this.#readChartCache(chart)) this.#scheduleChartRender();
     }
     return this.#loading ? 1 : CHART_BATCH;
   }
