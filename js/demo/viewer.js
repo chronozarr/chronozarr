@@ -1125,7 +1125,8 @@ class Viewer {
     const pump = lod === null ? (this.#bufferPump ??= { wanted: [], lod: null, running: false, controller: null }) : (this.#probePump ??= { wanted: [], lod, running: false, controller: null });
     pump.wanted = indices;
     pump.lod = lod;
-    if (pump.running) return;
+    // A scrub over timesteps that are in memory asks for none: no controller, no checks of what is ready, nothing on the wire.
+    if (pump.running || indices.length === 0) return;
     pump.running = true;
     pump.controller = new AbortController();
     this.#runBufferPump(pump);

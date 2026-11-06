@@ -305,14 +305,22 @@ test('planScrubLoads: a scrub that needs more ahead than the viewer loads ahead 
 
 test('planScrubLoads: the probe stops at the end of the axis with the level in use', () => {
   const { primary, probe } = plan({ t: 114, need: 5, isReady: inMemory({ 3: [114, 116] }) });
-  assert.deepEqual(primary.steps, [114, 115, 116]);
+  assert.deepEqual(primary.steps, [], 'the level in use holds them all');
   assert.deepEqual(probe, { lod: 2, steps: [114, 115, 116] });
+});
+
+test('planScrubLoads: nothing to load at the level in use when it holds the timestep on screen and the whole lookahead', () => {
+  const filled = FILL_LOOKAHEADS * 5;
+  assert.deepEqual(plan({ isReady: inMemory({ 3: [30, 30 + filled] }) }).primary, { lod: 3, steps: [] });
+  assert.equal(plan({ isReady: inMemory({ 3: [30, 30 + filled - 1] }) }).primary.steps.length, 1 + filled, 'the last of the lookahead is missing: all of it is asked for, in order');
+  assert.equal(plan({ isReady: inMemory({ 3: [31, 30 + filled] }) }).primary.steps.length, 1 + filled, 'the timestep on screen is missing');
 });
 
 test('planScrubLoads: nothing to wait for, nothing to probe', () => {
   const idle = plan({ t: 116, need: 0, isReady: inMemory({ 3: [0, 116] }) });
-  assert.deepEqual(idle.primary, { lod: 3, steps: [116] });
+  assert.deepEqual(idle.primary, { lod: 3, steps: [] });
   assert.equal(idle.probe, null);
+  assert.deepEqual(plan({ t: 116, need: 0 }).primary, { lod: 3, steps: [116] }, 'the timestep on screen is the one to load');
 });
 
 
@@ -367,7 +375,7 @@ test('chooseScrub: a scrub that saves data takes the deepest level whatever is i
 const pumps = (options) => scrubPumpRequests({ saving: false, t: 30, direction: 1, count: 117, levels: overview(), lod: 3, need: 5, isReady: inMemory({ 3: [30, 30 + FILL_LOOKAHEADS * 5] }), ...options });
 
 test('scrubPumpRequests: the level in use is filled ahead, and the next sharper level is probed once it has all it is asked to hold', () => {
-  assert.deepEqual(pumps(), { fill: [30, ...Array.from({ length: FILL_LOOKAHEADS * 5 }, (_, i) => 31 + i)], probe: { lod: 2, steps: [30, 31, 32, 33, 34, 35] } });
+  assert.deepEqual(pumps(), { fill: [], probe: { lod: 2, steps: [30, 31, 32, 33, 34, 35] } }, 'nothing of the level in use is left to load');
   const loading = pumps({ isReady: inMemory({ 3: [30, 30 + FILL_LOOKAHEADS * 5 - 1] }) });
   assert.equal(loading.probe, null, 'something of the level in use is still to load: the probe stops');
   assert.equal(loading.fill.length, 1 + FILL_LOOKAHEADS * 5);
@@ -376,8 +384,8 @@ test('scrubPumpRequests: the level in use is filled ahead, and the next sharper 
 test('scrubPumpRequests: a scrub that saves data fills the level in use and never probes', () => {
   const saving = pumps({ saving: true });
   assert.equal(saving.probe, null, 'the plan has a probe and data saving drops it');
-  assert.equal(saving.fill.length, 1 + FILL_LOOKAHEADS * 5);
   assert.notEqual(pumps({ saving: false }).probe, null);
+  assert.equal(pumps({ saving: true, isReady: inMemory({}) }).fill.length, 1 + FILL_LOOKAHEADS * 5);
 });
 
 test('scrubPumpRequests: a scrub with one level to choose from is left to the prefetch window', () => {
@@ -386,12 +394,12 @@ test('scrubPumpRequests: a scrub with one level to choose from is left to the pr
 });
 
 test('scrubPumpRequests: follows the direction of the scrub, so a turn replaces what the pumps wait for', () => {
-  const forward = pumps({ t: 60, isReady: () => true });
-  const back = pumps({ t: 60, direction: -1, isReady: () => true });
-  assert.deepEqual(forward.fill.slice(0, 3), [60, 61, 62]);
-  assert.deepEqual(back.fill.slice(0, 3), [60, 59, 58]);
-  assert.deepEqual(forward.probe.steps, [60, 61, 62, 63, 64, 65]);
-  assert.deepEqual(back.probe.steps, [60, 59, 58, 57, 56, 55]);
+  const loading = { t: 60, isReady: () => false };
+  assert.deepEqual(pumps(loading).fill.slice(0, 3), [60, 61, 62]);
+  assert.deepEqual(pumps({ ...loading, direction: -1 }).fill.slice(0, 3), [60, 59, 58]);
+  const held = { t: 60, isReady: () => true };
+  assert.deepEqual(pumps(held).probe.steps, [60, 61, 62, 63, 64, 65]);
+  assert.deepEqual(pumps({ ...held, direction: -1 }).probe.steps, [60, 59, 58, 57, 56, 55]);
 });
 
 test('nextPumpSteps: the first timesteps of the list that are not in memory, nearest first, as many as keep `size` in flight', () => {

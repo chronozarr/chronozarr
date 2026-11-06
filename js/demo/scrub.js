@@ -154,7 +154,8 @@ export const PROBE_MAX_NEED = 12;
 
 /**
  * What to load for a scrub that is drawing at `lod`: the timestep on screen and as many ahead as FILL_LOOKAHEADS
- * lookaheads at that level, nearest first, and the next sharper level of `levels` for the timestep on screen and the first
+ * lookaheads at that level, nearest first (none when they are all in memory: a scrub over loaded data has nothing to pump),
+ * and the next sharper level of `levels` for the timestep on screen and the first
  * `need` timesteps ahead: the probe that a step up waits for, and, for the timestep the scrub stops on, a sharper frame that
  * is in memory already when it does. The probe is spare capacity only:
  * - it exists while the level in use has everything it is asked to hold, so it takes nothing the level in use still needs;
@@ -167,14 +168,14 @@ export function planScrubLoads({ t, direction, count, levels, lod, need, isReady
   const full = isReady(lod, t) && readyRun(ahead, (step) => isReady(lod, step)) === ahead.length;
   const sharper = levels[levels.indexOf(lod) - 1];
   return {
-    primary: { lod, steps: [t, ...ahead] },
+    primary: { lod, steps: full ? [] : [t, ...ahead] },
     probe: sharper !== undefined && full && need > 0 && need <= PROBE_MAX_NEED ? { lod: sharper, steps: [t, ...ahead.slice(0, need)] } : null,
   };
 }
 
 /**
  * What the two buffer pumps of a scrub are asked to load (the viewer's #loadAheadOfScrub): `fill`, the timesteps for the
- * pump that loads at the level in use, and `probe`, the next sharper level and its timesteps for the second pump, or null
+ * pump that loads at the level in use (none when it holds them all), and `probe`, the next sharper level and its timesteps for the second pump, or null
  * to stop it. Null altogether for a scrub with one level to choose from: it is left to the prefetch window. A scrub that
  * saves data never probes, however much capacity it leaves.
  * @param {{saving: boolean} & Parameters<typeof planScrubLoads>[0]} options
