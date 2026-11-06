@@ -1108,7 +1108,7 @@ export class ChronoStore {
     const failure = outcomes.find((outcome) => outcome.status === 'rejected');
     if (failure) {
       const entry = failure === outcomes[0] ? data : mask;
-      if (entry?.abortedBySeek && isAbort(failure.reason)) throw SEEK_ABORT;
+      if (entry?.releasedBySeek && entry.controller.signal.aborted && isAbort(failure.reason)) throw SEEK_ABORT;
       throw failure.reason;
     }
     return outcomes[0].value;
@@ -1325,7 +1325,7 @@ export class ChronoStore {
    */
   #start(key, meta, { background, owner = null, read = false, seekTarget = false }) {
     const controller = new AbortController();
-    const entry = { controller, kind: meta.kind, waiters: 0, demandReaders: 0, sticky: false, owners: new Set(), releases: [], background, read, seekTarget, counted: false, abortedBySeek: false, priority: { value: background ? 1 : 0 }, promise: null };
+    const entry = { controller, kind: meta.kind, waiters: 0, demandReaders: 0, sticky: false, owners: new Set(), releases: [], background, read, seekTarget, counted: false, releasedBySeek: false, priority: { value: background ? 1 : 0 }, promise: null };
     this.#own(entry, owner);
     if (!background) this.#count(entry);
     entry.promise = this.#load(key, meta, entry)
@@ -1365,9 +1365,8 @@ export class ChronoStore {
     return entry && !entry.controller.signal.aborted ? entry : null;
   }
 
-  #cancelIfUnwanted(entry, bySeek = false) {
+  #cancelIfUnwanted(entry) {
     if (entry.controller.signal.aborted || entry.waiters > 0 || entry.sticky || entry.owners.size > 0) return;
-    entry.abortedBySeek = bySeek;
     this.#abortEntry(entry);
   }
 
@@ -1385,9 +1384,14 @@ export class ChronoStore {
   #cancelSpeculative(signal) {
     for (const entry of this.#inflight.values()) {
       if (!entry.background) continue;
-      for (const owner of entry.owners) if (owner !== signal) entry.owners.delete(owner);
+      for (const owner of entry.owners) {
+        if (owner === signal) continue;
+        entry.owners.delete(owner);
+        // The old job may still be waiting on the promise. If the remaining readers leave, it must retry the request it lost.
+        entry.releasedBySeek = true;
+      }
       this.#recount(entry);
-      this.#cancelIfUnwanted(entry, true);
+      this.#cancelIfUnwanted(entry);
     }
   }
 

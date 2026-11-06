@@ -449,6 +449,29 @@ test('ambient prefetch moves on when its store cancels a request independently o
   store.close();
 });
 
+test('ambient prefetch retries if a seek removes its claim and the remaining reader later aborts', async () => {
+  const { store, started, waiting, release } = await openGated();
+  const loop = store.prefetch({ lod: 0, cells: [[0, 0]], t: 30, playing: true, ambient: true, maxSteps: 1 });
+  await settled();
+  const frame = new AbortController();
+  const read = store.getRaw(0, 0, 0, 30, { signal: frame.signal });
+  const seek = store.prefetch({ lod: 0, cells: [[0, 0]], t: 45, seek: true, maxSteps: 1 });
+  await settled();
+  assert.ok(waiting.has('30/0/0'), 'the demand reader keeps the request alive through the seek');
+  frame.abort();
+  await assert.rejects(read, { name: 'AbortError' });
+  await settled();
+  assert.deepEqual(started, [30, 45], 'the old request was cancelled and the ambient job waits for the seek target');
+  release(45);
+  await settled();
+  assert.deepEqual(started, [30, 45, 30], 'the ambient job retries after the seek target lands');
+  release(30);
+  const [result] = await Promise.all([loop, seek]);
+  assert.equal(result.fetched, 1);
+  assert.ok(store.hasCachedRaw(0, 0, 0, 30));
+  store.close();
+});
+
 test('a seek takes over the speculative requests its plan wants and cancels the others', async () => {
   const { store, readable, started, openAll } = await openGated();
   const mark = readable.log.length;
