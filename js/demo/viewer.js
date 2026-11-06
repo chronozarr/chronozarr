@@ -1134,6 +1134,9 @@ class Viewer {
 
   async #runBufferPump(pump) {
     const { signal } = pump.controller;
+    const { store } = this;
+    // Held from the first timestep it asks for to the end of the run, so that prefetch does not start in the gap between one landing and the next being asked for.
+    let release = null;
     let failed = null;
     // The timesteps on the wire, and those that landed and are still not in memory: the cache cannot keep them, so asking again would never end.
     const loading = new Map();
@@ -1147,6 +1150,7 @@ class Viewer {
           unkept.clear();
         }
         for (const t of nextPumpSteps({ wanted, isReady: (step) => this.#frameReady(lod, step), loading, unkept, size: this.#bufferBatch(lod) })) {
+          release ??= store.holdDemand();
           loading.set(
             t,
             this.#loadTimestep(lod, t, signal).then(() => {
@@ -1161,6 +1165,7 @@ class Viewer {
     } catch (error) {
       if (error.name !== 'AbortError') failed = error;
     } finally {
+      release?.();
       pump.running = false;
     }
     if (failed && this.#playing) {
