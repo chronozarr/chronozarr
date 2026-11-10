@@ -66,12 +66,43 @@ test('coarse stages: limits can be overridden', () => {
   assert.deepEqual(planCoarseStages({ targetLod: 1, coarsestLod: 3, frameBytes: ucayali, minDirectMs: 1e9 }), []);
 });
 
-test('stage lead: two store round trips, at least 30 ms and at most 400 ms', () => {
-  assert.equal(stageLeadMs(45), 90);
-  assert.equal(stageLeadMs(99), 198);
-  assert.equal(stageLeadMs(0), 30, 'a local store: hardly any lead');
-  assert.equal(stageLeadMs(2), 30);
-  assert.equal(stageLeadMs(900), 400, 'a very slow first response does not delay the stages for seconds');
+// The lead of a stage with a short transfer is two store round trips (the time to open the store), held to 30 to 400 ms.
+const lead = (roundTripMs, bandwidth, wireBytes = 0.7e6) => stageLeadMs({ wireBytes, bandwidth, roundTripMs }); // 0.7 MB: the level-3 chunk of the Ucayali store on the wire
+
+test('stage lead: two round trips, 30 to 400 ms, while the stage\'s transfer is shorter than that', () => {
+  assert.equal(lead(45, 20e6), 90, '0.7 MB takes 35 ms at 20 MB/s');
+  assert.equal(lead(99, 20e6), 198);
+  assert.equal(lead(900, 20e6), 400, 'a very slow first response does not delay the stages for seconds');
+  assert.equal(lead(0, 20e6, 0.1e6), 30, 'a local store: hardly any lead');
+  assert.equal(lead(2, 20e6, 0.1e6), 30);
+  assert.equal(lead(127, ASSUMED_BANDWIDTH, 1.47e6), 254, 'a first open, nothing measured: the reader\'s 1.47 MB for a level-3 chunk takes 235 ms at 50 Mbit/s, under two round trips');
+});
+
+test('stage lead: the transfer time, not the transfer time plus a round trip, when the stage\'s transfer is longer', () => {
+  assert.equal(lead(50, 2e6), 350, '0.7 MB at 2 MB/s, over the 100 ms of two round trips');
+  assert.equal(lead(50, 1e6), 700, '1 MB/s');
+  assert.equal(lead(50, 0.5e6), 1400);
+  assert.equal(lead(50, 1e6, 1.4e6), 1400, 'twice the bytes');
+  assert.equal(lead(900, 1e6), 700, 'over the 400 ms that two round trips are held to');
+  assert.equal(lead(200, 2e6), 400, 'two round trips when they are longer than the transfer');
+});
+
+test('stage lead: at most 2 s', () => {
+  assert.equal(lead(50, 0.2e6), 2000, '0.7 MB at 0.2 MB/s would take 3.5 s');
+  assert.equal(lead(50, 0.35e6), 2000, 'a transfer of exactly 2 s');
+  assert.equal(lead(50, 0.4e6), 1750, 'and under it');
+  assert.equal(lead(900, 1e3), 2000);
+});
+
+test('stage lead: a stage with no bytes to fetch, or no usable bandwidth, has the lead of two round trips', () => {
+  assert.equal(lead(45, 1e6, 0), 90);
+  assert.equal(lead(45, 0, 0), 90, 'zero bytes over zero bandwidth is not NaN');
+  assert.equal(lead(0, 0, 0), 30);
+  for (const bandwidth of [0, -1e6, NaN, Infinity, -Infinity, undefined]) {
+    assert.equal(lead(45, bandwidth), 90, `bandwidth ${bandwidth}`);
+  }
+  assert.equal(lead(45, 1e6, NaN), 90);
+  assert.equal(lead(45, 1e6, -5), 90);
 });
 
 // ---- the coarse loop's window ----

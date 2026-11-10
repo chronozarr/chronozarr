@@ -7,8 +7,9 @@
 //             graph, a median of 6 sequential levels (4 to 9), plus local compile and evaluation.
 //             boot = a + 9 x RTT, `a` calibrated per measurement date from the browser runs (local time and the site's Worker wait).
 //   catalog   1 round trip.
-//   Staging (js/demo/coarse.js): the level-1 batch is requested when the coarse chunk has landed, or stageLead = clamp(2 x open time, 30, 400 ms)
-//             after the coarse chunk was requested if it has not; then the two share the link (coarse chunk weight fitted, see L3_WEIGHT).
+//   Staging (js/demo/coarse.js): the level-1 batch is requested when the coarse chunk lands or its lead expires. The lead is two store round
+//             trips (30 to 400 ms) and can extend up to the estimated transfer time, at most 2 s, when the coarse chunk responds within
+//             that window. The model assumes a continuous transfer after the first byte. The stages then share the link (see L3_WEIGHT).
 //   metadata  DNS, TCP, TLS 1.3 and the zarr.json request to data.chronozarr.org: DNS + 3 x RTT + W_meta.
 //   coarse    one level-3 chunk (about 0.7 MB): RTT + W + bytes / bandwidth, then decode and paint -> "first whole frame".
 //   batch     nine level-1 chunks (about 11 MB) requested together on one connection: RTT, each chunk's own server wait W_i, then the
@@ -24,6 +25,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { ASSUMED_BANDWIDTH, stageLatencyLeadMs, stageLeadMs } from '../../js/demo/coarse.js';
 import { DATA_ROOT, quantile, readJsonl, rng } from './lib.mjs';
 
 const args = process.argv.slice(2);
@@ -151,13 +153,24 @@ const shareLink = (starts, sizes, bw) => Math.max(...shareLinkTimes(starts, size
  */
 const L3_WEIGHT = { value: 1 };
 
-/** coarse.js stageLeadMs: the next stage starts two store round trips after the previous one, if that one has not landed by then (30-400 ms). */
-const stageLead = (roundTripMs) => Math.min(400, Math.max(30, 2 * roundTripMs));
+/**
+ * What the reader estimates a level-3 chunk to take on the wire when nothing has been fetched yet: 2 MiB decoded (1 x 4 bands x 512 x 512 x uint16)
+ * times its INITIAL_COMPRESSION_RATIO of 0.7. A first visit has measured no bandwidth either, so it leads by the transfer of this at ASSUMED_BANDWIDTH:
+ * 235 ms. Two round trips (2 x the open time, at most 400 ms) are the longer lead whenever the open takes 118 ms or more.
+ */
+const COLD_L3_WIRE_BYTES = 2 * 1024 * 1024 * 0.7;
+
+/** The level-1 batch can start at the latency lead if the coarse chunk is still waiting for its first byte. */
+function stageLead(roundTripMs, firstByteMs) {
+  const latencyLead = stageLatencyLeadMs(roundTripMs);
+  if (firstByteMs > latencyLead) return latencyLead;
+  return stageLeadMs({ wireBytes: COLD_L3_WIRE_BYTES, bandwidth: ASSUMED_BANDWIDTH, roundTripMs });
+}
 
 /**
  * Predicted frame times (ms from navigation start) for one set of inputs. The viewer stages the first frame: the coarse chunk
  * (level 3) is requested when the store is open; the nine level-1 chunks are requested when it has landed (plus a local planning gap),
- * or stageLead(open time) after it was requested if it has not landed by then, in which case the two share the link.
+ * or stageLead after it was requested if it has not landed by then, in which case the two share the link.
  */
 function predict({ rtt, wMeta, wL3, wL1, l3Bytes, l1Sizes, bwBytesPerMs, local, bootRoundTrips = BOOT_ROUND_TRIPS }) {
   const boot = local.boot + bootRoundTrips * rtt;
@@ -167,7 +180,7 @@ function predict({ rtt, wMeta, wL3, wL1, l3Bytes, l1Sizes, bwBytesPerMs, local, 
   const l3Request = open + local.betweenMetaAndL3;
   const l3Flows = l3Request + rtt + wL3;
   const l3Alone = l3Flows + l3Bytes / bwBytesPerMs;
-  const lead = stageLead(meta + local.openLocal);
+  const lead = stageLead(meta + local.openLocal, rtt + wL3);
   const sequential = l3Alone + local.gapAfterL3 <= l3Request + lead;
   const batchRequest = sequential ? l3Alone + local.gapAfterL3 : l3Request + lead;
   const starts = [l3Flows, ...wL1.map((w) => batchRequest + rtt + w)];
@@ -203,7 +216,7 @@ function calibrate(runs) {
   const staging = {
     overlappedShare: over.length / ph.length,
     observedLeadMs: median(over.map((p) => p.l1Start - p.l3.start)),
-    predictedLeadMs: median(over.map((p) => stageLead(p.meta + local.openLocal))),
+    predictedLeadMs: median(over.map((p) => stageLead(p.meta + local.openLocal, p.l3.ttfb))),
   };
   return { n: ph.length, staging, local, rttSpread: { min: Math.min(...xs), p50: median(xs), max: Math.max(...xs) }, bootSlopeRoundTrips: slope, bootRoundTripsAssumed: meanRoundTrips, phases: ph };
 }
