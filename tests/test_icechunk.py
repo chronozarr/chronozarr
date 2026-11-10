@@ -281,6 +281,9 @@ def test_forecast_uses_valid_time_and_requires_one_run(tmp_path: Path) -> None:
         plan.source.times,
         np.array(["2024-01-01T00", "2024-01-01T01", "2024-01-01T02"], dtype="datetime64[h]"),
     )
+    assert plan.lines()[0] == (
+        "source:     Icechunk snapshot, 3 timesteps (2024-01-01T00:00:00Z .. 2024-01-01T02:00:00Z)"
+    )
     assert isinstance(plan.source, XarraySource)
     assert plan.source.icechunk_identity is not None
     assert "valid_time = init_time" in plan.source.icechunk_identity["forecast"]
