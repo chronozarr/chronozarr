@@ -257,6 +257,61 @@ test('bandwidth follows the link: an exponential average that weights longer sam
   assert.ok(Math.abs(bw.estimate - 10_000_000) / 10_000_000 < 0.05, `converged: ${bw.estimate}`);
 });
 
+test('busy time in which every request was aborted counts as idle time: it neither lowers the estimate nor ages it', () => {
+  const run = (between) => {
+    const clock = clockAt();
+    const bw = new BandwidthEstimator(clock.read);
+    bw.begin();
+    clock.now += 1000;
+    bw.end(1_000_000);
+    between(bw, clock);
+    bw.begin();
+    clock.now += 1000;
+    bw.end(2_000_000);
+    return bw;
+  };
+  const idle = run((bw, clock) => { clock.now += 3000; });
+  const aborted = run((bw, clock) => {
+    for (let i = 0; i < 3; i++) bw.begin();
+    clock.now += 3000;
+    for (let i = 0; i < 3; i++) bw.abort();
+  });
+  assert.equal(aborted.estimate, idle.estimate);
+  assert.equal(aborted.mature, idle.mature);
+  assert.ok(aborted.estimate > 1_000_000, `${aborted.estimate}`);
+});
+
+test('an aborted request in a stretch of busy time where another one finished does not erase that stretch', () => {
+  const clock = clockAt();
+  const bw = new BandwidthEstimator(clock.read);
+  bw.begin();
+  bw.begin();
+  clock.now += 1000;
+  bw.end(1_000_000);
+  bw.abort();
+  assert.equal(Math.round(bw.estimate), 1_000_000, 'the second of transfer time is still in the estimate');
+});
+
+test('a request that ends with no bytes (a 404, a HEAD, a failed attempt) does not keep an aborted stretch of busy time in the estimate', () => {
+  // A link of 1 MB/s: the 1 MB request at the end takes a second. The aborted request is in flight for five.
+  const run = (steps) => {
+    const clock = clockAt();
+    const bw = new BandwidthEstimator(clock.read);
+    for (const [at, op, bytes] of steps) {
+      clock.now = at;
+      bw[op](bytes);
+    }
+    return Math.round(bw.estimate);
+  };
+  const tail = [[6000, 'begin'], [7000, 'end', 1e6]];
+  const clean = run([[0, 'begin'], [5000, 'abort'], ...tail]);
+  assert.equal(clean, 1_000_000);
+  assert.equal(run([[0, 'begin'], [0, 'begin'], [10, 'end', 0], [5000, 'abort'], ...tail]), clean, 'the empty answer came first');
+  assert.equal(run([[0, 'begin'], [0, 'begin'], [10, 'abort'], [5000, 'end', 0], ...tail]), clean, 'the empty answer came last');
+  const settled = [[0, 'begin'], [1000, 'end', 1e6]];
+  assert.equal(run([...settled, [1000, 'begin'], [1000, 'begin'], [6000, 'end', 0], [6000, 'abort']]), 1_000_000, 'an estimate that was measured is not lowered by such a stretch');
+});
+
 // ---- limiter ----
 
 /** Let queued microtasks and a timer tick run. */

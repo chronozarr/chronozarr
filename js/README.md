@@ -96,6 +96,8 @@ store.close(); // aborts in-flight requests and releases the decode workers
 
 `prefetch` takes `playing: true` to extend the window to the whole loop. It takes `masks: true` to fetch the masks alongside the chunks.
 
+Prefetch starts nothing while a read waits for a frame. A caller whose reads come back to back, with short gaps between them, calls `store.holdDemand()` for the length of the run and ends the hold with the function it returns. `getRaw`, `ensureRaw`, `getMask` and `getCoverage` take `{ background: true }` for a read that no frame waits for, such as a chart of one pixel over time: it runs at the priority of prefetch and does not hold prefetch back.
+
 `openStore` takes these options. `chronozarr/decoder.js` documents all of them.
 
 | Option | Default | Meaning |

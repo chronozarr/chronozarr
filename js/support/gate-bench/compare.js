@@ -21,21 +21,50 @@ export const METRICS = [
   { key: 'decodeMs', label: 'Decode per 2 MiB chunk', gateMs: 5, tolerance: 0.05, floorMs: 0.2 },
 ];
 
+/**
+ * The metrics of the compact pass (run.mjs --cache compact): the cold open and the warm switches on a cache that packs every chunk
+ * in memory, as the public demo store gets (js/demo/cache-policy.js), against the same gates. Decode is the same code with or
+ * without packing, so the default pass alone measures it.
+ */
+export const COMPACT_METRICS = METRICS.filter(({ key }) => key !== 'decodeMs').map((metric) => ({ ...metric, label: `${metric.label}, compact cache` }));
+
+/** The marks of the first visit (first-visit.mjs): shown next to the gates, with no tolerance and no gate. */
+export const FIRST_VISIT_MARKS = [
+  { key: 'firstRequestMs', label: 'Navigation to the first chunk request' },
+  { key: 'shaderMs', label: 'Shader compile and link, time blocked' },
+  { key: 'workerReadyMs', label: 'Decode worker spawn to its first message, with its codec' },
+  { key: 'codecMs', label: 'Codec module load by the page' },
+  { key: 'firstFrameMs', label: 'Navigation to the first whole frame' },
+  { key: 'targetFrameMs', label: 'Navigation to the frame at the target level' },
+];
+
 /** The counters of the warm loops that must all be 0 for the head. */
 const TRAFFIC = ['serverRequests', 'readerRequests', 'readerBytes'];
 
 export const MIN_PAIRS = 3;
 
-function median(values) {
+export function median(values) {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-const stats = (values) => ({ median: median(values), min: Math.min(...values), max: Math.max(...values), n: values.length });
+export const stats = (values) => ({ median: median(values), min: Math.min(...values), max: Math.max(...values), n: values.length });
 
 const sumLoops = (records) =>
   Object.fromEntries([...TRAFFIC, 'incomplete'].map((field) => [field, records.reduce((n, record) => n + record.warmLoop[field], 0)]));
+
+/** The marks of the first visit of each build over the pairs; null when no run took them. A run whose visit failed has `firstVisit.error` and counts as unavailable. */
+function firstVisitRows(pairs) {
+  const visits = pairs.flatMap((pair) => [pair.base.firstVisit, pair.head.firstVisit]);
+  if (!visits.some(Boolean)) return null;
+  const rows = FIRST_VISIT_MARKS.map((mark) => {
+    const values = (variant) => pairs.map((pair) => pair[variant].firstVisit?.[mark.key]).filter(Number.isFinite);
+    const ratios = pairs.map((pair) => pair.head.firstVisit?.[mark.key] / pair.base.firstVisit?.[mark.key]).filter((ratio) => Number.isFinite(ratio) && ratio > 0);
+    return { ...mark, base: values('base').length ? stats(values('base')) : null, head: values('head').length ? stats(values('head')) : null, ratio: ratios.length ? median(ratios) : null };
+  });
+  return { rows, unavailable: visits.filter((visit) => !visit || visit.error).length };
+}
 
 const formatMs = (ms) => (ms >= 100 ? `${Math.round(ms)}` : ms.toFixed(1));
 const percent = (ratio) => `${ratio >= 1 ? '+' : '−'}${Math.round(Math.abs(ratio - 1) * 100)} %`;
@@ -43,13 +72,13 @@ const percent = (ratio) => `${ratio >= 1 ? '+' : '−'}${Math.round(Math.abs(rat
 /**
  * @param {{variant: 'base'|'head', pair: number, figures: Record<string, number>,
  *   warmLoop: {serverRequests: number, readerRequests: number, readerBytes: number, incomplete: number}}[]} records
- *   one per run: `figures` holds a value of every METRICS key, `warmLoop` what the warm loops of that run counted.
+ *   one per run: `figures` holds a value of every key of `metrics`, `warmLoop` what the warm loops of that run counted.
  */
-export function compareBuilds(records) {
+export function compareBuilds(records, { metrics = METRICS } = {}) {
   const byPair = new Map();
   for (const record of records) {
     // A field that bench() no longer reports arrives as undefined, and NaN passes every comparison: stop instead.
-    for (const { key } of METRICS) {
+    for (const { key } of metrics) {
       const value = record.figures[key];
       if (!(Number.isFinite(value) && value > 0)) {
         throw new Error(`${key} of the ${record.variant} run of pair ${record.pair + 1} is ${value}, not a time: did a field of bench() or of the warm loop change name?`);
@@ -60,7 +89,7 @@ export function compareBuilds(records) {
   const pairs = [...byPair.values()].filter((pair) => pair.base && pair.head);
   if (pairs.length < MIN_PAIRS) throw new Error(`${pairs.length} complete pairs of runs: comparing the builds needs at least ${MIN_PAIRS} pairs`);
 
-  const rows = METRICS.map((metric) => {
+  const rows = metrics.map((metric) => {
     const base = stats(pairs.map((pair) => pair.base.figures[metric.key]));
     const head = stats(pairs.map((pair) => pair.head.figures[metric.key]));
     const ratios = pairs.map((pair) => pair.head.figures[metric.key] / pair.base.figures[metric.key]);
@@ -80,13 +109,14 @@ export function compareBuilds(records) {
   if (incomplete) {
     failures.push(`${incomplete} warm switches of the head drew an incomplete frame with every chunk of the loop in memory: those switches were not warm.`);
   }
-  return { rows, traffic, pairs: pairs.length, failures };
+  return { rows, traffic, pairs: pairs.length, failures, firstVisit: firstVisitRows(pairs) };
 }
 
-/** The step summary of the job: the verdict, then the absolute figures of both builds next to the gates. */
-export function summaryMarkdown(result, { environment = [] } = {}) {
+/** The step summary of the job, with the comparison or the reason it was skipped. */
+export function summaryMarkdown(result, { environment = [], title = 'Speed gates: head against base', invalid = '' } = {}) {
+  if (invalid) return [`## ${title}`, '', invalid, '', ...environment.map((line) => `- ${line}`), ''].join('\n');
   const lines = [
-    '## Speed gates: head against base',
+    `## ${title}`,
     '',
     result.failures.length ? `**Fail.** ${result.failures.length === 1 ? 'One regression' : `${result.failures.length} regressions`}:` : '**Pass.** The head is not slower than the base beyond the tolerances, and its warm switches used no network.',
     ...result.failures.map((failure) => `- ${failure}`),
@@ -103,8 +133,23 @@ export function summaryMarkdown(result, { environment = [] } = {}) {
     '',
     'The real-GPU gates are those of CLAUDE.md. A CI runner draws with SwiftShader (the WebGL renderer below) on shared CPUs, so its timings are compared with the base measured in the same job, not with the gates.',
   ];
+  if (result.firstVisit) lines.push('', ...firstVisitLines(result.firstVisit));
   if (environment.length) lines.push('', ...environment.map((line) => `- ${line}`));
   return `${lines.join('\n')}\n`;
+}
+
+function firstVisitLines({ rows, unavailable }) {
+  const cell = (stat) => (stat ? `${formatMs(stat.median)} ms (${formatMs(stat.min)} to ${formatMs(stat.max)})` : '–');
+  return [
+    '### First visit (informational, not gated)',
+    '',
+    'A new browser with an empty profile, once per run: the page, the viewer, its workers and the first open of the store, which the gates measure only after all of it is warm. The local server sends no cache headers, so the page and each worker download the codec themselves. Milliseconds from the start of the navigation, unless the row says otherwise; medians over the pairs, with the range.',
+    '',
+    '| Mark | Base | Head | Head / base |',
+    '|---|---|---|---|',
+    ...rows.map((row) => `| ${row.label} | ${cell(row.base)} | ${cell(row.head)} | ${row.ratio === null ? '–' : row.ratio.toFixed(2)} |`),
+    ...(unavailable ? ['', `The first visit failed in ${unavailable} of the runs (\`firstVisit.error\` in the JSON); the rows use the others.`] : []),
+  ];
 }
 
 function trafficText({ serverRequests, readerRequests, readerBytes, incomplete }) {
