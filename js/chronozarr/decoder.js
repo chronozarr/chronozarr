@@ -680,7 +680,7 @@ export class ChronoStore {
     await this.#readRaw(lod, row, col, t, options);
   }
 
-  async #readRaw(lod, row, col, t, { signal, background = false } = {}) {
+  async #readRaw(lod, row, col, t, { signal, background = false, trackProgress = false } = {}) {
     if (this.#closeController.signal.aborted) throw new Error('ChronoStore is closed');
     const level = this.level(lod);
     this.#checkCell(level, row, col);
@@ -701,14 +701,14 @@ export class ChronoStore {
     } else if (this.#cache.get(key)?.compressed) {
       counters.hits++;
       counters.compressedHits++;
-      entry = this.#start(key, meta, { background, read: true });
+      entry = this.#start(key, meta, { background, read: true, trackProgress });
     } else {
       counters.misses++;
-      entry = this.#start(key, meta, { background, read: true });
+      entry = this.#start(key, meta, { background, read: true, trackProgress });
     }
     const data = await this.#subscribe(entry, signal, background);
     // A prefetch that joined above kept only compressed bytes: decode them now.
-    return data ?? this.#readRaw(lod, row, col, t, { signal, background });
+    return data ?? this.#readRaw(lod, row, col, t, { signal, background, trackProgress });
   }
 
   /**
@@ -776,14 +776,15 @@ export class ChronoStore {
    *
    * With `materialize: false` the cells carry no `data`: the chunks are in the cache when this resolves, and a packed one
    * (compact mode) is not expanded into an array that the caller then does not read.
+   * With `trackProgress: true`, new HTTP reads record progress for coarseFrameProgressAt().
    *
    * @param {number} lod
    * @param {Array<[number, number]>} cells  [row, col] pairs, loaded in this order
    * @param {number} t
-   * @param {{signal?: AbortSignal, materialize?: boolean}} [options]
+   * @param {{signal?: AbortSignal, materialize?: boolean, trackProgress?: boolean}} [options]
    * @returns {Promise<{lod:number, t:number, cells:Array<{row:number, col:number, data?:ArrayBufferView}>}>}
    */
-  async getCoarseFrame(lod, cells, t, { signal, materialize = true } = {}) {
+  async getCoarseFrame(lod, cells, t, { signal, materialize = true, trackProgress = false } = {}) {
     const level = this.level(lod);
     for (const [row, col] of cells) this.#checkCell(level, row, col);
     const keys = cells.map(([row, col]) => chunkKey(lod, row, col, t));
@@ -792,10 +793,10 @@ export class ChronoStore {
       const loaded = await Promise.all(
         cells.map(async ([row, col]) => {
           if (!materialize) {
-            await this.ensureRaw(lod, row, col, t, { signal });
+            await this.ensureRaw(lod, row, col, t, { signal, trackProgress });
             return { row, col };
           }
-          const data = await this.getRaw(lod, row, col, t, { signal });
+          const data = await this.getRaw(lod, row, col, t, { signal, trackProgress });
           return { row, col, data };
         }),
       );
@@ -805,9 +806,23 @@ export class ChronoStore {
     }
   }
 
+  /** The oldest progress timestamp among a preview's missing data and masks. An unobserved response gives -Infinity. */
+  coarseFrameProgressAt(lod, cells, t) {
+    let oldest = Infinity;
+    for (const [row, col] of cells) {
+      const key = chunkKey(lod, row, col, t);
+      if (!this.#cache.hasDecoded(key)) oldest = Math.min(oldest, this.#liveEntry(key)?.progress?.at ?? -Infinity);
+      if (this.hasMask) {
+        const mask = this.#auxKey('mask', lod, row, col, t);
+        if (!this.#auxCache.has(mask)) oldest = Math.min(oldest, this.#liveEntry(mask)?.progress?.at ?? -Infinity);
+      }
+    }
+    return oldest;
+  }
+
   /** The validity mask chunk of a cell (uint8 [y][x] over the padded chunk, 1 = valid), or null when the store has no mask. `background` is as for getRaw(). */
-  getMask(lod, row, col, t, { signal, background = false } = {}) {
-    return this.#getAux('mask', lod, row, col, t, signal, background);
+  getMask(lod, row, col, t, { signal, background = false, trackProgress = false } = {}) {
+    return this.#getAux('mask', lod, row, col, t, signal, background, trackProgress);
   }
 
   /** The coverage chunk of a cell (uint8 [y][x], observations behind each pixel, 0 = gap-filled), or null when the store has none. */
@@ -1274,7 +1289,7 @@ export class ChronoStore {
     return restored;
   }
 
-  async #getAux(kind, lod, row, col, t, signal, background) {
+  async #getAux(kind, lod, row, col, t, signal, background, trackProgress = false) {
     if (this.#closeController.signal.aborted) throw new Error('ChronoStore is closed');
     if (this.#storage[kind] === null) return null;
     const level = this.level(lod);
@@ -1285,7 +1300,7 @@ export class ChronoStore {
     if (cached) return cached;
     let entry = this.#inflight.get(key);
     if (entry && !entry.controller.signal.aborted) this.#join(entry, background);
-    else entry = this.#start(key, { kind, lod, row, col, t }, { background });
+    else entry = this.#start(key, { kind, lod, row, col, t }, { background, trackProgress });
     return this.#subscribe(entry, signal, background);
   }
 
@@ -1356,9 +1371,10 @@ export class ChronoStore {
    * one is decoded even where a prefetch would keep only its compressed bytes, and it is none of the speculative requests that prefetch
    * holds to the link (see #speculativeInflight).
    */
-  #start(key, meta, { background, owner = null, read = false, seekTarget = false }) {
+  #start(key, meta, { background, owner = null, read = false, seekTarget = false, trackProgress = false }) {
     const controller = new AbortController();
     const entry = { controller, kind: meta.kind, waiters: 0, demandReaders: 0, sticky: false, owners: new Set(), releases: [], background, read, seekTarget, counted: false, releasedBySeek: false, priority: { value: background ? 1 : 0 }, promise: null };
+    if (trackProgress) entry.progress = { at: -Infinity };
     this.#own(entry, owner);
     if (!background) this.#count(entry);
     entry.promise = this.#load(key, meta, entry)
@@ -1498,11 +1514,11 @@ export class ChronoStore {
 
   /** Compressed bytes of one chunk, or undefined when the store has no such chunk (fill value). */
   async #fetchBytes({ kind, lod, row, col, t }, signal, entry) {
-    const priority = entry.priority;
+    const { priority, progress } = entry;
     const storage = this.#storage[kind][lod];
     const base = `/${this.levels[lod].path}/${this.#names[kind]}/`;
     const coords = (time) => (kind === 'data' ? [time, 0, row, col] : [time, row, col]);
-    if (!storage.sharded) return this.#readable.get(base + storage.keyOf(coords(t)), { signal, priority });
+    if (!storage.sharded) return this.#readable.get(base + storage.keyOf(coords(t)), { signal, priority, progress });
     const shardIndex = Math.floor(t / storage.shardTime);
     const shardKey = base + storage.keyOf(coords(shardIndex));
     entry.indexKey = `${lod}/${shardKey}`;
@@ -1511,7 +1527,7 @@ export class ChronoStore {
     const at = t % storage.shardTime;
     const offset = index[2 * at];
     if (offset < 0) return undefined;
-    return this.#readable.getRange(shardKey, { offset, length: index[2 * at + 1] }, { signal, priority });
+    return this.#readable.getRange(shardKey, { offset, length: index[2 * at + 1] }, { signal, priority, progress });
   }
 
   /** Shard index: read once, shared by every chunk of the shard, never tied to one caller's signal (see #readShardIndex). */

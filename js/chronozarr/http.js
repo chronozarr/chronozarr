@@ -119,19 +119,19 @@ export class HttpStore {
     return url;
   }
 
-  async get(key, { signal, priority = 0, reload = false } = {}) {
-    const { bytes } = await this.#send(this.#url(key), 'GET', undefined, signal, priority, { reload });
+  async get(key, { signal, priority = 0, reload = false, progress } = {}) {
+    const { bytes } = await this.#send(this.#url(key), 'GET', undefined, signal, priority, { reload, progress });
     return bytes;
   }
 
   /** `range` is {offset, length} or {suffixLength}. A suffix costs a HEAD first unless the store sends suffix ranges. */
-  async getRange(key, range, { signal, priority = 0, rangeMiss = false } = {}) {
+  async getRange(key, range, { signal, priority = 0, rangeMiss = false, progress } = {}) {
     const url = this.#url(key);
     let start;
     let end;
     if ('suffixLength' in range) {
       if (this.#suffixRequests) {
-        const { bytes } = await this.#send(url, 'GET', `bytes=-${range.suffixLength}`, signal, priority);
+        const { bytes } = await this.#send(url, 'GET', `bytes=-${range.suffixLength}`, signal, priority, { progress });
         return bytes && bytes.slice(Math.max(0, bytes.length - range.suffixLength));
       }
       const { headers } = await this.#send(url, 'HEAD', undefined, signal, priority);
@@ -148,16 +148,16 @@ export class HttpStore {
       start = range.offset;
       end = range.offset + range.length - 1;
     }
-    const { bytes, status } = await this.#send(url, 'GET', `bytes=${start}-${end}`, signal, priority, { rangeMiss });
+    const { bytes, status } = await this.#send(url, 'GET', `bytes=${start}-${end}`, signal, priority, { rangeMiss, progress });
     if (status === 416) return null;
     // A server that ignores Range answers 200 with the whole object.
     return bytes && status === 200 ? bytes.slice(start, end + 1) : bytes;
   }
 
-  async #send(url, method, range, signal, priority, { reload = false, rangeMiss = false } = {}) {
+  async #send(url, method, range, signal, priority, { reload = false, rangeMiss = false, progress } = {}) {
     const request = new Request(url, { method, signal, headers: range ? { Range: range } : undefined, ...(reload ? { cache: 'reload' } : {}) });
     for (let attempt = 1; ; attempt++) {
-      const outcome = await this.#limiter.run(priority, signal, () => this.#attempt(request, method, range, rangeMiss));
+      const outcome = await this.#limiter.run(priority, signal, () => this.#attempt(request, method, range, rangeMiss, progress));
       if (outcome.ok) return outcome;
       const { status, statusText, cause } = outcome;
       const retryable = status === undefined || status >= 500 || status === 429;
@@ -173,7 +173,7 @@ export class HttpStore {
   }
 
   /** One trip to the server, inside a limiter slot. Never throws except on abort: failures come back as data. */
-  async #attempt(request, method, range, rangeMiss) {
+  async #attempt(request, method, range, rangeMiss, progress) {
     this.#network.requests++;
     this.#bandwidth.begin();
     let received = 0;
@@ -194,7 +194,18 @@ export class HttpStore {
         await response.body?.cancel();
         return { ok: true, status: 404, bytes: undefined };
       }
-      const bytes = new Uint8Array(await response.arrayBuffer());
+      let body = response;
+      // Only a preview with extra time to give up watches body progress. Keep the normal body reader for other reads.
+      if (progress && response.body) {
+        progress.at = performance.now();
+        body = new Response(response.body.pipeThrough(new TransformStream({
+          transform(chunk, controller) {
+            if (chunk.byteLength > 0) progress.at = performance.now();
+            controller.enqueue(chunk);
+          },
+        })));
+      }
+      const bytes = new Uint8Array(await body.arrayBuffer());
       received = bytes.length;
       this.#network.bytes += received;
       if (response.status === 206) {
@@ -203,6 +214,7 @@ export class HttpStore {
       }
       return { ok: true, status: response.status, bytes };
     } catch (error) {
+      if (progress) progress.at = -Infinity;
       if (isAbort(error)) {
         aborted = true;
         throw error;

@@ -3,7 +3,7 @@
 
 import { chunkKey, openStore, scrubCost } from '../chronozarr/decoder.js';
 import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, validAt, windowPixels, xFromTime } from './chart.js';
-import { ASSUMED_BANDWIDTH, ancestorCells, coarseLoopDrifted, coarseLoopSteps, planCoarseStages, stageLeadMs } from './coarse.js';
+import { ASSUMED_BANDWIDTH, STAGE_LEAD_LATENCY_MAX_MS, ancestorCells, coarseLoopDrifted, coarseLoopSteps, planCoarseStages, stageLatencyLeadMs, stageLeadMs } from './coarse.js';
 import { fetchWithEarlyReads, takeEarlyRootMs } from './early.js';
 import { chooseFrame } from './frames.js';
 import { BUFFER_BATCH, DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, START_BUFFER_SECONDS, bufferBatch, chooseMovieLevel, describeReason, linkAllows, linkSteps, roundSteps, snapSpeed, wireRatio } from './playback.js';
@@ -1742,9 +1742,7 @@ class Viewer {
 
   /**
    * The cells a wave still needs, coarse first: the small coarse levels (see coarse.js), each shown once it is
-   * complete, then the target level, which is shown when all of its cells are in. A stage starts when the previous one lands or, sooner,
-   * its leadMs after the previous one started (see stageLeadMs): a couple of round trips, so the requests of one stage wait on the
-   * network while the bytes of the one before are still arriving instead of after them, or the time those bytes take when that is longer.
+   * complete, then the target level. Each stage gives the previous one a head start on the link.
    */
   async #loadWanted(wave, wanted) {
     const { lod } = wave;
@@ -1755,25 +1753,43 @@ class Viewer {
         for (const [row, col] of stage.cells) this.store.retainCell(stage.lod, row, col, wave.t, signal);
       }
     }
-    let previous = null;
-    let lead = 0;
     for (const stage of stages) {
-      if (previous) await Promise.race([previous, delay(lead, signal)]);
       if (signal.aborted) return;
-      previous = this.#loadStage(wave, stage);
-      lead = stage.leadMs;
+      await this.#waitForStage(wave, stage);
     }
-    if (previous) await Promise.race([previous, delay(lead, signal)]);
     if (!signal.aborted) this.#loadCells(wave, wanted);
   }
 
+  /**
+   * Give the preview two round trips to respond. Extend its lead only while every pending body is making progress,
+   * with at most 400 ms between bytes and the stage's transfer estimate as the overall limit.
+   */
+  async #waitForStage(wave, stage) {
+    const { signal } = wave.controller;
+    const latencyLead = stageLatencyLeadMs(this.#roundTripMs);
+    const trackProgress = stage.leadMs > latencyLead;
+    const deadline = performance.now() + stage.leadMs;
+    const loaded = this.#loadStage(wave, stage, trackProgress).then(() => true);
+    let wait = latencyLead;
+    while (!(await Promise.race([loaded, delay(wait, signal)]))) {
+      if (!trackProgress || signal.aborted) return;
+      const lastProgress = this.store.coarseFrameProgressAt(stage.lod, stage.cells, wave.t);
+      wait = Math.min(deadline, lastProgress + STAGE_LEAD_LATENCY_MAX_MS) - performance.now();
+      if (wait <= 0) return;
+    }
+  }
+
   /** Load one coarse stage and show it when it has landed whole. Never rejects: a stage that fails only costs the preview. */
-  async #loadStage(wave, stage) {
+  async #loadStage(wave, stage, trackProgress) {
     const { t } = wave;
     const { signal } = wave.controller;
+    const { lod, cells } = stage;
+    const { store } = this;
     const started = performance.now();
     try {
-      await this.#loadFrame(stage.lod, stage.cells, t, signal);
+      const reads = [store.getCoarseFrame(lod, cells, t, { signal, materialize: false, trackProgress })];
+      if (store.hasMask) for (const [row, col] of cells) reads.push(store.getMask(lod, row, col, t, { signal, trackProgress }));
+      await Promise.all(reads);
     } catch (error) {
       if (error.name !== 'AbortError') console.warn(`coarse frame failed (level ${stage.lod}, cells ${JSON.stringify(stage.cells)}, timestep ${t}); the target level loads anyway:`, redactText(error));
       return;
@@ -1820,11 +1836,6 @@ class Viewer {
       for (const ct of chunks) if (!store.hasCachedRaw(lod, row, col, ct)) pixels += width * height;
     }
     return pixels * bytesPerPixel;
-  }
-
-  /** The chunks of timestep t for these cells of one level, and their validity masks, decoded and in the cache when this resolves. */
-  async #loadFrame(lod, cells, t, signal) {
-    await Promise.all([this.store.getCoarseFrame(lod, cells, t, { signal, materialize: false }), ...cells.map(([row, col]) => this.#maskRead(lod, row, col, t, signal))]);
   }
 
   /** Fetch the target-level cells of a wave; the frame is painted when the last one has arrived (earlier ones only change what is ready). */

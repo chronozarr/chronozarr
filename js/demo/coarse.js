@@ -36,11 +36,16 @@ export const STAGE_LEAD_MIN_MS = 30;
 /** And at most this: a slow first response does not delay the stages for seconds. */
 export const STAGE_LEAD_LATENCY_MAX_MS = 400;
 
-/** The lead never exceeds this: a stage that has not landed by then is stalled, or on a link slower than measured, and the next one starts anyway. */
+/** The lead never exceeds this, even while the previous stage is still transferring. */
 export const STAGE_LEAD_MAX_MS = 2000;
 
+/** How long to give a stage to start responding, based on the time to open the store. */
+export function stageLatencyLeadMs(roundTripMs) {
+  return Math.min(STAGE_LEAD_LATENCY_MAX_MS, Math.max(STAGE_LEAD_MIN_MS, STAGE_LEAD_ROUND_TRIPS * roundTripMs));
+}
+
 /**
- * How long after a stage starts the next one may start, if the stage has not landed by then. Stores are unsharded by default,
+ * The longest a stage can hold the next one while its chunks are still arriving. Stores are unsharded by default,
  * so a chunk is one request that carries all its bytes. A stage that starts while the previous one's bytes are still arriving
  * shares the link with them, and the previous one lands later. The lead is the latency lead, STAGE_LEAD_ROUND_TRIPS times
  * `roundTripMs` (what it took to open the store, which is more than one round trip) within the limits above, when this stage's
@@ -49,7 +54,7 @@ export const STAGE_LEAD_MAX_MS = 2000;
  * so the transfer time already holds the latency. A stage with no bytes to fetch, or no usable bandwidth, has the latency lead.
  */
 export function stageLeadMs({ wireBytes, bandwidth, roundTripMs }) {
-  const latency = Math.min(STAGE_LEAD_LATENCY_MAX_MS, Math.max(STAGE_LEAD_MIN_MS, STAGE_LEAD_ROUND_TRIPS * roundTripMs));
+  const latency = stageLatencyLeadMs(roundTripMs);
   const transfer = wireBytes > 0 && bandwidth > 0 && Number.isFinite(bandwidth) ? (wireBytes * 1000) / bandwidth : 0;
   return Math.min(STAGE_LEAD_MAX_MS, Math.max(latency, transfer));
 }
