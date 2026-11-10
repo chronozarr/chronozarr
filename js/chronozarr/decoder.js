@@ -138,11 +138,14 @@ export function scrubCost(dt, direction, behindFactor = 2, period = null) {
 /**
  * Timesteps 0..nTime-1 from cheapest to most expensive to keep around `t` (see scrubCost). With `loop`, time
  * is circular, so the first timesteps come right after the last ones: what a looping movie needs ahead of it.
+ * With `stepStride`, keep only the current timestep and multiples of the stride.
  */
-export function windowOrder(nTime, t, { direction = 1, behindFactor = 2, loop = false } = {}) {
+export function windowOrder(nTime, t, { direction = 1, behindFactor = 2, loop = false, stepStride = 1 } = {}) {
   const period = loop ? nTime : null;
   const cost = (step) => scrubCost(step - t, direction, behindFactor, period);
-  return Array.from({ length: nTime }, (_, i) => i).sort((a, b) => cost(a) - cost(b) || Math.abs(a - t) - Math.abs(b - t));
+  const steps = Array.from({ length: nTime }, (_, i) => i);
+  const candidates = stepStride === 1 ? steps : steps.filter((step) => step === t || step % stepStride === 0);
+  return candidates.sort((a, b) => cost(a) - cost(b) || Math.abs(a - t) - Math.abs(b - t));
 }
 
 /** Stored values of one pixel per band, sampled directly from a raw or packed true-value chunk. */
@@ -902,7 +905,9 @@ export class ChronoStore {
    * the chunk and its mask are both loaded.
    * `maxSteps` plans at most that many timesteps, nearest first, whatever the horizon or the cache would allow: a caller that
    * knows how far ahead anything will be shown (a movie on a slow link, or a movie whose rolling buffer holds fewer frames than
-   * the loop, where compressed-only lookahead would push the frames about to be shown out) asks for no more. `ambient` marks a job that is not
+   * the loop, where compressed-only lookahead would push the frames about to be shown out) asks for no more.
+   * `stepStride` selects the current timestep and every Nth timestep on the axis, useful for sparse previews.
+   * `ambient` marks a job that is not
    * what the viewer is doing (the coarse loop that stays behind a frame): it does not count as a scrub or as playback, so it
    * neither ends the idle episode of the horizon prefetch nor gives it a new allowance. Without `concurrency` a job runs up
    * to 6 workers, but the speculative requests in flight over all jobs are held to what the measured link carries in about a
@@ -913,11 +918,12 @@ export class ChronoStore {
    * none of its speculative requests would ever finish), and `onChunk` of this job fires when it lands.
    *
    * @param {{lod:number, cells:Array<[number, number]>, t:number, direction?:1|-1, behindFactor?:number, loop?:boolean, playing?:boolean,
-   *   seek?:boolean, masks?:boolean, maxSteps?:number, ambient?:boolean, concurrency?:number, signal?:AbortSignal, onChunk?:(lod,row,col,t)=>void}} job
+   *   seek?:boolean, masks?:boolean, maxSteps?:number, stepStride?:number, ambient?:boolean, concurrency?:number, signal?:AbortSignal, onChunk?:(lod,row,col,t)=>void}} job
    */
-  async prefetch({ lod, cells, t, direction = 1, behindFactor = 2, loop = false, playing = false, seek = false, masks = false, maxSteps = Infinity, ambient = false, concurrency, signal, onChunk }) {
+  async prefetch({ lod, cells, t, direction = 1, behindFactor = 2, loop = false, playing = false, seek = false, masks = false, maxSteps = Infinity, stepStride = 1, ambient = false, concurrency, signal, onChunk }) {
     if (this.#closeController.signal.aborted) throw new Error('ChronoStore is closed');
     if (maxSteps !== Infinity && (!Number.isInteger(maxSteps) || maxSteps < 1)) throw new RangeError('maxSteps must be an integer >= 1');
+    if (!Number.isInteger(stepStride) || stepStride < 1) throw new RangeError('stepStride must be an integer >= 1');
     // Every job has a signal of its own, whether or not the caller passed one: #cancelSpeculative and #movieJobs identify a job by it.
     signal = anySignal(signal ? [signal, this.#closeController.signal] : [this.#closeController.signal]);
     const level = this.level(lod);
@@ -926,7 +932,7 @@ export class ChronoStore {
     const withMasks = masks && this.hasMask;
     const targets = new Set([t]);
     const horizon = wholeAxis ? null : this.#policy.horizonSteps;
-    const queue = this.#windowPlan(level, cells, t, { direction, behindFactor, loop }, horizon, withMasks, maxSteps).map(([row, col, ct], rank) => ({ row, col, t: ct, rank, free: seek && targets.has(ct) }));
+    const queue = this.#windowPlan(level, cells, t, { direction, behindFactor, loop, stepStride }, horizon, withMasks, maxSteps).map(([row, col, ct], rank) => ({ row, col, t: ct, rank, free: seek && targets.has(ct) }));
     const result = { planned: queue.length, fetched: 0, skipped: 0, compressedOnly: 0, masks: 0, budgetReached: false, errors: [] };
     if (signal.aborted) return result;
     if (movie) this.#movieJobs.add(signal);

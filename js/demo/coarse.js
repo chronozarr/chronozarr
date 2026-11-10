@@ -17,6 +17,15 @@ export const COARSE_FRAME_BYTES = 1.5 * 1024 * 1024;
  */
 export const COARSE_MAX_OVERHEAD = 0.15;
 
+/** A store can opt into a cheaper overview by continuing its pyramid past the first single-cell level. */
+export function extraOverviewLod(levels) {
+  const last = levels.at(-1);
+  const previous = levels.at(-2);
+  return previous?.gridRows === 1 && previous.gridCols === 1 && last.width * last.height < previous.width * previous.height
+    ? last.lod
+    : null;
+}
+
 /**
  * A target frame that would arrive in less than this (at the measured or assumed bandwidth) is loaded directly. Each
  * stage costs round trips and the bytes of its level (staging every level down to the target adds about a third to the
