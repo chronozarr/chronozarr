@@ -154,8 +154,10 @@ export const PROBE_MAX_NEED = 12;
 
 /**
  * What to load for a scrub that is drawing at `lod`: the timestep on screen and as many ahead as FILL_LOOKAHEADS
- * lookaheads at that level, nearest first, and the next sharper level of `levels` for the first `need` timesteps
- * ahead: the probe that a step up waits for. The probe is spare capacity only:
+ * lookaheads at that level, nearest first (none when they are all in memory: a scrub over loaded data has nothing to pump),
+ * and the next sharper level of `levels` for the timestep on screen and the first
+ * `need` timesteps ahead: the probe that a step up waits for, and, for the timestep the scrub stops on, a sharper frame that
+ * is in memory already when it does. The probe is spare capacity only:
  * - it exists while the level in use has everything it is asked to hold, so it takes nothing the level in use still needs;
  * - it reaches no further than the lookahead, and only for scrubs of at most PROBE_MAX_NEED timesteps of it.
  * @param {{isReady: (lod: number, t: number) => boolean}} options  `isReady` says whether the complete frame of a level at a timestep is in memory
@@ -166,14 +168,14 @@ export function planScrubLoads({ t, direction, count, levels, lod, need, isReady
   const full = isReady(lod, t) && readyRun(ahead, (step) => isReady(lod, step)) === ahead.length;
   const sharper = levels[levels.indexOf(lod) - 1];
   return {
-    primary: { lod, steps: [t, ...ahead] },
-    probe: sharper !== undefined && full && need > 0 && need <= PROBE_MAX_NEED ? { lod: sharper, steps: ahead.slice(0, need) } : null,
+    primary: { lod, steps: full ? [] : [t, ...ahead] },
+    probe: sharper !== undefined && full && need > 0 && need <= PROBE_MAX_NEED ? { lod: sharper, steps: [t, ...ahead.slice(0, need)] } : null,
   };
 }
 
 /**
  * What the two buffer pumps of a scrub are asked to load (the viewer's #loadAheadOfScrub): `fill`, the timesteps for the
- * pump that loads at the level in use, and `probe`, the next sharper level and its timesteps for the second pump, or null
+ * pump that loads at the level in use (none when it holds them all), and `probe`, the next sharper level and its timesteps for the second pump, or null
  * to stop it. Null altogether for a scrub with one level to choose from: it is left to the prefetch window. A scrub that
  * saves data never probes, however much capacity it leaves.
  * @param {{saving: boolean} & Parameters<typeof planScrubLoads>[0]} options
@@ -186,15 +188,18 @@ export function scrubPumpRequests({ saving, ...plan }) {
 }
 
 /**
- * The next batch a buffer pump loads: the first `size` of the `wanted` timesteps (nearest first) that are not ready, so
- * a list replaced mid-run is followed from where the scrub is. `done` when nothing is left to load, or when the batch
- * is the one just loaded (`previous`: the cache cannot keep what was loaded, so loading it again would never end).
- * @returns {{batch: number[], key: string, done: boolean}}
+ * The timesteps a buffer pump starts loading now: the first of the `wanted` ones (nearest first) that are not ready, not on the wire
+ * (`loading`) and not `unkept` (loaded already and still not ready: the cache cannot keep them, so loading them again would never
+ * end), as many as keep `size` timesteps in flight. A list replaced mid-run is followed from where the scrub is.
+ * @param {{wanted: number[], isReady: (step: number) => boolean, loading: {has(step: number): boolean, size: number}, unkept: {has(step: number): boolean}, size: number}} options
  */
-export function nextPumpBatch({ wanted, isReady, previous, size }) {
-  const batch = wanted.filter((step) => !isReady(step)).slice(0, size);
-  const key = batch.join(',');
-  return { batch, key, done: batch.length === 0 || key === previous };
+export function nextPumpSteps({ wanted, isReady, loading, unkept, size }) {
+  const steps = [];
+  for (const step of wanted) {
+    if (loading.size + steps.length >= size) break;
+    if (!loading.has(step) && !unkept.has(step) && !isReady(step)) steps.push(step);
+  }
+  return steps;
 }
 
 /** The `effectiveType` values (navigator.connection) of a link too slow to load a sharp scrub ahead of the user. */
@@ -208,4 +213,16 @@ const SLOW_LINKS = new Set(['slow-2g', '2g', '3g']);
  */
 export function savesData(connection) {
   return Boolean(connection && (connection.saveData === true || SLOW_LINKS.has(connection.effectiveType)));
+}
+
+/** A camera move this recently is part of a gesture that moves it again in a frame or two. */
+export const CAMERA_SETTLE_MS = 250;
+
+/**
+ * Whether frames are being drawn one after the other, so that background work must not delay one: a scrub is in progress,
+ * a movie plays (not while it buffers: nothing is painted then and the main thread waits for the network), or the camera
+ * moved `sinceCameraMoveMs` ago, less than CAMERA_SETTLE_MS.
+ */
+export function framesInSequence({ scrubbing, playing, buffering, sinceCameraMoveMs }) {
+  return scrubbing || (playing && !buffering) || sinceCameraMoveMs < CAMERA_SETTLE_MS;
 }

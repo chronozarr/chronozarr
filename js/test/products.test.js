@@ -197,3 +197,105 @@ test('describePixel validity without a mask: invalid only when every band is at 
   assert.equal(describePixel(Float32Array.of(NaN), [{ name: 'depth' }], null).valid, false);
   assert.equal(describePixel(Float32Array.of(-9999), [{ name: 'depth' }], -9999).valid, false);
 });
+
+// The results computeStretchLo and percentileRange must give, computed with ordinary arrays sorted by a comparator.
+function referenceStretchLo(rgbSamples) {
+  const tones = [];
+  for (const [r, g, b] of rgbSamples) {
+    if (r === 0 && g === 0 && b === 0) continue;
+    tones.push(reinhardSrgb(r), reinhardSrgb(g), reinhardSrgb(b));
+  }
+  if (tones.length < 30) return 0;
+  tones.sort((a, b) => a - b);
+  return tones[Math.floor(tones.length * 0.02)];
+}
+
+function referencePercentileRange(values) {
+  const finite = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (finite.length === 0) return null;
+  const lo = finite[Math.floor(finite.length * 0.02)];
+  const hi = finite[Math.min(finite.length - 1, Math.floor(finite.length * 0.98))];
+  return hi > lo ? [lo, hi] : [lo, lo + 1];
+}
+
+function seededRandom(seed) {
+  let state = seed;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 2 ** 32;
+  };
+}
+
+test('computeStretchLo gives the same value as sorting every tone with a comparator, for every sample count and kind of data', () => {
+  const random = seededRandom(1);
+  const kinds = {
+    'uniform reflectance': () => random() * 0.3,
+    'duplicates': () => Math.round(random() * 20) / 100,
+    'mostly nodata': () => (random() < 0.8 ? 0 : random() * 0.3),
+    'a few large values': () => (random() < 0.05 ? 5 + random() * 100 : random() * 0.2),
+    'negative reflectance': () => random() * 0.2 - 0.05,
+    'constant': () => 0.12,
+  };
+  // Nine samples give 27 tones, below the 30 needed; ten give exactly 30.
+  const counts = [0, 1, 2, 9, 10, 11, 49, 50, 51, 100, 333, 1200];
+  for (const [kind, value] of Object.entries(kinds)) {
+    for (const count of counts) {
+      const samples = Array.from({ length: count }, () => [value(), value(), value()]);
+      assert.equal(computeStretchLo(samples), referenceStretchLo(samples), `${kind}, ${count} samples`);
+    }
+  }
+  const nodata = Array.from({ length: 40 }, () => [0, 0, 0]);
+  assert.equal(computeStretchLo(nodata), 0, 'only all-zero samples');
+  assert.equal(computeStretchLo([...nodata, ...Array.from({ length: 10 }, () => [0.1, 0.1, 0.1])]), referenceStretchLo([...nodata, ...Array.from({ length: 10 }, () => [0.1, 0.1, 0.1])]), 'nodata does not count towards the 30 tones');
+});
+
+test('computeStretchLo leaves tones that are not finite out of the percentile and of the count', () => {
+  const random = seededRandom(2);
+  const finite = Array.from({ length: 200 }, () => [random() * 0.3, random() * 0.3, random() * 0.3]);
+  // The 2nd percentile of the tones that carry a value. -0.2 tone-maps to -Infinity; NaN and Infinity reflectance to NaN.
+  const percentileOfFiniteTones = (samples) => {
+    const tones = samples.filter(([r, g, b]) => !(r === 0 && g === 0 && b === 0)).flatMap((sample) => sample.map(reinhardSrgb)).filter(Number.isFinite).sort((a, b) => a - b);
+    return tones.length < 30 ? 0 : tones[Math.floor(tones.length * 0.02)];
+  };
+  const expected = referenceStretchLo(finite);
+  assert.ok(expected > 0 && expected < 1);
+
+  // Pixels with no value at all do not move the result, however many there are (half of all samples, then most).
+  for (const nodata of [[NaN, NaN, NaN], [Infinity, -Infinity, NaN], [-0.2, -0.2, -0.2]]) {
+    for (const count of [1, 20, 200, 1000]) {
+      const samples = [...finite, ...Array.from({ length: count }, () => nodata)];
+      assert.equal(computeStretchLo(samples), expected, `${count} samples of ${nodata}`);
+    }
+  }
+
+  // One channel without a value drops that tone only; the other two of the sample still count.
+  const partial = finite.map((sample, i) => (i % 3 === 0 ? [NaN, sample[1], sample[2]] : i % 3 === 1 ? [sample[0], Infinity, sample[2]] : [sample[0], sample[1], -0.2]));
+  assert.equal(computeStretchLo(partial), percentileOfFiniteTones(partial));
+  const mixed = [...finite, ...partial, [NaN, 0.1, 0.1], [0, NaN, 0], [0, 0, 0]];
+  assert.equal(computeStretchLo(mixed), percentileOfFiniteTones(mixed));
+
+  // The 30-tone minimum counts finite tones: 9 samples are 27 tones, and any number of NaN samples does not add to them.
+  const few = finite.slice(0, 9);
+  assert.equal(computeStretchLo([...few, ...Array.from({ length: 100 }, () => [NaN, NaN, NaN])]), 0);
+  assert.equal(computeStretchLo([...finite.slice(0, 10), ...Array.from({ length: 100 }, () => [NaN, NaN, NaN])]), referenceStretchLo(finite.slice(0, 10)));
+  assert.equal(computeStretchLo([[NaN, NaN, NaN], [NaN, NaN, NaN]]), 0);
+});
+
+test('percentileRange gives the same range as sorting the finite values with a comparator, for every count and kind of data', () => {
+  const random = seededRandom(3);
+  const kinds = {
+    'uniform': () => random() * 5,
+    'duplicates': () => Math.round(random() * 10),
+    'negative': () => random() * 40 - 30,
+    'with NaN and infinities': () => (random() < 0.1 ? [NaN, Infinity, -Infinity][Math.floor(random() * 3)] : random() * 5),
+    'only non-finite and one value': () => (random() < 0.99 ? NaN : 1),
+    'constant': () => 5,
+  };
+  const counts = [0, 1, 2, 3, 49, 50, 51, 99, 100, 101, 102, 999, 5000];
+  for (const [kind, value] of Object.entries(kinds)) {
+    for (const count of counts) {
+      const values = Array.from({ length: count }, value);
+      assert.deepEqual(percentileRange(values), referencePercentileRange(values), `${kind}, ${count} values`);
+    }
+  }
+});

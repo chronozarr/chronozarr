@@ -1,14 +1,14 @@
 // chronozarr viewer: renders a chronozarr store with WebGL2, scrubs through time, switches
 // products on the GPU and shows decoded values on click. Opens ?store=<base url>.
 
-import { chunkKey, openStore, samplePixelFrom, scrubCost, windowOrder } from '../chronozarr/decoder.js';
+import { chunkKey, openStore, scrubCost } from '../chronozarr/decoder.js';
 import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, validAt, windowPixels, xFromTime } from './chart.js';
 import { ASSUMED_BANDWIDTH, ancestorCells, coarseLoopDrifted, coarseLoopSteps, planCoarseStages, stageLeadMs } from './coarse.js';
 import { fetchWithEarlyReads, takeEarlyRootMs } from './early.js';
 import { chooseFrame } from './frames.js';
 import { BUFFER_BATCH, DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, START_BUFFER_SECONDS, bufferBatch, chooseMovieLevel, describeReason, linkAllows, linkSteps, roundSteps, snapSpeed, wireRatio } from './playback.js';
 import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js';
-import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrub, nextPumpBatch, readyRun, savesData, scrubPumpRequests, stepsAhead } from './scrub.js';
+import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrub, framesInSequence, nextPumpSteps, readyRun, savesData, scrubPumpRequests, stepsAhead } from './scrub.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
 import { bindOpenStoreForm, checkUniformChunks, explainOpenError, parseStoreUrl } from './open-store.js';
@@ -18,6 +18,8 @@ import { redactText, redactUrl } from '../chronozarr/redact.js';
 import { toggleExportPanel } from './export.js';
 import { FrameMonitor, formatBytes, formatMs, formatRate, hitRate, readStats } from './perf.js';
 import { Renderer } from './renderer.js';
+import { SliceScheduler } from './yield.js';
+import { GpuWindow } from './gpu-window.js';
 import { prepareMovieCache } from './cache-policy.js';
 import { MAX_SCALE, bindViewerInput } from './input.js';
 import { escapeHtml, formatValue, pixelLocation, sidebarHtml } from './inspector.js';
@@ -44,6 +46,8 @@ const PREFETCH_PLAYBACK_RESTART_MS = 250;
 const BEHIND_FACTOR = 2;
 const BEHIND_FACTOR_PLAYING = 8;
 const GPU_SLICE_FRACTION_OF_FRAME = 0.25;
+// While frames follow each other the fill works until this share of the frame has gone since the frame began, then waits for the next one.
+const GPU_FILL_BUDGET_FRACTION_OF_FRAME = 0.5;
 const POOL_BUDGET_BYTES = 384 * 1024 * 1024;
 const GPU_FILL_FRACTION = 0.9;
 const GPU_UPLOAD_SLICE_MS = 4;
@@ -58,6 +62,10 @@ const STRETCH_SAMPLES_PER_CELL = 300;
 const URL_SYNC_MS = 300;
 const CHART_BATCH = 4;
 const CHART_RENDER_MS = 120;
+// While the user scrubs or plays, the chart waits between batches and looks at the cache again this often.
+const CHART_YIELD_MS = 250;
+// After this many polls without cache progress, allow one background timestep so a chart can finish during continuous playback.
+const CHART_EMPTY_POLLS = 4;
 // A time change of more than this many steps is a jump: the speculative fetches around the old position are dropped.
 const SEEK_DISTANCE = 4;
 const PERF_UPDATE_MS = 250;
@@ -77,18 +85,21 @@ const CHART = { width: 264, height: 124, left: 34, right: 256, top: 8, bottom: 1
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
+/** Whether the chart holds what it needs of timestep t: its values and, with a coverage variable, its coverage. */
+const chartHolds = (chart, t) => Boolean(chart.readings[t]) && (!chart.coverage || chart.coverage[t] !== undefined);
+
 /** Resolves after `ms`, or as soon as `signal` aborts. */
 function delay(ms, signal) {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true },
-    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -178,13 +189,22 @@ class Viewer {
   /** Fill the playback buffer, or the buffer of a scrub, at the level in use; the probe pump fills the next sharper level ahead of a scrub: {wanted, lod (null: the level in use), running, controller}. */
   #bufferPump = null;
   #probePump = null;
+  /** Detached scrub pumps whose current requests may still be claimed by the replacement frame. */
+  #retiringPumps = [];
   #frameStats = { painted: 0, fallback: 0, kept: 0 };
   #view = { lod: 0, cells: new Set() };
   #maxVisibleCells = 0;
   #rafId = 0;
   #prefetchTimer = 0;
   #prefetchStartedAt = -Infinity;
-  #gpuFillTimer = 0;
+  /** The slices of the GPU fill: one per frame's budget while frames follow each other (#framesInSequence), back to back otherwise. */
+  #gpuFill = new SliceScheduler({
+    slice: () => this.#fillGpuWindow(),
+    isPaced: () => this.#framesInSequence,
+    budgetMs: () => this.#frameMs * GPU_FILL_BUDGET_FRACTION_OF_FRAME,
+  });
+  #gpuWindow = new GpuWindow();
+  #cameraMovedAt = -Infinity;
   #prefetchAbort = null;
   #painted = [];
   #storeGeneration = 0;
@@ -372,6 +392,7 @@ class Viewer {
   #beginView(kind) {
     this.#viewTiming = { kind, startedAt: performance.now(), coarseAt: null, fullAt: null };
     if (kind === 'camera') {
+      this.#cameraMovedAt = performance.now();
       this.#stopBufferPumps();
       this.#dropSpeculativeFetches();
       this.#hook('view');
@@ -464,7 +485,11 @@ class Viewer {
     if (!playing) {
       this.#beginView('time');
       this.#noteScrubStep(Math.abs(next - this.t));
-      if (Math.abs(next - this.t) > SEEK_DISTANCE) this.#dropSpeculativeFetches({ coarseLoop: true });
+      if (Math.abs(next - this.t) > SEEK_DISTANCE) {
+        // Let the replacement frame take over any requests it shares with the old pumps.
+        this.#stopBufferPumps({ handoff: true });
+        this.#dropSpeculativeFetches({ coarseLoop: true });
+      }
     }
     this.#direction = direction ?? (next > this.t ? 1 : -1);
     this.t = next;
@@ -490,20 +515,23 @@ class Viewer {
     return !this.#playing && this.#scrubMemo !== null && this.#scrubMemo.lod > this.#scrubMemo.baseLod;
   }
 
-  /** Forget the scrub in progress and stop loading ahead of it. True if it was drawing at a coarser level than the normal one. */
+  /** Forget the scrub and stop loading ahead of it. Return whether a render must sharpen the frame or take over pending requests. */
   #clearScrub() {
     clearTimeout(this.#scrubTimer);
     this.#scrubTimer = 0;
     this.#scrub.reset();
     const coarser = this.#scrubCoarser;
     this.#scrubMemo = null;
-    if (!this.#playing) this.#stopBufferPumps();
-    return coarser;
+    if (!this.#playing) {
+      const handoff = coarser || this.#rafId !== 0 || this.#retiringPumps.length > 0;
+      this.#stopBufferPumps({ handoff });
+    }
+    return coarser || this.#retiringPumps.length > 0;
   }
 
   /**
    * The scrub is over (the pointer was released, or no step for SCRUB_WINDOW_MS): draw at the normal level again, so
-   * the frame sharpens. A scrub that never left the normal level changes nothing.
+   * the frame sharpens. A queued frame can take over the reads it needs before the pump stops.
    */
   endScrub() {
     if (this.#clearScrub()) this.requestRender();
@@ -512,9 +540,13 @@ class Viewer {
   /**
    * After a jump in time or a camera move the prefetch window around the old view is stale: cancel what it still has
    * in flight (what the demand fetches for the new view also need stays), and have the next prefetch say so with `seek`.
+   * A GPU fill that waits for a message goes too, as it could run before the frame of the new view and fill the old window;
+   * one that waits for a paint comes after that frame and stays, so that a gesture that moves the view in every frame
+   * cannot keep it from ever running.
    */
   #dropSpeculativeFetches({ coarseLoop = false } = {}) {
     this.#seekPending = true;
+    this.#gpuFill.cancelQueuedTask();
     clearTimeout(this.#prefetchTimer);
     this.#prefetchTimer = 0;
     this.#prefetchAbort?.abort();
@@ -663,7 +695,7 @@ class Viewer {
       prepare: async (t, signal) => {
         requireStartingStore();
         try {
-          return await Promise.all([...chunksFor(t).map(([row, col, ct]) => store.getRaw(lod, row, col, ct, { signal })), ...cells.map(([row, col]) => this.#maskRead(lod, row, col, t, signal))]);
+          return await Promise.all([...chunksFor(t).map(([row, col, ct]) => store.ensureRaw(lod, row, col, ct, { signal })), ...cells.map(([row, col]) => this.#maskRead(lod, row, col, t, signal))]);
         } catch (error) {
           requireStartingStore();
           throw error;
@@ -826,7 +858,7 @@ class Viewer {
       this.#wave?.controller.abort();
       this.#wave = null;
       this.#setProgress(1);
-      this.#scheduleGpuFill();
+      this.#gpuFill.schedule();
       this.#schedulePrefetch();
     } else if (missing.length === 0) {
       // Everything is in memory but a frame could not be drawn whole (a slot could not be had): try again next frame.
@@ -835,10 +867,11 @@ class Viewer {
       this.#requestCells(lod, missing, t);
       // Cells that failed for good no longer hold anything back: keep prefetching for the ones that work.
       if (missing.every(([row, col]) => this.#wave.failures.has(`${row}/${col}`))) {
-        this.#scheduleGpuFill();
+        this.#gpuFill.schedule();
         this.#schedulePrefetch();
       }
     }
+    if (this.#retiringPumps.length) this.#abortRetiringPumps();
     this.#updateFrameDate(missing);
     if (this.#gaps.visible) this.#drawGapOverlay();
     const ms = performance.now() - started;
@@ -995,7 +1028,7 @@ class Viewer {
         seek,
         signal: abort.signal,
         onChunk: (chunkLod, row, col, t) => {
-          this.#scheduleGpuFill();
+          this.#gpuFill.schedule();
           this.#prefetchMask(chunkLod, row, col, t, abort.signal);
           this.#recheckFrame();
         },
@@ -1069,7 +1102,7 @@ class Viewer {
   #prefetchMask(lod, row, col, t, signal) {
     if (!this.store.hasMask) return;
     this.store.getMask(lod, row, col, t, { signal }).then(
-      () => this.#scheduleGpuFill(),
+      () => this.#gpuFill.schedule(),
       (error) => {
         if (error.name !== 'AbortError') console.error(`prefetch failed for the mask of chunk ${chunkKey(lod, row, col, t)}:`, redactText(error));
       },
@@ -1109,14 +1142,15 @@ class Viewer {
   /**
    * Playback or a scrub wants these timesteps (the next ones, nearest first) in memory: load the ones that are not, a
    * few at a time and at demand priority, in order, until they all are or playback stops or the scrub ends. They are
-   * loaded at the level in use, or at `lod` (the probe of a scrub). A new request replaces the list of a pump that is
-   * already running; the store shares the fetches.
+   * loaded at the level in use, or at `lod` (the probe of a scrub). The next one starts as soon as one lands, so the few
+   * stay in flight. A new request replaces the list of a pump that is already running; the store shares the fetches.
    */
   #fillBuffer(indices, { lod = null } = {}) {
     const pump = lod === null ? (this.#bufferPump ??= { wanted: [], lod: null, running: false, controller: null }) : (this.#probePump ??= { wanted: [], lod, running: false, controller: null });
     pump.wanted = indices;
     pump.lod = lod;
-    if (pump.running) return;
+    // A scrub over timesteps that are in memory asks for none: no controller, no checks of what is ready, nothing on the wire.
+    if (pump.running || indices.length === 0) return;
     pump.running = true;
     pump.controller = new AbortController();
     this.#runBufferPump(pump);
@@ -1124,22 +1158,41 @@ class Viewer {
 
   async #runBufferPump(pump) {
     const { signal } = pump.controller;
+    const { store } = this;
+    // Held from the first timestep it asks for to the end of the run, so that prefetch does not start in the gap between one landing and the next being asked for.
+    let release = null;
     let failed = null;
+    // The timesteps on the wire, and those that landed and are still not in memory: the cache cannot keep them, so asking again would never end.
+    const loading = new Map();
+    const unkept = new Set();
+    let wanted = pump.wanted;
     try {
-      let previous = '';
       while (!signal.aborted) {
         const lod = pump.lod ?? this.#targetLod();
-        // The same batch again means the cache cannot keep what was loaded: stop rather than load it forever.
-        const { batch, key, done } = nextPumpBatch({ wanted: pump.wanted, isReady: (t) => this.#frameReady(lod, t), previous, size: this.#bufferBatch(lod) });
-        if (done) break;
-        previous = key;
-        await Promise.all(batch.map((t) => this.#loadTimestep(lod, t, signal)));
+        if (pump.wanted !== wanted) {
+          wanted = pump.wanted;
+          unkept.clear();
+        }
+        for (const t of nextPumpSteps({ wanted, isReady: (step) => this.#frameReady(lod, step), loading, unkept, size: this.#bufferBatch(lod) })) {
+          release ??= store.holdDemand();
+          loading.set(
+            t,
+            this.#loadTimestep(lod, t, signal).then(() => {
+              loading.delete(t);
+              if (!signal.aborted && !this.#frameReady(lod, t)) unkept.add(t);
+            }),
+          );
+        }
+        if (loading.size === 0) break;
+        await Promise.race(loading.values());
       }
     } catch (error) {
       if (error.name !== 'AbortError') failed = error;
     } finally {
+      release?.();
       pump.running = false;
     }
+    if (pump !== this.#bufferPump && pump !== this.#probePump) return;
     if (failed && this.#playing) {
       console.error('playback: could not fill the buffer:', failed);
       this.#playback?.pause();
@@ -1149,17 +1202,29 @@ class Viewer {
     }
   }
 
-  /** Timesteps the buffer loads at once, at demand priority: BUFFER_BATCH, or fewer while a movie plays on a link that carries less (see bufferBatch). */
+  /** Timesteps the buffer loads at once, at demand priority: BUFFER_BATCH, or fewer on a link that carries less (see bufferBatch), for a scrub as for a movie. */
   #bufferBatch(lod) {
-    if (!this.#playing) return BUFFER_BATCH;
     return bufferBatch({ bytesPerStep: this.#wireBytesPerStep(lod, this.#visibleCells(lod)), bandwidth: this.store.bandwidthEstimate(), max: BUFFER_BATCH });
   }
 
-  /** Stop filling the buffer of playback or of a scrub, and the probe: what is in flight and wanted by no one else is cancelled. */
-  #stopBufferPumps() {
-    this.#bufferPump?.controller?.abort();
+  /** Stop both pumps. For a scrub handoff, only their current requests survive until the replacement frame claims what it needs. */
+  #stopBufferPumps({ handoff = false } = {}) {
+    for (const pump of [this.#bufferPump, this.#probePump]) {
+      if (!pump?.controller) continue;
+      if (handoff && pump.running) {
+        pump.wanted = [];
+        this.#retiringPumps.push(pump.controller);
+      } else {
+        pump.controller.abort();
+      }
+    }
     this.#bufferPump = null;
-    this.#stopProbe();
+    this.#probePump = null;
+    if (!handoff) this.#abortRetiringPumps();
+  }
+
+  #abortRetiringPumps() {
+    for (const controller of this.#retiringPumps.splice(0)) controller.abort();
   }
 
   #stopProbe() {
@@ -1195,7 +1260,7 @@ class Viewer {
     this.#coarseLoop = null;
     this.#wave?.controller.abort();
     this.#wave = null;
-    clearTimeout(this.#gpuFillTimer);
+    this.#gpuFill.cancel();
     clearTimeout(this.#prefetchTimer);
     this.#prefetchTimer = 0;
     this.#prefetchAbort?.abort();
@@ -1423,8 +1488,8 @@ class Viewer {
   }
 
   /** The validity mask of a cell at t, fetched at the priority of the cell's data; resolves null for a store without a mask. */
-  #maskRead(lod, row, col, t, signal) {
-    return this.store.hasMask ? this.store.getMask(lod, row, col, t, { signal }) : null;
+  #maskRead(lod, row, col, t, signal, background = false) {
+    return this.store.hasMask ? this.store.getMask(lod, row, col, t, { signal, background }) : null;
   }
 
   #slotForChunk(lod, row, col, t, renderer) {
@@ -1435,24 +1500,34 @@ class Viewer {
     return data ? renderer.upload(key, { lod, row, col, t }, data) : -1;
   }
 
-  #scheduleGpuFill() {
-    clearTimeout(this.#gpuFillTimer);
-    this.#gpuFillTimer = setTimeout(() => this.#fillGpuWindow(), 0);
+  /** Whether frames are drawn one after the other (see framesInSequence): a scrub, a movie that is not buffering, or a camera that is moving. */
+  get #framesInSequence() {
+    return framesInSequence({
+      scrubbing: this.#scrubTimer !== 0,
+      playing: this.#playing,
+      buffering: this.#playback?.buffering ?? false,
+      sinceCameraMoveMs: performance.now() - this.#cameraMovedAt,
+    });
+  }
+
+  /** The display's frame period: as measured while a movie plays, else 60 Hz. */
+  get #frameMs() {
+    return this.#playback?.frameMs ?? 1000 / 60;
   }
 
   /**
    * Keep a window of timesteps around t resident in the texture pool, as wide as the pool holds for the
    * visible cells and reaching further in the scrub direction (wrapping past the last timestep while a movie plays), so the next steps are uniform changes
-   * instead of uploads. Uploads come from the decoded cache in slices of GPU_UPLOAD_SLICE_MS.
+   * instead of uploads. Uploads come from the decoded cache in slices of GPU_UPLOAD_SLICE_MS, which #gpuFill spaces out. Returns
+   * whether the window has more to upload.
    */
   #fillGpuWindow() {
     const { lod, cells } = this.#view;
     const { store, renderer, t } = this;
-    if (cells.size === 0) return;
+    if (cells.size === 0) return false;
     const steps = Math.max(1, Math.floor((renderer.slots * GPU_FILL_FRACTION) / (cells.size)));
-    const timesteps = windowOrder(store.times.length, t, { direction: this.#direction, behindFactor: this.#behindFactor, loop: this.#playing }).slice(0, steps);
-    const frameMs = this.#playback?.frameMs ?? 1000 / 60;
-    const sliceMs = Math.min(GPU_UPLOAD_SLICE_MS, frameMs * GPU_SLICE_FRACTION_OF_FRAME);
+    const timesteps = this.#gpuWindow.timesteps(store.times.length, t, { direction: this.#direction, behindFactor: this.#behindFactor, loop: this.#playing }, steps);
+    const sliceMs = Math.min(GPU_UPLOAD_SLICE_MS, this.#frameMs * GPU_SLICE_FRACTION_OF_FRAME);
     const started = performance.now();
     for (const tt of timesteps) {
       for (const ct of [tt]) {
@@ -1469,13 +1544,11 @@ class Viewer {
             const mask = store.peekMask(lod, row, col, ct);
             if (mask) renderer.uploadMask(slot, mask);
           }
-          if (performance.now() - started > sliceMs) {
-            this.#gpuFillTimer = setTimeout(() => this.#fillGpuWindow(), 0);
-            return;
-          }
+          if (performance.now() - started > sliceMs) return true;
         }
       }
     }
+    return false;
   }
 
   /** Eviction order for decoded chunks and texture slots: outside the view first, then by scrub cost from t. */
@@ -1654,6 +1727,10 @@ class Viewer {
     if (!wave || previous) wave = { lod, t, controller: new AbortController(), cells: new Set(), failures: new Map() };
     const wanted = missing.filter(([row, col]) => !wave.cells.has(`${row}/${col}`));
     this.#wave = wave;
+    if (this.#retiringPumps.length) {
+      // Claim the target before its coarse stages can make the target wait.
+      for (const [row, col] of missing) this.store.retainCell(lod, row, col, t, wave.controller.signal);
+    }
     if (wanted.length > 0) {
       for (const [row, col] of wanted) wave.cells.add(`${row}/${col}`);
       this.#emit({ type: 'load-start', t, cells: wanted.length });
@@ -1672,9 +1749,15 @@ class Viewer {
   async #loadWanted(wave, wanted) {
     const { lod } = wave;
     const { signal } = wave.controller;
+    const stages = this.#coarseStages(lod, wanted, wave.t);
+    if (this.#retiringPumps.length) {
+      for (const stage of stages) {
+        for (const [row, col] of stage.cells) this.store.retainCell(stage.lod, row, col, wave.t, signal);
+      }
+    }
     let previous = null;
     let lead = 0;
-    for (const stage of this.#coarseStages(lod, wanted, wave.t)) {
+    for (const stage of stages) {
       if (previous) await Promise.race([previous, delay(lead, signal)]);
       if (signal.aborted) return;
       previous = this.#loadStage(wave, stage);
@@ -1741,7 +1824,7 @@ class Viewer {
 
   /** The chunks of timestep t for these cells of one level, and their validity masks, decoded and in the cache when this resolves. */
   async #loadFrame(lod, cells, t, signal) {
-    await Promise.all([this.store.getCoarseFrame(lod, cells, t, { signal }), ...cells.map(([row, col]) => this.#maskRead(lod, row, col, t, signal))]);
+    await Promise.all([this.store.getCoarseFrame(lod, cells, t, { signal, materialize: false }), ...cells.map(([row, col]) => this.#maskRead(lod, row, col, t, signal))]);
   }
 
   /** Fetch the target-level cells of a wave; the frame is painted when the last one has arrived (earlier ones only change what is ready). */
@@ -1756,6 +1839,8 @@ class Viewer {
           this.#setProgress((++done / wanted.length) * 0.98);
           this.#emit({ type: 'cell-ready', t, row, col });
           this.#render({ force: false });
+          // The cells that have landed go to the GPU while the rest of the frame is still on its way, so the paint that completes it has little left to upload.
+          this.#gpuFill.schedule();
         },
         (error) => {
           if (error.name === 'AbortError') return;
@@ -1882,9 +1967,10 @@ class Viewer {
     const { t } = frame;
     const cellX = x - col * level.chunkWidth;
     const cellY = y - row * level.chunkHeight;
+    let values;
     let mask = null;
     try {
-      [, mask] = await Promise.all([store.getRaw(lod, row, col, t), this.#maskRead(lod, row, col, t)]);
+      [[values], mask] = await Promise.all([store.readPixels(lod, row, col, t, [[cellX, cellY]]), this.#maskRead(lod, row, col, t)]);
     } catch (error) {
       if (request === this.#inspectRequest) {
         this.#showError('Chunk load failed', redactText(error?.message ?? error), { code: 'chunk_load_failed' });
@@ -1894,7 +1980,6 @@ class Viewer {
     if (request !== this.#inspectRequest) return;
     const observed = await this.#observedAt(lod, row, col, t, cellX, cellY);
     if (request !== this.#inspectRequest) return;
-    const values = store.samplePixel(lod, row, col, t, cellX, cellY);
     const maskValue = mask ? mask[cellY * level.chunkWidth + cellX] : null;
     const info = { t, lod, pixel: { x: Math.floor(worldX), y: Math.floor(worldY) }, observed, masked: maskValue === 0, ...describePixel(values, this.bands, this.#nodata, maskValue) };
     this.#hook('click', { pixel: info.pixel, t, lod, info });
@@ -1950,38 +2035,28 @@ class Viewer {
   async #fillChart(chart) {
     const { store } = this;
     const { lod, row, col } = chart.cell;
-    const level = store.levels[lod];
-    const sample = (data, mask) => ({
-      pixels: chart.window.map(([x, y]) => samplePixelFrom(data, level, x, y)),
-      ...(mask ? { valid: validAt(mask, level.chunkWidth, chart.window) } : {}),
-    });
-    const coverageOffset = chart.pixel.y * level.chunkWidth + chart.pixel.x;
-    for (let t = 0; t < chart.readings.length; t++) {
-      const data = store.peekRaw(lod, row, col, t);
-      const mask = store.hasMask ? store.peekMask(lod, row, col, t) : null;
-      if (data && (!store.hasMask || mask)) chart.readings[t] = sample(data, mask);
-      if (chart.coverage) {
-        const coverage = store.peekCoverage(lod, row, col, t);
-        if (coverage) chart.coverage[t] = coverage[coverageOffset];
-      }
-    }
+    const coverageOffset = chart.pixel.y * store.levels[lod].chunkWidth + chart.pixel.x;
+    this.#readChartCache(chart);
     this.#renderChart();
     // Timesteps still missing their values or (with a coverage variable) their coverage, nearest to the one on screen first.
-    const missing = chart.readings
-      .flatMap((reading, t) => (reading && (!chart.coverage || chart.coverage[t] !== undefined) ? [] : [t]))
-      .sort((a, b) => Math.abs(a - this.t) - Math.abs(b - this.t));
+    const missing = chart.readings.flatMap((_, t) => (chartHolds(chart, t) ? [] : [t])).sort((a, b) => Math.abs(a - this.t) - Math.abs(b - this.t));
     const { signal } = chart.controller;
-    for (let i = 0; i < missing.length; i += CHART_BATCH) {
+    for (let next = 0; next < missing.length; ) {
+      const size = await this.#chartBatchSize(chart, missing.slice(next));
+      if (size === 0 || signal.aborted) return;
+      // What the cache gave while the chart waited is not read again.
+      const batch = [];
+      for (; next < missing.length && batch.length < size; next++) if (!chartHolds(chart, missing[next])) batch.push(missing[next]);
       await Promise.all(
-        missing.slice(i, i + CHART_BATCH).map(async (t) => {
+        batch.map(async (t) => {
           const observed = chart.coverage && chart.coverage[t] === undefined ? this.#loadChartCoverage(chart, t, coverageOffset) : null;
           if (!chart.readings[t]) {
             try {
-              const [data, mask] = await Promise.all([
-                store.getRaw(lod, row, col, t, { signal }),
-                this.#maskRead(lod, row, col, t, signal),
+              const [pixels, mask] = await Promise.all([
+                store.readPixels(lod, row, col, t, chart.window, { signal, background: true }),
+                this.#maskRead(lod, row, col, t, signal, true),
               ]);
-              chart.readings[t] = sample(data, mask);
+              chart.readings[t] = this.#chartReading(chart, pixels, mask);
             } catch (error) {
               if (error.name === 'AbortError') return;
               chart.failed++;
@@ -1998,11 +2073,69 @@ class Viewer {
     this.#renderChart();
   }
 
+  /**
+   * Take the timesteps that the cache holds from the chart's missing ones, with no fetch. The window pixels are read where they lie in
+   * the cached chunk: a packed chunk (compact mode) is not expanded to read nine pixels. True if it added anything.
+   */
+  #readChartCache(chart) {
+    const { store } = this;
+    const { lod, row, col } = chart.cell;
+    const coverageOffset = chart.pixel.y * store.levels[lod].chunkWidth + chart.pixel.x;
+    let added = false;
+    for (let t = 0; t < chart.readings.length; t++) {
+      if (!chart.readings[t]) {
+        const mask = store.hasMask ? store.peekMask(lod, row, col, t) : null;
+        if (store.hasCachedRaw(lod, row, col, t) && (!store.hasMask || mask)) {
+          chart.readings[t] = this.#chartReading(
+            chart,
+            chart.window.map(([x, y]) => store.samplePixel(lod, row, col, t, x, y)),
+            mask,
+          );
+          added = true;
+        }
+      }
+      if (chart.coverage && chart.coverage[t] === undefined) {
+        const coverage = store.peekCoverage(lod, row, col, t);
+        if (coverage) {
+          chart.coverage[t] = coverage[coverageOffset];
+          added = true;
+        }
+      }
+    }
+    return added;
+  }
+
+  /** What the chart keeps of one timestep: the values of its window pixels and, with a validity mask, which of them are valid. */
+  #chartReading(chart, pixels, mask) {
+    return { pixels, ...(mask ? { valid: validAt(mask, this.store.levels[chart.cell.lod].chunkWidth, chart.window) } : {}) };
+  }
+
+  /**
+   * How many timesteps the chart reads next, 0 when the chart is cleared first. While the frame loads it reads one timestep at a time.
+   * During a scrub or movie, first give the cache a chance to supply missing timesteps. A chart may need coverage or cells the movie
+   * never reads, so after a stretch without cache progress it reads one background timestep before yielding again.
+   */
+  async #chartBatchSize(chart, pending) {
+    const { signal } = chart.controller;
+    let emptyPolls = 0;
+    while ((this.#playing || this.#scrubTimer !== 0) && !pending.every((t) => chartHolds(chart, t))) {
+      await delay(CHART_YIELD_MS, signal);
+      if (signal.aborted) return 0;
+      if (this.#readChartCache(chart)) {
+        this.#scheduleChartRender();
+        emptyPolls = 0;
+      } else if (++emptyPolls === CHART_EMPTY_POLLS && (this.#playing || this.#scrubTimer !== 0)) {
+        return 1;
+      }
+    }
+    return this.#loading ? 1 : CHART_BATCH;
+  }
+
   /** The coverage of the charted pixel at timestep t, into chart.coverage (null when it cannot be read). */
   async #loadChartCoverage(chart, t, offset) {
     const { lod, row, col } = chart.cell;
     try {
-      const coverage = await this.store.getCoverage(lod, row, col, t, { signal: chart.controller.signal });
+      const coverage = await this.store.getCoverage(lod, row, col, t, { signal: chart.controller.signal, background: true });
       chart.coverage[t] = coverage ? coverage[offset] : null;
     } catch (error) {
       if (error.name === 'AbortError') return;

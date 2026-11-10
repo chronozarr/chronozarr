@@ -93,7 +93,7 @@ A removed layer cannot be added again. The reader ends an idle worker pool after
 |---|---|
 | `open` | The store metadata is read. `layer.times`, `layer.bounds` and `layer.products` are valid. |
 | `loading` | The view needs data. |
-| `ready` | Everything that the view needs is on the GPU. It fires again after each pan, zoom or time change that had to wait. |
+| `ready` | Everything that the view needs is on the GPU, and no load is running. That includes a load that no cell needs any more and that nothing waits behind (see [Loading order](#loading-order)). It fires again after each pan, zoom or time change that had to wait. |
 | `error` | Carries `event.error`. The layer keeps running. |
 
 ### State
@@ -104,7 +104,7 @@ These members are read-only: `opened`, `store`, `times`, `bounds`, `bandNames`, 
 
 A time change never refetches what the reader has cached. The GPU pool keeps recently shown chunks, and the reader cache (`layer.store`) holds decoded chunks. While a new timestep loads, the previous one stays on screen.
 
-With `prefetch: true` the reader also fills its caches in the background through `store.prefetch`. It fetches the nearest timesteps first, up to `horizonSteps` (12) on either side of `t`, within its cache and speculative-bandwidth budgets. While nobody scrubs, it starts at most `idleBytes` (32 MiB) per view, and no more than the measured link delivers in `idleSeconds` (1 s). Both are `openStore` options, listed in [js/README.md](../README.md#read-a-store). A scrub then finds the timesteps near `t` cached. Prefetch can move hundreds of MB, and [evidence.md](../../docs/evidence.md#maplibre-layer) has a measured example.
+With `prefetch: true` the reader also fills its caches in the background through `store.prefetch`. It fetches the nearest timesteps first, up to `horizonSteps` (12) on either side of `t`, within its cache and speculative-bandwidth budgets. A timestep against the direction of the last time change counts as twice as far, so the steps ahead of a scrub come first. While nobody scrubs, it starts at most `idleBytes` (32 MiB) per view, and no more than the measured link delivers in `idleSeconds` (1 s). Both are `openStore` options, listed in [js/README.md](../README.md#read-a-store). A scrub then finds the timesteps near `t` cached. Prefetch can move hundreds of MB, and [evidence.md](../../docs/evidence.md#maplibre-layer) has a measured example.
 
 ### Stored data and colors
 
@@ -169,7 +169,7 @@ Each cell is a mesh of 8 x 8 quads (`meshDivisions`). A store with much larger c
 
 ### Loading order
 
-While a cell loads, the layer paints the last timestep shown there. If there is none, it paints the same area from a coarser level that is already loaded. The first view fetches the cells of the coarsest level first. It fetches the level that the zoom asks for after them. A measured example is in [evidence.md](../../docs/evidence.md#maplibre-layer).
+While a cell loads, the layer paints the last timestep shown there. If there is none, it paints the same area from a coarser level that is already loaded. If there is no coarser one either, as just after a zoom out, it paints the finer cells of the same timestep that are still on the GPU, from up to two levels finer. The first view fetches the cells of the coarsest level first. It fetches the level that the zoom asks for after them. A time change cancels the loads of the old timestep. A load that no cell in view needs any more, because its cell left the view or no visible cell stands in on its level, is cancelled once that has been so for 0.4 s and a load that a cell in view needs is in flight or queued, together with the prefetch of the old view, so the cells of the new view do not queue behind it. A pan back within that time finds the load still running. With no such load waiting, the old load runs to the end and a pan back finds its chunk cached, and `ready` waits for it. A measured example is in [evidence.md](../../docs/evidence.md#maplibre-layer).
 
 ## Checking alignment
 

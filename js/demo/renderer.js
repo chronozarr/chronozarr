@@ -163,6 +163,7 @@ export class Renderer {
   #frame = 0;
   #dtype = 'uint16';
   #hasMask = false;
+  #rawBlocks = null;
 
   /** Called with a slot's cell metadata; the highest score is evicted first. Set by the viewer. */
   evictionScore = () => 0;
@@ -379,6 +380,31 @@ export class Renderer {
   }
 
   /**
+   * The packed form of a chunk that packUint16 declined or that is a fill chunk: its raw uint16 values. Two values
+   * make one word, which on a little-endian host (codec.js refuses any other) is the same bytes, so an even-length
+   * array that starts on a word boundary is read in place. Each 128 values are one 16-bit block with minimum 0; that
+   * table depends only on the number of blocks, so it is built once and reused.
+   */
+  #rawAsPacked(data) {
+    let words;
+    if (data.length % 2 === 0 && data.byteOffset % 4 === 0) {
+      words = new Uint32Array(data.buffer, data.byteOffset, data.length / 2);
+    } else {
+      words = new Uint32Array(Math.ceil(data.length / 2));
+      for (let i = 0; i < data.length; i++) words[i >> 1] |= data[i] << ((i & 1) * 16);
+    }
+    const blockCount = Math.ceil(data.length / 128);
+    if (this.#rawBlocks?.length !== blockCount * 2) {
+      this.#rawBlocks = new Uint32Array(blockCount * 2);
+      for (let b = 0; b < blockCount; b++) {
+        this.#rawBlocks[b * 2] = b * 64;
+        this.#rawBlocks[b * 2 + 1] = 16 << 16;
+      }
+    }
+    return { words, blocks: this.#rawBlocks };
+  }
+
+  /**
    * Upload a decoded chunk (uint16, [band][y][x]) into a slot and return the slot, or -1 when no
    * slot can be freed. `meta` carries {lod,row,col,t} for eviction scoring. Foreground uploads
    * (needed for the frame being drawn) evict the highest-scoring unprotected slot; `background`
@@ -412,17 +438,7 @@ export class Renderer {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.#texture);
     if (pool.compact) {
-      let packed = data;
-      if (!data.words) {
-        const words = new Uint32Array(Math.ceil(data.length / 2));
-        for (let i = 0; i < data.length; i++) words[i >> 1] |= data[i] << ((i & 1) * 16);
-        const blocks = new Uint32Array(Math.ceil(data.length / 128) * 2);
-        for (let b = 0; b < blocks.length / 2; b++) {
-          blocks[b * 2] = b * 64;
-          blocks[b * 2 + 1] = 16 << 16;
-        }
-        packed = { words, blocks };
-      }
+      const packed = data.words ? data : this.#rawAsPacked(data);
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
       const uploadRows = (values, width, channels, format) => {
         const count = values.length / channels;
