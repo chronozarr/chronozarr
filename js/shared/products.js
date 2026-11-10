@@ -263,12 +263,28 @@ export function percentileRange(values) {
 }
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const CLOCK_WITHOUT_ZONE = /[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
 
-/** "Mar 2024" when every timestep is the first of a month, otherwise the ISO date. */
+/** Compact months or dates when all timesteps use the same UTC clock time. */
 export function makeTimeFormatter(times) {
-  const monthly = times.every((s) => s.slice(8, 10) === '01');
+  const utc = times.map((time) => {
+    // A timestamp without a zone represents the store's UTC coordinate.
+    const zoned = CLOCK_WITHOUT_ZONE.test(time) ? `${time.replace(' ', 'T')}Z` : time;
+    return new Date(zoned).toISOString();
+  });
+  const midnight = 'T00:00:00.000Z';
+  const clock = utc[0]?.slice(-midnight.length) ?? midnight;
+  const dateOnly = (utc.length > 1 || clock === midnight) && utc.every((time) => time.endsWith(clock));
+  if (!dateOnly) {
+    // Use the same precision for every label, including a midnight in a subdaily series.
+    let suffix = 'Z';
+    if (utc.every((time) => time.endsWith(':00.000Z'))) suffix = ':00.000Z';
+    else if (utc.every((time) => time.endsWith('.000Z'))) suffix = '.000Z';
+    return (t) => `${utc[t].slice(0, -suffix.length).replace('T', ' ')} UTC`;
+  }
+  const monthly = utc.every((time) => time.endsWith(`-01${clock}`));
   return (t) => {
-    const s = times[t];
-    return monthly ? `${MONTH_NAMES[Number(s.slice(5, 7)) - 1]} ${s.slice(0, 4)}` : s.slice(0, 10);
+    const date = utc[t].slice(0, -midnight.length);
+    return monthly ? `${MONTH_NAMES[Number(date.slice(-5, -3)) - 1]} ${date.slice(0, -6)}` : date;
   };
 }
