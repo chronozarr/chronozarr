@@ -3,12 +3,12 @@
 
 import { chunkKey, openStore, scrubCost } from '../chronozarr/decoder.js';
 import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, validAt, windowPixels, xFromTime } from './chart.js';
-import { ASSUMED_BANDWIDTH, STAGE_LEAD_LATENCY_MAX_MS, ancestorCells, coarseLoopDrifted, coarseLoopSteps, planCoarseStages, stageLatencyLeadMs, stageLeadMs } from './coarse.js';
+import { ASSUMED_BANDWIDTH, COARSE_FRAME_BYTES, COARSE_MAX_OVERHEAD, STAGE_LEAD_LATENCY_MAX_MS, STAGE_LEAD_MAX_MS, ancestorCells, coarseLoopDrifted, coarseLoopSteps, extraOverviewLod, planCoarseStages, stageLatencyLeadMs, stageLeadMs } from './coarse.js';
 import { fetchWithEarlyReads, takeEarlyRootMs } from './early.js';
 import { chooseFrame } from './frames.js';
 import { BUFFER_BATCH, DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, START_BUFFER_SECONDS, bufferBatch, chooseMovieLevel, describeReason, linkAllows, linkSteps, roundSteps, snapSpeed, wireRatio } from './playback.js';
 import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js';
-import { SCRUB_WINDOW_MS, ScrubSpeed, chooseScrub, framesInSequence, nextPumpSteps, readyRun, savesData, scrubPumpRequests, stepsAhead } from './scrub.js';
+import { PROBE_MAX_NEED, SCRUB_PREVIEW_STRIDE, SCRUB_WINDOW_MS, ScrubSpeed, chooseScrub, framesInSequence, nextPumpSteps, readyRun, savesData, scrubPreviewDate, scrubPreviewSteps, scrubPumpRequests, stepsAhead } from './scrub.js';
 import { DRAWER_BELOW, inspectorLayout } from './layout.js';
 import { decodeView, encodeView } from './permalink.js';
 import { bindOpenStoreForm, checkUniformChunks, explainOpenError, parseStoreUrl } from './open-store.js';
@@ -485,7 +485,7 @@ class Viewer {
     if (!playing) {
       this.#beginView('time');
       this.#noteScrubStep(Math.abs(next - this.t));
-      if (Math.abs(next - this.t) > SEEK_DISTANCE) {
+      if (Math.abs(next - this.t) > SEEK_DISTANCE && !this.#scrubMemo?.sampled) {
         // Let the replacement frame take over any requests it shares with the old pumps.
         this.#stopBufferPumps({ handoff: true });
         this.#dropSpeculativeFetches({ coarseLoop: true });
@@ -824,12 +824,14 @@ class Viewer {
     const started = performance.now();
     const { store, t } = this;
     const lod = this.#targetLod();
-    if (this.#scrubMemo !== null && !this.#playing) this.#loadAheadOfScrub();
+    const scrub = this.#playing ? null : this.#scrubMemo;
+    const sampled = scrub?.sampled && scrub.lod === lod;
+    if (scrub && (!scrub.sampled || sampled)) this.#loadAheadOfScrub();
     this.#updateResHint();
     const cells = this.#visibleCells(lod);
     this.#view = { lod, cells: new Set(cells.map(([row, col]) => `${row}/${col}`)) };
     const missing = cells.filter(([row, col]) => !this.#cellReady(lod, row, col, t));
-    const choice = chooseFrame({
+    let choice = chooseFrame({
       targetLod: lod,
       // A scrub that draws coarser than the normal level still takes a complete frame of this timestep at any level up to it.
       finestLod: this.#scrubCoarser ? this.#scrubMemo.baseLod : lod,
@@ -838,6 +840,14 @@ class Viewer {
       isReady: (frameLod, frameT) => (frameLod === lod && frameT === t ? missing.length === 0 : this.#frameReady(frameLod, frameT)),
       previous: this.#shown,
     });
+    // A fast drag can skip a sampled date. Show it only when it is closer to the selection than the current image.
+    if (sampled && choice?.kind !== 'target') {
+      const step = scrubPreviewDate(t, this.#direction);
+      const previousDistance = choice ? Math.abs(choice.t - t) : Infinity;
+      if (step < store.times.length && Math.abs(step - t) < previousDistance && this.#frameReady(lod, step)) {
+        choice = { lod, t: step, kind: 'fallback' };
+      }
+    }
 
     const shown = this.#shown;
     const same = choice !== null && shown !== null && shown.lod === choice.lod && shown.t === choice.t;
@@ -859,11 +869,11 @@ class Viewer {
       this.#wave = null;
       this.#setProgress(1);
       this.#gpuFill.schedule();
-      this.#schedulePrefetch();
+      if (!sampled) this.#schedulePrefetch();
     } else if (missing.length === 0) {
       // Everything is in memory but a frame could not be drawn whole (a slot could not be had): try again next frame.
       this.requestRender();
-    } else {
+    } else if (!sampled) {
       this.#requestCells(lod, missing, t);
       // Cells that failed for good no longer hold anything back: keep prefetching for the ones that work.
       if (missing.every(([row, col]) => this.#wave.failures.has(`${row}/${col}`))) {
@@ -898,6 +908,13 @@ class Viewer {
       if (!slots) return false;
       drawable.push({ row, col, slots });
     }
+    // The opening overview has provisional display ranges. A resize can reset view timing before the first sharp paint.
+    const sharp = kind === 'target' && (!this.#scrubCoarser || lod <= this.#scrubMemo.baseLod);
+    if (sharp && this.paintedT < 0 && this.#shown && extraOverviewLod(this.store.levels) !== null) {
+      this.#stretchLo = null;
+      if (!this.#linear.manual) this.#linear.range = null;
+      this.#channelRanges = null;
+    }
     if (this.#autoExposure && (this.#usesLinearRange() || this.#usesChannelRanges())) {
       const key = [lod, t, this.productIndex, this.bandChoice, this.camera.cx, this.camera.cy, this.camera.scale, canvas.width, canvas.height].join('/');
       if (key !== this.#exposureView) {
@@ -924,7 +941,7 @@ class Viewer {
     this.#shown = { lod, t, cells: new Set(cells.map(([row, col]) => `${row}/${col}`)), kind };
     this.#dirty = false;
     // A fast scrub's coarser frame is the target only while the scrub lasts; like a fallback, it does not count as painted.
-    if (kind === 'target' && !(this.#scrubCoarser && lod > this.#scrubMemo.baseLod)) this.paintedT = t;
+    if (sharp) this.paintedT = t;
     this.#frameStats.painted++;
     if (lod > targetLod) this.#frameStats.fallback++;
     const ms = performance.now() - started;
@@ -1045,7 +1062,8 @@ class Viewer {
   /**
    * Prefetch the loop at the coarsest useful level (the level of a view four times further out than the more
    * zoomed-out of the camera and the fitted view; for a store a few cells wide that is its last level, one cell), so
-   * that some complete frame is in memory for every timestep and a frame never has to be a partial one. It uses the
+   * that some complete frame is in memory for every timestep. A store with a small extra overview instead warms a
+   * sparse grid of dates in both directions, without wrapping at the ends of the timeline. It uses the
    * playing prefetch, which the store's idle limit does not apply to, but as an ambient job, which does not count as the
    * user playing; the horizon prefetch of the current level goes on as before. It plans as many timesteps as the measured
    * link carries in COARSE_LOOP_SECONDS (the whole loop on all but a slow link), nearest first. It runs once per view: again
@@ -1054,7 +1072,10 @@ class Viewer {
   #prefetchCoarseLoop() {
     const { store } = this;
     if (this.lodOverride !== null || this.#exportHold) return;
-    const lod = Math.max(this.#lodForScale(Math.min(this.camera.scale, this.fitScale) / 4), this.#view.lod);
+    const usefulLod = this.#lodForScale(Math.min(this.camera.scale, this.fitScale) / 4);
+    const overview = extraOverviewLod(store.levels);
+    const sparse = overview !== null && overview <= usefulLod + 1;
+    const lod = Math.max(sparse ? overview : usefulLod, this.#view.lod);
     this.#coarseLoopLod = lod;
     const cells = this.#visibleCells(lod);
     const key = `${lod}:${cells.map(([row, col]) => `${row}/${col}`).join(',')}`;
@@ -1062,7 +1083,8 @@ class Viewer {
     const count = store.times.length;
     const steps = coarseLoopSteps({ bytesPerStep: this.#wireBytesPerStep(lod, cells), bandwidth: store.bandwidthEstimate(), count });
     const current = this.#coarseLoop;
-    if (current?.key === key && !coarseLoopDrifted({ t: this.t, planned: current.t, steps: current.steps, count })) return;
+    const stepStride = sparse ? SCRUB_PREVIEW_STRIDE : 1;
+    if (current?.key === key && !coarseLoopDrifted({ t: this.t, planned: current.t, steps: current.steps * stepStride, count })) return;
     const controller = new AbortController();
     const loop = { key, controller, t: this.t, steps };
     this.#coarseLoop = loop;
@@ -1072,8 +1094,9 @@ class Viewer {
         cells,
         t: this.t,
         direction: this.#direction,
-        behindFactor: BEHIND_FACTOR_PLAYING,
-        loop: true,
+        behindFactor: sparse ? 1 : BEHIND_FACTOR_PLAYING,
+        loop: !sparse,
+        stepStride,
         playing: true,
         ambient: true,
         maxSteps: steps < count ? steps : undefined,
@@ -1145,10 +1168,11 @@ class Viewer {
    * loaded at the level in use, or at `lod` (the probe of a scrub). The next one starts as soon as one lands, so the few
    * stay in flight. A new request replaces the list of a pump that is already running; the store shares the fetches.
    */
-  #fillBuffer(indices, { lod = null } = {}) {
+  #fillBuffer(indices, { lod = null, sampled = false } = {}) {
     const pump = lod === null ? (this.#bufferPump ??= { wanted: [], lod: null, running: false, controller: null }) : (this.#probePump ??= { wanted: [], lod, running: false, controller: null });
     pump.wanted = indices;
-    pump.lod = lod;
+    pump.lod = sampled ? this.#scrubMemo.lod : lod;
+    pump.sampled = sampled;
     // A scrub over timesteps that are in memory asks for none: no controller, no checks of what is ready, nothing on the wire.
     if (pump.running || indices.length === 0) return;
     pump.running = true;
@@ -1173,13 +1197,17 @@ class Viewer {
           wanted = pump.wanted;
           unkept.clear();
         }
-        for (const t of nextPumpSteps({ wanted, isReady: (step) => this.#frameReady(lod, step), loading, unkept, size: this.#bufferBatch(lod) })) {
+        const size = pump.sampled ? 1 : this.#bufferBatch(lod);
+        for (const t of nextPumpSteps({ wanted, isReady: (step) => this.#frameReady(lod, step), loading, unkept, size })) {
           release ??= store.holdDemand();
           loading.set(
             t,
             this.#loadTimestep(lod, t, signal).then(() => {
               loading.delete(t);
-              if (!signal.aborted && !this.#frameReady(lod, t)) unkept.add(t);
+              if (!signal.aborted) {
+                if (!this.#frameReady(lod, t)) unkept.add(t);
+                if (pump.sampled) this.#recheckFrame();
+              }
             }),
           );
         }
@@ -1335,7 +1363,8 @@ class Viewer {
   /**
    * The level to draw at while the user scrubs (a drag on the timeline, repeated arrow keys), from how much of the
    * scrub is loaded already: the sharpest level with the next LOOKAHEAD_SECONDS of timesteps in memory, kept until
-   * its buffer runs low (chooseScrubLevel), never coarser than `deepestLod`. The normal level when nobody scrubs.
+   * its buffer runs low (chooseScrubLevel), down to `deepestLod`. A fast scrub that exhausts this buffer can use the
+   * small extra overview. The normal level when nobody scrubs.
    * It is decided once per step, so chunks landing between two steps do not change the level of a frame that is
    * on its way; the frame, the prefetch window and the eviction order all follow it through #view. When the browser
    * asks to save data (savesData), the scrub stays at the coarsest of those levels.
@@ -1358,7 +1387,11 @@ class Viewer {
         held: this.#scrubMemo?.lod,
         ready: (candidate, need) => this.#readyAhead(candidate, need),
       });
-      this.#scrubMemo = { key, baseLod, saving, ...choice };
+      const overview = extraOverviewLod(this.store.levels);
+      const sampled = overview !== null && overview > choice.lod && overview <= deepestLod + 1
+        && speed > PROBE_MAX_NEED && choice.need > 0 && choice.lod === choice.levels.at(-1)
+        && this.#readyAhead(choice.lod, choice.need) < choice.need;
+      this.#scrubMemo = { key, baseLod, saving, ...choice, lod: sampled ? overview : choice.lod, sampled };
     }
     return this.#scrubMemo.lod;
   }
@@ -1373,11 +1406,22 @@ class Viewer {
    * Load ahead of a scrub, at demand priority so the next step does not cancel it: the level in use, and, while that
    * level has everything it is asked to hold, a probe of the next sharper one with what is spare, so that a step up
    * can happen (planScrubLoads). The probe stops the moment the level in use has something to load again. A scrub with
-   * one level to choose from is left to the prefetch window. A scrub that saves data never probes.
+   * one level to choose from is left to the prefetch window. A scrub that saves data never probes. The sampled
+   * overview keeps just one lookahead read in flight as the selected date changes.
    */
   #loadAheadOfScrub() {
-    const { lod, levels, need, saving } = this.#scrubMemo;
-    const requests = scrubPumpRequests({ saving, t: this.t, direction: this.#direction, count: this.store.times.length, levels, lod, need, isReady: (candidate, step) => this.#frameReady(candidate, step) });
+    const { lod, levels, need, saving, sampled } = this.#scrubMemo;
+    const count = this.store.times.length;
+    if (this.#bufferPump && this.#bufferPump.sampled !== sampled) this.#stopBufferPumps({ handoff: true });
+    if (sampled) {
+      if (!this.#bufferPump) this.#dropSpeculativeFetches({ coarseLoop: true });
+      const steps = scrubPreviewSteps({ t: this.t, direction: this.#direction, count, need });
+      this.#fillBuffer(steps, { sampled: true });
+      this.#wave?.controller.abort();
+      this.#wave = null;
+      return;
+    }
+    const requests = scrubPumpRequests({ saving, t: this.t, direction: this.#direction, count, levels, lod, need, isReady: (candidate, step) => this.#frameReady(candidate, step) });
     if (requests === null) return;
     this.#fillBuffer(requests.fill);
     if (requests.probe) this.#fillBuffer(requests.probe.steps, { lod: requests.probe.lod });
@@ -1808,11 +1852,20 @@ class Viewer {
   #coarseStages(lod, cells, t) {
     if (this.lodOverride !== null || this.#playing) return [];
     const { store } = this;
+    const frameBytes = (level) => this.#frameBytes(level, ancestorCells(cells, lod, level), t);
+    const overview = extraOverviewLod(store.levels);
+    if (this.#viewTiming?.kind === 'open' && overview !== null && overview > lod) {
+      const target = frameBytes(lod);
+      const preview = frameBytes(overview);
+      if (target > COARSE_FRAME_BYTES && preview > 0 && preview <= COARSE_MAX_OVERHEAD * target) {
+        return [{ lod: overview, cells: ancestorCells(cells, lod, overview), leadMs: STAGE_LEAD_MAX_MS }];
+      }
+    }
     const bandwidth = store.bandwidthEstimate() ?? ASSUMED_BANDWIDTH;
     const levels = planCoarseStages({
       targetLod: lod,
       coarsestLod: store.levels.length - 1,
-      frameBytes: (level) => this.#frameBytes(level, ancestorCells(cells, lod, level), t),
+      frameBytes,
       bandwidth,
       wireRatio: wireRatio(readStats(store)),
     });
@@ -2579,7 +2632,8 @@ class Viewer {
     if (shown !== this.t) {
       const failures = this.#wave?.failures;
       const unavailable = failures && missing.some(([row, col]) => failures.get(`${row}/${col}`) > MAX_CELL_RETRIES);
-      message = `${unavailable ? 'Unavailable' : 'Loading'} ${this.#formatTime(this.t)}.`;
+      const action = unavailable ? 'Unavailable' : this.#scrubMemo?.sampled && !this.#playing ? 'Selected' : 'Loading';
+      message = `${action} ${this.#formatTime(this.t)}.`;
       if (shown !== undefined) message += ` Showing ${date}.`;
     }
     if (status.textContent !== message) status.textContent = message;

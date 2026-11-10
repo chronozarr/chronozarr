@@ -1,4 +1,7 @@
+import path from 'node:path';
+import { buildSyntheticStore } from '../support/synthetic-store.js';
 import { expect, test } from './fixtures.js';
+import { writeTree } from './make-node-fixtures.mjs';
 
 const DELAY_MS = 300;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -99,3 +102,101 @@ for (const stallInBody of [false, true]) {
     await page.evaluate(() => window.previewProbe.release());
   });
 }
+
+test('an extra overview previews a skipped date and leaves one read in flight until release', async ({ page, servers, storeUrl, stores }) => {
+  const store = buildSyntheticStore({
+    nTime: 33, nBand: 1, height: 1024, width: 1024, chunk: 256, nLevels: 4, sharded: false, consolidated: true, nodata: 0,
+    bandObjects: [{ name: 'surface', scale: 1, offset: 0 }],
+    values: (_t, _b, y, x, lod) => 1 + lod * 512 + (x + y) % 256,
+  });
+  await writeTree(path.join(stores.dir, 'scrub-preview'), store.files);
+  const url = `${servers.dataUrl}/scrub-preview/`;
+  const initial = await storeUrl('u8_rgb');
+  await page.clock.install();
+  await page.goto(`${servers.appUrl}/demo/index.html?store=${encodeURIComponent(initial)}`);
+  await page.waitForFunction(() => window.chronozarr?.viewer?.paintedT === 0);
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
+
+  const { paints, ranges } = await page.evaluate(async (url) => {
+    const { viewer } = window.chronozarr;
+    const reads = [];
+    const gate = Promise.withResolvers();
+    const previewRequested = Promise.withResolvers();
+    const previewReady = Promise.withResolvers();
+    const fetchChunk = async (request) => {
+      const match = /\/(\d)\/data\/c\/(\d+)\//.exec(new URL(request.url).pathname);
+      if (match) {
+        const [, lod, t] = match.map(Number);
+        if (t === 0 && lod === 3) {
+          previewRequested.resolve();
+          await previewReady.promise;
+        }
+        if (t !== 0 && (lod !== 3 || t !== 4)) {
+          if (lod === 3) reads.push({ t, signal: request.signal });
+          request.signal.throwIfAborted();
+          const aborted = new Promise((_, reject) => {
+            request.signal.addEventListener('abort', () => reject(request.signal.reason), { once: true });
+          });
+          await Promise.race([gate.promise, aborted]);
+        }
+      }
+      return fetch(request);
+    };
+    const paints = [];
+    const ranges = [];
+    const beginPaint = viewer.renderer.beginPaint.bind(viewer.renderer);
+    viewer.renderer.beginPaint = (frame, options) => {
+      ranges.push(frame.range);
+      beginPaint(frame, options);
+    };
+    viewer.probe = (event) => {
+      if (event.type === 'paint') paints.push([event.lod, event.kind]);
+    };
+    const opening = viewer.loadStore(url, { fetch: fetchChunk, workers: 0 });
+    await previewRequested.promise;
+    viewer.fit();
+    previewReady.resolve();
+    await opening;
+    viewer.renderer.beginPaint = beginPaint;
+    viewer.store.prefetch = async () => ({ errors: [] });
+    await viewer.store.ensureRaw(3, 0, 0, 4);
+    window.previewReads = reads;
+    window.releasePreviewReads = gate.resolve;
+    return { paints, ranges };
+  }, url);
+  expect(paints[0]).toEqual([3, 'fallback']);
+  expect(paints.at(-1)).toEqual([0, 'target']);
+  expect(ranges[0][0]).toBeGreaterThan(1000);
+  expect(ranges.at(-1)[1]).toBeLessThan(300);
+
+  const go = (t) => page.evaluate((t) => {
+    const { viewer } = window.chronozarr;
+    viewer.goToTime(t);
+    viewer.renderNow();
+    return { selected: viewer.t, shown: viewer.shownFrame.t, lod: viewer.shownFrame.lod };
+  }, t);
+  await go(1);
+  await page.clock.runFor(40);
+  expect(await go(5)).toEqual({ selected: 5, shown: 4, lod: 3 });
+  const date = await page.locator('#time-label').textContent();
+  const selected = await page.locator('#timeline-track').getAttribute('aria-valuetext');
+  expect(date).not.toBe(selected);
+  await expect(page.locator('#frame-date-status')).toHaveText(`Selected ${selected}. Showing ${date}.`);
+
+  await page.clock.runFor(40);
+  await go(10);
+  const reads = () => page.evaluate(() => window.previewReads.map(({ t, signal }) => ({ t, aborted: signal.aborted })));
+  expect(await reads()).toEqual([{ t: 16, aborted: false }]);
+
+  const final = await page.evaluate(async () => {
+    const { viewer } = window.chronozarr;
+    const painted = viewer.whenPainted();
+    viewer.endScrub();
+    viewer.renderNow();
+    window.releasePreviewReads();
+    await painted;
+    return { t: viewer.paintedT, lod: viewer.shownFrame.lod };
+  });
+  expect(final).toEqual({ t: 10, lod: 0 });
+  expect(await reads()).toEqual([{ t: 16, aborted: true }]);
+});

@@ -152,6 +152,21 @@ export function chooseScrub({ speed, t, direction, count, baseLod, deepestLod, c
  */
 export const PROBE_MAX_NEED = 12;
 
+/** Warm a fixed grid of dates so fast drags in either direction can reuse the same small previews. */
+export const SCRUB_PREVIEW_STRIDE = 4;
+
+/** Look far enough ahead that a preview has time to arrive before the playhead passes it. */
+export function scrubPreviewSteps({ t, direction, count, need }) {
+  const lead = Math.ceil(LOW_MARK * need);
+  return stepsAhead({ t, direction, count, limit: need }).filter((step) => Math.abs(step - t) >= lead && step % SCRUB_PREVIEW_STRIDE === 0);
+}
+
+/** The latest sampled date already passed in the direction of travel. */
+export function scrubPreviewDate(t, direction) {
+  const stride = SCRUB_PREVIEW_STRIDE;
+  return (direction > 0 ? Math.floor(t / stride) : Math.ceil(t / stride)) * stride;
+}
+
 /**
  * What to load for a scrub that is drawing at `lod`: the timestep on screen and as many ahead as FILL_LOOKAHEADS
  * lookaheads at that level, nearest first (none when they are all in memory: a scrub over loaded data has nothing to pump),

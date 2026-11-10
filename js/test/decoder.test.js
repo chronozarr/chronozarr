@@ -213,6 +213,12 @@ test('windowOrder with loop puts the start of the movie right after its end', ()
   assert.deepEqual(windowOrder(10, 8, { direction: 1, behindFactor: 8 }).slice(0, 4), [8, 9, 7, 6], 'without loop the wrap is not ahead');
 });
 
+test('a sparse preview window warms nearby dates on both sides without wrapping', () => {
+  const options = { behindFactor: 1, stepStride: 4 };
+  assert.deepEqual(windowOrder(26, 25, options).slice(0, 4), [25, 24, 20, 16]);
+  assert.deepEqual(windowOrder(26, 13, options).slice(0, 4), [13, 12, 16, 8]);
+});
+
 test('the prefetch window plan covers the wrap: from the last timestep it fetches t=0, 1, 2 before anything behind', async () => {
   const spec = { nTime: 12, nBand: 1, height: 16, width: 16, chunk: 32,  sharded: true };
   const chunkBytes = 32 * 32 * 2;
