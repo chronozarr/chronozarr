@@ -390,11 +390,16 @@ class Plan:
 
     def lines(self, read_ahead: int = 2, list_files: bool = False) -> list[str]:
         info = self.source.info
-        times = self.source.times
+        times = np.asarray(self.source.times, dtype="datetime64[ms]")
+        clocks = times - times.astype("datetime64[D]")
+        same_clock = (clocks == clocks[0]).all()
+        if same_clock and (len(times) > 1 or clocks[0] == np.timedelta64(0, "ms")):
+            unit = "D"
+        else:
+            unit = "s" if (times == times.astype("datetime64[s]")).all() else "ms"
+        first, last = np.datetime_as_string(times[[0, -1]], unit=unit, timezone="UTC")
         out = [
-            f"source:     {self.source.kind}, {self.n_time} timesteps "
-            f"({np.datetime_as_string(times[0], unit='D')} .. "
-            f"{np.datetime_as_string(times[-1], unit='D')})",
+            f"source:     {self.source.kind}, {self.n_time} timesteps ({first} .. {last})",
         ]
         if list_files and self.discovered and isinstance(self.source, CogManifestSource):
             out.extend(self.source.listing())

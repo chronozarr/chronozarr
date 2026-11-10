@@ -164,9 +164,27 @@ test('percentileRange: 2nd to 98th percentile of the finite values; a flat serie
   assert.equal(percentileRange([]), null);
 });
 
-test('time labels: months for month-start timesteps, ISO dates otherwise', () => {
+test('time labels keep compact months and dates when the UTC clock time is fixed', () => {
   assert.equal(makeTimeFormatter(['2024-01-01T00:00:00Z', '2024-02-01T00:00:00Z'])(1), 'Feb 2024');
   assert.equal(makeTimeFormatter(['2024-01-01T00:00:00Z', '2024-01-17T00:00:00Z'])(1), '2024-01-17');
+  assert.equal(makeTimeFormatter(['2024-01-01', '2024-02-01T01:00:00+01:00'])(1), 'Feb 2024');
+  assert.equal(makeTimeFormatter(['2024-01-01T12:00:00Z', '2024-01-17T12:00:00Z'])(1), '2024-01-17');
+});
+
+test('time labels distinguish same-day UTC hours, even on the first of a month', () => {
+  const times = ['2024-01-01T00:00:00', '2024-01-01T02:00:00+01:00'];
+  const label = makeTimeFormatter(times);
+  assert.deepEqual(times.map((_, t) => label(t)), ['2024-01-01 00:00 UTC', '2024-01-01 01:00 UTC']);
+});
+
+test('time labels preserve the seconds and milliseconds needed by a series', () => {
+  const times = ['2024-01-17T00:00:00Z', '2024-01-17T00:00:01Z', '2024-01-17T00:00:01.001Z'];
+  const seconds = makeTimeFormatter(times.slice(0, 2));
+  assert.equal(seconds(1), '2024-01-17 00:00:01 UTC');
+  assert.equal(makeTimeFormatter([times[1]])(0), '2024-01-17 00:00:01 UTC');
+  const milliseconds = makeTimeFormatter(times);
+  assert.equal(milliseconds(1), '2024-01-17 00:00:01.000 UTC');
+  assert.equal(milliseconds(2), '2024-01-17 00:00:01.001 UTC');
 });
 
 test('describePixel with a validity mask: masked-out means no values and no indices, and the mask replaces nodata', () => {
