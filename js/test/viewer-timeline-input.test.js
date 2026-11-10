@@ -1,6 +1,6 @@
 import { afterEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bindTimelineInput } from '../demo/input.js';
+import { bindKeyboardInput, bindTimelineInput } from '../demo/input.js';
 
 const MOUSE = 1;
 const FINGER_A = 2;
@@ -119,5 +119,77 @@ test('timeline: without a store the press scrubs nothing', () => {
   down(MOUSE, 10);
   move(MOUSE, xOf(11));
   up(MOUSE);
+  assert.deepEqual(viewer.calls, []);
+});
+
+/** The arrow keys on a page with a 117-month store at month 10; `viewer` records the calls they make. */
+function keyboard() {
+  const page = Object.assign(new EventTarget(), { closest: () => null, tagName: 'BODY' });
+  const viewer = {
+    store: { times: { length: 117 } },
+    t: 10,
+    calls: [],
+    goToTime(t) {
+      this.calls.push(['go', t]);
+      this.t = t;
+    },
+    endScrub() {
+      this.calls.push(['end']);
+    },
+  };
+  globalThis.document = page;
+  bindKeyboardInput(viewer);
+  const key = (type, name, repeat = false, target = page) => {
+    const event = Object.assign(new Event(type, { cancelable: true }), { key: name, repeat });
+    Object.defineProperty(event, 'target', { value: target });
+    page.dispatchEvent(event);
+  };
+  return { viewer, press: (name, repeat) => key('keydown', name, repeat), release: (name) => key('keyup', name), key };
+}
+
+test('keys: a held arrow key is a scrub that ends when the key is released', () => {
+  const { viewer, press, release } = keyboard();
+  press('ArrowRight');
+  for (let i = 0; i < 3; i++) press('ArrowRight', true);
+  assert.deepEqual(viewer.calls, [['go', 11], ['go', 12], ['go', 13], ['go', 14]], 'nothing ends the scrub while the key is down');
+  release('ArrowRight');
+  assert.deepEqual(viewer.calls.at(-1), ['end']);
+  assert.equal(viewer.calls.length, 5);
+});
+
+test('keys: taps in a row end nothing on release, so that they add up to a scrub speed', () => {
+  const { viewer, press, release } = keyboard();
+  for (let i = 0; i < 3; i++) {
+    press('ArrowLeft');
+    release('ArrowLeft');
+  }
+  assert.deepEqual(viewer.calls, [['go', 9], ['go', 8], ['go', 7]]);
+});
+
+test('keys: the release of a key that was held ends one scrub, and the tap after it ends none', () => {
+  const { viewer, press, release } = keyboard();
+  press('ArrowRight');
+  press('ArrowRight', true);
+  release('ArrowRight');
+  press('ArrowLeft');
+  release('ArrowLeft');
+  assert.deepEqual(viewer.calls, [['go', 11], ['go', 12], ['end'], ['go', 11]]);
+});
+
+test('keys: the release of another key ends nothing', () => {
+  const { viewer, press, release } = keyboard();
+  press('ArrowRight');
+  press('ArrowRight', true);
+  release('a');
+  release('Shift');
+  assert.deepEqual(viewer.calls, [['go', 11], ['go', 12]]);
+});
+
+test('keys: an arrow key held in a field is the field\'s: no step, and nothing to end', () => {
+  const { viewer, key } = keyboard();
+  const field = { closest: () => null, tagName: 'INPUT', type: 'text' };
+  key('keydown', 'ArrowRight', false, field);
+  key('keydown', 'ArrowRight', true, field);
+  key('keyup', 'ArrowRight', false, field);
   assert.deepEqual(viewer.calls, []);
 });

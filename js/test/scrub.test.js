@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CAMERA_SETTLE_MS,
   FILL_LOOKAHEADS,
   LOOKAHEAD_SECONDS,
   LOW_MARK,
@@ -10,7 +11,8 @@ import {
   ScrubSpeed,
   chooseScrub,
   chooseScrubLevel,
-  nextPumpBatch,
+  framesInSequence,
+  nextPumpSteps,
   planScrubLoads,
   readyRun,
   savesData,
@@ -285,14 +287,14 @@ test('planScrubLoads: the timestep on screen and the next FILL_LOOKAHEADS lookah
   assert.deepEqual(plan({ t: 115, need: 2 }).primary.steps, [115, 116], 'not past the end of the axis');
 });
 
-test('planScrubLoads: a probe of the next sharper level, for the lookahead only, once the level in use has all it is asked to hold', () => {
+test('planScrubLoads: a probe of the next sharper level, for the timestep on screen and the lookahead only, once the level in use has all it is asked to hold', () => {
   const filled = FILL_LOOKAHEADS * 5;
   const level3 = { 3: [30, 30 + filled] };
-  assert.deepEqual(plan({ isReady: inMemory(level3) }).probe, { lod: 2, steps: [31, 32, 33, 34, 35] });
-  assert.deepEqual(plan({ lod: 2, isReady: inMemory({ 2: [30, 30 + filled] }) }).probe, { lod: 1, steps: [31, 32, 33, 34, 35] }, 'one level up from the one in use, not the sharpest');
+  assert.deepEqual(plan({ isReady: inMemory(level3) }).probe, { lod: 2, steps: [30, 31, 32, 33, 34, 35] }, 'the timestep the scrub may stop on comes first');
+  assert.deepEqual(plan({ lod: 2, isReady: inMemory({ 2: [30, 30 + filled] }) }).probe, { lod: 1, steps: [30, 31, 32, 33, 34, 35] }, 'one level up from the one in use, not the sharpest');
   assert.equal(plan({ isReady: inMemory({ 3: [30, 30 + filled - 1] }) }).probe, null, 'a step of the level in use is still to load: the link is its');
   assert.equal(plan({ isReady: inMemory({ 3: [31, 30 + filled] }) }).probe, null, 'the timestep on screen is not in memory at it yet');
-  assert.equal(plan({ isReady: inMemory({ 3: [0, 116], 2: [0, 116] }), lod: 3 }).probe.steps.length, 5, 'the probe never reaches past the lookahead, however much is in memory');
+  assert.equal(plan({ isReady: inMemory({ 3: [0, 116], 2: [0, 116] }), lod: 3 }).probe.steps.length, 6, 'the probe never reaches past the lookahead, however much is in memory');
   assert.equal(plan({ lod: 1, isReady: inMemory({ 1: [30, 30 + filled] }) }).probe, null, 'the normal level has nothing sharper to probe');
 });
 
@@ -305,14 +307,22 @@ test('planScrubLoads: a scrub that needs more ahead than the viewer loads ahead 
 
 test('planScrubLoads: the probe stops at the end of the axis with the level in use', () => {
   const { primary, probe } = plan({ t: 114, need: 5, isReady: inMemory({ 3: [114, 116] }) });
-  assert.deepEqual(primary.steps, [114, 115, 116]);
-  assert.deepEqual(probe, { lod: 2, steps: [115, 116] });
+  assert.deepEqual(primary.steps, [], 'the level in use holds them all');
+  assert.deepEqual(probe, { lod: 2, steps: [114, 115, 116] });
+});
+
+test('planScrubLoads: nothing to load at the level in use when it holds the timestep on screen and the whole lookahead', () => {
+  const filled = FILL_LOOKAHEADS * 5;
+  assert.deepEqual(plan({ isReady: inMemory({ 3: [30, 30 + filled] }) }).primary, { lod: 3, steps: [] });
+  assert.equal(plan({ isReady: inMemory({ 3: [30, 30 + filled - 1] }) }).primary.steps.length, 1 + filled, 'the last of the lookahead is missing: all of it is asked for, in order');
+  assert.equal(plan({ isReady: inMemory({ 3: [31, 30 + filled] }) }).primary.steps.length, 1 + filled, 'the timestep on screen is missing');
 });
 
 test('planScrubLoads: nothing to wait for, nothing to probe', () => {
   const idle = plan({ t: 116, need: 0, isReady: inMemory({ 3: [0, 116] }) });
-  assert.deepEqual(idle.primary, { lod: 3, steps: [116] });
+  assert.deepEqual(idle.primary, { lod: 3, steps: [] });
   assert.equal(idle.probe, null);
+  assert.deepEqual(plan({ t: 116, need: 0 }).primary, { lod: 3, steps: [116] }, 'the timestep on screen is the one to load');
 });
 
 
@@ -367,7 +377,7 @@ test('chooseScrub: a scrub that saves data takes the deepest level whatever is i
 const pumps = (options) => scrubPumpRequests({ saving: false, t: 30, direction: 1, count: 117, levels: overview(), lod: 3, need: 5, isReady: inMemory({ 3: [30, 30 + FILL_LOOKAHEADS * 5] }), ...options });
 
 test('scrubPumpRequests: the level in use is filled ahead, and the next sharper level is probed once it has all it is asked to hold', () => {
-  assert.deepEqual(pumps(), { fill: [30, ...Array.from({ length: FILL_LOOKAHEADS * 5 }, (_, i) => 31 + i)], probe: { lod: 2, steps: [31, 32, 33, 34, 35] } });
+  assert.deepEqual(pumps(), { fill: [], probe: { lod: 2, steps: [30, 31, 32, 33, 34, 35] } }, 'nothing of the level in use is left to load');
   const loading = pumps({ isReady: inMemory({ 3: [30, 30 + FILL_LOOKAHEADS * 5 - 1] }) });
   assert.equal(loading.probe, null, 'something of the level in use is still to load: the probe stops');
   assert.equal(loading.fill.length, 1 + FILL_LOOKAHEADS * 5);
@@ -376,8 +386,8 @@ test('scrubPumpRequests: the level in use is filled ahead, and the next sharper 
 test('scrubPumpRequests: a scrub that saves data fills the level in use and never probes', () => {
   const saving = pumps({ saving: true });
   assert.equal(saving.probe, null, 'the plan has a probe and data saving drops it');
-  assert.equal(saving.fill.length, 1 + FILL_LOOKAHEADS * 5);
   assert.notEqual(pumps({ saving: false }).probe, null);
+  assert.equal(pumps({ saving: true, isReady: inMemory({}) }).fill.length, 1 + FILL_LOOKAHEADS * 5);
 });
 
 test('scrubPumpRequests: a scrub with one level to choose from is left to the prefetch window', () => {
@@ -386,26 +396,46 @@ test('scrubPumpRequests: a scrub with one level to choose from is left to the pr
 });
 
 test('scrubPumpRequests: follows the direction of the scrub, so a turn replaces what the pumps wait for', () => {
-  const forward = pumps({ t: 60, isReady: () => true });
-  const back = pumps({ t: 60, direction: -1, isReady: () => true });
-  assert.deepEqual(forward.fill.slice(0, 3), [60, 61, 62]);
-  assert.deepEqual(back.fill.slice(0, 3), [60, 59, 58]);
-  assert.deepEqual(forward.probe.steps, [61, 62, 63, 64, 65]);
-  assert.deepEqual(back.probe.steps, [59, 58, 57, 56, 55]);
+  const loading = { t: 60, isReady: () => false };
+  assert.deepEqual(pumps(loading).fill.slice(0, 3), [60, 61, 62]);
+  assert.deepEqual(pumps({ ...loading, direction: -1 }).fill.slice(0, 3), [60, 59, 58]);
+  const held = { t: 60, isReady: () => true };
+  assert.deepEqual(pumps(held).probe.steps, [60, 61, 62, 63, 64, 65]);
+  assert.deepEqual(pumps({ ...held, direction: -1 }).probe.steps, [60, 59, 58, 57, 56, 55]);
 });
 
-test('nextPumpBatch: the first timesteps of the list that are not in memory, nearest first, a few at a time', () => {
+test('nextPumpSteps: the first timesteps of the list that are not in memory, nearest first, as many as keep `size` in flight', () => {
   const have = new Set([31, 32, 34]);
-  const next = (options) => nextPumpBatch({ wanted: [30, 31, 32, 33, 34, 35, 36, 37], isReady: (step) => have.has(step), previous: '', size: 3, ...options });
-  assert.deepEqual(next(), { batch: [30, 33, 35], key: '30,33,35', done: false });
-  assert.deepEqual(next({ size: 2 }).batch, [30, 33]);
-  assert.deepEqual(next({ wanted: [37, 36, 35, 34, 33] }).batch, [37, 36, 35], 'a list the scrub replaced (it turned round) is followed in its own order');
+  const next = (options) => nextPumpSteps({ wanted: [30, 31, 32, 33, 34, 35, 36, 37], isReady: (step) => have.has(step), loading: new Set(), unkept: new Set(), size: 3, ...options });
+  assert.deepEqual(next(), [30, 33, 35]);
+  assert.deepEqual(next({ size: 2 }), [30, 33]);
+  assert.deepEqual(next({ wanted: [37, 36, 35, 34, 33] }), [37, 36, 35], 'a list the scrub replaced (it turned round) is followed in its own order');
 });
 
-test('nextPumpBatch: done when everything wanted is in memory, or when the cache gave back the batch just loaded', () => {
-  assert.equal(nextPumpBatch({ wanted: [30, 31], isReady: () => true, previous: '', size: 3 }).done, true);
-  assert.equal(nextPumpBatch({ wanted: [], isReady: () => false, previous: '', size: 3 }).done, true, 'nothing wanted');
-  const stuck = nextPumpBatch({ wanted: [30, 31, 32, 33], isReady: () => false, previous: '30,31,32', size: 3 });
-  assert.equal(stuck.done, true, 'the same batch twice: it is not staying in memory, so loading it again would never end');
-  assert.equal(nextPumpBatch({ wanted: [30, 31, 32, 33], isReady: (step) => step < 32, previous: '30,31,32', size: 3 }).done, false, 'the next batch is another one');
+test('nextPumpSteps: a timestep on the wire counts against `size` and is not asked for again, so one that lands makes room for the next', () => {
+  const next = (loading) => nextPumpSteps({ wanted: [30, 31, 32, 33, 34], isReady: () => false, loading: new Set(loading), unkept: new Set(), size: 3 });
+  assert.deepEqual(next([]), [30, 31, 32]);
+  assert.deepEqual(next([30, 31, 32]), [], 'the window is full');
+  assert.deepEqual(next([31, 32]), [30], 'one landed and is ready: the window has room for one');
+  assert.deepEqual(next([30]), [31, 32], 'the nearest one is on the wire: the next two follow it');
+  assert.deepEqual(next([30, 31, 32, 33]), [], 'more in flight than `size` (the link got slower): nothing starts');
+});
+
+test('nextPumpSteps: nothing when everything wanted is in memory or the list is empty, and not what the cache gave back after it landed', () => {
+  const next = (options) => nextPumpSteps({ wanted: [30, 31, 32, 33], isReady: () => false, loading: new Set(), unkept: new Set(), size: 3, ...options });
+  assert.deepEqual(next({ isReady: () => true }), []);
+  assert.deepEqual(next({ wanted: [] }), [], 'nothing wanted');
+  assert.deepEqual(next({ unkept: new Set([30, 31, 32]) }), [33], 'loaded and not staying in memory: loading them again would never end');
+  assert.deepEqual(next({ unkept: new Set([30, 31, 32, 33]) }), []);
+});
+
+test('frames follow each other while a scrub is in progress, a movie plays and paints, or the camera has just moved', () => {
+  const idle = { scrubbing: false, playing: false, buffering: false, sinceCameraMoveMs: Infinity };
+  assert.equal(framesInSequence(idle), false);
+  assert.equal(framesInSequence({ ...idle, scrubbing: true }), true);
+  assert.equal(framesInSequence({ ...idle, playing: true }), true);
+  assert.equal(framesInSequence({ ...idle, playing: true, buffering: true }), false, 'a movie that buffers paints nothing');
+  assert.equal(framesInSequence({ ...idle, sinceCameraMoveMs: CAMERA_SETTLE_MS - 1 }), true);
+  assert.equal(framesInSequence({ ...idle, sinceCameraMoveMs: CAMERA_SETTLE_MS }), false, 'the camera has settled');
+  assert.equal(framesInSequence({ ...idle, playing: true, buffering: true, scrubbing: true }), true, 'a scrub paints, whatever the movie does');
 });

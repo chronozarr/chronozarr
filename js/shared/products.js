@@ -212,16 +212,18 @@ export function reinhardSrgb(reflectance) {
   return t <= 0.0031308 ? 12.92 * t : 1.055 * Math.pow(t, 1 / 2.4) - 0.055;
 }
 
-/** 2nd percentile of tone-mapped red/green/blue reflectance samples ([r, g, b] triples); 0 with too few samples. */
+/** 2nd percentile of tone-mapped red/green/blue reflectance samples ([r, g, b] triples); 0 with fewer than 30 finite tones. */
 export function computeStretchLo(rgbSamples) {
-  const tones = [];
+  // A Float64Array sorts numerically by default, so no comparator is needed.
+  const tones = new Float64Array(rgbSamples.length * 3);
+  let count = 0;
   for (const [r, g, b] of rgbSamples) {
     if (r === 0 && g === 0 && b === 0) continue;
-    tones.push(reinhardSrgb(r), reinhardSrgb(g), reinhardSrgb(b));
+    // A NaN reflectance (the nodata of a float store) or one that tone-maps to infinity says nothing about the shadows. Counted, it would push the percentile up, so it is left out, as in percentileRange.
+    for (const tone of [reinhardSrgb(r), reinhardSrgb(g), reinhardSrgb(b)]) if (Number.isFinite(tone)) tones[count++] = tone;
   }
-  if (tones.length < 30) return 0;
-  tones.sort((a, b) => a - b);
-  return tones[Math.floor(tones.length * 0.02)];
+  if (count < 30) return 0;
+  return tones.subarray(0, count).sort()[Math.floor(count * 0.02)];
 }
 
 /** The three channels of the dual-pol composite from co-pol and cross-pol in dB: [co-pol, cross-pol, co-pol minus cross-pol (the power ratio in dB)]. */
@@ -250,10 +252,13 @@ export function channelBounds(range) {
 
 /** [lo, hi] at the 2nd and 98th percentile of the finite values; null with none. Equal ends are spread by 1. */
 export function percentileRange(values) {
-  const finite = values.filter(Number.isFinite).sort((a, b) => a - b);
-  if (finite.length === 0) return null;
-  const lo = finite[Math.floor(finite.length * 0.02)];
-  const hi = finite[Math.min(finite.length - 1, Math.floor(finite.length * 0.98))];
+  const finite = new Float64Array(values.length);
+  let count = 0;
+  for (const value of values) if (Number.isFinite(value)) finite[count++] = value;
+  if (count === 0) return null;
+  const sorted = finite.subarray(0, count).sort();
+  const lo = sorted[Math.floor(count * 0.02)];
+  const hi = sorted[Math.min(count - 1, Math.floor(count * 0.98))];
   return hi > lo ? [lo, hi] : [lo, lo + 1];
 }
 
