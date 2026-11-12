@@ -319,6 +319,56 @@ test('connectEmbed: errors of the viewer reach the host at once, even before rea
   assert.deepEqual(w.posted.map(({ data }) => [data.type, data.code, data.message]), [['chronozarr:error', 'store_open_failed', 'Could not open store: HTTP 404']]);
 });
 
+for (const [code, title, message] of [['store_open_failed', 'Could not open store', 'HTTP 404'], ['no_store', 'No store selected', 'the iframe URL needs ?store=']]) {
+  test(`connectEmbed: after ${code}, get and set are answered with that error again, and the set is never applied`, async () => {
+    const { w, viewer, calls } = connected();
+    viewer.hooks.error({ code, title, message });
+    const error = { v: 1, type: 'chronozarr:error', code, message: `${title}: ${message}` };
+    assert.deepEqual(w.posted.map(({ data }) => data), [error]);
+    w.posted.length = 0;
+
+    w.receive({ type: 'chronozarr:get' });
+    await sleep(5);
+    assert.deepEqual(w.posted.map(({ data }) => data), [error], 'a host whose listener attached late learns that the open failed');
+    w.posted.length = 0;
+
+    w.receive(setMessage({ t: 1, zoom: 2 }));
+    await sleep(5);
+    assert.deepEqual(w.posted.map(({ data }) => data), [error], 'the set cannot be applied: the store did not open');
+    assert.ok(w.posted.every(({ targetOrigin }) => targetOrigin === HOST));
+
+    w.posted.length = 0;
+    viewer.hooks.ready();
+    await sleep(10);
+    assert.deepEqual(w.posted.map(({ data }) => data.type), ['chronozarr:ready'], 'a store opened later still announces itself');
+    assert.deepEqual(calls, [], 'the set sent after the failure is not kept for the next store');
+  });
+}
+
+test('connectEmbed: an error that is not about opening the store leaves get and set waiting for ready', async () => {
+  const { w, viewer, calls } = connected();
+  viewer.hooks.error({ code: 'chunk_load_failed', title: 'Could not load a chunk', message: 'HTTP 500' });
+  w.posted.length = 0;
+  w.receive({ type: 'chronozarr:get' });
+  w.receive(setMessage({ t: 1 }));
+  await sleep(5);
+  assert.deepEqual(w.posted, []);
+  viewer.hooks.ready();
+  await sleep(10);
+  assert.deepEqual(w.posted.map(({ data }) => data.type), ['chronozarr:ready']);
+  assert.deepEqual(calls, [['goToTime', 1]]);
+});
+
+test('connectEmbed: a view change before ready sends nothing', async () => {
+  const w = fakeWindow();
+  const { viewer } = fakeViewer();
+  connectEmbed(viewer, parseEmbedParams(`?embed=1&origin=${encodeURIComponent(HOST)}`), { win: w.win, loadProjection: realProjection });
+  viewer.zoom = 2;
+  viewer.hooks.view();
+  await sleep(200);
+  assert.deepEqual(w.posted, []);
+});
+
 test('connectEmbed: a set is applied in a fixed order: product, band, colormap, time, camera, speed, playback', async () => {
   const { w, viewer, calls } = connected();
   viewer.hooks.ready();

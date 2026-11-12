@@ -11,6 +11,7 @@
 // pixel <-> lon/lat, message shapes), so node tests cover it. EmbedBridge and connectEmbed are the thin parts that
 // touch window and the viewer.
 
+import { Machine } from '../chronozarr/machine.js';
 import { redactText } from '../chronozarr/redact.js';
 import { COLORMAPS, colormapIndex } from '../shared/colormaps.js';
 import { pixelToProjected, projectedToPixel } from './permalink.js';
@@ -363,6 +364,20 @@ export class EmbedBridge {
 
 // ---- the viewer side ----
 
+/**
+ * The connection between the viewer and its host. opening: the store is not open yet. projecting: the store is open
+ * and its projection is loading. ready: `ready` was sent. failed: the store did not open; the host has been told why.
+ */
+const CONNECTION_MOVES = {
+  opening: { opened: 'projecting', failed: 'failed' },
+  projecting: { opened: 'projecting', projected: 'ready' },
+  ready: { opened: 'projecting' },
+  failed: { opened: 'projecting', failed: 'failed' },
+};
+
+/** The error codes that mean the store did not open. */
+const OPEN_FAILURES = new Set(['store_open_failed', 'no_store']);
+
 async function loadProjection(store) {
   try {
     const { createProjection } = await import('../maplibre/projection.js');
@@ -390,7 +405,9 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
   }
 
   let geo = makeGeo();
-  let readySent = false;
+  const connection = new Machine('embed connection', CONNECTION_MOVES, 'opening');
+  /** The `chronozarr:error` payload that told the host the store did not open; posted again while the connection is failed. */
+  let failure = null;
   /** `set` messages that arrived before the store opened, merged (later fields win), applied right after `ready`. */
   let early = null;
 
@@ -453,14 +470,19 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
   };
 
   async function handle(command) {
+    if (connection.is('failed')) {
+      // Nothing can be applied or reported without a store: the host hears why, and the command is not kept.
+      bridge.post('error', failure);
+      return;
+    }
     if (command.kind === 'get') {
-      if (readySent && viewer.store) {
+      if (connection.is('ready')) {
         bridge.post('ready', readyPayload());
         bridge.rememberView(viewPayload());
       }
       return;
     }
-    if (!readySent || !viewer.store) {
+    if (!connection.is('ready')) {
       early = { ...early, ...command.set };
       return;
     }
@@ -469,13 +491,13 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
 
   viewer.hooks = {
     ready: () => {
-      readySent = false;
+      connection.send('opened');
       const store = viewer.store;
       const projected = store.transform && (store.crs || store.wkt2 || store.projjson) ? projectionFor(store) : Promise.resolve(null);
       projected.then((loaded) => {
         if (viewer.store !== store) return;
         geo = makeGeo({ transform: store.transform, projection: loaded });
-        readySent = true;
+        connection.send('projected');
         bridge.post('ready', readyPayload());
         bridge.rememberView(viewPayload());
         if (early) {
@@ -486,13 +508,13 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
       });
     },
     time: ({ t }) => {
-      if (readySent) bridge.post('time', { t, time: timeOf(t) });
+      if (connection.is('ready')) bridge.post('time', { t, time: timeOf(t) });
     },
     view: () => {
-      if (readySent) bridge.scheduleView(viewPayload);
+      if (connection.is('ready')) bridge.scheduleView(viewPayload);
     },
     click: ({ pixel, t, lod, info }) => {
-      if (!readySent) return;
+      if (!connection.is('ready')) return;
       const { lon, lat } = geo.fromPixel(pixel.x + 0.5, pixel.y + 0.5);
       bridge.post('click', {
         pixel,
@@ -505,7 +527,15 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
         values: Object.fromEntries(info.bands.map((band) => [band.name, info.valid ? band.value : null])),
       });
     },
-    error: ({ code, title, message: text }) => bridge.post('error', { code, message: `${title}: ${text}` }),
+    error: ({ code, title, message: text }) => {
+      const payload = { code, message: `${title}: ${text}` };
+      // A store that fails to open while another one is shown leaves the connection with that one.
+      if (OPEN_FAILURES.has(code) && connection.can('failed')) {
+        connection.send('failed');
+        failure = payload;
+      }
+      bridge.post('error', payload);
+    },
   };
 
   bridge.start();
