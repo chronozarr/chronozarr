@@ -365,14 +365,16 @@ export class EmbedBridge {
 // ---- the viewer side ----
 
 /**
- * The connection between the viewer and its host. opening: the store is not open yet. projecting: the store is open
- * and its projection is loading. ready: `ready` was sent. failed: the store did not open; the host has been told why.
+ * The connection between the viewer and its host. It follows the viewer's store session: ready only while a store is
+ * open. opening: no store is open yet, or the viewer has started to open another one (`reopen`, taken when the status
+ * says that a store is opening). projecting: the store is open and its projection is loading. ready: `ready` was sent.
+ * failed: the store did not open; the host has been told why.
  */
 const CONNECTION_MOVES = {
   opening: { opened: 'projecting', failed: 'failed' },
-  projecting: { opened: 'projecting', projected: 'ready' },
-  ready: { opened: 'projecting' },
-  failed: { opened: 'projecting', failed: 'failed' },
+  projecting: { opened: 'projecting', projected: 'ready', reopen: 'opening' },
+  ready: { opened: 'projecting', reopen: 'opening' },
+  failed: { opened: 'projecting', failed: 'failed', reopen: 'opening' },
 };
 
 /** The error codes that mean the store did not open. */
@@ -408,7 +410,7 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
   const connection = new Machine('embed connection', CONNECTION_MOVES, 'opening');
   /** The `chronozarr:error` payload that told the host the store did not open; posted again while the connection is failed. */
   let failure = null;
-  /** `set` messages that arrived before the store opened, merged (later fields win), applied right after `ready`. */
+  /** `set` messages that arrived while no store was open, merged (later fields win), applied right after `ready`. */
   let early = null;
 
   const bridge = new EmbedBridge({ win, origin: params.origin, onCommand: (command) => handle(command) });
@@ -519,9 +521,15 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
       if (connection.state === 'ready') bridge.scheduleView(viewPayload);
     },
     status: () => {
-      // The payload is read from the open store; while another store opens there is none.
-      if (connection.state !== 'ready' || !viewer.store) return;
-      const { store, frame, playback, exporting, t, shownT, level, error } = viewer.status;
+      const status = viewer.status;
+      // The viewer publishes a status when its session starts to open a store: from then on there is no store to
+      // report on, a get waits for the next ready, and a failure the host was told about belongs to the store before.
+      if (status.store === 'opening' && connection.can('reopen')) {
+        connection.send('reopen');
+        failure = null;
+      }
+      if (connection.state !== 'ready') return;
+      const { store, frame, playback, exporting, t, shownT, level, error } = status;
       bridge.post('status', { store, frame, playback, exporting, t, time: timeOf(t), shownT, level, error, state: statePayload() });
     },
     click: ({ pixel, t, lod, info }) => {
@@ -540,7 +548,9 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
     },
     error: ({ code, title, message: text }) => {
       const payload = { code, message: `${title}: ${text}` };
-      // A store that fails to open while another one is shown leaves the connection with that one.
+      // The viewer moves the connection to opening before any open of its own can fail. An open failure reaches
+      // projecting or ready only when a script reports one through the viewer's reportStoreOpenError or reportNoStore
+      // while a store is shown: the connection stays with that store.
       if (OPEN_FAILURES.has(code) && connection.can('failed')) {
         connection.send('failed');
         failure = payload;

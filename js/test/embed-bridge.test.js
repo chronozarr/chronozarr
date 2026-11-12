@@ -398,7 +398,7 @@ for (const [code, title, message] of [['store_open_failed', 'Could not open stor
   });
 }
 
-test('connectEmbed: a failed open of another store while one is shown is posted and leaves the connection ready', async () => {
+test('connectEmbed: an open failure reported while a store is shown, with no open before it, is posted and leaves the connection ready', async () => {
   const { w, viewer, calls } = connected();
   viewer.hooks.ready();
   await sleep(5);
@@ -413,7 +413,7 @@ test('connectEmbed: a failed open of another store while one is shown is posted 
   assert.deepEqual(calls, [['goToTime', 1]], 'the set is applied');
 });
 
-test('connectEmbed: a failed open while the projection loads is posted, and ready still follows', async () => {
+test('connectEmbed: an open failure reported while the projection loads, with no open before it, is posted, and ready still follows', async () => {
   let project;
   const { w, viewer } = connected({ loadProjection: () => new Promise((resolve) => (project = resolve)) });
   viewer.hooks.ready();
@@ -423,6 +423,69 @@ test('connectEmbed: a failed open while the projection loads is posted, and read
   await sleep(5);
   assert.deepEqual(w.posted.map(({ data }) => data.type), ['chronozarr:error', 'chronozarr:ready']);
 });
+
+/** The fake viewer's session opens again, as loadStore does: no store, the status says opening, the hook is called. */
+function sessionOpensAgain(viewer) {
+  viewer.store = null;
+  viewer.status = { ...viewer.status, store: 'opening', frame: 'none', playback: 'paused' };
+  viewer.hooks.status();
+}
+
+/** The next store is open: the viewer calls the ready hook; the projection of the fake viewer loads with the real loader. */
+function nextStoreOpens(viewer, store) {
+  viewer.store = { ...store };
+  viewer.status = { ...viewer.status, store: 'open', frame: 'loading' };
+  viewer.hooks.ready();
+}
+
+test('connectEmbed: while the viewer opens another store, get waits for its ready and nothing is posted', async () => {
+  const { w, viewer } = connected();
+  const store = viewer.store;
+  viewer.hooks.ready();
+  await sleep(5);
+  w.posted.length = 0;
+  sessionOpensAgain(viewer);
+  w.receive({ type: 'chronozarr:get' });
+  await sleep(5);
+  assert.deepEqual(w.posted, [], 'no ready without a store, and no error');
+  nextStoreOpens(viewer, store);
+  await sleep(10);
+  assert.deepEqual(w.posted.map(({ data }) => data.type), ['chronozarr:ready'], 'the next store announces itself once');
+});
+
+test('connectEmbed: a set sent while the viewer opens another store is applied after that store is ready', async () => {
+  const { w, viewer, calls } = connected();
+  const store = viewer.store;
+  viewer.hooks.ready();
+  await sleep(5);
+  w.posted.length = 0;
+  sessionOpensAgain(viewer);
+  w.receive(setMessage({ t: 1 }));
+  w.receive(setMessage({ zoom: 2 }));
+  await sleep(5);
+  assert.deepEqual([w.posted, calls], [[], []], 'kept, not applied, not answered');
+  nextStoreOpens(viewer, store);
+  await sleep(10);
+  assert.deepEqual(w.posted.map(({ data }) => data.type), ['chronozarr:ready']);
+  assert.deepEqual(calls, [['goToTime', 1], ['setView', { zoom: 2, center: undefined }]]);
+});
+
+for (const from of ['ready', 'projecting']) {
+  test(`connectEmbed: when the store opened after a ${from} connection fails, get and set are answered with that error`, async () => {
+    const { w, viewer, calls } = connected(from === 'projecting' ? { loadProjection: () => new Promise(() => {}) } : {});
+    viewer.hooks.ready();
+    await sleep(5);
+    w.posted.length = 0;
+    sessionOpensAgain(viewer);
+    viewer.hooks.error({ code: 'store_open_failed', title: 'Could not open store', message: 'HTTP 404' });
+    const error = { v: 1, type: 'chronozarr:error', code: 'store_open_failed', message: 'Could not open store: HTTP 404' };
+    w.receive({ type: 'chronozarr:get' });
+    w.receive(setMessage({ t: 1 }));
+    await sleep(5);
+    assert.deepEqual(w.posted.map(({ data }) => data), [error, error, error], 'the error is posted, then answers get and set');
+    assert.deepEqual(calls, []);
+  });
+}
 
 test('connectEmbed: an error that is not about opening the store leaves get and set waiting for ready', async () => {
   const { w, viewer, calls } = connected();

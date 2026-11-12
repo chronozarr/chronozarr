@@ -728,6 +728,19 @@ test.describe('postMessage', () => {
       expect((await received(page, 'chronozarr:error'))[1].data, 'get is answered with the same error').toEqual(error);
       expect(await received(page, 'chronozarr:ready')).toEqual([]);
     });
+
+    test('opened by a script in the iframe after another store, it answers get with store_open_failed', async ({ page, servers, stores, storeUrl }) => {
+      const frame = await openHost(page, servers, stores, viewerUrl(servers, await storeUrl(STORE), { origin: hostOf(servers) }));
+      await waitForMessage(page, 'chronozarr:ready');
+      await frame.evaluate((url) => window.chronozarr.viewer.loadStore(url).catch(() => null), `${servers.dataUrl}/no_such_store/`);
+      const error = await waitForMessage(page, 'chronozarr:error', { code: 'store_open_failed' });
+
+      await send(page, { type: 'chronozarr:get' });
+      await expect.poll(async () => (await received(page, 'chronozarr:error')).length).toBe(2);
+      const errors = await received(page, 'chronozarr:error');
+      expect(errors.map(({ data }) => data.code), 'no internal error').toEqual(['store_open_failed', 'store_open_failed']);
+      expect(errors[1].data, 'get is answered with the error of the open').toEqual(error);
+    });
   });
 });
 
