@@ -198,3 +198,52 @@ test('a removed layer says so in its stats', async (t) => {
   layer.remove();
   assert.equal(layer.stats.state, 'removed');
 });
+
+test('a layer removed before it is added says removed, opens nothing and cannot be added', async (t) => {
+  const { layer, memory } = newLayer(t);
+  layer.remove();
+  assert.equal(layer.stats.state, 'removed');
+  await assert.rejects(layer.opened, /was removed/);
+  assert.throws(() => layer.onAdd(map, null), /was removed; create a new layer/);
+  await flush();
+  assert.equal(rootReads(memory), 0, 'the store was never read');
+  assert.equal(layer.store, null);
+});
+
+test('a layer removed while its store opens says removed, and the store that opens after that is closed', async (t) => {
+  const close = t.mock.method(ChronoStore.prototype, 'close');
+  let layer;
+  // The decode worker starts after the open has read every piece of metadata and right before the store exists: the
+  // layer is removed there, so the open completes for a layer that is gone.
+  const spawnWorker = () => {
+    layer.remove();
+    const worker = {
+      postMessage(message) {
+        if (message.type === 'init') queueMicrotask(() => worker.onmessage?.({ data: { type: 'ready' } }));
+      },
+      terminate() {},
+    };
+    return worker;
+  };
+  ({ layer } = newLayer(t, { storeOptions: { workers: 1, spawnWorker } }));
+  layer.onAdd(map, null);
+  await assert.rejects(layer.opened, /was removed/);
+  for (let i = 0; i < 100 && close.mock.callCount() === 0; i++) await flush();
+  assert.equal(layer.stats.state, 'removed');
+  assert.equal(close.mock.callCount(), 1, 'the store was closed');
+  assert.equal(layer.store, null);
+});
+
+test('a render without the matrix of MapLibre 5 reports a non-fatal error once, and the layer has not failed', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const { layer, errors } = newLayer(t);
+  layer.onAdd(map, countingGl().gl);
+  await layer.opened;
+  layer.render({});
+  layer.render({});
+  await flush();
+  assert.equal(errors.length, 1, 'reported once');
+  assert.equal(errors[0].fatal, false);
+  assert.match(errors[0].error.message, /needs MapLibre GL JS >= 5/);
+  assert.notEqual(layer.stats.state, 'failed');
+});
