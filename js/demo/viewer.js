@@ -932,9 +932,9 @@ class Viewer {
    * - `t`: the timestep asked for. `shownT` and `level`: the timestep and level of the frame on the canvas, null before
    *   the first.
    * - `error`: the notice on screen, null when there is none: `code` as the `error` hook gives it, `toast` true for a
-   *   notice that fades on its own, false for the error box that stays until the next open. The 'No store selected'
-   *   box of a page opened with no store and no catalog is the page's, not the viewer's: there `store` is 'none' and
-   *   `error` null, and the embed bridge posts its `no_store` error itself.
+   *   notice that fades on its own, false for the error box that stays until the next open. A page opened with no
+   *   store and no catalog shows the 'No store selected' box (reportNoStore): there `store` is 'none' and `error` has
+   *   code 'no_store'.
    * @returns {{store: 'none' | 'opening' | 'open' | 'failed', frame: 'none' | 'loading' | 'preview' | 'settled' | 'unavailable',
    *   playback: 'paused' | 'starting' | 'playing' | 'rebuffering', exporting: boolean, t: number, shownT: number | null,
    *   level: number | null, error: null | {code: string, toast: boolean}}}
@@ -2921,12 +2921,12 @@ class Viewer {
   }
 
   /**
-   * A toast is a non-blocking notice that fades on its own; otherwise the box stays until the next load. In the
-   * Viewer, this and #hideError are the only writers of the notice (#notice) and of the overlay's classes; outside it,
-   * main() shows the 'No store selected' box once, for a page with no store to open, and that box is not in the status.
+   * A toast is a non-blocking notice that fades on its own; otherwise the box stays until the next load. This and
+   * #hideError are the only writers of the notice (#notice) and of the overlay's classes. `hostMessage` is the message
+   * the `error` hook gives the host page when it must say more than the box (the box is the same as `message` otherwise).
    */
-  #showError(title, message, { toast = false, code = 'error' } = {}) {
-    this.#hook('error', { code, title, message });
+  #showError(title, message, { toast = false, code = 'error', hostMessage = message } = {}) {
+    this.#hook('error', { code, title, message: hostMessage });
     clearTimeout(this.#toastTimer);
     $('error-title').textContent = title;
     $('error-message').textContent = message;
@@ -2947,6 +2947,17 @@ class Viewer {
 
   reportStoreOpenError(failure) {
     this.#showError('Could not open store', failure.text, { code: 'store_open_failed' });
+  }
+
+  /**
+   * The page has no store to open and no catalog to fall back to: the box says how to give one, and the host page of
+   * an embed hears it as the error `no_store`, with the iframe URL as the place to add it.
+   */
+  reportNoStore() {
+    this.#showError('No store selected', 'Open this page with ?store=<base URL of a chronozarr store>.', {
+      code: 'no_store',
+      hostMessage: 'the iframe URL needs ?store=<base URL of a chronozarr store>.',
+    });
   }
 
   #updateSidebar(info) {
@@ -3003,7 +3014,7 @@ async function main() {
   viewer.inspectorUi = embed.controls;
   if (embed.controls) viewer.canvas.tabIndex = 0;
   viewer.extraQuery = embed.query;
-  const bridge = embed.embed ? connectEmbed(viewer, embed) : null;
+  if (embed.embed) connectEmbed(viewer, embed);
   window.chronozarr = {
     viewer,
     bench: (options) => import('./bench.js').then((m) => m.runBenchmarks(viewer, options)),
@@ -3109,10 +3120,7 @@ async function main() {
     // to a view (with a store, a timestep, a product, a zoom...) keeps meaning what it meant, t=0 when t is left out.
     open(catalog[0].url, { viewSearch: initialSearch, startTime: isBareVisit(initialSearch) ? latestCoveredTime : undefined });
   } else {
-    $('error-title').textContent = 'No store selected';
-    $('error-message').textContent = 'Open this page with ?store=<base URL of a chronozarr store>.';
-    $('error-overlay').classList.add('visible');
-    bridge?.post('error', { code: 'no_store', message: 'No store selected: the iframe URL needs ?store=<base URL of a chronozarr store>.' });
+    viewer.reportNoStore();
   }
 
 }
