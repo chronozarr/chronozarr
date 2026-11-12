@@ -2,8 +2,12 @@
 // previous store left behind (a step, a zoom, a click, a queued render, a playing movie, an export, the sidebar) can act
 // on the viewer, and every open settles, whether its first frame comes, cannot be had, or a newer open takes over.
 
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { buildSyntheticStore } from '../support/synthetic-store.js';
 import { expect, test as base } from './fixtures.js';
-import { clickStorePixel } from './viewer-helpers.js';
+import { writeTree } from './make-node-fixtures.mjs';
+import { clickStorePixel, waitForSettled } from './viewer-helpers.js';
 
 // The fixtures fail a test on any console error. A store that is not there, or a chunk that answers 503, is reported by
 // the browser and the reader as errors, which the tests about it list (the pattern of viewer-open-url.spec.js).
@@ -391,6 +395,24 @@ test.describe('a store whose first frame cannot be had', () => {
     expect(outcome, 'loadStore resolved with its timings').toEqual(expect.objectContaining({ firstPaintMs: null, openMs: expect.any(Number) }));
     expect(store, 'the store is open').toBe(url);
   });
+});
+
+test('a coverage read of the gap overlay that a store switch ends logs no error', async ({ page, servers, stores, storeUrl }) => {
+  // One cell of one band, with a coverage variable: the gap overlay reads the coverage of the cell on screen.
+  const dir = path.join(stores.dir, 'session-coverage');
+  if (!existsSync(dir)) {
+    const spec = { dtype: 'uint8', nTime: 4, nBand: 1, height: 128, width: 128, chunk: 128, sharded: false, nLevels: 1, consolidated: true, specVersion: '0.3.0', nodata: null, coverage: true, bandObjects: [{ name: 'depth', units: 'm', scale: 1 }] };
+    await writeTree(dir, buildSyntheticStore(spec).files);
+  }
+  const coverage = await holdRequests(page, /\/session-coverage\/.*coverage\//);
+  await openAt(page, servers, `${servers.dataUrl}/session-coverage/`);
+  await page.evaluate(() => window.chronozarr.viewer.toggleGaps());
+  await expect.poll(() => coverage.held.length, 'the gap overlay asks for the coverage of the cell').toBeGreaterThan(0);
+
+  // The switch closes the store, which ends the coverage read in flight.
+  expect(await page.evaluate((url) => window.chronozarr.viewer.loadStore(url), await storeUrl('u16_plain'))).toBeTruthy();
+  await coverage.release();
+  expect(await waitForSettled(page)).toEqual(expect.objectContaining({ store: 'open', frame: 'settled' }));
 });
 
 test('an export of the previous store does not keep the prefetch of the next one off', async ({ page, servers, storeUrl }) => {

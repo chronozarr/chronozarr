@@ -2678,7 +2678,10 @@ class Viewer {
             requested.delete(key);
             this.#drawGapOverlay();
           },
-          (error) => console.error(`gap overlay: coverage load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, redactText(error)),
+          (error) => {
+            // Closing the store at the end of its session aborts the read: that is no failure.
+            if (error.name !== 'AbortError') console.error(`gap overlay: coverage load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, redactText(error));
+          },
         );
       }
       return null;
