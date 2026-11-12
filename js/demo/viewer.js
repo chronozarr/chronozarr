@@ -1074,7 +1074,7 @@ class Viewer {
     this.#setLoading(!showing);
 
     if (showing) {
-      if ($('error-overlay').classList.contains('toast')) this.#hideError();
+      if (this.#notice?.toast) this.#hideError();
       this.#wave?.controller.abort();
       this.#wave = null;
       this.#setProgress(1);
@@ -2260,8 +2260,9 @@ class Viewer {
     try {
       [[values], mask] = await Promise.all([store.readPixels(lod, row, col, t, [[cellX, cellY]]), this.#maskRead(lod, row, col, t)]);
     } catch (error) {
+      // A toast, like a cell that fails to load: the frame on screen is still right, only this pixel's values are missing.
       if (request === this.#inspectRequest) {
-        this.#showError('Chunk load failed', redactText(error?.message ?? error), { code: 'chunk_load_failed' });
+        this.#showError('Chunk load failed', redactText(error?.message ?? error), { toast: true, code: 'chunk_load_failed' });
       }
       return;
     }
@@ -2896,7 +2897,10 @@ class Viewer {
     }
   }
 
-  /** A toast is a non-blocking notice that fades on its own; otherwise the box stays until the next load. */
+  /**
+   * A toast is a non-blocking notice that fades on its own; otherwise the box stays until the next load. In the
+   * viewer, this and #hideError are the only writers of the notice (#notice) and of the overlay's classes.
+   */
   #showError(title, message, { toast = false, code = 'error' } = {}) {
     this.#hook('error', { code, title, message });
     clearTimeout(this.#toastTimer);

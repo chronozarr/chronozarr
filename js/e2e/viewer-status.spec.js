@@ -3,7 +3,7 @@
 // (viewer.whenSettled()), the data-store, data-frame and data-playback attributes of <html>, and the `status` hook.
 
 import { expect, test as base } from './fixtures.js';
-import { openViewer } from './viewer-helpers.js';
+import { clickStorePixel, openViewer } from './viewer-helpers.js';
 
 // The fixtures fail a test on any console error. A store that is not there, or a chunk that answers 503, is reported by
 // the browser and the reader as errors, which the tests about it list.
@@ -200,6 +200,23 @@ test.describe('an open that fails', () => {
     expect(await readAttributes(page)).toEqual({ store: 'failed', frame: 'none', playback: 'paused' });
     expect(await settlesAtOnce(page)).toBe('resolved');
   });
+});
+
+test('a click whose pixel read fails shows a toast that the next complete frame hides', async ({ page, servers, storeUrl }) => {
+  await openViewer(page, servers, await storeUrl('u16_plain'));
+  await page.evaluate(() => {
+    const { store } = window.chronozarr.viewer;
+    store.readPixels = () => Promise.reject(new Error('the test refused this read'));
+  });
+  await clickStorePixel(page, 50, 40);
+  const overlay = page.locator('#error-overlay');
+  await expect(overlay).toHaveClass(/visible/);
+  await expect(overlay, 'the failed read is a toast, like the other chunk_load_failed notices').toHaveClass(/toast/);
+  expect((await readStatus(page)).error).toEqual({ code: 'chunk_load_failed', toast: true });
+
+  await page.evaluate(() => window.chronozarr.viewer.renderNow());
+  await expect(overlay, 'the next complete frame hides it').not.toHaveClass(/visible/, { timeout: 1000 });
+  expect((await readStatus(page)).error).toBeNull();
 });
 
 test('playback is starting or playing after play and paused after pause, and data-playback follows', async ({ page, servers, storeUrl }) => {
