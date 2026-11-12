@@ -94,6 +94,18 @@ async function waitForMessage(page, type, where = {}) {
 
 const send = (page, message) => page.evaluate((message) => window.send(message), message);
 
+/** Forget what the host has received so far: the next waitForMessage looks at what arrives from here on. */
+const forgetMessages = (page) =>
+  page.evaluate(() => {
+    window.messages = [];
+  });
+
+/** The first chronozarr:status whose `playback` is one of `phases`, waiting for it. */
+async function waitForPlayback(page, phases) {
+  const handle = await page.waitForFunction((phases) => window.messages.find((m) => m.data.type === 'chronozarr:status' && phases.includes(m.data.playback))?.data, phases);
+  return handle.jsonValue();
+}
+
 /** Click the centre of a level-0 pixel of the store in the iframe (the iframe fills the page). */
 async function clickPixel(page, frame, X, Y) {
   const point = await frame.evaluate(
@@ -573,6 +585,100 @@ test.describe('postMessage', () => {
     await expect.poll(() => warnings.some((text) => /origin="\*" is not an http\(s\) origin/.test(text))).toBe(true);
   });
 
+  test('ready carries the status of the open store', async ({ page, servers, stores, storeUrl }) => {
+    const store = await storeUrl(STORE);
+    await openHost(page, servers, stores, viewerUrl(servers, store, { origin: hostOf(servers) }));
+    const ready = await waitForMessage(page, 'chronozarr:ready');
+    expect(ready.status).toEqual(expect.objectContaining({ store: 'open', playback: 'paused', exporting: false, error: null }));
+    expect(Object.keys(ready.status).sort()).toEqual(['error', 'exporting', 'frame', 'level', 'playback', 'shownT', 'store']);
+  });
+
+  test('Space pressed inside the iframe starts and stops playback, and the host hears both in chronozarr:status', async ({ page, servers, stores, storeUrl }) => {
+    const store = await storeUrl(STORE);
+    const frame = await openHost(page, servers, stores, viewerUrl(servers, store, { origin: hostOf(servers) }));
+    await waitForMessage(page, 'chronozarr:ready');
+    await frame.evaluate(() => window.chronozarr.viewer.whenSettled());
+    await frame.locator('#gl-canvas').focus();
+    await forgetMessages(page);
+
+    await page.keyboard.press('Space');
+    const started = await waitForPlayback(page, ['starting', 'playing']);
+    expect(started.state.playing, 'the state of a status sent while the movie is on').toBe(true);
+
+    await forgetMessages(page);
+    await page.keyboard.press('Space');
+    const stopped = await waitForPlayback(page, ['paused']);
+    expect(stopped.state.playing).toBe(false);
+    expect(await frame.evaluate(() => window.chronozarr.viewer.playback.playing)).toBe(false);
+  });
+
+  test('a set to a timestep whose chunks are held is reported as loading, then as settled on that timestep', async ({ page, servers, stores, storeUrl }) => {
+    // One object per chunk, so the URL of a read names its timestep: every level of timestep 3 is held back.
+    const plain = 'u16_plain';
+    let release;
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    await page.route(new RegExp(`/${plain}/\\d+/data/c/3/`), async (route) => {
+      await held;
+      await route.continue();
+    });
+    try {
+      const frame = await openHost(page, servers, stores, viewerUrl(servers, await storeUrl(plain), { origin: hostOf(servers) }));
+      await waitForMessage(page, 'chronozarr:ready');
+      await frame.evaluate(() => window.chronozarr.viewer.whenSettled());
+      await forgetMessages(page);
+
+      await send(page, { type: 'chronozarr:set', t: 3 });
+      const loading = await waitForMessage(page, 'chronozarr:status', { frame: 'loading' });
+      expect([loading.t, loading.time, loading.shownT], 'the timestep asked for and the one still on the canvas').toEqual([3, '2024-01-04T00:00:00Z', 0]);
+      expect(loading.state.t).toBe(3);
+      expect(await received(page, 'chronozarr:status').then((messages) => messages.some((m) => m.data.frame === 'settled')), 'nothing settles while the chunks are held').toBe(false);
+
+      release();
+      const settled = await waitForMessage(page, 'chronozarr:status', { frame: 'settled' });
+      expect([settled.t, settled.shownT, settled.level]).toEqual([3, 3, 0]);
+    } finally {
+      release();
+    }
+  });
+
+  test('a digit key pressed inside the iframe changes the product, and chronozarr:status carries the new one', async ({ page, servers, stores, storeUrl }) => {
+    const store = await storeUrl(STORE);
+    const frame = await openHost(page, servers, stores, viewerUrl(servers, store, { origin: hostOf(servers) }));
+    const ready = await waitForMessage(page, 'chronozarr:ready');
+    expect(ready.state.product).toBe('true_color');
+    await frame.evaluate(() => window.chronozarr.viewer.whenSettled());
+    await frame.locator('#gl-canvas').focus();
+    await forgetMessages(page);
+
+    await page.keyboard.press('3');
+    const handle = await page.waitForFunction(() => window.messages.find((m) => m.data.type === 'chronozarr:status' && m.data.state.product === 'ndvi')?.data);
+    expect((await handle.jsonValue()).state.product).toBe('ndvi');
+    await expect(frame.locator('#products button.active')).toHaveText('NDVI');
+  });
+
+  test('without store= the host is told no_store once, the page shows the box, and get is answered with the error again', async ({ page, servers, stores }) => {
+    const src = `${servers.appUrl}/demo/index.html?${new URLSearchParams({ embed: '1', origin: hostOf(servers) })}`;
+    const frame = await openHost(page, servers, stores, src, { waitForStore: false });
+    const error = await waitForMessage(page, 'chronozarr:error', { code: 'no_store' });
+    expect(error).toEqual({ v: 1, type: 'chronozarr:error', code: 'no_store', message: 'No store selected: the iframe URL needs ?store=<base URL of a chronozarr store>.' });
+    await expect(frame.locator('#error-overlay')).toHaveClass(/visible/);
+    await expect(frame.locator('#error-overlay')).not.toHaveClass(/toast/);
+    await expect(frame.locator('#error-title')).toHaveText('No store selected');
+    await expect(frame.locator('#error-message')).toHaveText('Open this page with ?store=<base URL of a chronozarr store>.');
+    await frame.evaluate(() => window.chronozarr.viewer.whenSettled());
+
+    await send(page, { type: 'chronozarr:get' });
+    await expect.poll(async () => (await received(page, 'chronozarr:error')).length, { message: 'get is answered', timeout: 2000 }).toBe(2);
+    // After the round trip of get: the error was posted once, and once more as the answer.
+    const errors = await received(page, 'chronozarr:error');
+    expect(errors.map(({ data }) => data.code), 'the error is posted once, then answers get').toEqual(['no_store', 'no_store']);
+    expect(errors[1].data, 'get is answered with the same error').toEqual(error);
+    expect(await received(page, 'chronozarr:ready')).toEqual([]);
+    expect(await frame.evaluate(() => window.chronozarr.viewer.status), 'the box is the notice of the status').toEqual(expect.objectContaining({ store: 'none', frame: 'none', error: { code: 'no_store', toast: false } }));
+  });
+
   test('a bad set is answered with chronozarr:error and changes nothing', async ({ page, servers, stores, storeUrl }) => {
     const store = await storeUrl(STORE);
     const frame = await openHost(page, servers, stores, viewerUrl(servers, store, { origin: hostOf(servers) }));
@@ -608,6 +714,19 @@ test.describe('postMessage', () => {
       expect(error.message).toMatch(/^Could not open store: /);
       expect(await received(page, 'chronozarr:ready')).toEqual([]);
       expect(servers.app.requests.filter((r) => r.path.endsWith('catalog.json')), 'no catalog to fall back to').toEqual([]);
+    });
+
+    test('is reported once, and a get sent afterwards is answered with the same error', async ({ page, servers, stores }) => {
+      const frame = await openHost(page, servers, stores, viewerUrl(servers, `${servers.dataUrl}/no_such_store/`, { origin: hostOf(servers) }), { waitForStore: false });
+      const error = await waitForMessage(page, 'chronozarr:error', { code: 'store_open_failed' });
+      await frame.waitForFunction(() => window.chronozarr?.viewer.status.store === 'failed');
+      await frame.evaluate(() => window.chronozarr.viewer.whenSettled());
+      expect((await received(page, 'chronozarr:error')).length, 'the error is posted once').toBe(1);
+
+      await send(page, { type: 'chronozarr:get' });
+      await expect.poll(async () => (await received(page, 'chronozarr:error')).length).toBe(2);
+      expect((await received(page, 'chronozarr:error'))[1].data, 'get is answered with the same error').toEqual(error);
+      expect(await received(page, 'chronozarr:ready')).toEqual([]);
     });
   });
 });
