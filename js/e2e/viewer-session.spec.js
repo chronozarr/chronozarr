@@ -253,6 +253,24 @@ test('a switch while a movie plays shows no store from the first status that is 
   expect(records.map(([store]) => store)).toContain('opening');
 });
 
+test('a timeline drag held while a store opens reaches no store', async ({ page, servers, storeUrl }) => {
+  await openAt(page, servers, await storeUrl('u16_sharded'));
+  const next = await storeUrl('u16_plain');
+  const root = await holdRequests(page, `${next}zarr.json`);
+  const box = await page.locator('#timeline-track').boundingBox();
+  const y = box.y + box.height / 2;
+  await page.mouse.move(box.x + box.width * 0.25, y);
+  await page.mouse.down();
+  await openingStore(page, next);
+  await expect.poll(() => root.held.length).toBe(1);
+  expect(await page.evaluate(() => window.chronozarr.viewer.status.store)).toBe('opening');
+  await page.mouse.move(box.x + box.width * 0.5, y);
+  await page.mouse.move(box.x + box.width * 0.75, y);
+  await page.mouse.up();
+  await root.release();
+  expect(await page.evaluate(() => window.opening)).toBeTruthy();
+});
+
 test('the progress bar of a load during playback fades while the movie goes on', async ({ page, servers, storeUrl }) => {
   await openAt(page, servers, await storeUrl('u16_plain'));
   const level1 = await holdRequests(page, /\/u16_plain\/1\/data\/c\//);
