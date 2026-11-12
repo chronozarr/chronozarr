@@ -142,6 +142,20 @@ test.describe('an open that fails', () => {
     expect(consoleErrors.since(), 'console errors after the failed open').toEqual([]);
   });
 
+  test('after a step whose chunks were held leaves no tick of the timeline loading', async ({ page, servers, storeUrl }) => {
+    const url = await storeUrl('u16_plain');
+    const chunks = await holdRequests(page, /\/u16_plain\/\d+\/data\/c\/3\//);
+    await openAt(page, servers, url);
+    await page.evaluate(() => window.chronozarr.viewer.goToTime(3));
+    await expect(page.locator('.timeline-tick.loading'), 'the tick of the step while its chunks are held').toHaveCount(1);
+
+    const gone = await missingStore(page, servers);
+    expect(await page.evaluate((url) => window.chronozarr.viewer.loadStore(url).then(() => 'resolved', () => 'rejected'), gone)).toBe('rejected');
+    await expect(page.locator('.timeline-tick.loading')).toHaveCount(0);
+    await expect(page.locator('#timeline-track')).not.toHaveClass(/loading/);
+    await chunks.release();
+  });
+
   test('leaves the sidebar empty after a pixel of the previous store was clicked', async ({ page, servers, storeUrl }) => {
     await openAt(page, servers, await storeUrl('u16_sharded'));
     await clickStorePixel(page, 50, 40);

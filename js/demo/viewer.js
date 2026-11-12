@@ -493,6 +493,8 @@ class Viewer {
     store?.close();
     this.#updatePlayUi();
     this.#updateFrameDate([]);
+    // #loading is false from here: the tick of the timestep asked for and the track lose their loading look.
+    this.#updateTimeUi();
     this.#publishStatus();
   }
 
