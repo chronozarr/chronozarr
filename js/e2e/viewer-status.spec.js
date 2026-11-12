@@ -118,6 +118,53 @@ test('after a store opens it is open, settled and paused, the attributes say so,
   expect(await settlesAtOnce(page)).toBe('resolved');
 });
 
+test('while a store opens it is opening with no frame, and a whenSettled started then waits for the open', async ({ page, servers, storeUrl }) => {
+  await openViewer(page, servers, await storeUrl('u16_sharded'));
+  await waitForSettled(page);
+  const next = await storeUrl('u16_plain');
+  const root = await holdRequests(page, `${next}zarr.json`);
+  await page.evaluate((url) => {
+    window.opening = window.chronozarr.viewer.loadStore(url);
+  }, next);
+  await expect.poll(() => root.held.length).toBe(1);
+
+  expect(await readStatus(page)).toEqual(expect.objectContaining({ store: 'opening', frame: 'none' }));
+  expect(await readAttributes(page)).toEqual({ store: 'opening', frame: 'none', playback: 'paused' });
+  await startSettledWait(page);
+  await frames(page, 5);
+  expect(await page.evaluate(() => window.settled), 'whenSettled while the root metadata is held').toBe('pending');
+
+  await root.release();
+  expect(await page.evaluate(() => window.opening)).toBeTruthy();
+  await page.waitForFunction(() => window.settled !== 'pending');
+  expect(await page.evaluate(() => window.settled)).toEqual(expect.objectContaining({ store: 'open', frame: 'settled', t: 0, shownT: 0 }));
+});
+
+test('a whenSettled that waits while a newer open replaces the first resolves with the second store settled', async ({ page, servers, storeUrl }) => {
+  await openViewer(page, servers, await storeUrl('u16_sharded'));
+  await waitForSettled(page);
+  const first = await storeUrl('u16_plain');
+  const second = await storeUrl('u8_rgb');
+  const root = await holdRequests(page, `${first}zarr.json`);
+  await page.evaluate((url) => {
+    window.opening = window.chronozarr.viewer.loadStore(url);
+  }, first);
+  await expect.poll(() => root.held.length).toBe(1);
+  await page.evaluate(() => {
+    window.settled = 'pending';
+    const { viewer } = window.chronozarr;
+    viewer.whenSettled().then((status) => {
+      window.settled = { ...status, url: viewer.store?.url ?? null };
+    });
+  });
+
+  expect(await page.evaluate((url) => window.chronozarr.viewer.loadStore(url), second)).toBeTruthy();
+  await page.waitForFunction(() => window.settled !== 'pending');
+  expect(await page.evaluate(() => window.settled)).toEqual(expect.objectContaining({ store: 'open', frame: 'settled', url: second }));
+  await root.release();
+  expect(await page.evaluate(() => window.opening), 'the open that was replaced').toBeNull();
+});
+
 test('a step to a timestep whose chunks are held loads until they arrive, and whenSettled waits for it', async ({ page, servers, storeUrl }) => {
   const url = await storeUrl('u16_plain');
   const chunks = await holdRequests(page, /\/u16_plain\/\d+\/data\/c\/3\//);
@@ -337,6 +384,29 @@ test.describe('an open that fails', () => {
     expect(await readAttributes(page)).toEqual({ store: 'failed', frame: 'none', playback: 'paused' });
     expect(await settlesAtOnce(page)).toBe('resolved');
   });
+
+  test('a whenSettled that waits when the open fails resolves with the store failed and no frame', async ({ page, servers, storeUrl }) => {
+    await openViewer(page, servers, await storeUrl('u16_plain'));
+    await waitForSettled(page);
+    const gone = `${servers.dataUrl}/no_such_store/`;
+    // The first read of the root is held; any later one answers 404 at once.
+    const held = [];
+    await page.route(`${gone}zarr.json`, (route) => {
+      if (held.length === 0) held.push(route);
+      else route.fulfill({ status: 404, headers: { 'Access-Control-Allow-Origin': '*' } });
+    });
+    await page.evaluate((url) => {
+      window.opening = window.chronozarr.viewer.loadStore(url).then(() => 'resolved', () => 'rejected');
+    }, gone);
+    await expect.poll(() => held.length).toBe(1);
+    await startSettledWait(page);
+    expect(await page.evaluate(() => window.settled), 'whenSettled while the root metadata is held').toBe('pending');
+
+    await held[0].fulfill({ status: 404, headers: { 'Access-Control-Allow-Origin': '*' } });
+    expect(await page.evaluate(() => window.opening)).toBe('rejected');
+    await page.waitForFunction(() => window.settled !== 'pending');
+    expect(await page.evaluate(() => window.settled)).toEqual(expect.objectContaining({ store: 'failed', frame: 'none' }));
+  });
 });
 
 test('a click whose pixel read fails shows a toast that the next complete frame hides', async ({ page, servers, storeUrl }) => {
@@ -390,6 +460,45 @@ test('a load that starts within 200 ms of a complete frame keeps the progress ba
   await page.clock.resume();
   await page.evaluate(() => window.chronozarr.viewer.whenSettled());
   await expect.poll(() => fill.evaluate((element) => element.style.opacity), { timeout: 5000 }).toBe('0');
+});
+
+test('exporting is true from createExportSession to its close, the status hook hears both changes, and the attributes stay', async ({ page, servers, storeUrl }) => {
+  await openViewer(page, servers, await storeUrl('u16_plain'));
+  await waitForSettled(page);
+  const before = await readAttributes(page);
+  const seen = await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    const { dataset } = document.documentElement;
+    const attributes = () => ({ store: dataset.store, frame: dataset.frame, playback: dataset.playback });
+    const calls = [];
+    viewer.hooks.status = () => calls.push(viewer.status.exporting);
+    const session = viewer.createExportSession({ scale: 0.25, timesteps: 1 });
+    const during = { exporting: viewer.status.exporting, attributes: attributes() };
+    session.close();
+    return { calls, during, after: { exporting: viewer.status.exporting, attributes: attributes() } };
+  });
+  expect(seen).toEqual({
+    calls: [true, false],
+    during: { exporting: true, attributes: before },
+    after: { exporting: false, attributes: before },
+  });
+});
+
+test('while playback starts the Play button says that it starts when the next frames are loaded', async ({ page, servers, storeUrl }) => {
+  const url = await storeUrl('u16_plain');
+  // Every level of the first step is held: the movie cannot leave its start.
+  const step1 = await holdRequests(page, /\/u16_plain\/\d+\/data\/c\/1\//);
+  await openViewer(page, servers, url);
+  await waitForSettled(page);
+  await page.evaluate(() => window.chronozarr.viewer.play());
+  expect((await readStatus(page)).playback).toBe('starting');
+  const button = page.locator('#play-btn');
+  await expect(button).toHaveAttribute('title', 'Buffering: playback starts when the next frames are loaded (Space to cancel)');
+  await expect(button).toHaveAttribute('aria-busy', 'true');
+
+  await page.evaluate(() => window.chronozarr.viewer.pause());
+  await step1.release();
+  expect((await readStatus(page)).playback).toBe('paused');
 });
 
 test('setStretch on a single-band product calls the status hook once, with the new range', async ({ page, servers, storeUrl }) => {

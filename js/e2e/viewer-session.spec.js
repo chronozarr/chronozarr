@@ -199,8 +199,9 @@ test('a step, a zoom and a click while a store opens reach no store, and the new
   expect.soft([...toPrevious], 'requests to the previous store').toEqual([]);
 
   // From here no timer fires: the first frame of the new store has to be asked for by the open itself, not by a retry
-  // timer or a prefetch timer.
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 10));
+  // timer or a prefetch timer. The clock goes on while this call travels to the page, and pauseAt cannot go back in
+  // time, so it pauses a second ahead; the timers due in that second run on the way.
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1000);
   const firstFrame = recordRequests(page, /\/u16_plain\/0\/data\/c\/3\//);
   await root.release();
   await expect.poll(() => firstFrame.size, { message: 'requests for the four cells of the first frame', timeout: 5000 }).toBe(4);
@@ -287,6 +288,17 @@ test('a switch while a movie plays keeps the progress bar of the open, and the n
   await root.release();
   expect(await page.evaluate(() => window.opening)).toBeTruthy();
   expect(await page.evaluate(() => window.chronozarr.viewer.playback.playing)).toBe(false);
+  // The Playback of the previous store does not step the new one: the new store stays at its start timestep.
+  const timesteps = await page.evaluate(async () => {
+    const { viewer } = window.chronozarr;
+    const seen = new Set();
+    for (let frame = 0; frame < 60; frame++) {
+      seen.add(viewer.t);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    return [...seen];
+  });
+  expect(timesteps, 'the timesteps of the new store over 60 animation frames').toEqual([0]);
 });
 
 test('a switch while a movie plays shows no store from the first status that is not open', async ({ page, servers, storeUrl }) => {
