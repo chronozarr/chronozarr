@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { GIFEncoder, applyPalette, quantize } from '../vendor/gifenc.esm.js';
-import { canExport, exportFilename, flipRows, gifDelayMs, paletteSampleTimes, pickVideoMimeType, subsamplePixels, videoBitrate } from '../demo/export.js';
+import { canExport, exportFilename, exportPanelView, flipRows, gifDelayMs, paletteSampleTimes, pickVideoMimeType, subsamplePixels, videoBitrate } from '../demo/export.js';
 
 test('gifDelayMs rounds to whole centiseconds and never goes below 20 ms', () => {
   assert.equal(gifDelayMs(1), 1000);
@@ -86,4 +86,41 @@ test('the vendored GIF encoder writes a looping GIF89a with the frames, palette 
   assert.ok(text.includes('NETSCAPE2.0'), 'loop extension');
   assert.equal(text.split('\x21\xf9\x04').length - 1, frames.length, 'one graphic control extension per frame');
   assert.ok(bytes.length < 400, `tiny flat frames compress to ${bytes.length} bytes`);
+});
+
+test('a running export that has reported no progress shows Cancel, hides Start and Download, and says it is preparing', () => {
+  const view = exportPanelView('running', { stage: 'preparing', done: 0, total: 0, format: 'gif' });
+  assert.deepEqual(view, { startHidden: true, cancelHidden: false, download: null, status: 'Preparing…', fraction: 0 });
+});
+
+test('a running export shows the text of its stage and the fraction done', () => {
+  const running = (stage, format) => exportPanelView('running', { stage, done: 3, total: 12, format });
+  assert.deepEqual(running('loading', 'mp4'), { startHidden: true, cancelHidden: false, download: null, status: 'Loading: 3 of 12', fraction: 0.25 });
+  assert.equal(running('recording', 'webm').status, 'Recording: 3 of 12');
+  assert.equal(running('encoding', 'gif').status, 'Encoding GIF: 3 of 12');
+  assert.equal(running('recording', 'webm').fraction, 0.25);
+});
+
+test('a finished export offers the download with its file name and says how it went', () => {
+  const view = exportPanelView('done', {
+    text: 'Done in 2.1 s · 1.4 MB · 800×600 · 4 frames',
+    href: 'blob:http://localhost/abc',
+    filename: 'chronozarr-a-b-2015-01-to-2015-04.gif',
+  });
+  assert.deepEqual(view, {
+    startHidden: false,
+    cancelHidden: true,
+    download: { href: 'blob:http://localhost/abc', filename: 'chronozarr-a-b-2015-01-to-2015-04.gif', text: 'Download chronozarr-a-b-2015-01-to-2015-04.gif' },
+    status: 'Done in 2.1 s · 1.4 MB · 800×600 · 4 frames',
+    fraction: 1,
+  });
+});
+
+test('a cancelled or failed export shows Start again, no download and an empty bar', () => {
+  assert.deepEqual(exportPanelView('cancelled', {}), { startHidden: false, cancelHidden: true, download: null, status: 'Cancelled.', fraction: 0 });
+  assert.deepEqual(exportPanelView('failed', { message: 'Error: boom' }), { startHidden: false, cancelHidden: true, download: null, status: 'Export failed: Error: boom', fraction: 0 });
+});
+
+test('before any export the panel shows Start and nothing else', () => {
+  assert.deepEqual(exportPanelView('idle', {}), { startHidden: false, cancelHidden: true, download: null, status: '', fraction: 0 });
 });

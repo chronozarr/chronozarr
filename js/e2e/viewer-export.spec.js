@@ -132,3 +132,34 @@ for (const embed of [false, true]) {
     expect(gif.bytes.subarray(0, 6).toString('latin1')).toBe('GIF89a');
   });
 }
+
+test('a second export does not show the first one\'s result while it prepares', async ({ page, servers, storeUrl }) => {
+  const store = await storeUrl('u16_plain');
+  await open(page, `${servers.appUrl}/demo/index.html?store=${encodeURIComponent(store)}`);
+  await page.locator('#export-btn').click();
+  await page.locator('#export-size').selectOption('0.25');
+  await exportAndDownload(page, 'gif');
+  const status = page.locator('#export-status');
+  await expect(status).toContainText('Done in');
+
+  // With the cache empty, the second export has to wait for chunks: hold every chunk request.
+  const held = [];
+  await page.route(/\/data\/c\/\d+\/0\/\d+\/\d+$/, (route) => held.push(route));
+  await page.evaluate(() => {
+    window.chronozarr.viewer.store.clearCache();
+    window.chronozarr.viewer.renderer.clearResident();
+  });
+  try {
+    await page.locator('#export-start').click();
+    await expect.poll(() => held.length).toBeGreaterThan(0);
+    await expect(page.locator('#export-cancel')).toBeVisible();
+    await expect(page.locator('#export-download')).toBeHidden();
+    await expect(status).toHaveText('Preparing…');
+    await expect(status).not.toContainText('Done in');
+    expect(await page.locator('#export-fill').evaluate((fill) => fill.style.width)).toBe('0%');
+  } finally {
+    await page.unroute(/\/data\/c\/\d+\/0\/\d+\/\d+$/);
+    await Promise.all(held.map((route) => route.continue().catch(() => {})));
+  }
+  await expect(status).toContainText('Done in', { timeout: 30_000 });
+});

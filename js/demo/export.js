@@ -3,6 +3,7 @@
 // what is on screen; a timestep whose data is not in memory yet is waited for, like playback holds. MP4 (H.264) is
 // what slides, chat apps and phones play; Chrome and Safari record it, Firefox records only WebM.
 
+import { Machine } from '../chronozarr/machine.js';
 import { redactText } from '../chronozarr/redact.js';
 import { applyPalette, GIFEncoder, quantize } from '../vendor/gifenc.esm.js';
 import { Playback } from './playback.js';
@@ -232,17 +233,82 @@ export async function exportLoop(viewer, { format, from, to, stepsPerSecond, sca
 
 // ---- the Export panel ----
 
+/**
+ * What the panel is doing. idle: nothing was exported yet. running: an export is under way. done: the last export
+ * finished and can be downloaded. cancelled: the last export was cancelled. failed: the last export failed.
+ */
+const EXPORT_MOVES = {
+  idle: { start: 'running' },
+  running: { finish: 'done', cancel: 'cancelled', fail: 'failed' },
+  done: { start: 'running' },
+  cancelled: { start: 'running' },
+  failed: { start: 'running' },
+};
+
 const $ = (id) => document.getElementById(id);
+const exportState = new Machine('export panel', EXPORT_MOVES, 'idle');
+/**
+ * What the current state carries: running {stage, done, total, format} with stage 'preparing' until the first
+ * progress report; done {text, href, filename}; failed {message}.
+ */
+let exportRecord = {};
 let panelReady = false;
 let running = null;
-let downloadUrl = null;
 let listedStore = null;
 
 const megabytes = (bytes) => `${(bytes / 1048576).toFixed(1)} MB`;
 
-function describeProgress({ stage, done, total }, format) {
+function describeProgress({ stage, done, total, format }) {
   const what = stage === 'loading' ? 'Loading' : stage === 'recording' ? 'Recording' : `Encoding ${format.toUpperCase()}`;
   return { fraction: done / total, text: `${what}: ${done} of ${total}` };
+}
+
+/** What the panel shows in `state` with its `record`: which of Start and Cancel are hidden, the download link, the status line and the bar. */
+export function exportPanelView(state, record) {
+  const view = { startHidden: false, cancelHidden: true, download: null, status: '', fraction: 0 };
+  if (state === 'running') {
+    view.startHidden = true;
+    view.cancelHidden = false;
+    if (record.stage === 'preparing') {
+      view.status = 'Preparing…';
+    } else {
+      const { fraction, text } = describeProgress(record);
+      view.status = text;
+      view.fraction = fraction;
+    }
+  } else if (state === 'done') {
+    view.download = { href: record.href, filename: record.filename, text: `Download ${record.filename}` };
+    view.status = record.text;
+    view.fraction = 1;
+  } else if (state === 'cancelled') {
+    view.status = 'Cancelled.';
+  } else if (state === 'failed') {
+    view.status = `Export failed: ${record.message}`;
+  }
+  return view;
+}
+
+function drawPanel() {
+  const view = exportPanelView(exportState.state, exportRecord);
+  $('export-start').hidden = view.startHidden;
+  $('export-cancel').hidden = view.cancelHidden;
+  const link = $('export-download');
+  link.hidden = view.download === null;
+  if (view.download) {
+    link.href = view.download.href;
+    link.download = view.download.filename;
+    link.textContent = view.download.text;
+  }
+  $('export-status').textContent = view.status;
+  $('export-fill').style.width = `${view.fraction * 100}%`;
+}
+
+/** Take the move `event`, release what the state being left holds, keep `record` for the new state and draw it. */
+function moveTo(event, record) {
+  if (exportState.is('done')) URL.revokeObjectURL(exportRecord.href);
+  exportState.send(event);
+  exportRecord = record;
+  drawPanel();
 }
 
 /** Disable the formats this browser cannot write; a disabled choice falls to the first one that works (GIF always does). */
@@ -271,17 +337,13 @@ function fillTimeSelects(viewer) {
 }
 
 async function startExport(viewer) {
+  if (!exportState.can('start')) return;
   const format = $('export-format').value;
   const from = Number($('export-from').value);
   const to = Number($('export-to').value);
   const controller = new AbortController();
   running = controller;
-  $('export-start').hidden = true;
-  $('export-cancel').hidden = false;
-  $('export-download').hidden = true;
-  if (downloadUrl) URL.revokeObjectURL(downloadUrl);
-  const status = $('export-status');
-  const fill = $('export-fill');
+  moveTo('start', { stage: 'preparing', done: 0, total: 0, format });
   try {
     const result = await exportLoop(viewer, {
       format,
@@ -290,28 +352,25 @@ async function startExport(viewer) {
       stepsPerSecond: viewer.speed,
       scale: Number($('export-size').value),
       signal: controller.signal,
-      onProgress: (progress) => {
-        const { fraction, text } = describeProgress(progress, format);
-        fill.style.width = `${fraction * 100}%`;
-        status.textContent = text;
+      onProgress: ({ stage, done, total }) => {
+        exportRecord = { ...exportRecord, stage, done, total };
+        drawPanel();
       },
     });
-    downloadUrl = URL.createObjectURL(result.blob);
-    const link = $('export-download');
-    link.href = downloadUrl;
-    link.download = result.filename;
-    link.textContent = `Download ${result.filename}`;
-    link.hidden = false;
-    fill.style.width = '100%';
-    status.textContent = `Done in ${(result.ms / 1000).toFixed(1)} s · ${megabytes(result.bytes)} · ${result.width}×${result.height} · ${result.frames} frames`;
+    moveTo('finish', {
+      href: URL.createObjectURL(result.blob),
+      filename: result.filename,
+      text: `Done in ${(result.ms / 1000).toFixed(1)} s · ${megabytes(result.bytes)} · ${result.width}×${result.height} · ${result.frames} frames`,
+    });
   } catch (error) {
-    fill.style.width = '0';
-    status.textContent = error.name === 'AbortError' ? 'Cancelled.' : `Export failed: ${redactText(error)}`;
-    if (error.name !== 'AbortError') console.error('export failed:', redactText(error));
+    if (error.name === 'AbortError') {
+      moveTo('cancel', {});
+    } else {
+      moveTo('fail', { message: redactText(error) });
+      console.error('export failed:', redactText(error));
+    }
   } finally {
     running = null;
-    $('export-start').hidden = false;
-    $('export-cancel').hidden = true;
   }
 }
 
@@ -328,6 +387,7 @@ export function toggleExportPanel(viewer) {
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !panel.hidden) panel.hidden = true;
     });
+    drawPanel();
   }
   panel.hidden = !panel.hidden;
   if (panel.hidden) return;
