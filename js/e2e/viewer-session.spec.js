@@ -237,6 +237,26 @@ test('a switch while a movie plays keeps the progress bar of the open, and the n
   expect(await page.evaluate(() => window.chronozarr.viewer.playback.playing)).toBe(false);
 });
 
+test('the progress bar of a load during playback fades while the movie goes on', async ({ page, servers, storeUrl }) => {
+  await openAt(page, servers, await storeUrl('u16_plain'));
+  const level1 = await holdRequests(page, /\/u16_plain\/1\/data\/c\//);
+  await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    viewer.setSpeed(15);
+    viewer.play();
+    viewer.lodOverride = 1;
+    viewer.renderNow();
+  });
+  await expect.poll(() => level1.held.length).toBeGreaterThan(0);
+  await level1.release();
+
+  // Every frame the movie shows says the load is complete: the bar fades 200 ms after the first of them, not after the last.
+  await expect.poll(() => page.evaluate(() => document.getElementById('progress-fill').style.opacity), { timeout: 3000 }).toBe('0');
+  const steps = await page.evaluate(() => window.chronozarr.viewer.playback.stats.steps);
+  await page.waitForFunction((before) => window.chronozarr.viewer.playback.stats.steps > before + 3, steps);
+  expect(await page.evaluate(() => window.chronozarr.viewer.playback.playing), 'the movie still plays').toBe(true);
+});
+
 test.describe('two opens that overlap', () => {
   test.use({ expectedErrors: MISSING_STORE_ERRORS });
 

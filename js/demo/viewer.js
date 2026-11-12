@@ -2736,17 +2736,22 @@ class Viewer {
 
   #setProgress(frac) {
     const fill = $('progress-fill');
-    // A fade that is still pending belongs to a load that has finished: it must not hide the bar of the next one.
-    clearTimeout(this.#progressTimer);
     if (frac <= 0) {
+      clearTimeout(this.#progressTimer);
+      this.#progressTimer = 0;
       fill.style.opacity = '0';
       fill.style.width = '0';
     } else if (frac >= 1) {
       fill.style.width = '100%';
-      this.#progressTimer = setTimeout(() => {
+      // Every frame shown calls this: a fade already pending stays, so the bar fades 200 ms after the load completed.
+      this.#progressTimer ||= setTimeout(() => {
+        this.#progressTimer = 0;
         fill.style.opacity = '0';
       }, 200);
     } else {
+      // A fade that is still pending belongs to a load that has finished: it must not hide the bar of this one.
+      clearTimeout(this.#progressTimer);
+      this.#progressTimer = 0;
       fill.style.width = `${frac * 100}%`;
       fill.style.opacity = '1';
     }
