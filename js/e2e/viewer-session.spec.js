@@ -347,15 +347,20 @@ test('the progress bar of a load during playback fades while the movie goes on',
     viewer.play();
     viewer.lodOverride = 1;
     viewer.renderNow();
+    // A frame every 50 ms, from before the load completes. The movie alone can leave a gap longer than the fade after
+    // its first step, and a fade that started again with every frame would end in that gap.
+    window.frames = setInterval(() => viewer.renderNow(), 50);
   });
   await expect.poll(() => level1.held.length).toBeGreaterThan(0);
+  expect(await page.evaluate(() => document.getElementById('progress-fill').style.opacity), 'the bar shows the load of level 1').toBe('1');
   await level1.release();
 
-  // Every frame the movie shows says the load is complete: the bar fades 200 ms after the first of them, not after the last.
+  // Every frame shown says the load is complete: the bar fades 200 ms after the first of them, not after the last.
   await expect.poll(() => page.evaluate(() => document.getElementById('progress-fill').style.opacity), { timeout: 3000 }).toBe('0');
   const steps = await page.evaluate(() => window.chronozarr.viewer.playback.stats.steps);
   await page.waitForFunction((before) => window.chronozarr.viewer.playback.stats.steps > before + 3, steps);
   expect(await page.evaluate(() => window.chronozarr.viewer.playback.playing), 'the movie still plays').toBe(true);
+  await page.evaluate(() => clearInterval(window.frames));
 });
 
 test.describe('two opens that overlap', () => {
