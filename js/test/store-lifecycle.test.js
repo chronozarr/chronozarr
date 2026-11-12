@@ -60,7 +60,7 @@ test('close prevents a late decode from repopulating caches', async () => {
   assert.equal(store.cacheInfo().bytes, 0);
 });
 
-test('a store that fails to construct after its decode workers started terminates them', async () => {
+test('a store that fails to construct after the decode workers of its own pool (spawnWorker, not the shared lease) started terminates them', async () => {
   const readable = buildSyntheticStore(spec);
   const root = JSON.parse(new TextDecoder().decode(readable.files.get('/zarr.json')));
   root.attributes.chronozarr.times.pop();
