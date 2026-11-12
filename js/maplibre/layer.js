@@ -36,9 +36,10 @@ const SEEK_DISTANCE = 4; // a time change of more than this many steps drops que
 const EVENTS = ['open', 'loading', 'ready', 'error'];
 
 /**
- * The layer's lifecycle. constructed: not on a map yet. opening: on a map, the store is being read. open: the store is
- * read and, with a GL context, drawable. failed: opening failed for good; the layer draws nothing and holds no store.
- * removed: taken off the map; it cannot be added again.
+ * The layer's lifecycle. constructed: not on a map yet. opening: on a map; the store is being read, or the GPU is being
+ * set up on a store already read. open: the store is read and, with a GL context, drawable. failed: the open or the GPU
+ * setup failed for good; the layer draws nothing. It holds no store when the open failed, and keeps its store when only a
+ * later GPU setup failed. removed: taken off the map; it cannot be added again.
  */
 const LAYER_MOVES = {
   constructed: { add: 'opening', remove: 'removed' },
@@ -373,21 +374,21 @@ export class ChronozarrLayer {
     this.#gl = gl;
     // While the store opens, the open in progress sets up the GPU with the map and context recorded here.
     if (phase === 'opening') return;
-    if (phase === 'constructed' || phase === 'failed') {
+    if (phase === 'constructed' || (phase === 'failed' && this.#store === null)) {
       this.#phase.send('add');
       this.#open();
       return;
     }
+    // The store is open: the layer is open, or it opened and only its GPU setup failed. Setting up the GPU on that
+    // store keeps it, so `opened` and getValueAt keep answering from the store the layer holds.
+    if (phase === 'failed') this.#phase.send('add');
     try {
       this.#initGpu(this.#store);
     } catch (error) {
-      // A failed layer holds no store, so adding it again opens the store anew.
-      this.#store.close();
-      this.#store = null;
-      this.#geo = null;
-      this.#bandInfo = null;
       this.#fail(error);
+      return;
     }
+    if (this.#phase.state === 'opening') this.#phase.send('opened');
   }
 
   onRemove() {

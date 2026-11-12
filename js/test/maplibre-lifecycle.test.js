@@ -77,23 +77,58 @@ test('a layer whose GPU setup fails while it opens holds no store, and the store
   assert.equal(close.mock.callCount(), 1, 'the store that was opened was closed');
 });
 
-test('a layer that opened and then fails to set up the GPU releases its store, and adding it again opens the store anew', async (t) => {
+test('a layer that opened and then fails to set up the GPU keeps answering getValueAt from its store', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const { layer, errors } = newLayer(t);
+  layer.onAdd(map, null);
+  const store = await layer.opened;
+  layer.onAdd(map, countingGl({ failFragment: true }).gl);
+  await flush();
+  assert.equal(layer.stats.state, 'failed');
+  assert.deepEqual(errors.map((event) => event.fatal), [true]);
+  assert.equal(layer.store, store);
+  const value = await layer.getValueAt([0.5, 1.5]);
+  assert.equal(value.valid, true);
+  assert.equal(value.bands.length, 1);
+});
+
+test('a layer that opened and then fails to set up the GPU sets it up on the same store when it is added again', async (t) => {
   t.mock.method(console, 'error', () => {});
   const close = t.mock.method(ChronoStore.prototype, 'close');
   const { layer, memory } = newLayer(t);
+  let opens = 0;
+  layer.on('open', () => { opens += 1; });
   layer.onAdd(map, null);
-  const first = await layer.opened;
+  const store = await layer.opened;
   layer.onAdd(map, countingGl({ failFragment: true }).gl);
-  assert.equal(layer.store, null, 'the failed layer holds no store');
-  assert.equal(layer.products, null);
-  assert.equal(close.mock.callCount(), 1, 'the store was closed');
-  const reopened = new Promise((resolve) => layer.on('open', (event) => resolve(event.store)));
   layer.onAdd(map, countingGl().gl);
-  const second = await reopened;
-  assert.notEqual(second, first);
-  assert.equal(layer.store, second);
-  assert.equal(rootReads(memory), 2, 'the store was read again');
+  const during = layer.getValueAt([0.5, 1.5]);
+  assert.equal(layer.store, store, 'the layer keeps the store it opened');
+  assert.equal((await during).bands[0].value, 1000);
+  await flush();
+  assert.equal(await layer.opened, layer.store);
+  assert.equal(close.mock.callCount(), 0, 'no store was closed');
+  assert.equal(rootReads(memory), 1, 'the store was read once');
+  assert.equal(opens, 1, "'open' fired once");
   assert.ok(layer.stats.slots > 0, 'the GPU was set up');
+  assert.notEqual(layer.stats.state, 'failed');
+  assert.equal((await layer.getValueAt([0.5, 1.5])).bands[0].value, 1000);
+});
+
+test('a layer that opened and whose GPU setup fails twice stays failed and keeps its store open', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const close = t.mock.method(ChronoStore.prototype, 'close');
+  const { layer, errors } = newLayer(t);
+  layer.onAdd(map, null);
+  const store = await layer.opened;
+  layer.onAdd(map, countingGl({ failFragment: true }).gl);
+  layer.onAdd(map, countingGl({ failFragment: true }).gl);
+  await flush();
+  assert.equal(layer.stats.state, 'failed');
+  assert.deepEqual(errors.map((event) => event.fatal), [true, true]);
+  assert.equal(layer.store, store, 'the layer keeps the store it opened');
+  assert.equal(close.mock.callCount(), 0, 'the store was not closed');
+  assert.equal(await layer.opened, store, 'opened is still resolved with that store');
 });
 
 test('adding a layer a second time while its store opens reads the store once', async (t) => {
