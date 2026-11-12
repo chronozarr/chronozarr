@@ -309,7 +309,7 @@ function drawPanel() {
 
 /** Take the move `event`, release what the state being left holds, keep `record` for the new state and draw it. */
 function moveTo(event, record) {
-  if (exportState.is('done')) URL.revokeObjectURL(exportRecord.href);
+  if (exportState.state === 'done') URL.revokeObjectURL(exportRecord.href);
   exportState.send(event);
   exportRecord = { notice: null, ...record };
   drawPanel();

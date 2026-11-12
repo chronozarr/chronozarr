@@ -3,7 +3,8 @@
 // The table maps every state to an object of `event: target state`; a state with no moves is `{}`. The constructor
 // checks the table, so a typo in it fails when the module that owns it loads. `send` takes a move the current state
 // lists and throws on any other, leaving the state as it was. The object that owns a machine does what the move
-// requires right after `send` returns.
+// requires right after `send` returns. Code reads the state by comparing `state`, which allocates nothing on a path
+// that runs per frame or per chunk.
 
 const isPlainObject = (value) => {
   if (value === null || typeof value !== 'object') return false;
@@ -45,11 +46,6 @@ export class Machine {
     return this.#state;
   }
 
-  /** Whether the current state is one of `states`. */
-  is(...states) {
-    return states.includes(this.#state);
-  }
-
   /** Whether the current state accepts `event`. */
   can(event) {
     return Object.hasOwn(this.#table[this.#state], event);
@@ -66,13 +62,4 @@ export class Machine {
     this.#state = stateMoves[event];
     return this.#state;
   }
-}
-
-/** Every move of `table` as [from, event, to], in table order. */
-export function moves(table) {
-  const list = [];
-  for (const [from, stateMoves] of Object.entries(table)) {
-    for (const [event, to] of Object.entries(stateMoves)) list.push([from, event, to]);
-  }
-  return list;
 }

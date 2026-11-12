@@ -473,19 +473,20 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
   };
 
   async function handle(command) {
-    if (connection.is('failed')) {
+    const state = connection.state;
+    if (state === 'failed') {
       // Nothing can be applied or reported without a store: the host hears why, and the command is not kept.
       bridge.post('error', failure);
       return;
     }
     if (command.kind === 'get') {
-      if (connection.is('ready')) {
+      if (state === 'ready') {
         bridge.post('ready', readyPayload());
         bridge.rememberView(viewPayload());
       }
       return;
     }
-    if (!connection.is('ready')) {
+    if (state !== 'ready') {
       early = { ...early, ...command.set };
       return;
     }

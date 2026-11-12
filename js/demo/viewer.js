@@ -844,7 +844,7 @@ class Viewer {
 
   /** Play the movie; nothing while no store is open (the playback of a previous store stays paused). */
   play() {
-    if (this.#session.is('open')) this.#playback?.play();
+    if (this.#session.state === 'open') this.#playback?.play();
   }
 
   pause() {
@@ -852,7 +852,7 @@ class Viewer {
   }
 
   togglePlay() {
-    if (this.#session.is('open')) this.#playback?.toggle();
+    if (this.#session.state === 'open') this.#playback?.toggle();
   }
 
   /** Steps per second for movie playback, kept between visits. */
@@ -970,12 +970,12 @@ class Viewer {
 
   /** The frame of the status: the outcome of the last render, or 'loading' while a store is open and a render is queued. */
   #currentFrame() {
-    return this.#rafId !== 0 && this.#session.is('open') ? 'loading' : this.#frameOutcome;
+    return this.#rafId !== 0 && this.#session.state === 'open' ? 'loading' : this.#frameOutcome;
   }
 
   /** Whether nothing is pending (see whenSettled). */
   #settled() {
-    if (this.#session.is('opening')) return false;
+    if (this.#session.state === 'opening') return false;
     const frame = this.#currentFrame();
     return frame === 'settled' || frame === 'unavailable' || frame === 'none';
   }

@@ -226,7 +226,8 @@ export class DecodePool {
 
   /** A worker could not start or stopped with an error: use the fallback if there is one, else fail. */
   #workersFailed(error) {
-    if (!this.#mode.is('starting', 'running')) return;
+    const mode = this.#mode.state;
+    if (mode !== 'starting' && mode !== 'running') return;
     if (this.#fallback) this.#useFallback(error);
     else this.#fail('fail', error);
   }

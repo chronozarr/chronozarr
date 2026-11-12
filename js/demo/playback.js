@@ -168,7 +168,8 @@ export class Playback {
 
   /** Whether playback is on but waiting for frames: before the first step, or after it ran out. */
   get buffering() {
-    return this.#phase.is('starting', 'rebuffering');
+    const phase = this.#phase.state;
+    return phase === 'starting' || phase === 'rebuffering';
   }
 
   get stepsPerSecond() {
@@ -261,7 +262,7 @@ export class Playback {
 
   /** Start playing from the timestep on screen once enough frames are ready: the first step happens at once, then one per interval. */
   play() {
-    if (!this.#phase.is('paused')) return;
+    if (this.#phase.state !== 'paused') return;
     this.#phase.send('play');
     this.stats = Playback.#emptyStats();
     this.#lastStepAt = null;
@@ -288,7 +289,7 @@ export class Playback {
 
   /** Stop. Also what a manual scrub calls, so playback never fights the user. */
   pause() {
-    if (this.#phase.is('paused')) return;
+    if (this.#phase.state === 'paused') return;
     this.#phase.send('pause');
     this.#bufferingSince = null;
     if (this.#frame !== null) this.#cancelFrame(this.#frame);

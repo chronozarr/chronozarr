@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Machine, moves } from '../chronozarr/machine.js';
+import { Machine } from '../chronozarr/machine.js';
 
 // A small lifecycle in the shape the viewer's store session takes: a state may move to itself, and every state accepts
 // at least one event except `closed`.
@@ -68,14 +68,6 @@ test('can says whether the current state accepts an event, and an inherited prop
   assert.equal(machine.state, 'opening', 'can does not move the machine');
 });
 
-test('is says whether the current state is one of the states given', () => {
-  const machine = session('failed');
-  assert.equal(machine.is('failed'), true);
-  assert.equal(machine.is('open', 'failed'), true);
-  assert.equal(machine.is('open', 'opening'), false);
-  assert.equal(machine.is(), false);
-});
-
 test('the constructor refuses a name that is not a non-empty string', () => {
   assert.throws(() => new Machine('', SESSION, 'none'), { message: /name/ });
   assert.throws(() => new Machine(undefined, SESSION, 'none'), { message: /name/ });
@@ -108,17 +100,4 @@ test('the constructor refuses a target that is not a state, naming the machine, 
 test('the constructor refuses an initial state that is not a state of the table, naming the machine and the state', () => {
   assert.throws(() => new Machine('player', { idle: {} }, 'playing'), { message: /^player: .*"playing"/ });
   assert.throws(() => new Machine('player', { idle: {} }, 'toString'), { message: /^player: .*"toString"/ });
-});
-
-test('moves lists every move of a table as [from, event, to] in table order, a state with no moves adding none', () => {
-  assert.deepEqual(moves(SESSION), [
-    ['none', 'open', 'opening'],
-    ['opening', 'open', 'opening'],
-    ['opening', 'opened', 'open'],
-    ['opening', 'failed', 'failed'],
-    ['open', 'open', 'opening'],
-    ['open', 'close', 'closed'],
-    ['failed', 'open', 'opening'],
-  ]);
-  assert.deepEqual(moves({ idle: {} }), []);
 });
