@@ -92,7 +92,7 @@ A removed layer cannot be added again. The reader ends an idle worker pool after
 | Event | Meaning |
 |---|---|
 | `open` | The store metadata is read. `layer.times`, `layer.bounds` and `layer.products` are valid. |
-| `loading` | The view needs data. |
+| `loading` | A layer that was ready needs data again, after a change of view or timestep that has to load something, such as a pan, zoom or time change. The first load of a layer has no `loading` event: its `stats.state` starts as `'loading'`, and `ready` follows it. |
 | `ready` | Everything that the view needs is on the GPU, and no load is running. That includes a load that no cell needs any more and that nothing waits behind (see [Loading order](#loading-order)). It fires again after each pan, zoom or time change that had to wait. |
 | `error` | Carries `event.error` and `event.fatal`. With `fatal: false` the layer keeps running: a cell, a prefetch or the first coarse view failed to load, or the map or the GPU budget keeps it from drawing everything. With `fatal: true` the store could not be opened or the GPU could not be set up. The layer then draws nothing and `stats.state` is `'failed'`. `opened` rejects when the store could not be opened or the GPU setup failed while it opened; when the GPU setup fails on a later `onAdd`, `opened` stays resolved. |
 

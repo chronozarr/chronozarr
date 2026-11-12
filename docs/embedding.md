@@ -135,7 +135,7 @@ Before the store has opened there is no answer. `ready` follows when the store o
 
 #### `chronozarr:ready`
 
-The viewer sends `ready` when it has read the store's metadata and set up the view, before it paints the first frame. You can send commands from then on. The first frame may not be on screen yet: `status.frame` says whether it is, and `chronozarr:status` follows when it changes.
+The viewer sends `ready` when it has read the store's metadata, set up the view and, for a store with a transform and a declared CRS (`proj:code`, `proj:wkt2` or `proj:projjson`), waited until the projection that gives `lon` and `lat` has loaded or failed to load. When it failed, `lon` and `lat` are `null`, as in `chronozarr:click`. You can send commands from then on. The first frame may be on screen or still loading: `status.frame` says which, and `chronozarr:status` follows when it changes.
 
 ```json
 {
@@ -226,6 +226,8 @@ The viewer sends `status` when the store, the frame, playback, an export or the 
 | `level` | integer or `null` | The pyramid level of the frame on screen. Level 0 is full resolution. |
 | `error` | `null` or `{code, toast}` | The error that the viewer shows. `code` is a code of `chronozarr:error`. `toast` is `true` for a notice that fades on its own. |
 | `state` | object | The same object as `state` in `ready`. |
+
+The fields are those of the viewer's own status (see [The status](viewer.md#the-status)). An embed opens one store and sends `status` only after `ready`, so in this message `store` is `open` and `frame` is not `none`. A store that did not open is reported with `chronozarr:error`.
 
 `frame` has these values:
 
