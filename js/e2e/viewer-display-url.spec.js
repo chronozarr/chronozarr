@@ -366,3 +366,26 @@ test('the notebook player keeps the error that answered a command when a status 
   expect(await page.evaluate(() => window.values.state.speed), 'the status of the new speed arrived').toBe(6);
   expect(await page.evaluate(() => window.values.error.code)).toBe('bad_set');
 });
+
+test('the notebook player does not ask again when the store the viewer opens next fails to open', async ({ page, servers, stores, storeUrl }) => {
+  await page.goto(await writePlayerHost(servers, stores, 'player-open-failed', await storeUrl('u16_plain')));
+  await page.waitForFunction(() => window.values.ready);
+  // A directory whose zarr.json is not a chronozarr store: the open fails without a failed request.
+  const notAStore = path.join(stores.dir, 'player-open-failed', 'not-a-store');
+  await mkdir(notAStore, { recursive: true });
+  await writeFile(path.join(notAStore, 'zarr.json'), '{}');
+  await page.evaluate(() => {
+    window.errors = 0;
+    window.addEventListener('message', (event) => {
+      if (event.data?.type === 'chronozarr:error') window.errors++;
+    });
+  });
+  await page
+    .frameLocator('iframe')
+    .locator('html')
+    .evaluate((_, url) => window.chronozarr.viewer.loadStore(url).catch(() => null), `${servers.dataUrl}/player-open-failed/not-a-store/`);
+  await page.waitForFunction(() => window.values.error.code === 'store_open_failed');
+  // Long enough for many rounds of get and error between the two windows.
+  await page.waitForTimeout(500);
+  expect(await page.evaluate(() => window.errors), 'one error, not a stream').toBe(1);
+});

@@ -186,8 +186,9 @@ export default {
       } else if (message.type === 'chronozarr:click') update({ click: message });
       else if (message.type === 'chronozarr:error') {
         update({ error: message }); status.textContent = message.message;
-        // A viewer without chronozarr:status answers get with ready, which carries the state after the error.
-        if (connected) send({ type: 'chronozarr:get' });
+        // A viewer without chronozarr:status answers get with ready, which carries the state after the error. After a
+        // store failed to open the viewer answers get with that same error, so the player does not ask then.
+        if (connected && message.code !== 'store_open_failed' && message.code !== 'no_store') send({ type: 'chronozarr:get' });
       }
     };
     const listen = (key, callback) => { model.on(`change:${key}`, callback); subscriptions.push([`change:${key}`, callback]); };
