@@ -3,7 +3,7 @@
 // (viewer.whenSettled()), the data-store, data-frame and data-playback attributes of <html>, and the `status` hook.
 
 import { expect, test as base } from './fixtures.js';
-import { clickStorePixel, openViewer } from './viewer-helpers.js';
+import { clickStorePixel, openViewer, waitForSettled } from './viewer-helpers.js';
 
 // The fixtures fail a test on any console error. A store that is not there, or a chunk that answers 503, is reported by
 // the browser and the reader as errors, which the tests about it list.
@@ -78,6 +78,30 @@ const recordStatusHook = (page) =>
  * timers due in that second run on the way.
  */
 const pauseClock = async (page) => page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1000);
+
+/**
+ * From the moment the viewer has asked for every cell of a frame for the last time (the first request and the three
+ * retries of MAX_CELL_RETRIES in viewer.js), the page grants no animation frame, as a hidden tab or an offscreen iframe
+ * does: requestAnimationFrame never calls back. The retries need animation frames to be asked for; what follows the
+ * last failures must not. window.framesWithheld says that the page got there.
+ */
+const withholdFramesAfterLastAttempts = (page) =>
+  page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    const attempts = 4;
+    let cells = null;
+    let asked = 0;
+    window.framesWithheld = false;
+    viewer.probe = (event) => {
+      if (event.type !== 'load-start' || window.framesWithheld) return;
+      cells ??= event.cells;
+      asked += event.cells;
+      if (asked >= cells * attempts) {
+        window.requestAnimationFrame = () => 1;
+        window.framesWithheld = true;
+      }
+    };
+  });
 
 /** Wait for `count` animation frames of the page. */
 const frames = (page, count) =>
@@ -246,6 +270,57 @@ test.describe('a frame whose cells fail for good', () => {
       .toBe(false);
     expect(await page.evaluate(() => window.settled)).toEqual(expect.objectContaining({ store: 'open', frame: 'unavailable', t: 3 }));
     expect((await readAttributes(page)).frame).toBe('unavailable');
+  });
+
+  test('is unavailable, and whenSettled resolves with it, in a page that grants no animation frame', async ({ page, servers, storeUrl }) => {
+    test.setTimeout(120_000);
+    const url = await storeUrl('u16_plain');
+    await page.route(/\/u16_plain\/\d+\/data\/c\/3\//, (route) => route.fulfill({ status: 503, headers: { 'Access-Control-Allow-Origin': '*' } }));
+    await page.clock.install();
+    await openViewer(page, servers, url);
+    await waitForSettled(page);
+    await withholdFramesAfterLastAttempts(page);
+    await page.evaluate(() => window.chronozarr.viewer.goToTime(3));
+    await startSettledWait(page);
+    await expect
+      .poll(
+        async () => {
+          await page.clock.runFor(2000);
+          return page.evaluate(() => window.settled === 'pending');
+        },
+        { timeout: 60_000, intervals: [100] },
+      )
+      .toBe(false);
+    expect(await page.evaluate(() => window.framesWithheld), 'the page granted no animation frame after the last attempts').toBe(true);
+    expect(await page.evaluate(() => window.settled)).toEqual(expect.objectContaining({ store: 'open', frame: 'unavailable', t: 3 }));
+  });
+
+  test('an open whose first frame fails for good resolves without a first paint in a page that grants no animation frame', async ({ page, servers, storeUrl }) => {
+    test.setTimeout(120_000);
+    const first = await storeUrl('u16_sharded');
+    const url = await storeUrl('u16_plain');
+    await page.clock.install();
+    await openViewer(page, servers, first);
+    await waitForSettled(page);
+    await page.route(/\/u16_plain\/\d+\/data\/c\//, (route) => route.fulfill({ status: 503, headers: { 'Access-Control-Allow-Origin': '*' } }));
+    await withholdFramesAfterLastAttempts(page);
+    await page.evaluate((url) => {
+      window.openOutcome = 'pending';
+      window.chronozarr.viewer.loadStore(url).then((result) => {
+        window.openOutcome = result;
+      });
+    }, url);
+    await expect
+      .poll(
+        async () => {
+          await page.clock.runFor(2000);
+          return page.evaluate(() => window.openOutcome === 'pending');
+        },
+        { timeout: 60_000, intervals: [100] },
+      )
+      .toBe(false);
+    expect(await page.evaluate(() => window.framesWithheld), 'the page granted no animation frame after the last attempts').toBe(true);
+    expect(await page.evaluate(() => window.openOutcome)).toEqual(expect.objectContaining({ firstPaintMs: null }));
   });
 });
 

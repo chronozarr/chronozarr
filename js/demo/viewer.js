@@ -2170,7 +2170,9 @@ class Viewer {
     );
     this.#setProgress(0);
     if (failures > MAX_CELL_RETRIES) {
-      this.requestRender();
+      // Rendered now, as a cell that lands is: the frame that says the cell cannot be had, and the open or the
+      // whenSettled() that waits on it, must not wait for an animation frame, which a hidden page never grants.
+      if (!wave.controller.signal.aborted) this.#render({ force: false });
       return;
     }
     setTimeout(() => {
