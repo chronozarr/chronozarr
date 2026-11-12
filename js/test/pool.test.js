@@ -33,6 +33,49 @@ function fakeWorkerFactory({ readyDelayMs = 0, decodeDelayMs = 0, failInit = fal
   return { spawn, log };
 }
 
+/** Worker stand-ins that answer nothing on their own: the test sends each reply through `onmessage` or `onerror`. */
+function manualWorkers() {
+  const made = [];
+  const spawn = () => {
+    const worker = {
+      onmessage: null,
+      onerror: null,
+      terminated: false,
+      received: [],
+      postMessage(message) {
+        worker.received.push(message);
+      },
+      terminate() {
+        worker.terminated = true;
+      },
+    };
+    made.push(worker);
+    return worker;
+  };
+  return { spawn, made };
+}
+
+/** A fallback decoder that records what it decodes and whether it was closed. */
+function recordingFallback() {
+  const fallback = {
+    decoded: [],
+    closed: 0,
+    decode: async (bytes) => {
+      fallback.decoded.push(bytes[0]);
+      return new Uint16Array(bytes.length).fill(bytes[0]);
+    },
+    close() {
+      fallback.closed++;
+    },
+  };
+  return fallback;
+}
+
+const settledWithin = (promise, ms) => Promise.race([
+  promise.then((value) => ({ value }), (error) => ({ error })),
+  new Promise((resolve) => setTimeout(() => resolve('still pending'), ms)),
+]);
+
 test('pool decodes and returns arrays; jobs run lowest priority number first', async () => {
   const { spawn, log } = fakeWorkerFactory({ readyDelayMs: 5, decodeDelayMs: 2 });
   const pool = new DecodePool({ size: 1, spawn, init: { type: 'init' } });
@@ -265,4 +308,71 @@ test('main-thread fallback supports the same optional compact result and exact C
   assert.ok(packed.words);
   assert.deepEqual(packed.unpack(), expected);
   decoder.close();
+});
+
+test('when one worker fails to start while another holds a job, that job is rejected and the queued jobs go to the fallback', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const { spawn, made } = manualWorkers();
+  const fallback = recordingFallback();
+  const pool = new DecodePool({ size: 2, spawn, init: { type: 'init' }, fallback });
+  const [a, b] = made;
+  a.onmessage({ data: { type: 'ready' } });
+  const held = pool.decode(Uint8Array.of(1, 1), 1);
+  const queued = pool.decode(Uint8Array.of(2, 2), 1);
+  assert.equal(a.received.filter((m) => m.type === 'decode').length, 1, 'worker A holds the first job');
+  b.onmessage({ data: { type: 'error', message: 'no codecs' } });
+  const outcome = await settledWithin(held, 50);
+  assert.notEqual(outcome, 'still pending', 'the job that was on worker A settles');
+  assert.match(outcome.error?.message ?? '', /decode worker stopped before it answered/);
+  assert.equal((await queued)[0], 2);
+  assert.deepEqual(fallback.decoded, [2], 'the queued job was decoded by the fallback');
+  assert.equal(pool.mode, 'fallback');
+  assert.ok(a.terminated && b.terminated);
+});
+
+test('a worker error event on a pool with a fallback leaves it decoding through the fallback', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const { spawn, made } = manualWorkers();
+  const fallback = recordingFallback();
+  const pool = new DecodePool({ size: 1, spawn, init: { type: 'init' }, fallback });
+  // The pool detaches its handlers from a stopped worker: keep this one to deliver a second error to it.
+  const onerror = made[0].onerror;
+  onerror({ message: 'the worker script failed to load' });
+  assert.equal((await pool.decode(Uint8Array.of(3, 3), 1))[0], 3, 'a later background decode resolves');
+  assert.deepEqual(fallback.decoded, [3]);
+  assert.equal(pool.mode, 'fallback');
+  assert.equal(pool.failed, false);
+  assert.equal(fallback.closed, 0, 'the fallback stays open');
+  onerror({ message: 'a second error' });
+  assert.equal(pool.mode, 'fallback', 'later worker errors change nothing');
+  pool.close();
+  assert.equal(pool.mode, 'closed');
+  assert.equal(fallback.closed, 1, 'closing the pool closes the fallback');
+});
+
+test('mode goes from starting to running on the first ready worker, and to closed on close()', () => {
+  const { spawn, made } = manualWorkers();
+  const pool = new DecodePool({ size: 2, spawn, init: { type: 'init' } });
+  assert.equal(pool.mode, 'starting');
+  made[0].onmessage({ data: { type: 'ready' } });
+  assert.equal(pool.mode, 'running');
+  made[1].onmessage({ data: { type: 'ready' } });
+  assert.equal(pool.mode, 'running', 'a later ready changes nothing');
+  assert.equal(pool.failed, false);
+  pool.close();
+  assert.equal(pool.mode, 'closed');
+  assert.equal(pool.failed, true, 'a closed pool counts as failed');
+  pool.close();
+  assert.equal(pool.mode, 'closed');
+});
+
+test('a pool whose workers fail to start without a fallback is failed, and close() leaves it failed', async () => {
+  const { spawn, made } = manualWorkers();
+  const pool = new DecodePool({ size: 1, spawn, init: { type: 'init' } });
+  made[0].onmessage({ data: { type: 'error', message: 'no codecs' } });
+  assert.equal(pool.mode, 'failed');
+  assert.equal(pool.failed, true);
+  pool.close();
+  assert.equal(pool.mode, 'failed');
+  await assert.rejects(pool.decode(Uint8Array.of(1, 1), 1), /failed to start: no codecs/);
 });
