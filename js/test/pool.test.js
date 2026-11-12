@@ -376,3 +376,22 @@ test('a pool whose workers fail to start without a fallback is failed, and close
   assert.equal(pool.mode, 'failed');
   await assert.rejects(pool.decode(Uint8Array.of(1, 1), 1), /failed to start: no codecs/);
 });
+
+test('a main-thread codec that fails to load once is loaded again by the next decode', async () => {
+  let loads = 0;
+  const codec = { fromConfig: () => ({ decode: async (bytes) => bytes }) };
+  const registry = new Map([['zstd', async () => {
+    loads++;
+    if (loads === 1) throw new Error('network error while fetching the codec');
+    return codec;
+  }]]);
+  const decoder = new MainThreadDecoder({ registry });
+  const spec = { key: 'flaky-main', dtype: 'uint16', shape: [1, 1, 1, 2], codecs: [{ name: 'bytes', configuration: { endian: 'little' } }, { name: 'zstd', configuration: {} }] };
+  await assert.rejects(decoder.decode(new Uint8Array(4), 0, undefined, spec), /network error while fetching the codec/);
+  const out = await decoder.decode(new Uint8Array(4), 0, undefined, spec);
+  assert.equal(out.length, 2);
+  assert.equal(loads, 2);
+  await decoder.decode(new Uint8Array(4), 0, undefined, spec);
+  assert.equal(loads, 2, 'a codec that loaded is kept');
+  decoder.close();
+});

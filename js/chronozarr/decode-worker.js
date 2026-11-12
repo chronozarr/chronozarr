@@ -1,5 +1,5 @@
 // Module worker: decodes compressed chunks off the main thread. It serves any array of any store: each decode
-// message carries the chunk spec, and the codec chain for a spec is built once and kept.
+// message carries the chunk spec, and the codec chain for a spec is built once and kept (a failed build is tried again).
 //   -> {type:'init', zarritaUrl, warm?}     <- {type:'ready'} | {type:'error', message}
 //        `warm`: specs whose codecs are instantiated before 'ready', so a worker that is ready can decode at once
 //   -> {type:'warm', spec}                  (instantiate the spec's codecs early; no reply)
@@ -13,10 +13,16 @@ let zarrita = null;
 const decoders = new Map();
 
 function decoderFor(spec) {
-  let decoder = decoders.get(spec.key);
+  const { key } = spec;
+  let decoder = decoders.get(key);
   if (!decoder) {
     decoder = createChunkDecoder(zarrita, spec);
-    decoders.set(spec.key, decoder);
+    // A load that failed is forgotten, so the next message that needs the spec loads it again. The decode that
+    // awaits this promise still reports the error.
+    decoder.catch(() => {
+      if (decoders.get(key) === decoder) decoders.delete(key);
+    });
+    decoders.set(key, decoder);
   }
   return decoder;
 }

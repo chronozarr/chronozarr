@@ -35,11 +35,16 @@ export class MainThreadDecoder {
 
   #decoderFor(spec) {
     if (this.#closed) throw abortError();
-    let decoder = this.#decoders.get(spec.key);
+    const { key } = spec;
+    let decoder = this.#decoders.get(key);
     if (!decoder) {
       decoder = createChunkDecoder(this.#zarrita, spec);
-      decoder.catch(() => {});
-      this.#decoders.set(spec.key, decoder);
+      // A load that failed (a codec fetch that hit a network error) is forgotten, so the next use loads again. The
+      // handler also keeps a failed warm-up from being reported as an unhandled rejection.
+      decoder.catch(() => {
+        if (this.#decoders.get(key) === decoder) this.#decoders.delete(key);
+      });
+      this.#decoders.set(key, decoder);
     }
     return decoder;
   }
