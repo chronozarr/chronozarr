@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { GIFEncoder, applyPalette, quantize } from '../vendor/gifenc.esm.js';
-import { canExport, exportFilename, exportPanelView, flipRows, gifDelayMs, paletteSampleTimes, pickVideoMimeType, subsamplePixels, videoBitrate } from '../demo/export.js';
+import { canExport, exportFilename, exportLoop, exportPanelView, flipRows, gifDelayMs, paletteSampleTimes, pickVideoMimeType, subsamplePixels, videoBitrate } from '../demo/export.js';
 
 test('gifDelayMs rounds to whole centiseconds and never goes below 20 ms', () => {
   assert.equal(gifDelayMs(1), 1000);
@@ -132,4 +132,72 @@ test('a refusal notice replaces the status text and leaves the controls of the s
   assert.equal(done.status, 'The dataset changed. Check the range and start again.');
   assert.equal(done.download.href, 'blob:x');
   assert.equal(done.startHidden, false);
+});
+
+function fakeRecorderEnvironment({ onStop }) {
+  class FakeMediaRecorder {
+    static isTypeSupported(type) {
+      return type === 'video/webm';
+    }
+
+    state = 'inactive';
+    mimeType = 'video/webm';
+
+    start() {
+      this.state = 'recording';
+    }
+
+    stop() {
+      this.state = 'inactive';
+      onStop();
+      queueMicrotask(() => this.onstop());
+    }
+  }
+  const track = { requestFrame() {}, stop() {} };
+  const stream = { getVideoTracks: () => [track], getTracks: () => [track] };
+  const session = {
+    canvas: { width: 16, height: 16, captureStream: () => stream },
+    fits: () => false,
+    isReady: () => true,
+    prepare: async () => {},
+    render: () => true,
+    close() {},
+  };
+  const viewer = {
+    store: { url: 'http://localhost/stores/a/b', times: [0, 1, 2] },
+    timeLabel: (t) => `t${t}`,
+    pause() {},
+    createExportSession: () => session,
+  };
+  return { FakeMediaRecorder, viewer };
+}
+
+async function withBrowserGlobals(FakeMediaRecorder, body) {
+  const before = { MediaRecorder: globalThis.MediaRecorder, location: globalThis.location };
+  globalThis.MediaRecorder = FakeMediaRecorder;
+  globalThis.location = { href: 'http://localhost/demo/index.html' };
+  try {
+    return await body();
+  } finally {
+    globalThis.MediaRecorder = before.MediaRecorder;
+    globalThis.location = before.location;
+  }
+}
+
+test('an export cancelled while the recorder finishes the file rejects with an AbortError instead of returning the file', async () => {
+  const controller = new AbortController();
+  const { FakeMediaRecorder, viewer } = fakeRecorderEnvironment({ onStop: () => controller.abort() });
+  await withBrowserGlobals(FakeMediaRecorder, () =>
+    assert.rejects(
+      exportLoop(viewer, { format: 'webm', from: 1, to: 1, stepsPerSecond: 1000, signal: controller.signal }),
+      (error) => error.name === 'AbortError',
+    ),
+  );
+});
+
+test('an export that is not cancelled returns its file when the recorder finishes', async () => {
+  const { FakeMediaRecorder, viewer } = fakeRecorderEnvironment({ onStop() {} });
+  const result = await withBrowserGlobals(FakeMediaRecorder, () => exportLoop(viewer, { format: 'webm', from: 1, to: 1, stepsPerSecond: 1000 }));
+  assert.equal(result.frames, 1);
+  assert.equal(result.filename, 'chronozarr-a-b-t1-to-t1.webm');
 });

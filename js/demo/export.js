@@ -191,6 +191,8 @@ async function recordVideo(session, { format, from, to, stepsPerSecond, onProgre
     }
     recorder.stop();
     await stopped;
+    // A cancel that arrives while the recorder writes the last bytes still wins: no file is returned for it.
+    signal?.throwIfAborted();
   } finally {
     if (recorder.state !== 'inactive') recorder.stop();
     for (const t of stream.getTracks()) t.stop();
