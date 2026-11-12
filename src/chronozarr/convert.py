@@ -274,14 +274,16 @@ from chronozarr._convert_source import (
     SourceInfo as SourceInfo,
 )
 from chronozarr._convert_source import (
+    StagedReuse,
+    _check_north_up,
+    icechunk_staged_reuse,
+    override_scaling,
+)
+from chronozarr._convert_source import (
     Step as Step,
 )
 from chronozarr._convert_source import (
     Validity as Validity,
-)
-from chronozarr._convert_source import (
-    _check_north_up,
-    override_scaling,
 )
 from chronozarr._convert_source import (
     check_bounds as check_bounds,
@@ -824,10 +826,17 @@ def _check_work_dir(work: Path, plan: Plan, resume: bool) -> None:
     digest = hashlib.sha256(fingerprint.encode()).hexdigest()
     if work.exists() and any(work.iterdir()):
         if not resume:
-            if plan.source.kind == "Zarr store":
+            reuse = plan.source.staged_reuse
+            if reuse is StagedReuse.ZARR_CHUNKS_CAN_CHANGE:
                 raise FileExistsError(
                     f"{work} holds timesteps staged by an earlier run. Choose a fresh work "
                     "directory with --work-dir."
+                )
+            if reuse is StagedReuse.VIRTUAL_REFERENCES_UNBOUND:
+                raise FileExistsError(
+                    f"{work} holds timesteps staged by an earlier run. Choose a fresh work "
+                    "directory with --work-dir: a snapshot pins references, but this importer "
+                    "does not bind external object versions."
                 )
             raise FileExistsError(
                 f"{work} holds timesteps staged by an earlier run. Pass --resume to reuse them, "
@@ -1019,7 +1028,12 @@ def convert(
     `encode_options` go to `chronozarr.encode`: chunk_size, codec, level, volatility,
     shard, shard_time, n_lods, workers, provenance.
     """
-    if isinstance(source, IcechunkInput) and source.virtual_prefixes and resume:
+    if (
+        resume
+        and isinstance(source, IcechunkInput)
+        and icechunk_staged_reuse(source.virtual_prefixes)
+        is StagedReuse.VIRTUAL_REFERENCES_UNBOUND
+    ):
         raise ValueError(
             "resume is unsupported for Icechunk imports allowing virtual sources: a snapshot "
             "pins references, but this importer does not bind external object versions; "
@@ -1156,12 +1170,13 @@ def convert(
         )
         encode_s = time.perf_counter() - started
     except BaseException as exc:
-        if plan.source.kind == "Zarr store":
+        reuse = plan.source.staged_reuse
+        if reuse is StagedReuse.ZARR_CHUNKS_CAN_CHANGE:
             exc.add_note(
                 f"staged timesteps are kept in {work} for inspection. Choose a fresh work "
                 "directory with --work-dir."
             )
-        elif isinstance(source, IcechunkInput) and source.virtual_prefixes:
+        elif reuse is StagedReuse.VIRTUAL_REFERENCES_UNBOUND:
             exc.add_note(
                 f"staged timesteps are kept in {work} for inspection; virtual-source resume "
                 "is unsupported without external object identities, so start a fresh import"
