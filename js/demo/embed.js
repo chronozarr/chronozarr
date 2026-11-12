@@ -427,7 +427,7 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
     playing: viewer.playback?.playing ?? false,
     speed: viewer.speed,
   });
-  /** The viewer's status as `ready` carries it: the timestep asked for is `state.t` there. A viewer without one sends none. */
+  /** The viewer's status as `ready` carries it: the timestep asked for is `state.t` there. */
   const readyStatus = ({ store, frame, playback, exporting, shownT, level, error }) => ({ store, frame, playback, exporting, shownT, level, error });
   const readyPayload = () => {
     const { store } = viewer;
@@ -438,7 +438,7 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
       products: viewer.products.map((product) => ({ id: product.id, name: product.name, available: product.available })),
       levels: store.levels.map((level) => ({ lod: level.lod, width: level.width, height: level.height, resolution: level.resolution })),
       state: statePayload(),
-      ...(viewer.status && { status: readyStatus(viewer.status) }),
+      status: readyStatus(viewer.status),
     };
   };
 
@@ -510,19 +510,21 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
         }
       });
     },
+    // The hooks below run per event (time up to once a frame): a plain comparison, no call that allocates.
     time: ({ t }) => {
-      if (connection.is('ready')) bridge.post('time', { t, time: timeOf(t) });
+      if (connection.state === 'ready') bridge.post('time', { t, time: timeOf(t) });
     },
     view: () => {
-      if (connection.is('ready')) bridge.scheduleView(viewPayload);
+      if (connection.state === 'ready') bridge.scheduleView(viewPayload);
     },
     status: () => {
-      if (!connection.is('ready')) return;
+      // The payload is read from the open store; while another store opens there is none.
+      if (connection.state !== 'ready' || !viewer.store) return;
       const { store, frame, playback, exporting, t, shownT, level, error } = viewer.status;
       bridge.post('status', { store, frame, playback, exporting, t, time: timeOf(t), shownT, level, error, state: statePayload() });
     },
     click: ({ pixel, t, lod, info }) => {
-      if (!connection.is('ready')) return;
+      if (connection.state !== 'ready') return;
       const { lon, lat } = geo.fromPixel(pixel.x + 0.5, pixel.y + 0.5);
       bridge.post('click', {
         pixel,

@@ -278,15 +278,6 @@ test('connectEmbed: ready carries the status of the viewer, without the timestep
   assert.deepEqual(w.posted[0].data.status, { store: 'open', frame: 'preview', playback: 'paused', exporting: false, shownT: 0, level: 2, error: null });
 });
 
-test('connectEmbed: a viewer without a status sends ready without one', async () => {
-  const { w, viewer } = connected();
-  delete viewer.status;
-  viewer.hooks.ready();
-  await sleep(5);
-  assert.equal(w.posted[0].data.type, 'chronozarr:ready');
-  assert.equal(Object.hasOwn(w.posted[0].data, 'status'), false);
-});
-
 test('connectEmbed: status posts what the viewer is doing once ready, and nothing before', async () => {
   const { w, viewer } = connected();
   viewer.hooks.status();
@@ -318,6 +309,17 @@ test('connectEmbed: status posts what the viewer is doing once ready, and nothin
   w.receive({ type: 'chronozarr:get' });
   await sleep(5);
   assert.deepEqual(state, w.posted[1].data.state, 'state is the state of ready');
+});
+
+test('connectEmbed: a status while no store is open posts nothing and does not throw', async () => {
+  const { w, viewer } = connected();
+  viewer.hooks.ready();
+  await sleep(5);
+  w.posted.length = 0;
+  viewer.store = null;
+  viewer.status = { store: 'opening', frame: 'none', playback: 'paused', exporting: false, t: 0, shownT: null, level: null, error: null };
+  assert.doesNotThrow(() => viewer.hooks.status());
+  assert.deepEqual(w.posted, []);
 });
 
 test('connectEmbed: get answers with ready again once the store is open, and with nothing before', async () => {
@@ -395,6 +397,32 @@ for (const [code, title, message] of [['store_open_failed', 'Could not open stor
     assert.deepEqual(calls, [], 'the set sent after the failure is not kept for the next store');
   });
 }
+
+test('connectEmbed: a failed open of another store while one is shown is posted and leaves the connection ready', async () => {
+  const { w, viewer, calls } = connected();
+  viewer.hooks.ready();
+  await sleep(5);
+  w.posted.length = 0;
+  viewer.hooks.error({ code: 'store_open_failed', title: 'Could not open store', message: 'HTTP 404' });
+  assert.deepEqual(w.posted.map(({ data }) => [data.type, data.code]), [['chronozarr:error', 'store_open_failed']]);
+  w.posted.length = 0;
+  w.receive({ type: 'chronozarr:get' });
+  w.receive(setMessage({ t: 1 }));
+  await sleep(5);
+  assert.deepEqual(w.posted.map(({ data }) => data.type), ['chronozarr:ready'], 'get is answered with ready');
+  assert.deepEqual(calls, [['goToTime', 1]], 'the set is applied');
+});
+
+test('connectEmbed: a failed open while the projection loads is posted, and ready still follows', async () => {
+  let project;
+  const { w, viewer } = connected({ loadProjection: () => new Promise((resolve) => (project = resolve)) });
+  viewer.hooks.ready();
+  viewer.hooks.error({ code: 'store_open_failed', title: 'Could not open store', message: 'HTTP 404' });
+  assert.deepEqual(w.posted.map(({ data }) => [data.type, data.code]), [['chronozarr:error', 'store_open_failed']]);
+  project(null);
+  await sleep(5);
+  assert.deepEqual(w.posted.map(({ data }) => data.type), ['chronozarr:error', 'chronozarr:ready']);
+});
 
 test('connectEmbed: an error that is not about opening the store leaves get and set waiting for ready', async () => {
   const { w, viewer, calls } = connected();
