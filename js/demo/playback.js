@@ -368,6 +368,8 @@ export class Playback {
   }
 
   #step(now) {
+    // The owner's callbacks run right before a step (onChange, prepare) and may have paused playback.
+    if (this.#phase.state !== 'playing') return;
     const index = this.#getIndex();
     if (this.#expectedIndex !== null && index !== this.#expectedIndex) {
       this.pause();

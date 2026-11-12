@@ -380,6 +380,45 @@ test('pause() while it rebuffers gives paused', () => {
   assert.equal(display.waiting, false);
 });
 
+test('a prepare callback that pauses playback leaves no step on the frame it runs in', () => {
+  // Timestep 1 is on screen from the first step; from 240 ms only timestep 2 is ready ahead, so the buffer is low on
+  // the frame at 250 ms where the step to 2 is due, and prepare runs on that frame.
+  let prepares = 0;
+  const ctx = setup({
+    count: 10,
+    stepsPerSecond: 4,
+    ready: (index, now) => now < 240 || index === 2,
+    prepare: () => {
+      prepares++;
+      ctx.playback.pause();
+    },
+  });
+  ctx.playback.play();
+  assert.deepEqual(ctx.state.steps.map((s) => s.index), [1]);
+  assert.doesNotThrow(() => ctx.display.runUntil(260));
+  assert.equal(prepares, 1, 'prepare ran on the frame where the step was due');
+  assert.deepEqual(ctx.state.steps.map((s) => s.index), [1], 'no step after the pause');
+  assert.equal(ctx.playback.phase, 'paused');
+});
+
+test('onChange sees playing, not buffering, on its first call after play() with every frame ready and after a refill', () => {
+  // Timestep 3 is missing from 300 ms to 600 ms: the step due at 500 ms runs dry, and the refill comes at 600 ms.
+  const records = [];
+  const ctx = setup({
+    count: 10,
+    stepsPerSecond: 4,
+    ready: (index, now) => !(index === 3 && now >= 300 && now < 600),
+    onChange: () => records.push({ phase: ctx.playback.phase, buffering: ctx.playback.buffering }),
+  });
+  ctx.playback.play();
+  ctx.display.runUntil(1000);
+  assert.deepEqual(records[0], { phase: 'playing', buffering: false });
+  assert.ok(!records.some((r) => r.phase === 'starting'), 'never starting');
+  const refill = records.findIndex((r, i) => i > 0 && records[i - 1].phase === 'rebuffering' && r.phase !== 'rebuffering');
+  assert.ok(refill > 0, 'it ran dry and refilled');
+  assert.deepEqual(records[refill], { phase: 'playing', buffering: false });
+});
+
 test('without wrap, reaching the last timestep pauses playback', () => {
   const { playback, state, display } = setup({ count: 6, stepsPerSecond: 30, wrap: false, start: 3 });
   playback.play();
