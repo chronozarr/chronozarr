@@ -163,3 +163,31 @@ test('a second export does not show the first one\'s result while it prepares', 
   }
   await expect(status).toContainText('Done in', { timeout: 30_000 });
 });
+
+test('the From and To lists follow the open dataset: Start after a dataset change refills them and exports nothing', async ({ page, servers, storeUrl }) => {
+  const long = await storeUrl('link_plain');
+  const short = await storeUrl('u16_plain');
+  await open(page, `${servers.appUrl}/demo/index.html?store=${encodeURIComponent(long)}`);
+  await page.locator('#export-btn').click();
+  await page.locator('#export-size').selectOption('0.25');
+  await page.locator('#export-format').selectOption('gif');
+  await expect(page.locator('#export-to option')).toHaveCount(12);
+  await page.locator('#export-to').selectOption('11');
+
+  await page.evaluate(async (url) => {
+    await window.chronozarr.viewer.loadStore(url);
+  }, short);
+  await page.locator('#export-start').click();
+
+  const status = page.locator('#export-status');
+  await expect(status).toHaveText('The dataset changed. Check the range and start again.');
+  await expect(page.locator('#export-from option')).toHaveCount(4);
+  await expect(page.locator('#export-to option')).toHaveCount(4);
+  await expect(page.locator('#export-download')).toBeHidden();
+  await expect(page.locator('#export-start')).toBeVisible();
+  await expect(page.locator('#export-cancel')).toBeHidden();
+
+  await page.locator('#export-start').click();
+  await expect(page.locator('#export-download')).toBeVisible({ timeout: 30_000 });
+  await expect(status).toContainText('4 frames');
+});

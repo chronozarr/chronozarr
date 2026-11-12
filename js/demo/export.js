@@ -248,10 +248,11 @@ const EXPORT_MOVES = {
 const $ = (id) => document.getElementById(id);
 const exportState = new Machine('export panel', EXPORT_MOVES, 'idle');
 /**
- * What the current state carries: running {stage, done, total, format} with stage 'preparing' until the first
- * progress report; done {text, href, filename}; failed {message}.
+ * What the current state carries, besides `notice` (the reason a Start was refused, shown instead of the state's own text):
+ * running {stage, done, total, format} with stage 'preparing' until the first progress report; done {text, href,
+ * filename}; failed {message}.
  */
-let exportRecord = {};
+let exportRecord = { notice: null };
 let panelReady = false;
 let running = null;
 let listedStore = null;
@@ -285,6 +286,7 @@ export function exportPanelView(state, record) {
   } else if (state === 'failed') {
     view.status = `Export failed: ${record.message}`;
   }
+  if (record.notice) view.status = record.notice;
   return view;
 }
 
@@ -307,7 +309,13 @@ function drawPanel() {
 function moveTo(event, record) {
   if (exportState.is('done')) URL.revokeObjectURL(exportRecord.href);
   exportState.send(event);
-  exportRecord = record;
+  exportRecord = { notice: null, ...record };
+  drawPanel();
+}
+
+/** Refuse a Start: the state stays as it was, the status says why. */
+function refuseStart(notice) {
+  exportRecord = { ...exportRecord, notice };
   drawPanel();
 }
 
@@ -321,23 +329,30 @@ function fillFormats() {
   if (select.selectedOptions[0]?.disabled) select.value = [...select.options].find((option) => !option.disabled).value;
 }
 
+/** Fill the From and To lists for the open store. */
 function fillTimeSelects(viewer) {
   const options = () => viewer.store.times.map((_, t) => new Option(viewer.timeLabel(t), t));
   const from = $('export-from');
   const to = $('export-to');
-  const last = viewer.store.times.length - 1;
-  if (listedStore !== viewer.store) {
-    listedStore = viewer.store;
-    from.replaceChildren(...options());
-    to.replaceChildren(...options());
-    from.value = '0';
-    to.value = String(last);
-  }
+  listedStore = viewer.store;
+  from.replaceChildren(...options());
+  to.replaceChildren(...options());
+  from.value = '0';
+  to.value = String(viewer.store.times.length - 1);
+}
+
+function fillRate(viewer) {
   $('export-rate').textContent = `${viewer.speed} steps/s (from the speed control)`;
 }
 
 async function startExport(viewer) {
   if (!exportState.can('start')) return;
+  fillRate(viewer);
+  if (!viewer.store) return refuseStart('No dataset is open.');
+  if (listedStore !== viewer.store) {
+    fillTimeSelects(viewer);
+    return refuseStart('The dataset changed. Check the range and start again.');
+  }
   const format = $('export-format').value;
   const from = Number($('export-from').value);
   const to = Number($('export-to').value);
@@ -392,5 +407,12 @@ export function toggleExportPanel(viewer) {
   panel.hidden = !panel.hidden;
   if (panel.hidden) return;
   fillFormats();
-  if (viewer.store) fillTimeSelects(viewer);
+  if (exportRecord.notice) {
+    exportRecord = { ...exportRecord, notice: null };
+    drawPanel();
+  }
+  if (viewer.store) {
+    if (listedStore !== viewer.store) fillTimeSelects(viewer);
+    fillRate(viewer);
+  }
 }

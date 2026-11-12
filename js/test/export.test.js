@@ -124,3 +124,12 @@ test('a cancelled or failed export shows Start again, no download and an empty b
 test('before any export the panel shows Start and nothing else', () => {
   assert.deepEqual(exportPanelView('idle', {}), { startHidden: false, cancelHidden: true, download: null, status: '', fraction: 0 });
 });
+
+test('a refusal notice replaces the status text and leaves the controls of the state as they are', () => {
+  const view = exportPanelView('idle', { notice: 'No dataset is open.' });
+  assert.deepEqual(view, { startHidden: false, cancelHidden: true, download: null, status: 'No dataset is open.', fraction: 0 });
+  const done = exportPanelView('done', { text: 'Done in 1.0 s', href: 'blob:x', filename: 'f.gif', notice: 'The dataset changed. Check the range and start again.' });
+  assert.equal(done.status, 'The dataset changed. Check the range and start again.');
+  assert.equal(done.download.href, 'blob:x');
+  assert.equal(done.startHidden, false);
+});
