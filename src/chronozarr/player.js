@@ -80,7 +80,9 @@ export default {
       product.value = model.get('product'); speed.value = String(model.get('speed'));
       band.value = model.get('band') ?? ''; colormap.value = colormapId();
       const limits = model.get('range');
-      low.value = limits?.[0] ?? ''; high.value = limits?.[1] ?? '';
+      // A limit that is being typed is left as it is; its change event sends it.
+      if (!low.matches(':focus')) low.value = limits?.[0] ?? '';
+      if (!high.matches(':focus')) high.value = limits?.[1] ?? '';
       const advanced = model.get('controls') === true;
       for (const control of [date, product, speed]) control.hidden = !advanced;
       const single = advanced && model.get('product') === 'band';
@@ -169,10 +171,16 @@ export default {
         if (desired) { pending = desired; flush(); }
       } else if (message.type === 'chronozarr:status') {
         const state = message.state;
-        activeBand = state.band;
-        bandRanges.set(activeBand, state.range ?? null);
-        update({ state, t: state.t, product: state.product, band: state.band, range: state.range ?? null,
-          colormap: state.colormap ?? 'gray', playing: state.playing, speed: state.speed });
+        // A command that has not been sent yet is newer than the status: its keys keep the value the user chose, and
+        // a band change keeps the band and limits it set up for the viewer.
+        if (pending.band === undefined) {
+          activeBand = state.band;
+          bandRanges.set(activeBand, state.range ?? null);
+        }
+        const values = { t: state.t, product: state.product, band: state.band, range: state.range ?? null,
+          colormap: state.colormap ?? 'gray', playing: state.playing, speed: state.speed };
+        for (const key of Object.keys(pending)) delete values[key];
+        update({ state, ...values });
         // The error is cleared only when the viewer showed it as a notice and no longer does. An error that answered a
         // command was never part of a status: it stays until another error replaces it or the player restarts.
         if (message.error === null && shownError !== null && model.get('error').code === shownError) {

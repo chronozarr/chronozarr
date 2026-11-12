@@ -389,3 +389,46 @@ test('the notebook player does not ask again when the store the viewer opens nex
   await page.waitForTimeout(500);
   expect(await page.evaluate(() => window.errors), 'one error, not a stream').toBe(1);
 });
+
+test('the notebook player keeps a command it has not sent yet when an older status arrives', async ({ page, servers, stores, storeUrl }) => {
+  await page.goto(await writePlayerHost(servers, stores, 'player-pending', await storeUrl('u16_plain')));
+  await page.waitForFunction(() => window.values.ready);
+  await page.frameLocator('iframe').locator('html').evaluate(() => window.chronozarr.viewer.whenSettled());
+  // The commands wait in the player until the next task; the status is dispatched before that, as one that was
+  // already on its way from the viewer would be.
+  const kept = await page.evaluate(() => {
+    const frame = document.querySelector('iframe');
+    const viewerState = window.values.state;
+    const otherBand = window.values.bands.find((band) => band.name !== viewerState.band).name;
+    window.model.set('speed', 9);
+    window.model.set('band', otherBand);
+    const data = { v: 1, type: 'chronozarr:status', error: null, state: viewerState };
+    window.dispatchEvent(new MessageEvent('message', { data, origin: new URL(frame.src).origin, source: frame.contentWindow }));
+    return { speed: window.values.speed, band: window.values.band, otherBand };
+  });
+  expect([kept.speed, kept.band]).toEqual([9, kept.otherBand]);
+  await page.waitForFunction((band) => window.values.state.speed === 9 && window.values.state.band === band, kept.otherBand);
+});
+
+test('the notebook player keeps a display limit that is being typed when a status redraws the controls', async ({ page, servers, stores, storeUrl }) => {
+  await page.goto(await writePlayerHost(servers, stores, 'player-typing', await storeUrl('u16_plain')));
+  await page.waitForFunction(() => window.values.ready);
+  await page.evaluate(() => {
+    window.model.set('controls', true);
+    window.model.set('product', 'band');
+  });
+  await page.waitForFunction(() => window.values.state.product === 'band');
+  const viewer = page.frameLocator('iframe').locator('html');
+  await viewer.evaluate(() => window.chronozarr.viewer.whenSettled());
+  const low = page.getByRole('spinbutton', { name: 'Display minimum' });
+  await low.click();
+  await page.keyboard.type('42');
+  // A new timestep (chronozarr:time) and a new speed, which the viewer reports with chronozarr:status: each redraws the controls.
+  await viewer.evaluate(() => {
+    window.chronozarr.viewer.goToTime(2);
+    window.chronozarr.viewer.setSpeed(6);
+  });
+  await page.waitForFunction(() => window.values.t === 2 && window.values.state.speed === 6);
+  await expect(low).toBeFocused();
+  await expect(low).toHaveValue('42');
+});
