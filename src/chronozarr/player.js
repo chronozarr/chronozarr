@@ -37,6 +37,9 @@ export default {
     let origin, connected = false, disposed = false, suppress = false, saveTimer = 0, commandTimer = 0, openTimer = 0;
     let pending = {};
     let activeBand = '';
+    // The code of the notice that the viewer's last status carried, in chronozarr:status or chronozarr:ready (null:
+    // none), to tell an error the viewer showed from one that answered a command.
+    let shownError = null;
     const bandRanges = new Map();
     const colormapId = () => model.get('colormap') ?? 'gray';
     const subscriptions = [];
@@ -54,7 +57,8 @@ export default {
       commandTimer = 0;
       if (!connected || disposed || !Object.keys(pending).length) return;
       send({ type: 'chronozarr:set', ...pending }); pending = {};
-      send({ type: 'chronozarr:get' }); // v1 has no separate playback/product acknowledgement.
+      // A viewer that sends chronozarr:status reports the result by itself; one deployed before it has no other way to acknowledge a command.
+      send({ type: 'chronozarr:get' });
     }
     function queue(key, value) {
       if (['product', 'band'].includes(key) && !value) return;
@@ -108,7 +112,7 @@ export default {
       return url.href.replaceAll('%2C', ',');
     }
     function start() {
-      connected = false; pending = {}; activeBand = ''; bandRanges.clear(); clearTimeout(commandTimer); clearTimeout(openTimer);
+      connected = false; pending = {}; activeBand = ''; shownError = null; bandRanges.clear(); clearTimeout(commandTimer); clearTimeout(openTimer);
       update({ ready: false, error: {}, times: [], products: [], bands: [], state: {}, click: {} });
       status.textContent = 'Opening store…'; product.replaceChildren();
       // A path on the notebook's own origin (a jupyter-server-proxy route) resolves against this page.
@@ -140,7 +144,12 @@ export default {
       if (message.type === 'chronozarr:ready') {
         const first = !connected;
         connected = true; clearTimeout(openTimer);
-        if (model.get('error').code === 'no_response') update({ error: {} });
+        // ready carries the viewer's status. Before the first ready the player sent no command, so an error it holds is
+        // its own no_response or a notice of the viewer: it stays only while the viewer still shows it. A later ready
+        // answers get, and keeps the error that a command brought.
+        const carried = message.status?.error?.code ?? null;
+        if (first && model.get('error').code !== undefined && model.get('error').code !== carried) update({ error: {} });
+        shownError = carried;
         status.textContent = model.get('error').message ?? '';
         product.replaceChildren();
         for (const item of message.products.filter(item => item.available)) product.add(new Option(item.name, item.id));
@@ -158,6 +167,18 @@ export default {
           state, t: state.t, product: state.product, band: state.band, range: state.range ?? null,
           colormap: state.colormap ?? 'gray', playing: state.playing, speed: state.speed });
         if (desired) { pending = desired; flush(); }
+      } else if (message.type === 'chronozarr:status') {
+        const state = message.state;
+        activeBand = state.band;
+        bandRanges.set(activeBand, state.range ?? null);
+        update({ state, t: state.t, product: state.product, band: state.band, range: state.range ?? null,
+          colormap: state.colormap ?? 'gray', playing: state.playing, speed: state.speed });
+        // The error is cleared only when the viewer showed it as a notice and no longer does. An error that answered a
+        // command was never part of a status: it stays until another error replaces it or the player restarts.
+        if (message.error === null && shownError !== null && model.get('error').code === shownError) {
+          update({ error: {} }); status.textContent = '';
+        }
+        shownError = message.error?.code ?? null;
       } else if (message.type === 'chronozarr:time') {
         update({ t: message.t, state: { ...model.get('state'), t: message.t, time: message.time } });
       } else if (message.type === 'chronozarr:view') {
@@ -165,6 +186,7 @@ export default {
       } else if (message.type === 'chronozarr:click') update({ click: message });
       else if (message.type === 'chronozarr:error') {
         update({ error: message }); status.textContent = message.message;
+        // A viewer without chronozarr:status answers get with ready, which carries the state after the error.
         if (connected) send({ type: 'chronozarr:get' });
       }
     };
