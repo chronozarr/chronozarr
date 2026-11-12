@@ -520,7 +520,9 @@ class Viewer {
     };
   }
 
+  /** Fit the whole store in the canvas, centered. Does nothing while no store is open. */
   fit() {
+    if (this.store === null) return;
     const level = this.store.levels[0];
     const { width, height } = this.canvas;
     const scale = Math.min(width / level.width, height / level.height) * 0.94;
@@ -571,6 +573,7 @@ class Viewer {
     this.#scheduleUrlSync();
   }
 
+  /** The scale of the fitted view, from the size of the open store's level 0: while no store is open there is none, and reading it throws, as it does before the first open. */
   get fitScale() {
     const level = this.store.levels[0];
     return Math.min(this.canvas.width / level.width, this.canvas.height / level.height) * 0.94;
@@ -757,9 +760,12 @@ class Viewer {
    * stretch), at `scale` times the canvas size. The level is the normal one when `timesteps` steps of the
    * visible cells fit the decoded cache, else the coarser one a movie would play at. It has its own small
    * texture pool and reads the decoded chunk cache, so the viewer keeps working while it runs. See export.js.
+   * `timesteps` defaults to every timestep of the store. It throws while no store is open.
    */
-  createExportSession({ scale = 1, timesteps = this.store.times.length } = {}) {
+  createExportSession({ scale = 1, timesteps } = {}) {
+    if (this.store === null) throw new Error('createExportSession needs an open store: none is open');
     const { store } = this;
+    if (timesteps === undefined) timesteps = store.times.length;
     const generation = this.#storeGeneration;
     const isStartingStore = () => this.#storeGeneration === generation;
     const requireStartingStore = () => {
@@ -864,8 +870,9 @@ class Viewer {
     this.#hook('status');
   }
 
-  /** Whether every visible cell has the chunks for timestep t in memory at the level that is drawn, so showing it needs no fetch. */
+  /** Whether every visible cell has the chunks for timestep t in memory at the level that is drawn, so showing it needs no fetch. False while no store is open. */
   isTimestepReady(t) {
+    if (this.store === null) return false;
     return this.#frameReady(this.#targetLod(), t);
   }
 
@@ -1240,8 +1247,10 @@ class Viewer {
   /**
    * Start background prefetch now and resolve with its result when it finishes or is aborted. `movie` plans it
    * for playback (the movie level, time treated as a loop) even while paused; it defaults to whether a movie plays.
+   * While no store is open it does nothing and resolves null.
    */
   prefetchNow({ movie = this.#playing } = {}) {
+    if (this.store === null) return Promise.resolve(null);
     clearTimeout(this.#prefetchTimer);
     this.#prefetchTimer = 0;
     this.#prefetchStartedAt = performance.now();

@@ -192,6 +192,40 @@ test('a step, a zoom and a click while a store opens reach no store, and the new
   expect(await page.evaluate(() => window.chronozarr.viewer.paintedT)).toBe(3);
 });
 
+test('fit, prefetchNow and isTimestepReady do nothing while a store opens, and createExportSession says that none is open', async ({ page, servers, storeUrl }) => {
+  await openAt(page, servers, await storeUrl('u16_sharded'));
+  const next = await storeUrl('u16_plain');
+  const root = await holdRequests(page, `${next}zarr.json`);
+  await openingStore(page, next);
+  await expect.poll(() => root.held.length).toBe(1);
+
+  const outcomes = await page.evaluate(async () => {
+    const { viewer } = window.chronozarr;
+    const attempt = async (call) => {
+      try {
+        return { value: (await call()) ?? null };
+      } catch (error) {
+        return { error: `${error.name}: ${error.message}` };
+      }
+    };
+    return {
+      fit: await attempt(() => viewer.fit()),
+      prefetchNow: await attempt(() => viewer.prefetchNow()),
+      isTimestepReady: await attempt(() => viewer.isTimestepReady(0)),
+      createExportSession: await attempt(() => viewer.createExportSession()),
+    };
+  });
+  expect(outcomes).toEqual({
+    fit: { value: null },
+    prefetchNow: { value: null },
+    isTimestepReady: { value: false },
+    createExportSession: { error: 'Error: createExportSession needs an open store: none is open' },
+  });
+
+  await root.release();
+  expect(await page.evaluate(() => window.opening)).toBeTruthy();
+});
+
 test('Space while a store opens starts no movie', async ({ page, servers, storeUrl }) => {
   await openAt(page, servers, await storeUrl('u16_sharded'), '&t=2');
   const next = await storeUrl('u16_plain');
