@@ -59,6 +59,7 @@ const LOD_BIAS = 0.5;
 const CELL_RETRY_DELAY_MS = 4000;
 const MAX_CELL_RETRIES = 3;
 const TOAST_MS = 12000;
+const PROGRESS_FADE_MS = 200;
 const SPEED_KEY = 'chronozarr.stepsPerSecond';
 const STRETCH_SAMPLES_PER_CELL = 300;
 const URL_SYNC_MS = 300;
@@ -237,7 +238,9 @@ class Viewer {
   #tickElements = [];
   #wave = null;
   #toastTimer = 0;
-  /** The fade of the progress bar after it reached 100 %. */
+  /** The progress bar: 'hidden', 'loading' (it shows how much of a load has arrived) or 'complete' (full, its fade pending). */
+  #progress = 'hidden';
+  /** The fade of a complete progress bar, which hides it PROGRESS_FADE_MS after the load completed. */
   #progressTimer = 0;
   #playback = null;
   #exportHold = null;
@@ -2874,24 +2877,32 @@ class Viewer {
     this.#paintMs = null;
   }
 
+  /** The progress bar shows a load (0 < frac < 1), completes it (frac >= 1, then fades) or is hidden (frac <= 0). */
   #setProgress(frac) {
+    if (frac >= 1) {
+      // Every frame shown calls this, each frame of a movie too: only a bar that shows a load fills up and starts its
+      // fade. One that is complete already (its fade pending) or hidden stays as it is, with no new timer.
+      if (this.#progress !== 'loading') return;
+      this.#progress = 'complete';
+      const fill = $('progress-fill');
+      fill.style.width = '100%';
+      this.#progressTimer = setTimeout(() => {
+        this.#progressTimer = 0;
+        this.#progress = 'hidden';
+        fill.style.opacity = '0';
+      }, PROGRESS_FADE_MS);
+      return;
+    }
+    // A fade that is still pending belongs to a load that has finished: it must not hide the bar of this one.
+    clearTimeout(this.#progressTimer);
+    this.#progressTimer = 0;
     const fill = $('progress-fill');
     if (frac <= 0) {
-      clearTimeout(this.#progressTimer);
-      this.#progressTimer = 0;
+      this.#progress = 'hidden';
       fill.style.opacity = '0';
       fill.style.width = '0';
-    } else if (frac >= 1) {
-      fill.style.width = '100%';
-      // Every frame shown calls this: a fade already pending stays, so the bar fades 200 ms after the load completed.
-      this.#progressTimer ||= setTimeout(() => {
-        this.#progressTimer = 0;
-        fill.style.opacity = '0';
-      }, 200);
     } else {
-      // A fade that is still pending belongs to a load that has finished: it must not hide the bar of this one.
-      clearTimeout(this.#progressTimer);
-      this.#progressTimer = 0;
+      this.#progress = 'loading';
       fill.style.width = `${frac * 100}%`;
       fill.style.opacity = '1';
     }

@@ -219,6 +219,42 @@ test('a click whose pixel read fails shows a toast that the next complete frame 
   expect((await readStatus(page)).error).toBeNull();
 });
 
+test('a load that starts within 200 ms of a complete frame keeps the progress bar visible', async ({ page, servers, storeUrl }) => {
+  const url = await storeUrl('u16_plain');
+  const step1 = await holdRequests(page, /\/u16_plain\/\d+\/data\/c\/1\//);
+  const step2 = await holdRequests(page, /\/u16_plain\/\d+\/data\/c\/2\//);
+  await page.clock.install();
+  await openViewer(page, servers, url);
+  // From here no timer fires unless the test runs the clock: the fade of the bar is one of them.
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 10));
+  await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    viewer.goToTime(1);
+    viewer.renderNow();
+  });
+  await expect.poll(() => step1.held.length).toBeGreaterThan(0);
+  await step1.release();
+  // The load of timestep 1 completes: the bar is full and its fade is pending.
+  await page.waitForFunction(() => window.chronozarr.viewer.paintedT === 1);
+  const fill = page.locator('#progress-fill');
+  expect(await fill.evaluate((element) => [element.style.width, element.style.opacity])).toEqual(['100%', '1']);
+
+  await page.clock.runFor(100);
+  await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    viewer.goToTime(2);
+    viewer.renderNow();
+  });
+  // Past the moment the fade of the completed load would have hidden the bar.
+  await page.clock.runFor(300);
+  expect(await fill.evaluate((element) => element.style.opacity), 'the bar of the load that started').toBe('1');
+
+  await step2.release();
+  await page.clock.resume();
+  await page.evaluate(() => window.chronozarr.viewer.whenSettled());
+  await expect.poll(() => fill.evaluate((element) => element.style.opacity), { timeout: 5000 }).toBe('0');
+});
+
 test('playback is starting or playing after play and paused after pause, and data-playback follows', async ({ page, servers, storeUrl }) => {
   await openViewer(page, servers, await storeUrl('u16_plain'));
   const started = await page.evaluate(() => {
