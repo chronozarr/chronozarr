@@ -94,11 +94,11 @@ A removed layer cannot be added again. The reader ends an idle worker pool after
 | `open` | The store metadata is read. `layer.times`, `layer.bounds` and `layer.products` are valid. |
 | `loading` | The view needs data. |
 | `ready` | Everything that the view needs is on the GPU, and no load is running. That includes a load that no cell needs any more and that nothing waits behind (see [Loading order](#loading-order)). It fires again after each pan, zoom or time change that had to wait. |
-| `error` | Carries `event.error`. The layer keeps running. |
+| `error` | Carries `event.error` and `event.fatal`. With `fatal: false` the layer keeps running: a cell, a prefetch or the first coarse view failed to load, or the map or the GPU budget keeps it from drawing everything. With `fatal: true` the store could not be opened or the GPU could not be set up. The layer then draws nothing, `opened` rejects and `stats.state` is `'failed'`. |
 
 ### State
 
-These members are read-only: `opened`, `store`, `times`, `bounds`, `bandNames`, `products`, `t`, `product`, `colormap`, `opacity`, `lod` and `stats`. `opened` is a promise of the open store. `stats` counts GPU slots, uploads, evictions, meshes and pending loads.
+These members are read-only: `opened`, `store`, `times`, `bounds`, `bandNames`, `products`, `t`, `product`, `colormap`, `opacity`, `lod` and `stats`. `opened` is a promise of the open store. `stats` counts GPU slots, uploads, evictions, meshes and pending loads. `stats.state` is `'loading'` while the view needs data and `'ready'` once it has it, `'failed'` after a fatal `error`, and `'removed'` after `remove()`. A failed layer holds no store: `store`, `times`, `bounds` and `products` are `null`.
 
 ### Caching and prefetch
 

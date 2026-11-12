@@ -238,8 +238,12 @@ export class ChronozarrLayer {
     return this.#lastView.lod;
   }
 
-  /** Counters for diagnostics: GPU slots, uploads, evictions, cached meshes, pending cell loads. */
+  /**
+   * Counters for diagnostics: GPU slots, uploads, evictions, cached meshes, pending cell loads. `state` is 'failed'
+   * after a fatal failure, 'removed' after removal, and otherwise 'loading' or 'ready'.
+   */
   get stats() {
+    const phase = this.#phase.state;
     return {
       ...this.#counters,
       lod: this.#lastView.lod,
@@ -247,15 +251,15 @@ export class ChronozarrLayer {
       residentSlots: this.#gpu?.pool?.size ?? 0,
       meshes: this.#meshes.size,
       pending: this.#pending.size,
-      state: this.#state,
+      state: phase === 'failed' || phase === 'removed' ? phase : this.#state,
     };
   }
 
   /**
    * Listen for 'open' (store metadata read), 'loading' (the view needs data), 'ready' (everything the view needs is
    * on the GPU and no load is running, including a load that nothing in view needs any more; fires again after every
-   * pan, zoom or time change that had to wait for data) and 'error'
-   * (`event.error`; the layer keeps running). Returns a function that removes the listener.
+   * pan, zoom or time change that had to wait for data) and 'error' (`event.error`; `event.fatal` is true when the
+   * layer has stopped for good, see stats.state, and false when it keeps running). Returns a function that removes the listener.
    */
   on(type, listener) {
     if (!EVENTS.includes(type)) throw new RangeError(`ChronozarrLayer: unknown event "${type}"; use one of ${EVENTS.join(', ')}`);
@@ -482,14 +486,14 @@ export class ChronozarrLayer {
     if (this.#phase.state === 'removed') return;
     if (this.#phase.can('fail')) this.#phase.send('fail');
     this.#rejectOpened(error);
-    this.#emit('error', { error });
+    this.#emit('error', { error, fatal: true });
     console.error('ChronozarrLayer:', redactText(error));
   }
 
   #reportOnce(key, error) {
     if (this.#reported.has(key)) return;
     this.#reported.add(key);
-    this.#emit('error', { error });
+    this.#emit('error', { error, fatal: false });
     console.error('ChronozarrLayer:', redactText(error));
   }
 
@@ -817,7 +821,7 @@ export class ChronozarrLayer {
         this.#seeding = false;
         this.#repaint();
         if (isAbort(error)) return;
-        this.#emit('error', { error });
+        this.#emit('error', { error, fatal: false });
         console.error('ChronozarrLayer: the coarse first paint failed to load', redactText(error));
       },
     );
@@ -1044,7 +1048,7 @@ export class ChronozarrLayer {
     collect().catch((error) => {
       if (!isAbort(error)) {
         this.#failed.set('samples', performance.now());
-        this.#emit('error', { error, lod, t });
+        this.#emit('error', { error, fatal: false, lod, t });
       }
     }).finally(() => {
       this.#pending.delete('samples');
@@ -1124,7 +1128,7 @@ export class ChronozarrLayer {
           return;
         }
         this.#failed.set(key, performance.now());
-        this.#emit('error', { error, lod, row, col, t });
+        this.#emit('error', { error, fatal: false, lod, row, col, t });
         console.error(`ChronozarrLayer: cell ${key} failed to load`, redactText(error));
         this.#repaint();
       },
@@ -1200,14 +1204,14 @@ export class ChronozarrLayer {
     const seek = Math.abs(this.#t - this.#prefetchedAt) > SEEK_DISTANCE;
     this.#prefetchedAt = this.#t;
     const report = (error) => {
-      if (!isAbort(error)) this.#emit('error', { error, prefetch: true });
+      if (!isAbort(error)) this.#emit('error', { error, fatal: false, prefetch: true });
     };
     // The reader fetches each mask with its chunk, as a speculative read under the same allowances; a mask requested after
     // the chunk landed would be a demand read that holds the prefetch workers back.
     store
       .prefetch({ lod, cells, t: this.#t, direction: this.#direction, seek, masks: store.hasMask, signal: controller.signal })
       .then((result) => {
-        if (result.errors.length > 0) this.#emit('error', { error: result.errors[0].error, prefetch: true, errors: result.errors });
+        if (result.errors.length > 0) this.#emit('error', { error: result.errors[0].error, fatal: false, prefetch: true, errors: result.errors });
       }, report);
     // The new job has taken over the requests it shares with the old one (the reader plans synchronously): now the old one can stop.
     previous?.abort();

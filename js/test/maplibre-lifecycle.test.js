@@ -6,7 +6,9 @@ import { buildSyntheticStore } from '../support/synthetic-store.js';
 
 // The layer's lifecycle against a stub GL and an in-memory store, without a browser: what it holds and reports after it
 // opens, fails or is removed, and what GL objects a failed setup leaves behind.
+const MATRIX = [2, 0, 0, 0, 0, -2, 0, 0, 0, 0, 1, 0, -1, 1, 0, 1];
 const map = { triggerRepaint() {}, getLayer() { return false; }, getZoom() { return 0; } };
+const flush = () => new Promise(setImmediate);
 
 /**
  * A GL stand-in that counts the shaders, programs and textures created and deleted. With `failFragment` the fragment
@@ -104,7 +106,6 @@ test('adding a layer a second time while its store opens reads the store once', 
   assert.ok(layer.stats.slots > 0, 'the open in progress set up the GPU with the context of the second call');
 });
 
-
 test('a texture allocation that fails deletes the program and the textures it created', async (t) => {
   t.mock.method(console, 'error', () => {});
   const { layer } = newLayer(t);
@@ -126,4 +127,39 @@ test('a fragment shader that fails to compile leaves no shader behind', async (t
   await assert.rejects(layer.opened, /shader compile failed/);
   assert.equal(counts.createShader, 2);
   assert.equal(counts.deleteShader, 2, 'the vertex shader was deleted too');
+});
+
+test('a store the layer refuses fails the layer for good: the stats say failed, the error is fatal and opened rejects', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const { layer, errors } = newLayer(t, { layerOptions: { t: 5 } });
+  layer.onAdd(map, null);
+  await assert.rejects(layer.opened, /timestep 5 is outside/);
+  await flush();
+  assert.equal(layer.stats.state, 'failed');
+  assert.deepEqual(errors.map((event) => event.fatal), [true]);
+  assert.equal(layer.products, null, 'the refused store left no products');
+  assert.equal(layer.bandNames, null);
+});
+
+test('a cell that fails to load reports an error that is not fatal, and the layer has not failed', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const { layer, memory, errors } = newLayer(t);
+  layer.onAdd(map, countingGl().gl);
+  await layer.opened;
+  const get = memory.get.bind(memory);
+  memory.get = (key, options) => key.includes('/data/c/') ? Promise.reject(new Error('the disk is gone')) : get(key, options);
+  layer.render({ defaultProjectionData: { mainMatrix: MATRIX } });
+  for (let i = 0; i < 100 && errors.length === 0; i++) await flush();
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].fatal, false);
+  assert.ok(errors[0].error instanceof Error);
+  assert.notEqual(layer.stats.state, 'failed');
+});
+
+test('a removed layer says so in its stats', async (t) => {
+  const { layer } = newLayer(t);
+  layer.onAdd(map, null);
+  await layer.opened;
+  layer.remove();
+  assert.equal(layer.stats.state, 'removed');
 });
