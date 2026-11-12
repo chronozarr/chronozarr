@@ -336,8 +336,11 @@ test('a timeline drag held while a store opens reaches no store', async ({ page,
 });
 
 test('the progress bar of a load during playback fades while the movie goes on', async ({ page, servers, storeUrl }) => {
-  await openAt(page, servers, await storeUrl('u16_plain'));
+  const url = await storeUrl('u16_plain');
+  // Held before the store opens. The viewer prefetches every timestep of its coarsest level 30 ms after the first
+  // frame, and for this store that is all of level 1: a hold that starts after the open can find nothing left to hold.
   const level1 = await holdRequests(page, /\/u16_plain\/1\/data\/c\//);
+  await openAt(page, servers, url);
   await page.evaluate(() => {
     const { viewer } = window.chronozarr;
     viewer.setSpeed(15);
