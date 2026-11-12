@@ -315,29 +315,35 @@ export async function openStore(baseUrl, options = {}) {
   } else {
     decoder = new MainThreadDecoder(ZARRITA_CODECS);
   }
-  for (const spec of chunkSpecs) decoder.warm?.(spec);
+  // openStore holds the decoder (and its lease on the shared workers) until the store exists and owns it.
+  try {
+    for (const spec of chunkSpecs) decoder.warm?.(spec);
 
-  return new ChronoStore({
-    url: baseUrl,
-    cz,
-    notes,
-    datasets,
-    names,
-    levelMirror: cz.levels ?? null,
-    transform,
-    crs: geometry[0],
-    dataMetas,
-    storage,
-    specs,
-    readable,
-    decoder,
-    network,
-    bandwidth,
-    limiter,
-    clock,
-    budgets,
-    policy,
-  });
+    return new ChronoStore({
+      url: baseUrl,
+      cz,
+      notes,
+      datasets,
+      names,
+      levelMirror: cz.levels ?? null,
+      transform,
+      crs: geometry[0],
+      dataMetas,
+      storage,
+      specs,
+      readable,
+      decoder,
+      network,
+      bandwidth,
+      limiter,
+      clock,
+      budgets,
+      policy,
+    });
+  } catch (error) {
+    decoder.close();
+    throw error;
+  }
 }
 
 function parseStoreJson(bytes, baseUrl, key) {
