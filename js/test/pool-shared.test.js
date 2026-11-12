@@ -5,6 +5,14 @@ import { DecodePool, MainThreadDecoder, leaseDecodePool, sharedPoolCount } from 
 const SPEC = { key: 'spec-a', dtype: 'uint16', shape: [1, 1, 1, 2], codecs: [] };
 const OTHER_SPEC = { key: 'spec-b', dtype: 'uint8', shape: [1, 1, 1, 2], codecs: [] };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Resolves once `condition()` holds, checking every millisecond; fails after two seconds. For what must happen. */
+async function until(condition) {
+  const end = Date.now() + 2000;
+  while (!condition()) {
+    if (Date.now() > end) throw new Error(`still not true after 2 s: ${condition}`);
+    await sleep(1);
+  }
+}
 
 /** In-process Worker stand-in that records every message it receives. */
 function recordingWorkers({ failInit = false } = {}) {
@@ -154,8 +162,7 @@ test('a pool that fell back to the main thread is not handed to the next lease, 
   first.close();
   assert.equal(fallbackClosed, 1, 'the replaced pool is closed when its last lease is released');
   second.close();
-  await sleep(60);
-  assert.equal(sharedPoolCount(), 0);
+  await until(() => sharedPoolCount() === 0);
 });
 
 test('an idle pool that fell back to the main thread is closed when the next lease replaces it', async (t) => {
@@ -172,6 +179,5 @@ test('an idle pool that fell back to the main thread is closed when the next lea
   assert.equal(healthy.made.length, 1, 'a fresh pool with workers was built');
   assert.equal(fallbackClosed, 1, 'the idle pool it replaced is closed at once');
   second.close();
-  await sleep(60);
-  assert.equal(sharedPoolCount(), 0);
+  await until(() => sharedPoolCount() === 0);
 });
