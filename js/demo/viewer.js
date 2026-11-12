@@ -2925,8 +2925,10 @@ class Viewer {
       return;
     }
     // A fade that is still pending belongs to a load that has finished: it must not hide the bar of this one.
-    clearTimeout(this.#progressTimer);
-    this.#progressTimer = 0;
+    if (this.#progressTimer !== 0) {
+      clearTimeout(this.#progressTimer);
+      this.#progressTimer = 0;
+    }
     const fill = $('progress-fill');
     if (frac <= 0) {
       this.#progress = 'hidden';
