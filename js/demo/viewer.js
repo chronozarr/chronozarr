@@ -164,8 +164,10 @@ class Viewer {
   probe = null;
   /**
    * What the embed bridge listens to (embed.js): ready() when a store has opened, time({t}) on a timestep change,
-   * view() on a camera change, click({pixel, t, lod, info}) on a click inside the store, error({code, title, message}).
-   * Empty outside an embed.
+   * view() on a camera change, click({pixel, t, lod, info}) on a click inside the store, error({code, title, message}),
+   * status() when the store, frame, playback, export hold or notice code of `viewer.status` changes, and after a change
+   * of product, band, colormap, stretch, auto exposure or speed. The frame that counts is the outcome of the last render:
+   * status() is not called when `status.frame` reads 'loading' only because a render is queued. Empty outside an embed.
    */
   hooks = {};
   /** The viewer runs in an iframe of another page (?embed=1): the inspector is always a drawer. */
@@ -930,7 +932,9 @@ class Viewer {
    * - `t`: the timestep asked for. `shownT` and `level`: the timestep and level of the frame on the canvas, null before
    *   the first.
    * - `error`: the notice on screen, null when there is none: `code` as the `error` hook gives it, `toast` true for a
-   *   notice that fades on its own, false for the error box that stays until the next open.
+   *   notice that fades on its own, false for the error box that stays until the next open. The 'No store selected'
+   *   box of a page opened with no store and no catalog is the page's, not the viewer's: there `store` is 'none' and
+   *   `error` null, and the embed bridge posts its `no_store` error itself.
    * @returns {{store: 'none' | 'opening' | 'open' | 'failed', frame: 'none' | 'loading' | 'preview' | 'settled' | 'unavailable',
    *   playback: 'paused' | 'starting' | 'playing' | 'rebuffering', exporting: boolean, t: number, shownT: number | null,
    *   level: number | null, error: null | {code: string, toast: boolean}}}
@@ -2914,7 +2918,8 @@ class Viewer {
 
   /**
    * A toast is a non-blocking notice that fades on its own; otherwise the box stays until the next load. In the
-   * viewer, this and #hideError are the only writers of the notice (#notice) and of the overlay's classes.
+   * Viewer, this and #hideError are the only writers of the notice (#notice) and of the overlay's classes; outside it,
+   * main() shows the 'No store selected' box once, for a page with no store to open, and that box is not in the status.
    */
   #showError(title, message, { toast = false, code = 'error' } = {}) {
     this.#hook('error', { code, title, message });
