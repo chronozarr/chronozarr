@@ -351,6 +351,9 @@ class Viewer {
     this.#configurePool();
     this.#playback = this.#createPlayback();
     this.#movieMemo = null;
+    // A canvas resize while the store opened asked the next prefetch to seek. An open that restores a camera has nothing
+    // to seek from; an open that fits the view asks for the seek again in fit() below.
+    this.#seekPending = false;
     this.#clearScrub();
     this.#linear = { range: null, manual: false };
     this.#channelRanges = null;
