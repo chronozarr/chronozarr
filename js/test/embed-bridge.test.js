@@ -215,6 +215,7 @@ function fakeViewer({ transform = GEOREF, crs = 'EPSG:32631' } = {}) {
     fitted: true,
     speed: 4,
     playback: { playing: false },
+    status: { store: 'open', frame: 'loading', playback: 'paused', exporting: false, t: 0, shownT: null, level: null, error: null },
     goToTime(t) {
       calls.push(['goToTime', t]);
       viewer.t = t;
@@ -267,6 +268,56 @@ test('connectEmbed: ready carries the store, its times, bands, products, levels 
   assert.equal(data.state.speed, 4);
   assert.deepEqual([data.state.center.x, data.state.center.y, data.state.center.lon], [501000, 3999000, data.state.center.lon]);
   assert.ok(Math.abs(data.state.center.lat - 36.1) < 0.1);
+});
+
+test('connectEmbed: ready carries the status of the viewer, without the timestep that state already has', async () => {
+  const { w, viewer } = connected();
+  viewer.status = { store: 'open', frame: 'preview', playback: 'paused', exporting: false, t: 0, shownT: 0, level: 2, error: null };
+  viewer.hooks.ready();
+  await sleep(5);
+  assert.deepEqual(w.posted[0].data.status, { store: 'open', frame: 'preview', playback: 'paused', exporting: false, shownT: 0, level: 2, error: null });
+});
+
+test('connectEmbed: a viewer without a status sends ready without one', async () => {
+  const { w, viewer } = connected();
+  delete viewer.status;
+  viewer.hooks.ready();
+  await sleep(5);
+  assert.equal(w.posted[0].data.type, 'chronozarr:ready');
+  assert.equal(Object.hasOwn(w.posted[0].data, 'status'), false);
+});
+
+test('connectEmbed: status posts what the viewer is doing once ready, and nothing before', async () => {
+  const { w, viewer } = connected();
+  viewer.hooks.status();
+  assert.deepEqual(w.posted, [], 'nothing before ready');
+  viewer.hooks.ready();
+  await sleep(5);
+  w.posted.length = 0;
+
+  viewer.t = 2;
+  viewer.status = { store: 'open', frame: 'settled', playback: 'rebuffering', exporting: true, t: 2, shownT: 1, level: 0, error: { code: 'chunk_load_failed', toast: true } };
+  viewer.hooks.status();
+  assert.equal(w.posted.length, 1);
+  const { data, targetOrigin } = w.posted[0];
+  assert.equal(targetOrigin, HOST);
+  const { state, ...status } = data;
+  assert.deepEqual(status, {
+    v: 1,
+    type: 'chronozarr:status',
+    store: 'open',
+    frame: 'settled',
+    playback: 'rebuffering',
+    exporting: true,
+    t: 2,
+    time: '2024-03-01T00:00:00Z',
+    shownT: 1,
+    level: 0,
+    error: { code: 'chunk_load_failed', toast: true },
+  });
+  w.receive({ type: 'chronozarr:get' });
+  await sleep(5);
+  assert.deepEqual(state, w.posted[1].data.state, 'state is the state of ready');
 });
 
 test('connectEmbed: get answers with ready again once the store is open, and with nothing before', async () => {

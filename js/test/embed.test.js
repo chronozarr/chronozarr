@@ -113,7 +113,7 @@ test('parseCommand ignores what is not addressed to the viewer', () => {
   for (const data of [null, undefined, 'chronozarr:set', 42, [], ['chronozarr:set'], {}, { type: 5 }, { type: 'other:set', t: 1 }, { type: 'webpackOk' }]) {
     assert.deepEqual(parseCommand(data), { kind: 'ignore' }, JSON.stringify(data));
   }
-  for (const name of ['ready', 'time', 'click', 'view', 'error']) {
+  for (const name of ['ready', 'time', 'click', 'view', 'error', 'status']) {
     assert.deepEqual(parseCommand({ v: 1, type: `chronozarr:${name}` }), { kind: 'ignore' }, `a host that echoes ${name} back gets no error`);
   }
 });
