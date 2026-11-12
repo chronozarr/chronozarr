@@ -7,6 +7,7 @@ import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeF
 import { ASSUMED_BANDWIDTH, COARSE_FRAME_BYTES, COARSE_MAX_OVERHEAD, STAGE_LEAD_LATENCY_MAX_MS, STAGE_LEAD_MAX_MS, ancestorCells, coarseLoopDrifted, coarseLoopSteps, extraOverviewLod, planCoarseStages, stageLatencyLeadMs, stageLeadMs } from './coarse.js';
 import { fetchWithEarlyReads, takeEarlyRootMs } from './early.js';
 import { chooseFrame } from './frames.js';
+import { frameOutcome } from './status.js';
 import { BUFFER_BATCH, DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, START_BUFFER_SECONDS, bufferBatch, chooseMovieLevel, describeReason, linkAllows, linkSteps, roundSteps, snapSpeed, wireRatio } from './playback.js';
 import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js';
 import { PROBE_MAX_NEED, SCRUB_PREVIEW_STRIDE, SCRUB_WINDOW_MS, ScrubSpeed, chooseScrub, framesInSequence, nextPumpSteps, readyRun, savesData, scrubPreviewDate, scrubPreviewSteps, scrubPumpRequests, stepsAhead } from './scrub.js';
@@ -220,6 +221,14 @@ class Viewer {
   #cameraMovedAt = -Infinity;
   #prefetchAbort = null;
   #session = new Machine('viewer session', SESSION_MOVES, 'none');
+  /** What the last render left on the canvas (status.js frameOutcome): 'none' while no store is open, 'loading' from an open to its first render. */
+  #frameOutcome = 'none';
+  /** Who waits in whenSettled(); resolved with the status once nothing is pending. */
+  #settledWaiters = [];
+  /** The values the data-* attributes and the `status` hook were last given (#publishStatus). */
+  #published = { store: null, frame: null, playback: null, exporting: null, error: null };
+  /** The notice on screen: null, or {code, toast} for the error box (toast false) or the toast. */
+  #notice = null;
   /** Who waits for the next complete frame (whenPainted, and the open's first-frame wait); all are let go when a session ends. */
   #painted = [];
   /** While an open waits for its first frame: ends that wait when every cell the frame misses has failed for good. */
@@ -280,6 +289,8 @@ class Viewer {
     this.#trackTimelineHeight();
     // Crossing the breakpoint either way starts the drawer closed rather than reopening one left open at the other width.
     window.matchMedia(`(width < ${DRAWER_BELOW}px)`).addEventListener('change', () => this.closeInspector());
+    // The data-* attributes of the status are there from the start, before any store is asked for.
+    this.#publishStatus();
   }
 
   /**
@@ -297,11 +308,13 @@ class Viewer {
    *   `startTime`: where to start in time when `viewSearch` names no timestep (start-time.js); without it, the first timestep.
    */
   async loadStore(url, options = {}) {
-    // 1. End the previous session. An open that was waiting for its first frame wakes up after this call has
-    // returned at its first await, and by then the generation below says that it was superseded.
+    // 1. End the previous session. The session moves first, so that the status that #endSession publishes on its way
+    // already says that a store is opening, never that one is open with no store. An open that was waiting for its
+    // first frame wakes up after this call has returned at its first await, and by then the generation below says that
+    // it was superseded.
+    this.#session.send('open');
     this.#endSession();
     const generation = ++this.#storeGeneration;
-    this.#session.send('open');
     this.#hideError();
     this.#setProgress(0.02);
     const started = performance.now();
@@ -315,8 +328,10 @@ class Viewer {
       const failure = await explainOpenError(error, { url });
       if (generation === this.#storeGeneration) {
         this.#session.send('failed');
+        // The error box is shown before the status of the move is published, so that the status carries its code.
         this.reportStoreOpenError(failure);
         this.#setProgress(0);
+        this.#publishStatus();
       }
       throw error;
     }
@@ -344,6 +359,9 @@ class Viewer {
     // 3. Start the session on the store.
     this.store = store;
     this.#session.send('opened');
+    // Nothing is on the canvas for this store until its first render says what is.
+    this.#frameOutcome = 'loading';
+    this.#publishStatus();
     store.evictionScore = (entry) => this.#storeScore(entry);
     this.bands = normalizeBands(store.attrs.bands);
     this.dtype = store.dtype;
@@ -429,6 +447,8 @@ class Viewer {
    * and the timeline its ticks until the next store draws.
    */
   #endSession() {
+    // No store is open from here on: what is published below (pausing publishes) has no frame.
+    this.#frameOutcome = 'none';
     // A click being inspected drops its result once the token has moved on.
     ++this.#inspectRequest;
     // Pausing runs #updatePlayUi, which queues a render and an address bar sync: pause first, so that both are cancelled below.
@@ -463,6 +483,7 @@ class Viewer {
     this.store = null;
     this.#updatePlayUi();
     this.#updateFrameDate([]);
+    this.#publishStatus();
   }
 
   /**
@@ -745,6 +766,7 @@ class Viewer {
     canvas.height = Math.max(1, Math.round(this.canvas.height * scale));
     const hold = { lod, cells: new Set(cells.map(([row, col]) => `${row}/${col}`)) };
     this.#exportHold = hold;
+    this.#publishStatus();
     clearTimeout(this.#prefetchTimer);
     this.#prefetchTimer = 0;
     this.#prefetchAbort?.abort();
@@ -802,6 +824,7 @@ class Viewer {
         renderer.dispose();
         if (this.#exportHold !== hold) return;
         this.#exportHold = null;
+        this.#publishStatus();
         this.#schedulePrefetch();
       },
     };
@@ -830,6 +853,7 @@ class Viewer {
     saveSpeed(this.#speed);
     this.#playback?.setSpeed(this.#speed);
     this.#updateSpeedUi();
+    this.#hook('status');
   }
 
   /** Whether every visible cell has the chunks for timestep t in memory at the level that is drawn, so showing it needs no fetch. */
@@ -847,6 +871,7 @@ class Viewer {
     this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
+    this.#hook('status');
   }
 
   /** Colormap of the single-band product, an index in COLORMAPS (0 = gray). */
@@ -858,6 +883,7 @@ class Viewer {
     this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
+    this.#hook('status');
   }
 
   setBandChoice(index) {
@@ -869,6 +895,7 @@ class Viewer {
     this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
+    this.#hook('status');
   }
 
   requestRender() {
@@ -882,6 +909,107 @@ class Viewer {
   /** Resolves after the next complete frame, or when the store is replaced before one is painted. */
   whenPainted() {
     return new Promise((resolve) => this.#painted.push(resolve));
+  }
+
+  /**
+   * What the viewer is doing, as a new plain object on each call:
+   * - `store`: the store session. 'none': no store was asked for; 'opening': a store's metadata is being read and no
+   *   store is open; 'open': `viewer.store` is the open store; 'failed': the last open failed and no store is open.
+   * - `frame`: what the last render left on the canvas. 'none': no store is open; 'loading': the frame asked for is not
+   *   on the canvas (a coarser frame, another timestep or nothing stands in), and also whenever a store is open and a
+   *   render is queued, since its outcome is not known yet; 'preview': a fast scrub's coarser frame of the timestep asked
+   *   for is on the canvas (it sharpens when the scrub ends); 'settled': the frame asked for is on the canvas at the
+   *   level the view settles on, and no render is queued; 'unavailable': the frame asked for cannot be had, because
+   *   every cell it misses has failed for good (until the view moves to another level or timestep).
+   * - `playback`: 'paused': no movie plays (always so while no store is open); 'starting': play was pressed and the
+   *   first frames are loading; 'playing': the movie steps; 'rebuffering': it stepped and now waits for frames.
+   * - `exporting`: an export session holds the cache (createExportSession, until its close()).
+   * - `t`: the timestep asked for. `shownT` and `level`: the timestep and level of the frame on the canvas, null before
+   *   the first.
+   * - `error`: the notice on screen, null when there is none: `code` as the `error` hook gives it, `toast` true for a
+   *   notice that fades on its own, false for the error box that stays until the next open.
+   * @returns {{store: 'none' | 'opening' | 'open' | 'failed', frame: 'none' | 'loading' | 'preview' | 'settled' | 'unavailable',
+   *   playback: 'paused' | 'starting' | 'playing' | 'rebuffering', exporting: boolean, t: number, shownT: number | null,
+   *   level: number | null, error: null | {code: string, toast: boolean}}}
+   */
+  get status() {
+    const shown = this.#shown;
+    const notice = this.#notice;
+    return {
+      store: this.#session.state,
+      frame: this.#currentFrame(),
+      playback: this.#playbackPhase(),
+      exporting: this.#exportHold !== null,
+      t: this.t,
+      shownT: shown === null ? null : shown.t,
+      level: shown === null ? null : shown.lod,
+      error: notice === null ? null : { code: notice.code, toast: notice.toast },
+    };
+  }
+
+  /**
+   * Resolves with the status once nothing is pending: no store is opening, and the frame is 'settled', 'unavailable'
+   * or 'none'. It resolves on the next microtask when that holds already. A view change made before the call is waited
+   * for (its queued render makes the frame read 'loading'), and so is a fast scrub's preview, which sharpens when the
+   * scrub ends. It also resolves when the frame cannot be had and when an open fails.
+   */
+  whenSettled() {
+    if (this.#settled()) return Promise.resolve(this.status);
+    return new Promise((resolve) => this.#settledWaiters.push(resolve));
+  }
+
+  /** The frame of the status: the outcome of the last render, or 'loading' while a store is open and a render is queued. */
+  #currentFrame() {
+    return this.#rafId !== 0 && this.#session.is('open') ? 'loading' : this.#frameOutcome;
+  }
+
+  /** Whether nothing is pending (see whenSettled). */
+  #settled() {
+    if (this.#session.is('opening')) return false;
+    const frame = this.#currentFrame();
+    return frame === 'settled' || frame === 'unavailable' || frame === 'none';
+  }
+
+  /** The playback of the status, from the getters of the open store's Playback; 'paused' while no store is open. */
+  #playbackPhase() {
+    const playback = this.store ? this.#playback : null;
+    if (!playback?.playing) return 'paused';
+    if (!playback.buffering) return 'playing';
+    return playback.stats.firstStepAt === null ? 'starting' : 'rebuffering';
+  }
+
+  /**
+   * Publish what changed in the status: the data-store, data-frame and data-playback attributes of <html>, each written
+   * only when it differs from what was written last, and the `status` hook when the store, the frame, the playback,
+   * the export hold or the code of the notice changed. Then resolve whoever waits in whenSettled() if nothing is
+   * pending. data-frame is the outcome of the last render: it does not turn to 'loading' while a render is merely
+   * queued, so a script that has just changed the view awaits whenSettled() rather than reading the attribute.
+   * It runs at the end of every render: on a frame that changes nothing it costs a few comparisons.
+   */
+  #publishStatus() {
+    const published = this.#published;
+    const store = this.#session.state;
+    const frame = this.#frameOutcome;
+    const playback = this.#playbackPhase();
+    const exporting = this.#exportHold !== null;
+    const error = this.#notice === null ? null : this.#notice.code;
+    const changed = store !== published.store || frame !== published.frame || playback !== published.playback || exporting !== published.exporting || error !== published.error;
+    if (changed) {
+      const { dataset } = document.documentElement;
+      if (store !== published.store) dataset.store = store;
+      if (frame !== published.frame) dataset.frame = frame;
+      if (playback !== published.playback) dataset.playback = playback;
+      published.store = store;
+      published.frame = frame;
+      published.playback = playback;
+      published.exporting = exporting;
+      published.error = error;
+      this.#hook('status');
+    }
+    if (this.#settledWaiters.length > 0 && this.#settled()) {
+      const status = this.status;
+      for (const resolve of this.#settledWaiters.splice(0)) resolve(status);
+    }
   }
 
   /**
@@ -972,6 +1100,10 @@ class Viewer {
       this.#paintMs = painted ? ms : this.#paintMs;
       for (const resolve of this.#painted.splice(0)) resolve();
     }
+    // The level the view settles on, as #paintFrame tests it: a fast scrub's coarser level is not.
+    const sharp = showing && (!this.#scrubCoarser || choice.lod <= this.#scrubMemo.baseLod);
+    this.#frameOutcome = frameOutcome(true, showing, sharp, missing.length, !showing && this.#failedForGood(missing));
+    this.#publishStatus();
     return { complete: showing, ms, lod, cells: cells.length };
   }
 
@@ -1809,6 +1941,7 @@ class Viewer {
     this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
+    this.#hook('status');
   }
 
   get stretchRange() { return this.#linear.manual ? [...this.#linear.range] : null; }
@@ -1824,6 +1957,7 @@ class Viewer {
     this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
+    this.#hook('status');
   }
 
   /** Back to the range measured from the data on screen. */
@@ -1832,6 +1966,7 @@ class Viewer {
     this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
+    this.#hook('status');
   }
 
   /** 2nd percentile of tone-mapped true-color samples (physical reflectance), kept fixed while scrubbing. 0 without red, green and blue bands. */
@@ -2668,6 +2803,7 @@ class Viewer {
     if (buffering) button.title = 'Buffering: playback starts when the next frames are loaded (Space to cancel)';
     if (!playing) this.#stopBufferPumps();
     this.#updateSpeedUi();
+    this.#publishStatus();
   }
 
   /** The slider shows the requested speed; when the display or the link cannot keep up the label adds what is delivered. */
@@ -2766,15 +2902,19 @@ class Viewer {
     clearTimeout(this.#toastTimer);
     $('error-title').textContent = title;
     $('error-message').textContent = message;
+    this.#notice = { code, toast };
     const overlay = $('error-overlay');
     overlay.classList.add('visible');
     overlay.classList.toggle('toast', toast);
     if (toast) this.#toastTimer = setTimeout(() => this.#hideError(), TOAST_MS);
+    this.#publishStatus();
   }
 
   #hideError() {
+    this.#notice = null;
     $('error-overlay').classList.remove('visible', 'toast');
     $('open-default-dataset').hidden = true;
+    this.#publishStatus();
   }
 
   reportStoreOpenError(failure) {
