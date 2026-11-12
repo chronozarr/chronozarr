@@ -345,6 +345,81 @@ test('without wrap it looks no further than the last timestep', () => {
   assert.deepEqual(state.prepared, []);
 });
 
+test('the phase is paused, then starting while the first frames load, then playing, then paused after pause()', () => {
+  // Ten frames a second arrive from the network: timestep k is ready from k * 100 ms; a start at 10/s needs 20.
+  const { playback, display } = setup({ count: 100, stepsPerSecond: 10, ready: (index, now) => index * 100 <= now });
+  assert.equal(playback.phase, 'paused');
+  playback.play();
+  assert.equal(playback.phase, 'starting');
+  display.runUntil(1900);
+  assert.equal(playback.phase, 'starting', 'still waiting for frame 20');
+  display.runUntil(2100);
+  assert.equal(playback.phase, 'playing');
+  playback.pause();
+  assert.equal(playback.phase, 'paused');
+});
+
+test('a movie that runs out of frames after it started is rebuffering, not starting, and plays again once they are in', () => {
+  // Timestep 6 is missing from 300 ms to 1500 ms; everything else is there.
+  const { playback, display } = setup({ count: 10, stepsPerSecond: 4, ready: (index, now) => !(index === 6 && now >= 300 && now < 1500) });
+  playback.play();
+  assert.equal(playback.phase, 'playing', 'every frame of the start is there');
+  display.runUntil(1300);
+  assert.equal(playback.phase, 'rebuffering', 'timestep 6 was due at 1250 ms');
+  display.runUntil(1600);
+  assert.equal(playback.phase, 'playing');
+});
+
+test('pause() while it rebuffers gives paused', () => {
+  const { playback, display } = setup({ count: 100, stepsPerSecond: 4, ready: (index) => index <= 12 });
+  playback.play();
+  display.runUntil(4000);
+  assert.equal(playback.phase, 'rebuffering', 'nothing past timestep 12 has arrived');
+  playback.pause();
+  assert.equal(playback.phase, 'paused');
+  assert.equal(display.waiting, false);
+});
+
+test('without wrap, reaching the last timestep pauses playback', () => {
+  const { playback, state, display } = setup({ count: 6, stepsPerSecond: 30, wrap: false, start: 3 });
+  playback.play();
+  display.runUntil(1000);
+  assert.deepEqual(state.steps.map((s) => s.index), [4, 5], 'it stops on the last timestep');
+  assert.equal(playback.phase, 'paused');
+  assert.equal(playback.playing, false);
+  assert.equal(display.waiting, false, 'and asks for no more frames');
+});
+
+test('playing and buffering agree with the phase in each of the four phases', () => {
+  const agrees = (playback) => {
+    const expected = {
+      paused: { playing: false, buffering: false },
+      starting: { playing: true, buffering: true },
+      playing: { playing: true, buffering: false },
+      rebuffering: { playing: true, buffering: true },
+    }[playback.phase];
+    assert.ok(expected, `a known phase: ${playback.phase}`);
+    assert.deepEqual({ playing: playback.playing, buffering: playback.buffering }, expected, `in ${playback.phase}`);
+  };
+  // Timestep 1 arrives at 100 ms (a start that waits); timestep 6 is missing from 300 ms to 1500 ms (a run dry after it started).
+  const { playback, display } = setup({ count: 10, stepsPerSecond: 4, ready: (index, now) => (index !== 1 || now >= 100) && !(index === 6 && now >= 300 && now < 1500) });
+  const seen = new Set();
+  const look = () => {
+    seen.add(playback.phase);
+    agrees(playback);
+  };
+  look();
+  playback.play();
+  look();
+  for (let at = 50; at <= 2000; at += 50) {
+    display.runUntil(at);
+    look();
+  }
+  playback.pause();
+  look();
+  assert.deepEqual([...seen].sort(), ['paused', 'playing', 'rebuffering', 'starting']);
+});
+
 test('a frame that comes more than an interval late does not produce a burst either', () => {
   let time = 0;
   let index = 0;
