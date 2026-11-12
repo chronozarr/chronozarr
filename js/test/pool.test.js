@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { getEventListeners } from 'node:events';
 import { DecodePool, MainThreadDecoder } from '../chronozarr/pool.js';
 
 /** In-process stand-in for a Worker: replies to init and decode messages like decode-worker.js does. */
@@ -328,6 +329,24 @@ test('when one worker fails to start while another holds a job, that job is reje
   assert.deepEqual(fallback.decoded, [2], 'the queued job was decoded by the fallback');
   assert.equal(pool.mode, 'fallback');
   assert.ok(a.terminated && b.terminated);
+});
+
+test('aborting a job that a pool rejected when it fell back does not throw, and the job no longer listens to its signal', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const { spawn, made } = manualWorkers();
+  const pool = new DecodePool({ size: 2, spawn, init: { type: 'init' }, fallback: recordingFallback() });
+  const [a, b] = made;
+  a.onmessage({ data: { type: 'ready' } });
+  const controller = new AbortController();
+  const reasons = [];
+  const held = pool.decode(Uint8Array.of(1, 1), 1, controller.signal).catch((error) => reasons.push(error.message));
+  b.onmessage({ data: { type: 'error', message: 'no codecs' } });
+  await held;
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0, 'the job no longer listens to its signal');
+  assert.doesNotThrow(() => controller.abort());
+  await new Promise(setImmediate);
+  assert.equal(reasons.length, 1);
+  assert.match(reasons[0], /decode worker stopped before it answered/);
 });
 
 test('a worker error event on a pool with a fallback leaves it decoding through the fallback', async (t) => {
