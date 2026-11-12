@@ -810,7 +810,7 @@ class Viewer {
 
   /** Play the movie; nothing while no store is open (the playback of a previous store stays paused). */
   play() {
-    if (this.#session.is('open')) this.#playback.play();
+    if (this.#session.is('open')) this.#playback?.play();
   }
 
   pause() {
@@ -818,7 +818,7 @@ class Viewer {
   }
 
   togglePlay() {
-    if (this.#session.is('open')) this.#playback.toggle();
+    if (this.#session.is('open')) this.#playback?.toggle();
   }
 
   /** Steps per second for movie playback, kept between visits. */
