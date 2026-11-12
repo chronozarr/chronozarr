@@ -1104,7 +1104,10 @@ class Viewer {
     }
     // The level the view settles on, as #paintFrame tests it: a fast scrub's coarser level is not.
     const sharp = showing && (!this.#scrubCoarser || choice.lod <= this.#scrubMemo.baseLod);
-    this.#frameOutcome = frameOutcome(true, showing, sharp, missing.length, !showing && this.#failedForGood(missing));
+    // The failures of the wave count only for its own level and timestep: a sampled scrub does not start a wave for this one.
+    const wave = this.#wave;
+    const failedForGood = !showing && wave !== null && wave.lod === lod && wave.t === t && this.#failedForGood(missing);
+    this.#frameOutcome = frameOutcome(true, showing, sharp, missing.length, failedForGood);
     // The outcome is stored before anything publishes: hiding a toast publishes, and the status it gives is this render's.
     if (showing && this.#notice?.toast) this.#hideError();
     else this.#publishStatus();
