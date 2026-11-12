@@ -79,7 +79,7 @@ A page opened from `file://` has the origin `null` and cannot be a host. Serve i
 
 All messages are plain JSON objects. The `type` starts with `chronozarr:`. The contract version is `v: 1`, and every message from the viewer carries it. A message to the viewer may leave `v` out, which means 1. Any other value gets a `chronozarr:error` with code `bad_message`.
 
-The viewer ignores messages of other protocols on the same window. It also ignores the types that it sends itself, so a host that echoes messages back gets no errors. It ignores unknown fields in a `set`, so a later version can add some.
+The viewer ignores messages of other protocols on the same window. It also ignores the types that it sends itself (`ready`, `time`, `click`, `view`, `status` and `error`), so a host that echoes messages back gets no errors. It ignores unknown fields in a `set`, so a later version can add some.
 
 ### Host to viewer
 
@@ -108,7 +108,9 @@ The viewer accepts or rejects a `set` as a whole. It rejects a `set` when a fiel
 
 The viewer then applies nothing and answers with `chronozarr:error` (`bad_set`), which names the field.
 
-A `set` that arrives before the store has opened is kept. The viewer merges several of them, with later fields winning, and applies them right after `chronozarr:ready`. For the first frame, use the URL parameters instead. The viewer then paints the requested view at once.
+A `set` that arrives before the store has opened is kept. The viewer merges several of them, with later fields winning, and applies them right after `chronozarr:ready`. It applies them as one `set`, so one field that the store cannot satisfy rejects all of them with one `bad_set`. For the first frame, use the URL parameters instead. The viewer then paints the requested view at once.
+
+A `set` that arrives after the store failed to open is not kept. The viewer answers it with the `chronozarr:error` that reported the failure (`store_open_failed` or `no_store`).
 
 ```js
 frame.postMessage({ v: 1, type: 'chronozarr:set', t: '2024-03-01' }, VIEWER);
@@ -122,18 +124,18 @@ frame.postMessage({ type: 'chronozarr:set', speed: 10, playing: true }, VIEWER);
 frame.postMessage({ type: 'chronozarr:get' }, VIEWER);
 ```
 
-The viewer answers with `chronozarr:ready` again, and its `state` is current. Send `get` in two cases:
+The viewer answers with `chronozarr:ready` again, and its `state` and `status` are current. Send `get` in two cases:
 
 - Your listener was attached after the first `ready`. A cached iframe or a framework that mounts late causes this.
 - You need `state.playing`.
 
-Before the store has opened there is no answer. `ready` follows when the store opens.
+Before the store has opened there is no answer. `ready` follows when the store opens. If the store failed to open, the viewer answers with the `chronozarr:error` that reported the failure (`store_open_failed` or `no_store`).
 
 ### Viewer to host
 
 #### `chronozarr:ready`
 
-The viewer sends `ready` when it has read the store's metadata and set up the view, before it paints the first frame. You can send commands from then on.
+The viewer sends `ready` when it has read the store's metadata and set up the view, before it paints the first frame. You can send commands from then on. The first frame may not be on screen yet: `status.frame` says whether it is, and `chronozarr:status` follows when it changes.
 
 ```json
 {
@@ -148,15 +150,16 @@ The viewer sends `ready` when it has read the store's metadata and set up the vi
     "t": 0, "time": "2015-11-01T00:00:00Z", "product": "true_color", "band": "B02", "colormap": "gray", "range": null, "zoom": 0.175,
     "center": { "x": 499445, "y": 9156055, "lon": -75.005032, "lat": -7.634983 }, "fitted": true,
     "playing": false, "speed": 4
-  }
+  },
+  "status": { "store": "open", "frame": "loading", "playback": "paused", "exporting": false, "shownT": null, "level": null, "error": null }
 }
 ```
 
-`times` and `state.time` are the ISO strings of the store. `state.range` is `null` while the viewer measures the range itself. `bands[].common_name` and `units` are `null` when the store does not say. `levels[].resolution` is the pixel size in the store's units, or `null` without georeferencing. In `state.center`, `x` and `y` are in the store's coordinates. `lon` and `lat` are `null` when the viewer cannot compute them. `state.fitted` is `true` while the camera shows the whole store at the fitted scale. A link to the view can then leave out `z` and `c`, so that it fits any window.
+`status` holds the fields of `chronozarr:status` except `t`, `time` and `state`, which `state` already gives. `times` and `state.time` are the ISO strings of the store. `state.range` is `null` while the viewer measures the range itself. `bands[].common_name` and `units` are `null` when the store does not say. `levels[].resolution` is the pixel size in the store's units, or `null` without georeferencing. In `state.center`, `x` and `y` are in the store's coordinates. `lon` and `lat` are `null` when the viewer cannot compute them. `state.fitted` is `true` while the camera shows the whole store at the fitted scale. A link to the view can then leave out `z` and `c`, so that it fits any window.
 
 #### `chronozarr:time`
 
-The viewer sends `time` on every change of the timestep. A change comes from a `set`, a click on the timeline, the arrow keys, the chart or a step of playback. Playback sends up to 60 a second. `t` is the timestep that was asked for. The frame on screen can still be the previous one for a moment while chunks load.
+The viewer sends `time` on every change of the timestep. A change comes from a `set`, a click on the timeline, the arrow keys, the chart or a step of playback. Playback sends up to 60 a second. `t` is the timestep that was asked for. The frame on screen can still be the previous one for a moment while chunks load. `chronozarr:status` says when the frame of `t` is on screen.
 
 ```json
 { "v": 1, "type": "chronozarr:time", "t": 8, "time": "2016-11-01T00:00:00Z" }
@@ -197,6 +200,56 @@ The viewer sends `view` when the camera has been still for 120 ms after a pan, z
 
 `zoom` and `center` mean the same as in `set`, so you can send a saved `view` back to restore the camera. `fitted` means the same as in `state`.
 
+#### `chronozarr:status`
+
+The viewer sends `status` when the store, the frame, playback, an export or the error on screen changes. It also sends it after a change of product, band, colormap, display range or speed, including one made with the keys inside the iframe. It sends `status` only after `ready`.
+
+```json
+{
+  "v": 1,
+  "type": "chronozarr:status",
+  "store": "open", "frame": "settled", "playback": "paused", "exporting": false,
+  "t": 8, "time": "2016-11-01T00:00:00Z", "shownT": 8, "level": 0, "error": null,
+  "state": { "t": 8, "time": "2016-11-01T00:00:00Z", "product": "true_color", "band": "B02", "colormap": "gray", "range": null, "zoom": 0.175, "center": { "x": 499445, "y": 9156055, "lon": -75.005032, "lat": -7.634983 }, "fitted": true, "playing": false, "speed": 4 }
+}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `store` | `none`, `opening`, `open` or `failed` | Whether a store is open. |
+| `frame` | `none`, `loading`, `preview`, `settled` or `unavailable` | Whether the frame of `t` is on screen. See below. |
+| `playback` | `paused`, `starting`, `playing` or `rebuffering` | What playback is doing. See below. |
+| `exporting` | boolean | `true` while an export to MP4, WebM or GIF runs. |
+| `t` | integer | The timestep that was asked for, as in `chronozarr:time`. |
+| `time` | string | The ISO string of `t`. |
+| `shownT` | integer or `null` | The timestep of the frame on screen. It differs from `t` while the frame of `t` loads. |
+| `level` | integer or `null` | The pyramid level of the frame on screen. Level 0 is full resolution. |
+| `error` | `null` or `{code, toast}` | The error that the viewer shows. `code` is a code of `chronozarr:error`. `toast` is `true` for a notice that fades on its own. |
+| `state` | object | The same object as `state` in `ready`. |
+
+`frame` has these values:
+
+- `none`: there is no frame to show, because no store is open.
+- `loading`: the frame of `t` is not on screen yet.
+- `preview`: a coarser frame of `t` is on screen, as during a fast scrub.
+- `settled`: the frame of `t` is on screen at the level that the view settles on.
+- `unavailable`: the chunks of the frame of `t` failed for good.
+
+`playback` has these values:
+
+- `paused`: playback is stopped.
+- `starting`: playback was asked for, and the viewer is loading frames before the first step.
+- `playing`: the timestep advances at the playback speed.
+- `rebuffering`: playback waits for frames that are not loaded yet, and continues when they are.
+
+A host can show its own spinner while the frame loads:
+
+```js
+window.addEventListener('message', (event) => {
+  if (event.origin === VIEWER && event.source === frame && event.data.type === 'chronozarr:status') spinner.hidden = event.data.frame !== 'loading';
+});
+```
+
 #### `chronozarr:error`
 
 ```json
@@ -208,7 +261,7 @@ The viewer sends `view` when the camera has been still for 120 ms after a pan, z
 | `bad_message` | A message of yours has an unsupported `v` or an unknown `chronozarr:` type. |
 | `bad_set` | A `set` has an invalid field or one that the store cannot satisfy. Nothing was applied. |
 | `no_store` | The iframe URL has no `store`. |
-| `store_open_failed` | The store could not be opened. It was not found, it has no CORS or it is not a chronozarr store. `message` has the reason. |
+| `store_open_failed` | The store could not be opened. It was not found, it has no CORS or it is not a chronozarr store. The viewer also sends this code when the `store` parameter cannot be read as an address. `message` has the reason. |
 | `chunk_load_failed` | A chunk could not be read after retries. The cell keeps its previous data and the viewer retries it. The viewer shows a toast for this error. |
 | `playback_failed` | Playback paused because the loop could not be buffered. |
 | `internal` | A command failed unexpectedly. The browser console has the stack. |
