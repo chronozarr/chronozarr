@@ -11,6 +11,7 @@
 
 import { openStore } from '../chronozarr/decoder.js';
 import { anySignal } from '../chronozarr/http.js';
+import { Machine } from '../chronozarr/machine.js';
 import { redactText } from '../chronozarr/redact.js';
 import { COLORMAPS, colormapIndex } from '../shared/colormaps.js';
 import { channelBounds, computeStretchLo, describePixel, displayMode, dualPolRanges, findBand, inputConversion, inputIndices, nodataToCompare, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../shared/products.js';
@@ -34,6 +35,18 @@ const STAND_IN_FINER_LEVELS = 2; // levels below the target that a stand-in may 
 const SEEK_DISTANCE = 4; // a time change of more than this many steps drops queued speculative fetches (as the viewer does)
 const EVENTS = ['open', 'loading', 'ready', 'error'];
 
+/**
+ * The layer's lifecycle. constructed: not on a map yet. opening: on a map, the store is being read. open: the store is
+ * read and, with a GL context, drawable. failed: opening failed for good; the layer draws nothing and holds no store.
+ * removed: taken off the map; it cannot be added again.
+ */
+const LAYER_MOVES = {
+  constructed: { add: 'opening', remove: 'removed' },
+  opening: { opened: 'open', fail: 'failed', remove: 'removed' },
+  open: { fail: 'failed', remove: 'removed' },
+  failed: { add: 'opening', remove: 'removed' },
+  removed: {},
+};
 
 const chunkId = (lod, row, col, t) => `${lod}/${row}/${col}/${t}`;
 const isAbort = (error) => error?.name === 'AbortError';
@@ -113,7 +126,7 @@ export class ChronozarrLayer {
   #gl = null;
   #gpu = null;
   #store = null;
-  #disposed = false;
+  #phase = new Machine('ChronozarrLayer', LAYER_MOVES, 'constructed');
   #geo = null;
   #meshes = new Map();
   #t;
@@ -296,7 +309,7 @@ export class ChronozarrLayer {
    */
   async getValueAt(lngLat, { t = this.#t } = {}) {
     const store = await this.#opened;
-    if (this.#disposed) throw new Error('ChronozarrLayer.getValueAt: the layer was removed');
+    if (this.#phase.state === 'removed') throw new Error('ChronozarrLayer.getValueAt: the layer was removed');
     if (!Number.isInteger(t) || t < 0 || t >= store.times.length) throw new RangeError(`ChronozarrLayer.getValueAt: timestep must be an integer in 0..${store.times.length - 1}, got ${t}`);
     const [lng, lat] = lngLatOf(lngLat);
     const [x, y] = this.#geo.projection.fromLonLat(lng, lat);
@@ -350,16 +363,25 @@ export class ChronozarrLayer {
   // ---- MapLibre CustomLayerInterface ----
 
   onAdd(map, gl) {
-    if (this.#disposed) throw new Error(`ChronozarrLayer "${this.id}" was removed; create a new layer instead of re-adding it`);
+    const phase = this.#phase.state;
+    if (phase === 'removed') throw new Error(`ChronozarrLayer "${this.id}" was removed; create a new layer instead of re-adding it`);
     this.#map = map;
     this.#gl = gl;
-    if (!this.#store) {
+    // While the store opens, the open in progress sets up the GPU with the map and context recorded here.
+    if (phase === 'opening') return;
+    if (phase === 'constructed' || phase === 'failed') {
+      this.#phase.send('add');
       this.#open();
       return;
     }
     try {
-      this.#initGpu();
+      this.#initGpu(this.#store);
     } catch (error) {
+      // A failed layer holds no store, so adding it again opens the store anew.
+      this.#store.close();
+      this.#store = null;
+      this.#geo = null;
+      this.#bandInfo = null;
       this.#fail(error);
     }
   }
@@ -370,7 +392,7 @@ export class ChronozarrLayer {
 
   render(glOrOptions, maybeOptions) {
     const options = maybeOptions ?? glOrOptions;
-    if (!this.#gpu?.pool || this.#disposed) return;
+    if (!this.#gpu?.pool || this.#phase.state === 'removed') return;
     const matrix = options?.defaultProjectionData?.mainMatrix;
     if (!matrix) {
       this.#reportOnce('no-matrix', new Error('ChronozarrLayer needs MapLibre GL JS >= 5 (render options carry no defaultProjectionData.mainMatrix)'));
@@ -386,39 +408,42 @@ export class ChronozarrLayer {
 
   // ---- opening ----
 
+  /** Reads the store and, with a GL context, sets up the GPU; the layer holds the store only once both succeeded. */
   async #open() {
     let store;
+    let configured;
     try {
       const options = this.#options.storeOptions ?? {};
       const signal = options.signal ? anySignal([options.signal, this.#openController.signal]) : this.#openController.signal;
       store = await openStore(this.#options.url, { ...options, signal });
-      if (this.#disposed) {
+      if (this.#phase.state === 'removed') {
         store.close();
         return;
       }
-      await this.#configure(store);
-      if (this.#disposed) {
+      configured = await this.#configure(store);
+      if (this.#phase.state === 'removed') {
         store.close();
         return;
       }
+      if (this.#gl) this.#initGpu(store);
     } catch (error) {
       store?.close();
       this.#fail(error);
       return;
     }
     this.#store = store;
-    try {
-      if (this.#gl) this.#initGpu();
-    } catch (error) {
-      this.#fail(error);
-      return;
-    }
+    this.#geo = configured.geo;
+    this.#bandInfo = configured.bandInfo;
+    this.#phase.send('opened');
     this.#resolveOpened(store);
     this.#emit('open', { store });
     this.#repaint();
   }
 
-  /** Validates the store for map use and derives everything that does not depend on the GL context. Async because a CRS outside the built-in projections loads proj4. */
+  /**
+   * Validates the store for map use and derives everything that does not depend on the GL context: {bandInfo, geo}.
+   * It assigns nothing; #open does once the GPU is set up too. Async because a CRS outside the built-in projections loads proj4.
+   */
   async #configure(store) {
     const { url } = this.#options;
     if (!Array.isArray(store.transform)) throw new Error(`${url}: level 0 declares no affine "transform", so the store cannot be placed on a map. Re-encode it with the current chronozarr writer.`);
@@ -426,23 +451,25 @@ export class ChronozarrLayer {
     const projection = await createProjection(store);
 
     const bands = normalizeBands(store.attrs.bands);
-    this.#bandInfo = { bands, names: bands.map((band) => band.name), nodata: typeof store.nodata === 'number' ? store.nodata : null, products: resolveProducts(store.attrs.bands) };
+    const bandInfo = { bands, names: bands.map((band) => band.name), nodata: typeof store.nodata === 'number' ? store.nodata : null, products: resolveProducts(store.attrs.bands) };
     if (this.#t >= store.times.length) throw new RangeError(`${url}: timestep ${this.#t} is outside 0..${store.times.length - 1}`);
-    this.#resolveProduct(this.#productId, this.#band);
+    this.#resolveProduct(this.#productId, this.#band, bandInfo);
 
     const transforms = store.levels.map((_, lod) => levelTransform(store.transform, lod));
     const { width, height } = store.levels[0];
-    this.#geo = {
+    const geo = {
       projection,
       transforms,
       mercatorPerTexel0: mercatorPerTexel(projection, transforms[0], width, height),
       bounds: footprintBounds(projection, transforms[0], width, height),
       cells: store.levels.map(() => null),
     };
+    return { bandInfo, geo };
   }
 
-  #resolveProduct(id, band) {
-    const { names, products } = this.#bandInfo;
+  /** The product `id` and the index of `band` against the store's bands; throws RangeError for one the store cannot show. */
+  #resolveProduct(id, band, bandInfo = this.#bandInfo) {
+    const { names, products } = bandInfo;
     const product = products.find((p) => p.id === id);
     if (!product) throw new RangeError(`ChronozarrLayer: unknown product "${id}"; available: ${products.filter((p) => p.available).map((p) => p.id).join(', ')}`);
     if (!product.available) throw new RangeError(`ChronozarrLayer: product "${id}" needs ${product.missing.join(', ')} bands, which this store lacks (it has ${names.join(', ')})`);
@@ -452,7 +479,8 @@ export class ChronozarrLayer {
   }
 
   #fail(error) {
-    if (this.#disposed) return;
+    if (this.#phase.state === 'removed') return;
+    if (this.#phase.can('fail')) this.#phase.send('fail');
     this.#rejectOpened(error);
     this.#emit('error', { error });
     console.error('ChronozarrLayer:', redactText(error));
@@ -467,10 +495,10 @@ export class ChronozarrLayer {
 
   // ---- GL resources ----
 
-  #createProgram() {
+  #createProgram(store) {
     const gl = this.#gl;
     const vs = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-    const fs = compile(gl, gl.FRAGMENT_SHADER, fragmentShader({ dtype: this.#store.dtype, hasMask: this.#store.hasMask }));
+    const fs = compile(gl, gl.FRAGMENT_SHADER, fragmentShader({ dtype: store.dtype, hasMask: store.hasMask }));
     const program = gl.createProgram();
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
@@ -501,13 +529,12 @@ export class ChronozarrLayer {
     return texture;
   }
 
-  /** Allocates the texture pool once both the store and the GL context exist. */
-  #initGpu() {
+  /** Allocates the texture pool for `store` once both the store and the GL context exist. */
+  #initGpu(store) {
     const gl = this.#gl;
     if (this.#gpu?.texture) return;
-    const store = this.#store;
     const format = TEXTURE_FORMATS[store.dtype];
-    const gpu = this.#createProgram();
+    const gpu = this.#createProgram(store);
     this.#gpu = gpu;
     const { nBand, chunkWidth, chunkHeight } = store.levels[0];
     const slotBytes = nBand * chunkWidth * chunkHeight * format.Array.BYTES_PER_ELEMENT;
@@ -546,8 +573,8 @@ export class ChronozarrLayer {
   }
 
   #dispose() {
-    if (this.#disposed) return;
-    this.#disposed = true;
+    if (this.#phase.state === 'removed') return;
+    this.#phase.send('remove');
     clearTimeout(this.#prefetchTimer);
     clearTimeout(this.#graceTimer);
     this.#prefetchController?.abort();
@@ -996,7 +1023,7 @@ export class ChronozarrLayer {
         samples.push(...sampleCell(data, mask, store.levels[lod], extent));
       }
       const current = this.#sampleKey(this.#lastView.lod, this.#lastView.cells.map(([row, col]) => ({ row, col })), this.#t);
-      if (!signal.aborted && !this.#disposed && key === current) this.#sampledView = { key, values: samples };
+      if (!signal.aborted && this.#phase.state !== 'removed' && key === current) this.#sampledView = { key, values: samples };
     };
     collect().catch((error) => {
       if (!isAbort(error)) {
@@ -1142,7 +1169,7 @@ export class ChronozarrLayer {
 
   /** Once the view has settled, let the reader fill its caches around t for the visible cells (store.prefetch). */
   #schedulePrefetch() {
-    if (!this.#options.prefetch || this.#disposed) return;
+    if (!this.#options.prefetch || this.#phase.state === 'removed') return;
     clearTimeout(this.#prefetchTimer);
     this.#prefetchTimer = setTimeout(() => this.#runPrefetch(), PREFETCH_DELAY_MS);
   }
@@ -1150,7 +1177,7 @@ export class ChronozarrLayer {
   #runPrefetch() {
     const store = this.#store;
     const { lod, cells } = this.#lastView;
-    if (!store || this.#disposed || cells.length === 0) return;
+    if (!store || this.#phase.state === 'removed' || cells.length === 0) return;
     const previous = this.#prefetchController;
     const controller = new AbortController();
     this.#prefetchController = controller;
