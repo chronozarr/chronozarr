@@ -196,6 +196,33 @@ test('a fast scrub that draws a coarser level is a preview, and settles once the
   expect(await page.evaluate(() => window.settled)).toEqual(expect.objectContaining({ frame: 'settled', t: 2, shownT: 2, level: 0 }));
 });
 
+test('a preview that hides a toast neither ends whenSettled nor publishes the outcome of the frame before it', async ({ page, servers, storeUrl }) => {
+  const level0 = await openForScrub(page, servers, storeUrl, {
+    beforePause: async () => {
+      await page.evaluate(() => {
+        const { store } = window.chronozarr.viewer;
+        store.readPixels = () => Promise.reject(new Error('the test refused this read'));
+      });
+      await clickStorePixel(page, 50, 40);
+      await expect(page.locator('#error-overlay')).toHaveClass(/toast/);
+      await page.evaluate(() => window.chronozarr.viewer.whenSettled());
+    },
+  });
+  await expect(page.locator('#error-overlay'), 'the toast is on screen when the scrub starts').toHaveClass(/visible/);
+  await recordStatusHook(page);
+  expect(await scrubToPreview(page), 'the frame after the scrub draws').toBe('preview');
+  await expect(page.locator('#error-overlay'), 'the preview is a complete frame: it hides the toast').not.toHaveClass(/visible/);
+  expect(await page.evaluate(() => window.settled), 'a preview is not an end state').toBe('pending');
+  const calls = await page.evaluate(() => window.statusCalls.map(({ frame, shownT, error }) => ({ frame, shownT, error })));
+  expect(calls, 'each call of the hook sees the outcome of the render that called it').toEqual([{ frame: 'preview', shownT: 2, error: null }]);
+
+  await level0.release();
+  await page.clock.runFor(400);
+  await page.clock.resume();
+  await page.waitForFunction(() => window.settled !== 'pending', null, { timeout: 30_000 });
+  expect(await page.evaluate(() => window.settled)).toEqual(expect.objectContaining({ frame: 'settled', t: 2, level: 0 }));
+});
+
 test.describe('a frame whose cells fail for good', () => {
   test.use({ expectedErrors: /Failed to load resource: .*503|request failed, giving up|chunk load failed|prefetch failed for chunk/ });
 

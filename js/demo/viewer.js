@@ -1077,7 +1077,6 @@ class Viewer {
     this.#setLoading(!showing);
 
     if (showing) {
-      if (this.#notice?.toast) this.#hideError();
       this.#wave?.controller.abort();
       this.#wave = null;
       this.#setProgress(1);
@@ -1106,7 +1105,9 @@ class Viewer {
     // The level the view settles on, as #paintFrame tests it: a fast scrub's coarser level is not.
     const sharp = showing && (!this.#scrubCoarser || choice.lod <= this.#scrubMemo.baseLod);
     this.#frameOutcome = frameOutcome(true, showing, sharp, missing.length, !showing && this.#failedForGood(missing));
-    this.#publishStatus();
+    // The outcome is stored before anything publishes: hiding a toast publishes, and the status it gives is this render's.
+    if (showing && this.#notice?.toast) this.#hideError();
+    else this.#publishStatus();
     return { complete: showing, ms, lod, cells: cells.length };
   }
 
