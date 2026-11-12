@@ -185,6 +185,7 @@ is rescaled and the store holds exactly the 8-bit (or 16-bit) values of the file
 
 from __future__ import annotations
 
+import enum
 import hashlib
 import json
 import shutil
@@ -820,6 +821,112 @@ def _is_staged(work: Path, t: int, plan: Plan) -> bool:
     )
 
 
+class _OutputState(enum.Enum):
+    """What an output directory holds, as far as a conversion is concerned."""
+
+    FREE = "absent or empty"
+    FINISHED_STORE = "finished store"  # a root zarr.json whose attributes have a chronozarr block
+    # The work directory records that a conversion began to encode into this directory, and the
+    # root is still the bare group that an encode starts with.
+    UNFINISHED_STORE = "unfinished store"
+    OTHER = "something else"
+
+
+# The file in a work directory that names the output a conversion began to encode into. The
+# work directory is removed when the conversion succeeds, so the file outlives only an encode
+# that did not finish.
+_ENCODING_MARKER = "encoding"
+
+
+def _record_encode_start(work: Path, out_path: Path) -> None:
+    (work / _ENCODING_MARKER).write_text(str(out_path.resolve()))
+
+
+def _encode_was_started(work: Path, out_path: Path) -> bool:
+    """Whether `work` records that a conversion began to encode into `out_path`."""
+    try:
+        recorded = (work / _ENCODING_MARKER).read_text()
+    except OSError:
+        return False
+    return recorded == str(out_path.resolve())
+
+
+def _default_work_dir(out_path: Path) -> Path:
+    return out_path.parent / f"{out_path.name}.convert-work"
+
+
+def _encoding_work_dir(out_path: Path, work: Path) -> Path | None:
+    """The work directory that records an encode into `out_path`, or None when none does.
+
+    That is `work`, or else the default work directory of `out_path`: a rerun that names a fresh
+    work directory still finds the record of a run that named none.
+    """
+    for candidate in (work, _default_work_dir(out_path)):
+        if _encode_was_started(candidate, out_path):
+            return candidate
+    return None
+
+
+def _classify_output(out_path: Path, encode_recorded: bool) -> _OutputState:
+    """Classify `out_path` for a conversion. Nothing is opened as a store.
+
+    A directory is an unfinished store only on the conversion's own record: a work directory
+    says that an encode into `out_path` began (`encode_recorded`), and the root `zarr.json` is
+    what `encode()` writes first and completes last, a Zarr v3 group with no attributes and no
+    consolidated metadata. The shape of a directory alone never makes it one, so a dataset that
+    merely looks like a store being written keeps the message for a path that is not empty.
+    """
+    if not out_path.exists() or not any(out_path.iterdir()):
+        return _OutputState.FREE
+    try:
+        root = json.loads((out_path / "zarr.json").read_text())
+    except (OSError, ValueError):
+        return _OutputState.OTHER
+    if not isinstance(root, dict):
+        return _OutputState.OTHER
+    attributes = root.get("attributes", {})
+    if not isinstance(attributes, dict):
+        return _OutputState.OTHER
+    if "chronozarr" in attributes:
+        return _OutputState.FINISHED_STORE
+    is_bare_group = (
+        root.get("zarr_format") == 3
+        and root.get("node_type") == "group"
+        and not attributes
+        and root.get("consolidated_metadata") is None
+    )
+    if is_bare_group and encode_recorded:
+        return _OutputState.UNFINISHED_STORE
+    return _OutputState.OTHER
+
+
+def _unfinished_store_error(
+    out_path: Path, work: Path, staged: StagedReuse | None
+) -> FileExistsError:
+    """The refusal for an unfinished store.
+
+    `work` is the work directory that records the encode. `staged` says whether the timesteps
+    staged in it can be reused, and is None when it holds none. A conversion still running in
+    another process leaves the same directory, so the message tells the user to delete only if
+    none is running.
+    """
+    message = (
+        f"{out_path} holds an unfinished store: the run that wrote it was interrupted, or is "
+        f"still running. If no conversion is running, delete {out_path} and "
+    )
+    if staged is StagedReuse.REUSABLE:
+        return FileExistsError(
+            f"{message}rerun with --resume --work-dir {work} to reuse the timesteps staged "
+            f"in {work}."
+        )
+    message = f"{message}{work}, then rerun the conversion"
+    if staged is None:
+        return FileExistsError(f"{message}.")
+    return FileExistsError(
+        f"{message}: the timesteps staged in {work} cannot be reused for this source."
+    )
+
+
 def _check_work_dir(work: Path, plan: Plan, resume: bool) -> None:
     plan_file = work / "plan.json"
     fingerprint = json.dumps(plan.source.fingerprint(), sort_keys=True)
@@ -1059,11 +1166,24 @@ def convert(
                 "this source is already a manifest or is not a set of rasters"
             )
     out_path = Path(out)
-    if not dry_run and out_path.exists() and any(out_path.iterdir()):
+    work = Path(work_dir) if work_dir is not None else _default_work_dir(out_path)
+    encoding_work = None if dry_run else _encoding_work_dir(out_path, work)
+    output = (
+        _OutputState.FREE if dry_run else _classify_output(out_path, encoding_work is not None)
+    )
+    if output in (_OutputState.FINISHED_STORE, _OutputState.OTHER):
         raise FileExistsError(
             f"{out_path} already exists and is not empty; stores are immutable, write to a "
             "new path"
         )
+    # The work directory of the unfinished store at `out_path`; None when the output is free.
+    unfinished_work = encoding_work if output is _OutputState.UNFINISHED_STORE else None
+    if unfinished_work is not None and not any(unfinished_work.glob("t*.npy")):
+        raise _unfinished_store_error(out_path, unfinished_work, None)
+    # With timesteps staged, planning comes before the refusal of an unfinished output: only the
+    # planned source says whether they can be reused. It plans without `resume` then, so that a
+    # source that cannot reuse them gets that refusal, which names the store, and not the
+    # refusal of the flag.
     try:
         plan = plan_conversion(
             source,
@@ -1084,12 +1204,14 @@ def convert(
             calendar_to_gregorian=calendar_to_gregorian,
             bands_are_dates=bands_are_dates,
             mosaic_tiles=mosaic_tiles,
-            resume=resume,
+            resume=resume and unfinished_work is None,
         )
     except PreflightError as exc:
         if write_manifest_to is not None and exc.draft is not None:
             exc.wrote_manifest(_write_draft(exc.draft, Path(write_manifest_to)))
         raise
+    if unfinished_work is not None:
+        raise _unfinished_store_error(out_path, unfinished_work, plan.source.staged_reuse)
     bands = list(plan.source.info.bands)
     if band_roles:
         bands = list(assign_roles(bands, band_roles))
@@ -1130,11 +1252,6 @@ def convert(
         report = migrate(plan.source, out_path, progress)
         return ConvertReport(plan, report, 0, 0, 0, time.perf_counter() - started)
 
-    work = (
-        Path(work_dir)
-        if work_dir is not None
-        else out_path.parent / f"{out_path.name}.convert-work"
-    )
     _check_work_dir(work, plan, resume)
     info = plan.source.info
     if isinstance(plan.source, XarraySource) and plan.source.calendar is not None:
@@ -1157,6 +1274,7 @@ def convert(
         read_s = time.perf_counter() - started
 
         started = time.perf_counter()
+        _record_encode_start(work, out_path)
         report = encode(
             _staged_timesteps(plan, work),
             out_path,
