@@ -103,3 +103,27 @@ test('adding a layer a second time while its store opens reads the store once', 
   assert.equal(layer.store, store);
   assert.ok(layer.stats.slots > 0, 'the open in progress set up the GPU with the context of the second call');
 });
+
+
+test('a texture allocation that fails deletes the program and the textures it created', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const { layer } = newLayer(t);
+  const { gl, counts } = countingGl({ glError: 1282 });
+  layer.onAdd(map, gl);
+  await assert.rejects(layer.opened, /GL error 1282/);
+  assert.equal(counts.createTexture, 1);
+  assert.equal(counts.deleteTexture, 1, 'the texture was deleted');
+  assert.equal(counts.createProgram, 1);
+  assert.equal(counts.deleteProgram, 1, 'the program was deleted');
+  assert.equal(layer.stats.slots, 0, 'the layer holds no GPU pool');
+});
+
+test('a fragment shader that fails to compile leaves no shader behind', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const { layer } = newLayer(t);
+  const { gl, counts } = countingGl({ failFragment: true });
+  layer.onAdd(map, gl);
+  await assert.rejects(layer.opened, /shader compile failed/);
+  assert.equal(counts.createShader, 2);
+  assert.equal(counts.deleteShader, 2, 'the vertex shader was deleted too');
+});

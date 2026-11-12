@@ -392,7 +392,7 @@ export class ChronozarrLayer {
 
   render(glOrOptions, maybeOptions) {
     const options = maybeOptions ?? glOrOptions;
-    if (!this.#gpu?.pool || this.#phase.state === 'removed') return;
+    if (this.#gpu === null || this.#phase.state === 'removed') return;
     const matrix = options?.defaultProjectionData?.mainMatrix;
     if (!matrix) {
       this.#reportOnce('no-matrix', new Error('ChronozarrLayer needs MapLibre GL JS >= 5 (render options carry no defaultProjectionData.mainMatrix)'));
@@ -498,7 +498,13 @@ export class ChronozarrLayer {
   #createProgram(store) {
     const gl = this.#gl;
     const vs = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-    const fs = compile(gl, gl.FRAGMENT_SHADER, fragmentShader({ dtype: store.dtype, hasMask: store.hasMask }));
+    let fs;
+    try {
+      fs = compile(gl, gl.FRAGMENT_SHADER, fragmentShader({ dtype: store.dtype, hasMask: store.hasMask }));
+    } catch (error) {
+      gl.deleteShader(vs);
+      throw error;
+    }
     const program = gl.createProgram();
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
@@ -529,29 +535,39 @@ export class ChronozarrLayer {
     return texture;
   }
 
-  /** Allocates the texture pool for `store` once both the store and the GL context exist. */
+  /**
+   * Allocates the program and the texture pool for `store` once both the store and the GL context exist. `#gpu` is
+   * assigned only when all of it exists; a step that throws deletes what the earlier steps created and leaves it null.
+   */
   #initGpu(store) {
     const gl = this.#gl;
-    if (this.#gpu?.texture) return;
+    if (this.#gpu !== null) return;
     const format = TEXTURE_FORMATS[store.dtype];
     const gpu = this.#createProgram(store);
+    try {
+      const { nBand, chunkWidth, chunkHeight } = store.levels[0];
+      const slotBytes = nBand * chunkWidth * chunkHeight * format.Array.BYTES_PER_ELEMENT;
+      const maxLayers = gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS);
+      const slots = Math.min(Math.floor(this.#options.gpuBudgetBytes / slotBytes), Math.floor(maxLayers / nBand));
+      if (slots < 1) throw new Error(`ChronozarrLayer: the GPU budget (${this.#options.gpuBudgetBytes} bytes, ${maxLayers} array layers available) holds ${slots} chunk slots of ${slotBytes} bytes; at least 1 is needed. Raise gpuBudgetBytes.`);
+      if (chunkWidth > gl.getParameter(gl.MAX_TEXTURE_SIZE)) throw new Error(`ChronozarrLayer: chunks are ${chunkWidth} px wide, more than this GPU's MAX_TEXTURE_SIZE`);
+      gl.getError(); // clears one error left by earlier code, so the check below reports our own
+      gpu.texture = this.#allocateTexture(gl[format.internal], chunkWidth, chunkHeight, slots * nBand);
+      if (store.hasMask) gpu.maskTexture = this.#allocateTexture(gl.R8UI, chunkWidth, chunkHeight, slots);
+      const error = gl.getError();
+      if (error !== gl.NO_ERROR) throw new Error(`ChronozarrLayer: allocating ${slots} texture slots (${(slots * slotBytes) / MIB} MiB) failed with GL error ${error}. Lower gpuBudgetBytes.`);
+      gpu.pool = new SlotPool(slots);
+      if (store.hasMask) gpu.maskPool = new SlotPool(slots);
+      gpu.format = format;
+      gpu.slotLayers = nBand;
+      gpu.chunk = { width: chunkWidth, height: chunkHeight };
+    } catch (error) {
+      if (gpu.texture) gl.deleteTexture(gpu.texture);
+      if (gpu.maskTexture) gl.deleteTexture(gpu.maskTexture);
+      gl.deleteProgram(gpu.program);
+      throw error;
+    }
     this.#gpu = gpu;
-    const { nBand, chunkWidth, chunkHeight } = store.levels[0];
-    const slotBytes = nBand * chunkWidth * chunkHeight * format.Array.BYTES_PER_ELEMENT;
-    const maxLayers = gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS);
-    const slots = Math.min(Math.floor(this.#options.gpuBudgetBytes / slotBytes), Math.floor(maxLayers / nBand));
-    if (slots < 1) throw new Error(`ChronozarrLayer: the GPU budget (${this.#options.gpuBudgetBytes} bytes, ${maxLayers} array layers available) holds ${slots} chunk slots of ${slotBytes} bytes; at least 1 is needed. Raise gpuBudgetBytes.`);
-    if (chunkWidth > gl.getParameter(gl.MAX_TEXTURE_SIZE)) throw new Error(`ChronozarrLayer: chunks are ${chunkWidth} px wide, more than this GPU's MAX_TEXTURE_SIZE`);
-    gl.getError(); // clears one error left by earlier code, so the check below reports our own
-    gpu.texture = this.#allocateTexture(gl[format.internal], chunkWidth, chunkHeight, slots * nBand);
-    if (store.hasMask) gpu.maskTexture = this.#allocateTexture(gl.R8UI, chunkWidth, chunkHeight, slots);
-    const error = gl.getError();
-    if (error !== gl.NO_ERROR) throw new Error(`ChronozarrLayer: allocating ${slots} texture slots (${(slots * slotBytes) / MIB} MiB) failed with GL error ${error}. Lower gpuBudgetBytes.`);
-    gpu.pool = new SlotPool(slots);
-    if (store.hasMask) gpu.maskPool = new SlotPool(slots);
-    gpu.format = format;
-    gpu.slotLayers = nBand;
-    gpu.chunk = { width: chunkWidth, height: chunkHeight };
   }
 
   #disposeGl() {
