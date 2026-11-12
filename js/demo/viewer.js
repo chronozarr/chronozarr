@@ -1961,6 +1961,12 @@ class Viewer {
   get autoExposure() { return this.#autoExposure; }
 
   setAutoExposure(enabled) {
+    this.#applyAutoExposure(enabled);
+    this.#hook('status');
+  }
+
+  /** What setAutoExposure does but tell the host: setStretch tells it once, after the range is set. */
+  #applyAutoExposure(enabled) {
     this.#autoExposure = Boolean(enabled);
     this.#exposureView = null;
     if (enabled) this.#linear.manual = false;
@@ -1968,7 +1974,6 @@ class Viewer {
     this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
-    this.#hook('status');
   }
 
   get stretchRange() { return this.#linear.manual ? [...this.#linear.range] : null; }
@@ -1979,7 +1984,7 @@ class Viewer {
       this.#updateStretchUi();
       return;
     }
-    this.setAutoExposure(false);
+    this.#applyAutoExposure(false);
     this.#linear = { range: [lo, hi], manual: true };
     this.#dirty = true;
     this.requestRender();

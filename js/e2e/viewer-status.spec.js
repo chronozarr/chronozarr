@@ -392,6 +392,20 @@ test('a load that starts within 200 ms of a complete frame keeps the progress ba
   await expect.poll(() => fill.evaluate((element) => element.style.opacity), { timeout: 5000 }).toBe('0');
 });
 
+test('setStretch on a single-band product calls the status hook once, with the new range', async ({ page, servers, storeUrl }) => {
+  await openViewer(page, servers, await storeUrl('u16_plain'));
+  await waitForSettled(page);
+  const ranges = await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    viewer.setProduct(viewer.products.findIndex(({ id }) => id === 'band'));
+    const seen = [];
+    viewer.hooks.status = () => seen.push(viewer.stretchRange);
+    viewer.setStretch(0.1, 0.3);
+    return seen;
+  });
+  expect(ranges, 'stretchRange at each call of the status hook').toEqual([[0.1, 0.3]]);
+});
+
 test('playback is starting or playing after play and paused after pause, and data-playback follows', async ({ page, servers, storeUrl }) => {
   await openViewer(page, servers, await storeUrl('u16_plain'));
   const started = await page.evaluate(() => {
