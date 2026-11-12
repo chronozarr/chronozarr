@@ -362,3 +362,32 @@ test('the status hook is called when a frame starts loading and settles, when pl
   });
   expect(afterProduct, 'calls of the hook by setProduct').toBeGreaterThan(0);
 });
+
+test('a movie that runs out of frames after it started is rebuffering, and the Play button says playback resumes', async ({ page, servers, storeUrl }) => {
+  const url = await storeUrl('link_plain');
+  // Every level of timestep 6 is held: at 2 steps per second the movie starts with timesteps 1 to 4 and runs dry at 5.
+  const later = await holdRequests(page, /\/link_plain\/\d+\/data\/c\/6\//);
+  await openViewer(page, servers, url);
+  await page.evaluate(() => window.chronozarr.viewer.whenSettled());
+  await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    viewer.setSpeed(2);
+    viewer.play();
+  });
+  await page.waitForFunction(() => window.chronozarr.viewer.playback.stats.steps > 0, null, { timeout: 30_000 });
+  await page.waitForFunction(() => document.documentElement.dataset.playback === 'rebuffering', null, { timeout: 30_000 });
+  const during = await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    return { playback: viewer.status.playback, phase: viewer.playback.phase, t: viewer.t };
+  });
+  expect(during).toEqual({ playback: 'rebuffering', phase: 'rebuffering', t: 5 });
+  const button = page.locator('#play-btn');
+  await expect(button).toHaveAttribute('title', 'Buffering: playback resumes when the next frames are loaded (Space to cancel)');
+  await expect(button).toHaveAttribute('aria-label', 'Pause (Space)');
+  await expect(button).toHaveAttribute('aria-busy', 'true');
+  await expect(button).toHaveClass(/buffering/);
+
+  await page.evaluate(() => window.chronozarr.viewer.pause());
+  await later.release();
+  expect((await readStatus(page)).playback).toBe('paused');
+});

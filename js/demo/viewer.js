@@ -977,12 +977,12 @@ class Viewer {
     return frame === 'settled' || frame === 'unavailable' || frame === 'none';
   }
 
-  /** The playback of the status, from the getters of the open store's Playback; 'paused' while no store is open. */
+  /**
+   * The playback of the status: the phase of the open store's Playback; 'paused' while no store is open, and in the
+   * moment of an open between the store and its Playback.
+   */
   #playbackPhase() {
-    const playback = this.store ? this.#playback : null;
-    if (!playback?.playing) return 'paused';
-    if (!playback.buffering) return 'playing';
-    return playback.stats.firstStepAt === null ? 'starting' : 'rebuffering';
+    return (this.store ? this.#playback?.phase : null) ?? 'paused';
   }
 
   /**
@@ -2812,7 +2812,11 @@ class Viewer {
     const { ahead, needed } = playback?.buffered ?? { ahead: 0, needed: 0 };
     const text = buffering ? `buffering ${ahead} / ${needed}` : '';
     if (hint.textContent !== text) hint.textContent = text;
-    if (buffering) button.title = 'Buffering: playback starts when the next frames are loaded (Space to cancel)';
+    if (buffering) {
+      // Before the first step the movie starts; after it ran out of frames it resumes.
+      const wait = playback.phase === 'rebuffering' ? 'resumes' : 'starts';
+      button.title = `Buffering: playback ${wait} when the next frames are loaded (Space to cancel)`;
+    }
     if (!playing) this.#stopBufferPumps();
     this.#updateSpeedUi();
     this.#publishStatus();
