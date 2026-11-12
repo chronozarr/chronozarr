@@ -313,10 +313,11 @@ class Viewer {
    *   `startTime`: where to start in time when `viewSearch` names no timestep (start-time.js); without it, the first timestep.
    */
   async loadStore(url, options = {}) {
-    // 1. End the previous session. The session moves first, so that the status that #endSession publishes on its way
-    // already says that a store is opening, never that one is open with no store. An open that was waiting for its
-    // first frame wakes up after this call has returned at its first await, and by then the generation below says that
-    // it was superseded.
+    // 1. End the previous session. The session moves first and #endSession detaches the store before anything else, so
+    // that every status published on the way says that a store is opening and finds `viewer.store` null: never a status
+    // that says opening while `viewer.store` still holds the previous store. An open that was waiting for its first
+    // frame wakes up after this call has returned at its first await, and by then the generation below says that it was
+    // superseded.
     this.#session.send('open');
     this.#endSession();
     const generation = ++this.#storeGeneration;
@@ -452,7 +453,10 @@ class Viewer {
    * and the timeline its ticks until the next store draws.
    */
   #endSession() {
-    // No store is open from here on: what is published below (pausing publishes) has no frame.
+    // No store is open from here on: what is published below (pausing publishes) has no store and no frame. The store
+    // is detached first and closed near the end, after the work that still holds its requests has stopped.
+    const store = this.store;
+    this.store = null;
     this.#frameOutcome = 'none';
     // A click being inspected drops its result once the token has moved on.
     ++this.#inspectRequest;
@@ -484,8 +488,7 @@ class Viewer {
     for (const resolve of this.#painted.splice(0)) resolve();
     this.#updateSidebar(null);
     this.closeInspector();
-    this.store?.close();
-    this.store = null;
+    store?.close();
     this.#updatePlayUi();
     this.#updateFrameDate([]);
     this.#publishStatus();

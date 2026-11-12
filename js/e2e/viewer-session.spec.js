@@ -237,6 +237,22 @@ test('a switch while a movie plays keeps the progress bar of the open, and the n
   expect(await page.evaluate(() => window.chronozarr.viewer.playback.playing)).toBe(false);
 });
 
+test('a switch while a movie plays shows no store from the first status that is not open', async ({ page, servers, storeUrl }) => {
+  await openAt(page, servers, await storeUrl('u16_sharded'));
+  const next = await storeUrl('u16_plain');
+  await page.evaluate(() => window.chronozarr.viewer.play());
+  await page.waitForFunction(() => window.chronozarr.viewer.playback.stats.steps >= 2);
+  const records = await page.evaluate(async (url) => {
+    const { viewer } = window.chronozarr;
+    const log = [];
+    viewer.hooks = { status: () => log.push([viewer.status.store, viewer.store === null]) };
+    await viewer.loadStore(url);
+    return log;
+  }, next);
+  for (const [store, noStore] of records) expect(noStore, `viewer.store is null exactly when the status store is not open (status store ${store})`).toBe(store !== 'open');
+  expect(records.map(([store]) => store)).toContain('opening');
+});
+
 test('the progress bar of a load during playback fades while the movie goes on', async ({ page, servers, storeUrl }) => {
   await openAt(page, servers, await storeUrl('u16_plain'));
   const level1 = await holdRequests(page, /\/u16_plain\/1\/data\/c\//);
