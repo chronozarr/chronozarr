@@ -331,6 +331,8 @@ class Viewer {
       store ??= await openStore(url, { fetch: options.fetch, maxCacheBytes: options.maxCacheBytes, totalBytes: options.totalBytes, workers: options.workers });
       checkUniformChunks(store);
     } catch (error) {
+      // A store that this call opened and then refused is closed here: nothing else holds it or its decoder lease.
+      if (store !== null && store !== options.store) store.close();
       const failure = await explainOpenError(error, { url });
       if (generation === this.#storeGeneration) {
         this.#session.send('failed');
