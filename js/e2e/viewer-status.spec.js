@@ -72,6 +72,13 @@ const recordStatusHook = (page) =>
     viewer.hooks.status = () => window.statusCalls.push(viewer.status);
   });
 
+/**
+ * Pause the installed page clock: from here no timer or animation frame runs unless the test runs the clock. The clock
+ * goes on while this call travels to the page, and pauseAt cannot go back in time, so it pauses a second ahead; the
+ * timers due in that second run on the way.
+ */
+const pauseClock = async (page) => page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1000);
+
 /** Wait for `count` animation frames of the page. */
 const frames = (page, count) =>
   page.evaluate(async (n) => {
@@ -90,7 +97,9 @@ test('after a store opens it is open, settled and paused, the attributes say so,
 test('a step to a timestep whose chunks are held loads until they arrive, and whenSettled waits for it', async ({ page, servers, storeUrl }) => {
   const url = await storeUrl('u16_plain');
   const chunks = await holdRequests(page, /\/u16_plain\/\d+\/data\/c\/3\//);
+  await page.clock.install();
   await openViewer(page, servers, url);
+  await pauseClock(page);
   const right = await page.evaluate(() => {
     const { viewer } = window.chronozarr;
     viewer.goToTime(3);
@@ -98,12 +107,14 @@ test('a step to a timestep whose chunks are held loads until they arrive, and wh
   });
   expect(right, 'the frame right after the call').toBe('loading');
   await startSettledWait(page);
-  // Past the end of the scrub that a manual step starts (300 ms) and several frames.
-  await page.waitForTimeout(500);
+  // Past the end of the scrub that a manual step starts (300 ms) and many animation frames.
+  await page.clock.runFor(500);
+  await expect.poll(() => chunks.held.length, 'the chunks of timestep 3 are asked for').toBeGreaterThan(0);
   expect((await readStatus(page)).frame, 'the frame while the chunks are held').toBe('loading');
   expect((await readAttributes(page)).frame).toBe('loading');
   expect(await page.evaluate(() => window.settled), 'whenSettled while the chunks are held').toBe('pending');
 
+  await page.clock.resume();
   await chunks.release();
   await page.waitForFunction(() => window.settled !== 'pending');
   const settled = await page.evaluate(() => window.settled);
@@ -132,10 +143,16 @@ test('a zoom to a finer level whose chunks are held loads while paintedT still e
   expect(await page.evaluate(() => window.settled)).toEqual(expect.objectContaining({ frame: 'settled', level: 0, shownT: 0 }));
 });
 
-test('a fast scrub that draws a coarser level is a preview, and settles once the scrub ends without a call from the test', async ({ page, servers, storeUrl }) => {
+/**
+ * Open link_plain with its finer level held for every timestep but the first, so that a scrub can only draw the coarser
+ * one, and load the coarser level of every timestep. The clock is installed and, once the store has settled, paused:
+ * no timer or animation frame runs unless the test runs the clock, so the scrub lasts until the test ends it.
+ * Returns the hold on the finer level.
+ */
+async function openForScrub(page, servers, storeUrl, { beforePause = async () => {} } = {}) {
   const url = await storeUrl('link_plain');
-  // The finer level of every timestep but the first is held, so the scrub can only draw the coarser one.
   const level0 = await holdRequests(page, /\/link_plain\/0\/data\/c\/([1-9]|1[01])\//);
+  await page.clock.install();
   await openViewer(page, servers, url);
   await page.evaluate(async () => {
     const { viewer } = window.chronozarr;
@@ -143,20 +160,38 @@ test('a fast scrub that draws a coarser level is a preview, and settles once the
     await Promise.all(store.times.map((_, t) => store.ensureRaw(1, 0, 0, t)));
     await viewer.whenSettled();
   });
-  await recordStatusHook(page);
-  // Two steps less than 300 ms apart are a scrub (a single step is a tap).
+  await beforePause();
+  await pauseClock(page);
+  return level0;
+}
+
+/**
+ * Two steps less than 300 ms apart are a scrub (a single step is a tap). Start a whenSettled() wait right after them, run
+ * the clock for one animation frame, which draws the coarser level of timestep 2, and return the frame of the status then.
+ */
+async function scrubToPreview(page) {
   await page.evaluate(() => {
     const { viewer } = window.chronozarr;
     viewer.goToTime(1);
     viewer.goToTime(2);
   });
-  await page.waitForFunction(() => window.statusCalls.some((status) => status.frame === 'preview'));
+  await startSettledWait(page);
+  await page.clock.runFor(20);
+  return (await readStatus(page)).frame;
+}
+
+test('a fast scrub that draws a coarser level is a preview, and settles once the scrub ends without a call from the test', async ({ page, servers, storeUrl }) => {
+  const level0 = await openForScrub(page, servers, storeUrl);
+  await recordStatusHook(page);
+  expect(await scrubToPreview(page), 'the frame after the scrub draws').toBe('preview');
   const preview = await page.evaluate(() => window.statusCalls.find((status) => status.frame === 'preview'));
   expect(preview).toEqual(expect.objectContaining({ t: 2, shownT: 2, level: 1 }));
-  await startSettledWait(page);
   expect(await page.evaluate(() => window.settled), 'a preview is not an end state').toBe('pending');
 
   await level0.release();
+  // Past the end of the scrub (300 ms after its last step); then the clock flows again for the loads of the finer level.
+  await page.clock.runFor(400);
+  await page.clock.resume();
   await page.waitForFunction(() => window.settled !== 'pending', null, { timeout: 30_000 });
   expect(await page.evaluate(() => window.settled)).toEqual(expect.objectContaining({ frame: 'settled', t: 2, shownT: 2, level: 0 }));
 });
@@ -226,7 +261,7 @@ test('a load that starts within 200 ms of a complete frame keeps the progress ba
   await page.clock.install();
   await openViewer(page, servers, url);
   // From here no timer fires unless the test runs the clock: the fade of the bar is one of them.
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 10));
+  await pauseClock(page);
   await page.evaluate(() => {
     const { viewer } = window.chronozarr;
     viewer.goToTime(1);
