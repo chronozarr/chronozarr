@@ -894,37 +894,52 @@ def _classify_output(out_path: Path, work: Path) -> tuple[_OutputState, Path | N
     return _OutputState.OTHER, None
 
 
-def _unfinished_store_error(
-    out_path: Path, work: Path, staged: StagedReuse | None
-) -> FileExistsError:
+def _plan_digest(fingerprint: Any) -> str:
+    return hashlib.sha256(json.dumps(fingerprint, sort_keys=True).encode()).hexdigest()
+
+
+def _recorded_plan_digest(plan_file: Path) -> str | None:
+    try:
+        recorded = json.loads(plan_file.read_text())
+    except (OSError, ValueError):
+        return None
+    digest = recorded.get("sha256") if isinstance(recorded, dict) else None
+    return digest if isinstance(digest, str) else None
+
+
+def _unfinished_store_error(out_path: Path, work: Path, plan: Plan | None) -> FileExistsError:
     """The refusal for an unfinished store.
 
-    `work` is the work directory that records the encode. `staged` says whether the timesteps
-    staged in it can be reused, and is None when it holds none. A conversion still running in
-    another process leaves the same directory, so the message tells the user to delete only if
-    none is running.
+    `work` records the encode. `plan` is the requested conversion and is None when `work`
+    holds no staged timesteps. A conversion still running in another process leaves the same
+    directory, so the message tells the user to delete only if none is running.
     """
     message = (
         f"{out_path} holds an unfinished store: the run that wrote it was interrupted, or is "
         f"still running. If no conversion is running, delete {out_path} and "
     )
-    if staged is StagedReuse.REUSABLE:
+    if plan is None:
+        return FileExistsError(f"{message}{work}, then rerun the conversion.")
+    if _recorded_plan_digest(work / "plan.json") != _plan_digest(plan.source.fingerprint()):
+        return FileExistsError(
+            f"{message}rerun without --resume and set --work-dir to a new directory. "
+            f"Keep the staged timesteps in {work}."
+        )
+    if plan.source.staged_reuse is StagedReuse.REUSABLE:
         return FileExistsError(
             f"{message}rerun with --resume --work-dir {work} to reuse the timesteps staged "
             f"in {work}."
         )
-    message = f"{message}{work}, then rerun the conversion"
-    if staged is None:
-        return FileExistsError(f"{message}.")
     return FileExistsError(
-        f"{message}: the timesteps staged in {work} cannot be reused for this source."
+        f"{message}{work}, then rerun the conversion: the timesteps staged in {work} "
+        "cannot be reused for this source."
     )
 
 
 def _check_work_dir(work: Path, plan: Plan, resume: bool) -> None:
     plan_file = work / "plan.json"
-    fingerprint = json.dumps(plan.source.fingerprint(), sort_keys=True)
-    digest = hashlib.sha256(fingerprint.encode()).hexdigest()
+    fingerprint = plan.source.fingerprint()
+    digest = _plan_digest(fingerprint)
     if work.exists() and any(work.iterdir()):
         if not resume:
             reuse = plan.source.staged_reuse
@@ -943,15 +958,15 @@ def _check_work_dir(work: Path, plan: Plan, resume: bool) -> None:
                 f"{work} holds timesteps staged by an earlier run. Pass --resume to reuse them, "
                 "or delete the directory to start over"
             )
-        recorded = json.loads(plan_file.read_text()) if plan_file.is_file() else {}
-        if recorded.get("sha256") != digest:
+        recorded_digest = _recorded_plan_digest(plan_file)
+        if recorded_digest != digest:
             raise ValueError(
                 f"{work} was staged for a different input or options (plan hash "
-                f"{str(recorded.get('sha256'))[:12]} vs {digest[:12]}); delete it or rerun "
+                f"{str(recorded_digest)[:12]} vs {digest[:12]}); delete it or rerun "
                 "without --resume in a fresh work directory"
             )
     work.mkdir(parents=True, exist_ok=True)
-    plan_file.write_text(json.dumps({"sha256": digest, "plan": json.loads(fingerprint)}))
+    plan_file.write_text(json.dumps({"sha256": digest, "plan": fingerprint}))
 
 
 def _stage(
@@ -1171,10 +1186,9 @@ def convert(
         )
     if unfinished_work is not None and not any(unfinished_work.glob("t*.npy")):
         raise _unfinished_store_error(out_path, unfinished_work, None)
-    # With timesteps staged, planning comes before the refusal of an unfinished output: only the
-    # planned source says whether they can be reused. It plans without `resume` then, so that a
-    # source that cannot reuse them gets that refusal, which names the store, and not the
-    # refusal of the flag.
+    # With timesteps staged, plan before refusing an unfinished output so the advice can check
+    # which plan produced them. Plan without `resume` in this case so the refusal names the
+    # unfinished store even when the source itself does not support resume.
     try:
         plan = plan_conversion(
             source,
@@ -1202,7 +1216,7 @@ def convert(
             exc.wrote_manifest(_write_draft(exc.draft, Path(write_manifest_to)))
         raise
     if unfinished_work is not None:
-        raise _unfinished_store_error(out_path, unfinished_work, plan.source.staged_reuse)
+        raise _unfinished_store_error(out_path, unfinished_work, plan)
     bands = list(plan.source.info.bands)
     if band_roles:
         bands = list(assign_roles(bands, band_roles))

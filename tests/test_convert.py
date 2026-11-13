@@ -1221,6 +1221,33 @@ def test_a_killed_conversion_of_a_zarr_source_says_to_delete_the_store_and_its_w
     assert stored(out).shape == truth.shape
 
 
+@pytest.mark.parametrize("new_source", ["geotiff", "zarr"])
+def test_an_unfinished_store_with_a_different_input_keeps_its_staged_timesteps(
+    tmp_path, unfinished_encode, new_source
+):
+    manifest, out, work = copy_unfinished_encode(tmp_path, unfinished_encode)
+    options: dict[str, Any] = dict(OPTIONS)
+    if new_source == "geotiff":
+        tif = write_tif(tmp_path / "other.tif", make_truth(1, 1, 8, 8)[0])
+        source = write_csv(tmp_path / "other.csv", [tif], dates=DATES[:1])
+    else:
+        source = tmp_path / "other.zarr"
+        attribute_less_dataset(source, consolidated=False)
+        options["crs"] = CRS
+
+    with pytest.raises(FileExistsError) as error:
+        convert(source, out, **options)
+    assert str(error.value) == UNFINISHED.format(out=out) + (
+        "rerun without --resume and set --work-dir to a new directory. "
+        f"Keep the staged timesteps in {work}."
+    )
+
+    out.rename(tmp_path / "interrupted")
+    report = convert(manifest, out, resume=True, work_dir=work, **OPTIONS)
+    assert (report.n_staged, report.n_reused) == (0, 1)
+    np.testing.assert_array_equal(stored(out), make_truth(1, 1, 8, 8))
+
+
 def test_the_record_names_the_output_however_its_path_is_written(
     tmp_path, unfinished_encode, monkeypatch
 ):
