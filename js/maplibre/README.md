@@ -100,6 +100,8 @@ A removed layer cannot be added again. The reader ends an idle worker pool after
 
 These members are read-only: `opened`, `store`, `times`, `bounds`, `bandNames`, `products`, `t`, `product`, `colormap`, `opacity`, `lod` and `stats`. `opened` is a promise of the open store. `stats` counts GPU slots, uploads, evictions, meshes and pending loads. `stats.state` is `'loading'` while the view needs data and `'ready'` once it has it, `'failed'` after a fatal `error`, and `'removed'` after `remove()`. A layer whose open failed holds no store: `store`, `times`, `bounds`, `bandNames` and `products` are `null`. A layer that opened and then failed to set up the GPU keeps its store, so `getValueAt` still answers; adding it again sets up the GPU on that same store.
 
+If `onAdd` retries a failed store open, read `layer.opened` again for the new attempt. Each promise belongs to the attempt that created it.
+
 ### Caching and prefetch
 
 A time change never refetches what the reader has cached. The GPU pool keeps recently shown chunks, and the reader cache (`layer.store`) holds decoded chunks. While a new timestep loads, the previous one stays on screen.

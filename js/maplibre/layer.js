@@ -181,6 +181,10 @@ export class ChronozarrLayer {
     this.#colormap = ChronozarrLayer.#checkColormap(colormap);
     this.#opacity = ChronozarrLayer.#checkOpacity(opacity);
     this.#stretchLo = stretchLo;
+    this.#newOpenPromise();
+  }
+
+  #newOpenPromise() {
     this.#opened = new Promise((resolve, reject) => {
       this.#resolveOpened = resolve;
       this.#rejectOpened = reject;
@@ -190,7 +194,7 @@ export class ChronozarrLayer {
 
   // ---- public API ----
 
-  /** Resolves with the ChronoStore once it is open (after the layer was added to a map); rejects if it cannot be used. */
+  /** Resolves with the ChronoStore once it is open; rejects if the attempt fails. A retry of the store open replaces the promise. */
   get opened() {
     return this.#opened;
   }
@@ -375,6 +379,7 @@ export class ChronozarrLayer {
     // While the store opens, the open in progress sets up the GPU with the map and context recorded here.
     if (phase === 'opening') return;
     if (phase === 'constructed' || (phase === 'failed' && this.#store === null)) {
+      if (phase === 'failed') this.#newOpenPromise();
       this.#phase.send('add');
       this.#open();
       return;

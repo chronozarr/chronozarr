@@ -77,6 +77,27 @@ test('a layer whose GPU setup fails while it opens holds no store, and the store
   assert.equal(close.mock.callCount(), 1, 'the store that was opened was closed');
 });
 
+test('a layer that retries its initial open gets a new promise and can read pixels', async (t) => {
+  t.mock.method(console, 'error', () => {});
+  const { layer, memory } = newLayer(t);
+  layer.onAdd(map, countingGl({ failFragment: true }).gl);
+  const first = layer.opened;
+  await assert.rejects(first, /shader compile failed/);
+  assert.equal(layer.stats.state, 'failed');
+
+  const opened = new Promise((resolve) => layer.on('open', resolve));
+  layer.onAdd(map, countingGl().gl);
+  const value = layer.getValueAt([0.5, 1.5]);
+  // Attach a rejection handler immediately so a failed regression is reported by the assertions below.
+  value.catch(() => {});
+  const { store } = await opened;
+  assert.equal(layer.store, store);
+  assert.equal(await layer.opened, store);
+  assert.equal((await value).bands[0].value, 1000);
+  assert.equal(rootReads(memory), 2);
+  assert.ok(layer.stats.slots > 0);
+});
+
 test('a layer that opened and then fails to set up the GPU keeps answering getValueAt from its store', async (t) => {
   t.mock.method(console, 'error', () => {});
   const { layer, errors } = newLayer(t);
