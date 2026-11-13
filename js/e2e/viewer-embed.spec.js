@@ -410,6 +410,31 @@ test.describe('postMessage', () => {
     expect((await received(page, 'chronozarr:time')).map((m) => m.data.t)).toEqual([3, 4, 5]);
   });
 
+  test('reports each cached seek and resolution change as soon as its frame is drawn', async ({ page, servers, stores, storeUrl }) => {
+    const store = await storeUrl('beyond_idle');
+    const frame = await openHost(page, servers, stores, viewerUrl(servers, store, { origin: hostOf(servers) }));
+    await waitForMessage(page, 'chronozarr:ready');
+    expect(await frame.evaluate(() => window.chronozarr.viewer.whenSettled())).toMatchObject({ t: 0, shownT: 0, level: 1 });
+    await frame.evaluate(async () => {
+      const { store } = window.chronozarr.viewer;
+      const reads = [];
+      for (const { lod, gridRows, gridCols } of store.levels) {
+        for (let row = 0; row < gridRows; row++) {
+          for (let col = 0; col < gridCols; col++) reads.push(store.ensureRaw(lod, row, col, 1));
+        }
+      }
+      await Promise.all(reads);
+    });
+
+    await send(page, { type: 'chronozarr:set', t: 1 });
+    await waitForMessage(page, 'chronozarr:time', { t: 1 });
+    expect(await frame.evaluate(() => window.chronozarr.viewer.whenSettled())).toMatchObject({ shownT: 1, frame: 'settled' });
+    await waitForMessage(page, 'chronozarr:status', { t: 1, shownT: 1, level: 1, frame: 'settled' });
+
+    await send(page, { type: 'chronozarr:set', zoom: 2 });
+    await waitForMessage(page, 'chronozarr:status', { t: 1, shownT: 1, level: 0, frame: 'settled' });
+  });
+
   test('set also changes the product, the band, the zoom and the centre; chronozarr:view reports the camera', async ({ page, servers, stores, storeUrl }) => {
     const store = await storeUrl(STORE);
     const frame = await openHost(page, servers, stores, viewerUrl(servers, store, { origin: hostOf(servers) }));

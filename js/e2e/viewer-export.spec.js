@@ -44,6 +44,39 @@ test('an export keeps its starting product even when the viewer changes products
   expect(result).toEqual({ beforeComplete: true, afterComplete: true, unchanged: true });
 });
 
+test('failure to create the export renderer leaves prefetch running', async ({ page, servers, storeUrl, consoleErrors }) => {
+  const store = await storeUrl('u16_plain');
+  await open(page, `${servers.appUrl}/demo/index.html?store=${encodeURIComponent(store)}`);
+  await page.locator('#export-btn').click();
+  await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    const getContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (kind, ...options) {
+      return kind === 'webgl2' && this !== viewer.canvas ? null : getContext.call(this, kind, ...options);
+    };
+    try {
+      document.getElementById('export-start').click();
+    } finally {
+      HTMLCanvasElement.prototype.getContext = getContext;
+    }
+  });
+  await expect(page.locator('#export-status')).toContainText('Export failed: Error: WebGL2 is not available');
+  const error = consoleErrors.findIndex((message) => message.includes('export failed: Error: WebGL2 is not available'));
+  expect(error).toBeGreaterThanOrEqual(0);
+  consoleErrors.splice(error, 1);
+  expect(await page.evaluate(() => window.chronozarr.viewer.status.exporting)).toBe(false);
+  await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    const prefetch = viewer.store.prefetch.bind(viewer.store);
+    viewer.store.prefetch = (...args) => {
+      window.prefetchResumed = true;
+      return prefetch(...args);
+    };
+    viewer.renderNow();
+  });
+  await page.waitForFunction(() => window.prefetchResumed);
+});
+
 test('switching datasets during recording fails the export with a visible explanation', async ({ page, servers, storeUrl, consoleErrors }) => {
   const first = await storeUrl('u16_plain');
   const second = await storeUrl('link_plain');

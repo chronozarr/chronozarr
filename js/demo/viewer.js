@@ -165,8 +165,8 @@ class Viewer {
   /**
    * What the embed bridge listens to (embed.js): ready() when a store has opened, time({t}) on a timestep change,
    * view() on a camera change, click({pixel, t, lod, info}) on a click inside the store, error({code, title, message}),
-   * status() when the store, frame, playback, export hold or notice code of `viewer.status` changes, and after a change
-   * of product, band, colormap, stretch, auto exposure or speed. The frame that counts is the outcome of the last render:
+   * status() when the store, frame outcome, displayed timestep or level, playback, export hold or notice code
+   * changes, and after a change of product, band, colormap, stretch, auto exposure or speed.
    * status() is not called when `status.frame` reads 'loading' only because a render is queued. Empty outside an embed.
    */
   hooks = {};
@@ -229,7 +229,7 @@ class Viewer {
   /** Who waits in whenSettled(); resolved with the status once nothing is pending. */
   #settledWaiters = [];
   /** The values the data-* attributes and the `status` hook were last given (#publishStatus). */
-  #published = { store: null, frame: null, playback: null, exporting: null, error: null };
+  #published = { store: null, frame: null, shownT: null, level: null, playback: null, exporting: null, error: null };
   /** The notice on screen: null, or {code, toast} for the error box (toast false) or the toast. */
   #notice = null;
   /** Who waits for the next complete frame (whenPainted, and the open's first-frame wait); all are let go when a session ends. */
@@ -319,8 +319,8 @@ class Viewer {
     // frame wakes up after this call has returned at its first await, and by then the generation below says that it was
     // superseded.
     this.#session.send('open');
-    this.#endSession();
     const generation = ++this.#storeGeneration;
+    this.#endSession();
     this.#hideError();
     this.#setProgress(0.02);
     const started = performance.now();
@@ -333,14 +333,7 @@ class Viewer {
     } catch (error) {
       // A store that this call opened and then refused is closed here: nothing else holds it or its decoder lease.
       if (store !== null && store !== options.store) store.close();
-      const failure = await explainOpenError(error, { url });
-      if (generation === this.#storeGeneration) {
-        this.#session.send('failed');
-        // The error box is shown before the status of the move is published, so that the status carries its code.
-        this.reportStoreOpenError(failure);
-        this.#setProgress(0);
-        this.#publishStatus();
-      }
+      await this.#failOpen(error, url, generation);
       throw error;
     }
     if (generation !== this.#storeGeneration) {
@@ -364,17 +357,59 @@ class Viewer {
     // A root read that the page started before this script loaded (early.js) took its round trip before `started`.
     this.#roundTripMs = Math.max(openMs, takeEarlyRootMs() ?? 0);
 
-    // 3. Start the session on the store.
-    this.store = store;
+    // 3. Set up the store and its renderer before publishing an open session.
+    try {
+      this.#initializeStore(store, options, startT);
+    } catch (error) {
+      if (this.store === store) this.#endSession();
+      else store.close();
+      await this.#failOpen(error, url, generation);
+      throw error;
+    }
     this.#session.send('opened');
-    // Nothing is on the canvas for this store until its first render says what is.
     this.#frameOutcome = 'loading';
-    this.#publishStatus();
+    this.#updatePlayUi();
+    if (generation !== this.#storeGeneration) return null;
+    this.#hook('ready');
+    if (generation !== this.#storeGeneration) return null;
+
+    // 4. Wait for the first frame: true once it is painted, false when it cannot be had, true too when a newer open
+    // ended this session (the generation tells that case apart).
+    const firstFrame = new Promise((resolve) => {
+      this.#painted.push(() => resolve(true));
+      this.#firstFrameUnavailable = () => resolve(false);
+    });
+    this.#beginView('open');
+    this.renderNow();
+    const painted = await firstFrame;
+    if (generation !== this.#storeGeneration) return null;
+    this.#firstFrameUnavailable = null;
+    if (painted) this.#setProgress(1);
+    this.syncUrl();
+    const { startedAt, coarseAt } = this.#viewTiming;
+    return {
+      openMs,
+      firstPaintMs: painted ? performance.now() - started : null,
+      coarseMs: coarseAt === null ? null : coarseAt - started,
+      coarseAfterMetadataMs: coarseAt === null ? null : coarseAt - startedAt,
+    };
+  }
+
+  async #failOpen(error, url, generation) {
+    const failure = await explainOpenError(error, { url });
+    if (generation !== this.#storeGeneration) return;
+    this.#session.send('failed');
+    this.#setProgress(0);
+    this.reportStoreOpenError(failure);
+  }
+
+  #initializeStore(store, options, startT) {
+    prepareMovieCache(store, this.renderer.limits.maxSize);
+    this.#configurePool(store);
+    this.store = store;
     store.evictionScore = (entry) => this.#storeScore(entry);
     this.bands = normalizeBands(store.attrs.bands);
     this.dtype = store.dtype;
-    prepareMovieCache(store, this.renderer.limits.maxSize);
-    this.#configurePool();
     this.#playback = this.#createPlayback();
     this.#movieMemo = null;
     // A canvas resize while the store opened asked the next prefetch to seek. An open that restores a camera has nothing
@@ -417,34 +452,11 @@ class Viewer {
     this.#buildTimeline();
     this.#updateTimeUi();
     this.#updateFrameDate([]);
-    this.#updatePlayUi();
     this.#updateMeta();
     this.#updateSidebar(null);
     this.closeInspector();
     $('click-hint').classList.remove('hidden');
     this.#updateGapToggle();
-    this.#hook('ready');
-
-    // 4. Wait for the first frame: true once it is painted, false when it cannot be had, true too when a newer open
-    // ended this session (the generation tells that case apart).
-    const firstFrame = new Promise((resolve) => {
-      this.#painted.push(() => resolve(true));
-      this.#firstFrameUnavailable = () => resolve(false);
-    });
-    this.#beginView('open');
-    this.renderNow();
-    const painted = await firstFrame;
-    if (generation !== this.#storeGeneration) return null;
-    this.#firstFrameUnavailable = null;
-    if (painted) this.#setProgress(1);
-    this.syncUrl();
-    const { startedAt, coarseAt } = this.#viewTiming;
-    return {
-      openMs,
-      firstPaintMs: painted ? performance.now() - started : null,
-      coarseMs: coarseAt === null ? null : coarseAt - started,
-      coarseAfterMetadataMs: coarseAt === null ? null : coarseAt - startedAt,
-    };
   }
 
   /**
@@ -782,19 +794,6 @@ class Viewer {
     const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.round(this.canvas.width * scale));
     canvas.height = Math.max(1, Math.round(this.canvas.height * scale));
-    const hold = { lod, cells: new Set(cells.map(([row, col]) => `${row}/${col}`)) };
-    this.#exportHold = hold;
-    this.#publishStatus();
-    clearTimeout(this.#prefetchTimer);
-    this.#prefetchTimer = 0;
-    this.#prefetchAbort?.abort();
-    this.#coarseLoop?.controller.abort();
-    this.#coarseLoop = null;
-    const renderer = new Renderer(canvas);
-    const first = store.levels[0];
-    const bytesPerSample = first.chunkBytes / (first.nBand * first.chunkWidth * first.chunkHeight);
-    const slots = renderer.planSlots(first.nBand, first.chunkWidth, first.chunkHeight, POOL_BUDGET_BYTES, Math.max(4, 2 * cells.length + 4), bytesPerSample, store.hasMask, store.compactCacheEnabled);
-    renderer.configure({ dtype: this.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots, hasMask: store.hasMask, compact: store.compactCacheEnabled });
     const frame = {
       width: canvas.width,
       height: canvas.height,
@@ -804,6 +803,24 @@ class Viewer {
       stretchLo: this.#stretchLo ?? 0,
       nodata: this.#nodata,
     };
+    const renderer = new Renderer(canvas);
+    try {
+      const first = store.levels[0];
+      const bytesPerSample = first.chunkBytes / (first.nBand * first.chunkWidth * first.chunkHeight);
+      const slots = renderer.planSlots(first.nBand, first.chunkWidth, first.chunkHeight, POOL_BUDGET_BYTES, Math.max(4, 2 * cells.length + 4), bytesPerSample, store.hasMask, store.compactCacheEnabled);
+      renderer.configure({ dtype: this.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots, hasMask: store.hasMask, compact: store.compactCacheEnabled });
+    } catch (error) {
+      renderer.dispose();
+      throw error;
+    }
+    const hold = { lod, cells: new Set(cells.map(([row, col]) => `${row}/${col}`)) };
+    this.#exportHold = hold;
+    clearTimeout(this.#prefetchTimer);
+    this.#prefetchTimer = 0;
+    this.#prefetchAbort?.abort();
+    this.#coarseLoop?.controller.abort();
+    this.#coarseLoop = null;
+    this.#publishStatus();
     const chunksFor = (t) => cells.flatMap(([row, col]) => [t].map((ct) => [row, col, ct]));
     const masksReady = (t) => !store.hasMask || cells.every(([row, col]) => store.hasCachedMask(lod, row, col, t));
     return {
@@ -1001,9 +1018,9 @@ class Viewer {
 
   /**
    * Publish what changed in the status: the data-store, data-frame and data-playback attributes of <html>, each written
-   * only when it differs from what was written last, and the `status` hook when the store, the frame, the playback,
-   * the export hold or the code of the notice changed. Then resolve whoever waits in whenSettled() if nothing is
-   * pending. data-frame is the outcome of the last render: it does not turn to 'loading' while a render is merely
+   * only when it differs from what was written last. Notify the `status` hook when the store, frame outcome,
+   * displayed timestep or level, playback, export hold or notice code changes. Resolve whenSettled() waiters once
+   * nothing is pending. data-frame is the outcome of the last render: it does not turn to 'loading' while a render is
    * queued, so a script that has just changed the view awaits whenSettled() rather than reading the attribute.
    * It runs at the end of every render: on a frame that changes nothing it costs a few comparisons.
    */
@@ -1011,11 +1028,13 @@ class Viewer {
     const published = this.#published;
     const store = this.#session.state;
     const frame = this.#frameOutcome;
+    const shownT = this.#shown?.t ?? null;
+    const level = this.#shown?.lod ?? null;
     const playback = this.#playbackPhase();
     const exporting = this.#exportHold !== null;
     const error = this.#notice === null ? null : this.#notice.code;
-    const changed = store !== published.store || frame !== published.frame || playback !== published.playback || exporting !== published.exporting || error !== published.error;
-    if (changed) {
+    const attributesChanged = store !== published.store || frame !== published.frame || playback !== published.playback;
+    if (attributesChanged) {
       const { dataset } = document.documentElement;
       if (store !== published.store) dataset.store = store;
       if (frame !== published.frame) dataset.frame = frame;
@@ -1023,6 +1042,10 @@ class Viewer {
       published.store = store;
       published.frame = frame;
       published.playback = playback;
+    }
+    if (attributesChanged || shownT !== published.shownT || level !== published.level || exporting !== published.exporting || error !== published.error) {
+      published.shownT = shownT;
+      published.level = level;
       published.exporting = exporting;
       published.error = error;
       this.#hook('status');
@@ -1537,13 +1560,13 @@ class Viewer {
     this.#prefetchAbort = null;
   }
 
-  #configurePool() {
-    const { store, renderer } = this;
+  #configurePool(store) {
+    const { renderer } = this;
     const first = store.levels[0];
     const wanted = store.levels.reduce((n, l) => n + l.gridRows * l.gridCols * l.nTime, 0);
     const bytesPerSample = first.chunkBytes / (first.nBand * first.chunkWidth * first.chunkHeight);
     const slots = renderer.planSlots(first.nBand, first.chunkWidth, first.chunkHeight, POOL_BUDGET_BYTES, wanted, bytesPerSample, store.hasMask, store.compactCacheEnabled);
-    renderer.configure({ dtype: this.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots, hasMask: store.hasMask, compact: store.compactCacheEnabled });
+    renderer.configure({ dtype: store.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots, hasMask: store.hasMask, compact: store.compactCacheEnabled });
     this.#maxVisibleCells = Math.floor(slots / 2);
   }
 

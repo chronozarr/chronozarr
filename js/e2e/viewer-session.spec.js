@@ -168,6 +168,51 @@ test.describe('an open that fails', () => {
   });
 });
 
+test.describe('a store whose chunks do not fit the GPU', () => {
+  test.use({ expectedErrors: /loadStore.*exceeds MAX_TEXTURE_SIZE/ });
+
+  test('settles as failed, shows the error, and can reopen the default dataset', async ({ page, servers, storeUrl }) => {
+    const good = await storeUrl('u16_plain');
+    const oversized = await storeUrl('u16_sharded');
+    await page.route('**/catalog.json', (route) => route.fulfill({ json: [{ name: 'Default', url: good }, { name: 'Oversized', url: oversized }] }));
+    await page.goto(`${servers.appUrl}/demo/index.html`);
+    await page.waitForFunction(() => window.chronozarr?.ready);
+    expect(await page.evaluate(() => window.chronozarr.ready)).toBeTruthy();
+    const size = await page.evaluate(() => window.chronozarr.viewer.renderer.limits.maxSize * 2);
+    await page.route(`${oversized}zarr.json`, async (route) => {
+      const response = await route.fetch();
+      const root = await response.json();
+      for (const [key, array] of Object.entries(root.consolidated_metadata.metadata)) {
+        if (!key.endsWith('/data')) continue;
+        for (const shape of [array.chunk_grid.configuration.chunk_shape, array.codecs[0].configuration.chunk_shape]) {
+          shape[2] = size;
+          shape[3] = size;
+        }
+      }
+      await route.fulfill({ response, json: root });
+    });
+    await page.evaluate(() => {
+      const { viewer } = window.chronozarr;
+      window.storeStates = [];
+      viewer.hooks.status = () => window.storeStates.push(viewer.status.store);
+    });
+
+    await page.locator('#catalog-select').selectOption(oversized);
+    await page.waitForFunction(() => window.chronozarr.viewer.status.store !== 'opening');
+    expect(await page.evaluate(() => window.chronozarr.ready)).toBeUndefined();
+    expect(await page.evaluate(() => window.chronozarr.viewer.status)).toMatchObject({ store: 'failed', frame: 'none', error: { code: 'store_open_failed' } });
+    expect(await waitForSettled(page)).toMatchObject({ store: 'failed', frame: 'none' });
+    expect(await page.evaluate(() => ({ store: window.chronozarr.viewer.store, states: window.storeStates }))).toEqual({ store: null, states: ['opening', 'failed'] });
+    await expect(page.locator('#error-message')).toContainText('exceeds MAX_TEXTURE_SIZE');
+    await expect(page.locator('#play-btn')).toBeDisabled();
+    await expect(page.locator('#export-btn')).toBeDisabled();
+
+    await page.locator('#open-default-dataset').click();
+    expect(await waitForSettled(page)).toMatchObject({ store: 'open', frame: 'settled' });
+    await expect(page.locator('#error-overlay')).not.toHaveClass(/visible/);
+  });
+});
+
 /** The URLs of the requests the page sends from now on whose URL matches `pattern`, each once. */
 function recordRequests(page, pattern) {
   const urls = new Set();

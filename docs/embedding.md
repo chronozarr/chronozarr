@@ -202,7 +202,7 @@ The viewer sends `view` when the camera has been still for 120 ms after a pan, z
 
 #### `chronozarr:status`
 
-The viewer sends `status` when the store, the frame, playback, an export or the error on screen changes. It also sends it after a change of product, band, colormap, display range or speed, including one made with the keys inside the iframe. It sends `status` only after `ready`.
+The viewer sends `status` when the store, frame outcome, displayed timestep or level, playback, an export or the error on screen changes. It also sends it after a change of product, band, colormap, display range or speed, including one made with the keys inside the iframe. It sends `status` only after `ready`.
 
 ```json
 {
