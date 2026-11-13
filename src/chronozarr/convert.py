@@ -190,6 +190,7 @@ import hashlib
 import json
 import shutil
 import time
+import uuid
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -299,7 +300,7 @@ from chronozarr._convert_xarray import (
     _parse_dims,
 )
 from chronozarr.bands import assign_roles
-from chronozarr.encode import EncodeReport, encode
+from chronozarr.encode import _ENCODING_RUN_ATTR, EncodeReport, encode
 from chronozarr.icechunk import IcechunkInput, identity_note
 
 # Raw input bytes per second through `encode()` (spill, pyramid, zstd level 5, write). Measured
@@ -826,78 +827,71 @@ class _OutputState(enum.Enum):
 
     FREE = "absent or empty"
     FINISHED_STORE = "finished store"  # a root zarr.json whose attributes have a chronozarr block
-    # The work directory records that a conversion began to encode into this directory, and the
-    # root is still the bare group that an encode starts with.
+    # The root still carries the run ID recorded in the conversion's work directory.
     UNFINISHED_STORE = "unfinished store"
     OTHER = "something else"
 
 
-# The file in a work directory that names the output a conversion began to encode into. The
-# work directory is removed when the conversion succeeds, so the file outlives only an encode
-# that did not finish.
+# The work directory records the intended path and run ID. The ID appears on the output
+# only when the encoder creates its root. Neither record alone identifies an unfinished output.
 _ENCODING_MARKER = "encoding"
 
 
-def _record_encode_start(work: Path, out_path: Path) -> None:
-    (work / _ENCODING_MARKER).write_text(str(out_path.resolve()))
-
-
-def _encode_was_started(work: Path, out_path: Path) -> bool:
-    """Whether `work` records that a conversion began to encode into `out_path`."""
-    try:
-        recorded = (work / _ENCODING_MARKER).read_text()
-    except OSError:
-        return False
-    return recorded == str(out_path.resolve())
+def _record_encode_start(work: Path, out_path: Path) -> str:
+    run = uuid.uuid4().hex
+    record = {"output": str(out_path.resolve()), "run": run}
+    (work / _ENCODING_MARKER).write_text(json.dumps(record), encoding="utf-8")
+    return run
 
 
 def _default_work_dir(out_path: Path) -> Path:
     return out_path.parent / f"{out_path.name}.convert-work"
 
 
-def _encoding_work_dir(out_path: Path, work: Path) -> Path | None:
-    """The work directory that records an encode into `out_path`, or None when none does.
+def _encoding_work_dir(out_path: Path, work: Path, run: str) -> Path | None:
+    """Find the work directory for the run recorded on this output's root.
 
     That is `work`, or else the default work directory of `out_path`: a rerun that names a fresh
     work directory still finds the record of a run that named none.
     """
+    expected = {"output": str(out_path.resolve()), "run": run}
     for candidate in (work, _default_work_dir(out_path)):
-        if _encode_was_started(candidate, out_path):
+        try:
+            recorded = json.loads((candidate / _ENCODING_MARKER).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if recorded == expected:
             return candidate
     return None
 
 
-def _classify_output(out_path: Path, encode_recorded: bool) -> _OutputState:
-    """Classify `out_path` for a conversion. Nothing is opened as a store.
-
-    A directory is an unfinished store only on the conversion's own record: a work directory
-    says that an encode into `out_path` began (`encode_recorded`), and the root `zarr.json` is
-    what `encode()` writes first and completes last, a Zarr v3 group with no attributes and no
-    consolidated metadata. The shape of a directory alone never makes it one, so a dataset that
-    merely looks like a store being written keeps the message for a path that is not empty.
-    """
+def _classify_output(out_path: Path, work: Path) -> tuple[_OutputState, Path | None]:
+    """Classify the output and return its work directory only when the two run IDs match."""
     if not out_path.exists() or not any(out_path.iterdir()):
-        return _OutputState.FREE
+        return _OutputState.FREE, None
     try:
         root = json.loads((out_path / "zarr.json").read_text())
     except (OSError, ValueError):
-        return _OutputState.OTHER
+        return _OutputState.OTHER, None
     if not isinstance(root, dict):
-        return _OutputState.OTHER
+        return _OutputState.OTHER, None
     attributes = root.get("attributes", {})
     if not isinstance(attributes, dict):
-        return _OutputState.OTHER
+        return _OutputState.OTHER, None
     if "chronozarr" in attributes:
-        return _OutputState.FINISHED_STORE
-    is_bare_group = (
+        return _OutputState.FINISHED_STORE, None
+    run = attributes.get(_ENCODING_RUN_ATTR)
+    if (
         root.get("zarr_format") == 3
         and root.get("node_type") == "group"
-        and not attributes
+        and isinstance(run, str)
+        and len(attributes) == 1
         and root.get("consolidated_metadata") is None
-    )
-    if is_bare_group and encode_recorded:
-        return _OutputState.UNFINISHED_STORE
-    return _OutputState.OTHER
+    ):
+        recorded = _encoding_work_dir(out_path, work, run)
+        if recorded is not None:
+            return _OutputState.UNFINISHED_STORE, recorded
+    return _OutputState.OTHER, None
 
 
 def _unfinished_store_error(
@@ -1167,17 +1161,14 @@ def convert(
             )
     out_path = Path(out)
     work = Path(work_dir) if work_dir is not None else _default_work_dir(out_path)
-    encoding_work = None if dry_run else _encoding_work_dir(out_path, work)
-    output = (
-        _OutputState.FREE if dry_run else _classify_output(out_path, encoding_work is not None)
+    output, unfinished_work = (
+        (_OutputState.FREE, None) if dry_run else _classify_output(out_path, work)
     )
     if output in (_OutputState.FINISHED_STORE, _OutputState.OTHER):
         raise FileExistsError(
             f"{out_path} already exists and is not empty; stores are immutable, write to a "
             "new path"
         )
-    # The work directory of the unfinished store at `out_path`; None when the output is free.
-    unfinished_work = encoding_work if output is _OutputState.UNFINISHED_STORE else None
     if unfinished_work is not None and not any(unfinished_work.glob("t*.npy")):
         raise _unfinished_store_error(out_path, unfinished_work, None)
     # With timesteps staged, planning comes before the refusal of an unfinished output: only the
@@ -1274,7 +1265,7 @@ def convert(
         read_s = time.perf_counter() - started
 
         started = time.perf_counter()
-        _record_encode_start(work, out_path)
+        run = _record_encode_start(work, out_path)
         report = encode(
             _staged_timesteps(plan, work),
             out_path,
@@ -1284,6 +1275,7 @@ def convert(
             transform=info.grid.transform,
             nodata=info.nodata,
             mask=_staged_masks(plan, work) if info.mask else None,
+            _encoding_run=run,
             **encode_options,
         )
         encode_s = time.perf_counter() - started
