@@ -74,8 +74,15 @@ const CODEC_EDITS = {
     to: `retryableCodec('./codecs/${name}.js',`,
   })),
   'chronozarr/decode-worker.js': [
-    { from: 'zarrita = await import(message.zarritaUrl);', to: 'zarrita = bundledZarrita;', head: "import * as bundledZarrita from '../vendor/zarrita/codecs.js';\n" },
-    { from: "new URL('../vendor/zarrita/codecs.js', import.meta.url).href", to: "'bundled'" },
+    {
+      from: "const builtinRegistryUrl = new URL('../vendor/zarrita/codecs.js', import.meta.url).href;\n",
+      to: '',
+    },
+    {
+      from: 'zarrita = await import(message.zarritaUrl);\n      if (message.zarritaUrl === builtinRegistryUrl) zarrita = { registry: zarrita.registry, codecLoaders };',
+      to: 'zarrita = { registry: bundledRegistry, codecLoaders };',
+      head: "import { registry as bundledRegistry } from '../vendor/zarrita/codecs.js';\n",
+    },
   ],
   'chronozarr/decoder.js': [{ from: "new URL('../vendor/zarrita/codecs.js', import.meta.url).href", to: "'bundled'" }],
 };
