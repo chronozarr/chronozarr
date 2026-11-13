@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { GIFEncoder, applyPalette, quantize } from '../vendor/gifenc.esm.js';
-import { canExport, exportFilename, flipRows, gifDelayMs, paletteSampleTimes, pickVideoMimeType, subsamplePixels, videoBitrate } from '../demo/export.js';
+import { canExport, exportFilename, exportLoop, exportPanelView, flipRows, gifDelayMs, paletteSampleTimes, pickVideoMimeType, subsamplePixels, videoBitrate } from '../demo/export.js';
 
 test('gifDelayMs rounds to whole centiseconds and never goes below 20 ms', () => {
   assert.equal(gifDelayMs(1), 1000);
@@ -86,4 +86,118 @@ test('the vendored GIF encoder writes a looping GIF89a with the frames, palette 
   assert.ok(text.includes('NETSCAPE2.0'), 'loop extension');
   assert.equal(text.split('\x21\xf9\x04').length - 1, frames.length, 'one graphic control extension per frame');
   assert.ok(bytes.length < 400, `tiny flat frames compress to ${bytes.length} bytes`);
+});
+
+test('a running export that has reported no progress shows Cancel, hides Start and Download, and says it is preparing', () => {
+  const view = exportPanelView('running', { stage: 'preparing', done: 0, total: 0, format: 'gif' });
+  assert.deepEqual(view, { startHidden: true, cancelHidden: false, download: null, status: 'Preparing…', fraction: 0 });
+});
+
+test('a running export shows the text of its stage and the fraction done', () => {
+  const running = (stage, format) => exportPanelView('running', { stage, done: 3, total: 12, format });
+  assert.deepEqual(running('loading', 'mp4'), { startHidden: true, cancelHidden: false, download: null, status: 'Loading: 3 of 12', fraction: 0.25 });
+  assert.equal(running('recording', 'webm').status, 'Recording: 3 of 12');
+  assert.equal(running('encoding', 'gif').status, 'Encoding GIF: 3 of 12');
+  assert.equal(running('recording', 'webm').fraction, 0.25);
+});
+
+test('a finished export offers the download with its file name and says how it went', () => {
+  const view = exportPanelView('done', {
+    text: 'Done in 2.1 s · 1.4 MB · 800×600 · 4 frames',
+    href: 'blob:http://localhost/abc',
+    filename: 'chronozarr-a-b-2015-01-to-2015-04.gif',
+  });
+  assert.deepEqual(view, {
+    startHidden: false,
+    cancelHidden: true,
+    download: { href: 'blob:http://localhost/abc', filename: 'chronozarr-a-b-2015-01-to-2015-04.gif', text: 'Download chronozarr-a-b-2015-01-to-2015-04.gif' },
+    status: 'Done in 2.1 s · 1.4 MB · 800×600 · 4 frames',
+    fraction: 1,
+  });
+});
+
+test('a cancelled or failed export shows Start again, no download and an empty bar', () => {
+  assert.deepEqual(exportPanelView('cancelled', {}), { startHidden: false, cancelHidden: true, download: null, status: 'Cancelled.', fraction: 0 });
+  assert.deepEqual(exportPanelView('failed', { message: 'Error: boom' }), { startHidden: false, cancelHidden: true, download: null, status: 'Export failed: Error: boom', fraction: 0 });
+});
+
+test('before any export the panel shows Start and nothing else', () => {
+  assert.deepEqual(exportPanelView('idle', {}), { startHidden: false, cancelHidden: true, download: null, status: '', fraction: 0 });
+});
+
+test('a refusal notice replaces the status text and leaves the controls of the state as they are', () => {
+  const view = exportPanelView('idle', { notice: 'No dataset is open.' });
+  assert.deepEqual(view, { startHidden: false, cancelHidden: true, download: null, status: 'No dataset is open.', fraction: 0 });
+  const done = exportPanelView('done', { text: 'Done in 1.0 s', href: 'blob:x', filename: 'f.gif', notice: 'The dataset changed. Check the range and start again.' });
+  assert.equal(done.status, 'The dataset changed. Check the range and start again.');
+  assert.equal(done.download.href, 'blob:x');
+  assert.equal(done.startHidden, false);
+});
+
+function fakeRecorderEnvironment({ onStop }) {
+  class FakeMediaRecorder {
+    static isTypeSupported(type) {
+      return type === 'video/webm';
+    }
+
+    state = 'inactive';
+    mimeType = 'video/webm';
+
+    start() {
+      this.state = 'recording';
+    }
+
+    stop() {
+      this.state = 'inactive';
+      onStop();
+      queueMicrotask(() => this.onstop());
+    }
+  }
+  const track = { requestFrame() {}, stop() {} };
+  const stream = { getVideoTracks: () => [track], getTracks: () => [track] };
+  const session = {
+    canvas: { width: 16, height: 16, captureStream: () => stream },
+    fits: () => false,
+    isReady: () => true,
+    prepare: async () => {},
+    render: () => true,
+    close() {},
+  };
+  const viewer = {
+    store: { url: 'http://localhost/stores/a/b', times: [0, 1, 2] },
+    timeLabel: (t) => `t${t}`,
+    pause() {},
+    createExportSession: () => session,
+  };
+  return { FakeMediaRecorder, viewer };
+}
+
+async function withBrowserGlobals(FakeMediaRecorder, body) {
+  const before = { MediaRecorder: globalThis.MediaRecorder, location: globalThis.location };
+  globalThis.MediaRecorder = FakeMediaRecorder;
+  globalThis.location = { href: 'http://localhost/demo/index.html' };
+  try {
+    return await body();
+  } finally {
+    globalThis.MediaRecorder = before.MediaRecorder;
+    globalThis.location = before.location;
+  }
+}
+
+test('an export cancelled while the recorder finishes the file rejects with an AbortError instead of returning the file', async () => {
+  const controller = new AbortController();
+  const { FakeMediaRecorder, viewer } = fakeRecorderEnvironment({ onStop: () => controller.abort() });
+  await withBrowserGlobals(FakeMediaRecorder, () =>
+    assert.rejects(
+      exportLoop(viewer, { format: 'webm', from: 1, to: 1, stepsPerSecond: 1000, signal: controller.signal }),
+      (error) => error.name === 'AbortError',
+    ),
+  );
+});
+
+test('an export that is not cancelled returns its file when the recorder finishes', async () => {
+  const { FakeMediaRecorder, viewer } = fakeRecorderEnvironment({ onStop() {} });
+  const result = await withBrowserGlobals(FakeMediaRecorder, () => exportLoop(viewer, { format: 'webm', from: 1, to: 1, stepsPerSecond: 1000 }));
+  assert.equal(result.frames, 1);
+  assert.equal(result.filename, 'chronozarr-a-b-t1-to-t1.webm');
 });

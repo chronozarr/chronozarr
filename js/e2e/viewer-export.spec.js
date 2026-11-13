@@ -44,6 +44,39 @@ test('an export keeps its starting product even when the viewer changes products
   expect(result).toEqual({ beforeComplete: true, afterComplete: true, unchanged: true });
 });
 
+test('failure to create the export renderer leaves prefetch running', async ({ page, servers, storeUrl, consoleErrors }) => {
+  const store = await storeUrl('u16_plain');
+  await open(page, `${servers.appUrl}/demo/index.html?store=${encodeURIComponent(store)}`);
+  await page.locator('#export-btn').click();
+  await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    const getContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (kind, ...options) {
+      return kind === 'webgl2' && this !== viewer.canvas ? null : getContext.call(this, kind, ...options);
+    };
+    try {
+      document.getElementById('export-start').click();
+    } finally {
+      HTMLCanvasElement.prototype.getContext = getContext;
+    }
+  });
+  await expect(page.locator('#export-status')).toContainText('Export failed: Error: WebGL2 is not available');
+  const error = consoleErrors.findIndex((message) => message.includes('export failed: Error: WebGL2 is not available'));
+  expect(error).toBeGreaterThanOrEqual(0);
+  consoleErrors.splice(error, 1);
+  expect(await page.evaluate(() => window.chronozarr.viewer.status.exporting)).toBe(false);
+  await page.evaluate(() => {
+    const { viewer } = window.chronozarr;
+    const prefetch = viewer.store.prefetch.bind(viewer.store);
+    viewer.store.prefetch = (...args) => {
+      window.prefetchResumed = true;
+      return prefetch(...args);
+    };
+    viewer.renderNow();
+  });
+  await page.waitForFunction(() => window.prefetchResumed);
+});
+
 test('switching datasets during recording fails the export with a visible explanation', async ({ page, servers, storeUrl, consoleErrors }) => {
   const first = await storeUrl('u16_plain');
   const second = await storeUrl('link_plain');
@@ -132,3 +165,115 @@ for (const embed of [false, true]) {
     expect(gif.bytes.subarray(0, 6).toString('latin1')).toBe('GIF89a');
   });
 }
+
+test('a second export does not show the first one\'s result while it prepares', async ({ page, servers, storeUrl }) => {
+  const store = await storeUrl('u16_plain');
+  await open(page, `${servers.appUrl}/demo/index.html?store=${encodeURIComponent(store)}`);
+  await page.locator('#export-btn').click();
+  await page.locator('#export-size').selectOption('0.25');
+  await exportAndDownload(page, 'gif');
+  const status = page.locator('#export-status');
+  await expect(status).toContainText('Done in');
+
+  // With the cache empty, the second export has to wait for chunks: hold every chunk request.
+  const held = [];
+  await page.route(/\/data\/c\/\d+\/0\/\d+\/\d+$/, (route) => held.push(route));
+  await page.evaluate(() => {
+    window.chronozarr.viewer.store.clearCache();
+    window.chronozarr.viewer.renderer.clearResident();
+  });
+  try {
+    await page.locator('#export-start').click();
+    await expect.poll(() => held.length).toBeGreaterThan(0);
+    await expect(page.locator('#export-cancel')).toBeVisible();
+    await expect(page.locator('#export-download')).toBeHidden();
+    await expect(status).toHaveText('Preparing…');
+    await expect(status).not.toContainText('Done in');
+    expect(await page.locator('#export-fill').evaluate((fill) => fill.style.width)).toBe('0%');
+  } finally {
+    await page.unroute(/\/data\/c\/\d+\/0\/\d+\/\d+$/);
+    await Promise.all(held.map((route) => route.continue().catch(() => {})));
+  }
+  await expect(status).toContainText('Done in', { timeout: 30_000 });
+});
+
+test('Cancel while the chunks of an export are held cancels it: the panel offers Start again and no download', async ({ page, servers, storeUrl }) => {
+  const store = await storeUrl('u16_plain');
+  await open(page, `${servers.appUrl}/demo/index.html?store=${encodeURIComponent(store)}`);
+  await page.locator('#export-btn').click();
+  await page.locator('#export-size').selectOption('0.25');
+  await page.locator('#export-format').selectOption('gif');
+
+  // With the cache empty, the export has to wait for chunks: hold every chunk request.
+  const held = [];
+  await page.route(/\/data\/c\/\d+\/0\/\d+\/\d+$/, (route) => held.push(route));
+  await page.evaluate(() => {
+    window.chronozarr.viewer.store.clearCache();
+    window.chronozarr.viewer.renderer.clearResident();
+  });
+  try {
+    await page.locator('#export-start').click();
+    await expect.poll(() => held.length).toBeGreaterThan(0);
+    await page.locator('#export-cancel').click();
+    await expect(page.locator('#export-status')).toHaveText('Cancelled.');
+    await expect(page.locator('#export-start')).toBeVisible();
+    await expect(page.locator('#export-cancel')).toBeHidden();
+    await expect(page.locator('#export-download')).toBeHidden();
+    // With the chunks released an export that went on would finish: the session has ended, and no file is offered.
+    await page.unroute(/\/data\/c\/\d+\/0\/\d+\/\d+$/);
+    await Promise.all(held.splice(0).map((route) => route.continue().catch(() => {})));
+    await expect.poll(() => page.evaluate(() => window.chronozarr.viewer.status.exporting)).toBe(false);
+    await page.evaluate(() => window.chronozarr.viewer.whenSettled());
+    await expect(page.locator('#export-status')).toHaveText('Cancelled.');
+    await expect(page.locator('#export-download')).toBeHidden();
+  } finally {
+    await page.unroute(/\/data\/c\/\d+\/0\/\d+\/\d+$/);
+    await Promise.all(held.map((route) => route.continue().catch(() => {})));
+  }
+});
+
+test('Start after a store failed to open says that no dataset is open', async ({ page, servers, storeUrl, consoleErrors }) => {
+  const store = await storeUrl('u16_plain');
+  await open(page, `${servers.appUrl}/demo/index.html?store=${encodeURIComponent(store)}`);
+  await page.locator('#export-btn').click();
+  await expect(page.locator('#export-panel')).toBeVisible();
+
+  const gone = `${servers.dataUrl}/no_such_store/`;
+  await page.route(`${gone}zarr.json`, (route) => route.fulfill({ status: 404, headers: { 'Access-Control-Allow-Origin': '*' } }));
+  expect(await page.evaluate((url) => window.chronozarr.viewer.loadStore(url).then(() => 'resolved', () => 'rejected'), gone)).toBe('rejected');
+  await page.locator('#export-start').click();
+  await expect(page.locator('#export-status')).toHaveText('No dataset is open.');
+  await expect(page.locator('#export-download')).toBeHidden();
+
+  // The browser and the reader report the store that is not there as errors.
+  const missing = /Failed to load resource|blocked by CORS policy|request failed, giving up/;
+  for (let i = consoleErrors.length - 1; i >= 0; i--) if (missing.test(consoleErrors[i])) consoleErrors.splice(i, 1);
+});
+
+test('the From and To lists follow the open dataset: Start after a dataset change refills them and exports nothing', async ({ page, servers, storeUrl }) => {
+  const long = await storeUrl('link_plain');
+  const short = await storeUrl('u16_plain');
+  await open(page, `${servers.appUrl}/demo/index.html?store=${encodeURIComponent(long)}`);
+  await page.locator('#export-btn').click();
+  await page.locator('#export-size').selectOption('0.25');
+  await page.locator('#export-format').selectOption('gif');
+  await expect(page.locator('#export-to option')).toHaveCount(12);
+  await page.locator('#export-to').selectOption('11');
+
+  await page.evaluate(async (url) => {
+    await window.chronozarr.viewer.loadStore(url);
+  }, short);
+  await page.locator('#export-start').click();
+
+  const status = page.locator('#export-status');
+  await expect(status).toHaveText('The dataset changed. Check the range and start again.');
+  await expect(page.locator('#export-from option')).toHaveCount(4);
+  await expect(page.locator('#export-to option')).toHaveCount(4);
+  await expect(page.locator('#export-download')).toBeHidden();
+  await expect(page.locator('#export-start')).toBeVisible();
+  await expect(page.locator('#export-cancel')).toBeHidden();
+
+  await page.locator('#export-start').click();
+  await expect(page.locator('#export-download')).toBeVisible({ timeout: 30_000 });
+  await expect(status).toContainText('4 frames');
+});

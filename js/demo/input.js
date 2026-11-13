@@ -145,7 +145,7 @@ export function bindTimelineInput(viewer) {
     viewer.endScrub();
   };
   window.addEventListener('pointermove', (e) => {
-    if (e.pointerId === scrubPointer) viewer.goToTime(timeFromEvent(e));
+    if (e.pointerId === scrubPointer && viewer.store) viewer.goToTime(timeFromEvent(e));
   });
   window.addEventListener('pointerup', endScrub);
   window.addEventListener('pointercancel', endScrub);

@@ -98,6 +98,8 @@ async function compactColdOpens({ runs, totalBytes }) {
   for (let run = 0; run < runs; run++) {
     await sleep(300);
     const { openMs, firstPaintMs } = await viewer.loadStore(url, { lod: 0, fetch: noStoreFetch, totalBytes });
+    // loadStore resolves null for the first paint when the frame cannot be had: the median would take it for 0 ms.
+    if (firstPaintMs === null) throw new Error('the first frame could not be drawn: every cell it misses failed for good');
     rows.push({ run, openMs, firstPaintMs, compact: viewer.store.compactCacheEnabled });
   }
   return rows;

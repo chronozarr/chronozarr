@@ -59,3 +59,27 @@ test('close prevents a late decode from repopulating caches', async () => {
   assert.equal(await result, 'AbortError');
   assert.equal(store.cacheInfo().bytes, 0);
 });
+
+test('a store that fails to construct after the decode workers of its own pool (spawnWorker, not the shared lease) started terminates them', async () => {
+  const readable = buildSyntheticStore(spec);
+  const root = JSON.parse(new TextDecoder().decode(readable.files.get('/zarr.json')));
+  root.attributes.chronozarr.times.pop();
+  readable.files.set('/zarr.json', new TextEncoder().encode(JSON.stringify(root)));
+  const workers = [];
+  const spawnWorker = () => {
+    const worker = {
+      terminated: false,
+      postMessage(message) {
+        if (message.type === 'init') queueMicrotask(() => worker.onmessage?.({ data: { type: 'ready' } }));
+      },
+      terminate() {
+        worker.terminated = true;
+      },
+    };
+    workers.push(worker);
+    return worker;
+  };
+  await assert.rejects(openStore('memory://bad-times', { store: readable, workers: 2, spawnWorker }), /has 12 timesteps, times attr has 11/);
+  assert.equal(workers.length, 2, 'the workers were started before the store was built');
+  assert.ok(workers.every((w) => w.terminated), 'and are terminated when building it fails');
+});

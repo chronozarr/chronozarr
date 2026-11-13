@@ -5,6 +5,14 @@ import { DecodePool, MainThreadDecoder, leaseDecodePool, sharedPoolCount } from 
 const SPEC = { key: 'spec-a', dtype: 'uint16', shape: [1, 1, 1, 2], codecs: [] };
 const OTHER_SPEC = { key: 'spec-b', dtype: 'uint8', shape: [1, 1, 1, 2], codecs: [] };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Resolves once `condition()` holds, checking every millisecond; fails after two seconds. For what must happen. */
+async function until(condition) {
+  const end = Date.now() + 2000;
+  while (!condition()) {
+    if (Date.now() > end) throw new Error(`still not true after 2 s: ${condition}`);
+    await sleep(1);
+  }
+}
 
 /** In-process Worker stand-in that records every message it receives. */
 function recordingWorkers({ failInit = false } = {}) {
@@ -134,4 +142,42 @@ test('a lease with a fallback decodes demand jobs on the calling thread until a 
   assert.deepEqual([...out], [8, 9]);
   lease.close();
   await sleep(50);
+});
+
+test('a pool that fell back to the main thread is not handed to the next lease, and is closed once its leases are released', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const broken = recordingWorkers({ failInit: true });
+  const key = 'shared-fell-back';
+  let fallbackClosed = 0;
+  const fallback = { decode: async (bytes) => new Uint16Array(bytes.length).fill(bytes[0]), close: () => fallbackClosed++ };
+  const first = leaseDecodePool({ key, size: 1, spawn: broken.spawn, init: { type: 'init' }, fallback, idleMs: 20 });
+  assert.equal((await first.decode(Uint8Array.of(1, 1), 1, undefined, SPEC))[0], 1, 'decoded by the fallback');
+  const healthy = recordingWorkers();
+  const second = leaseDecodePool({ key, size: 1, spawn: healthy.spawn, init: { type: 'init' }, idleMs: 20 });
+  assert.equal(healthy.made.length, 1, 'a fresh pool with workers was built');
+  assert.equal((await second.decode(Uint8Array.of(4, 4), 1, undefined, SPEC))[0], 4);
+  assert.equal(healthy.made[0].received.filter((m) => m.type === 'decode').length, 1, 'the new lease decodes on a worker');
+  assert.equal(fallbackClosed, 0, 'the replaced pool stays open while its lease is held');
+  assert.equal((await first.decode(Uint8Array.of(2, 2), 1, undefined, SPEC))[0], 2, 'the first lease still decodes');
+  first.close();
+  assert.equal(fallbackClosed, 1, 'the replaced pool is closed when its last lease is released');
+  second.close();
+  await until(() => sharedPoolCount() === 0);
+});
+
+test('an idle pool that fell back to the main thread is closed when the next lease replaces it', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const broken = recordingWorkers({ failInit: true });
+  const key = 'shared-idle-fell-back';
+  let fallbackClosed = 0;
+  const fallback = { decode: async (bytes) => new Uint16Array(bytes.length).fill(bytes[0]), close: () => fallbackClosed++ };
+  const first = leaseDecodePool({ key, size: 1, spawn: broken.spawn, init: { type: 'init' }, fallback, idleMs: 1000 });
+  await first.decode(Uint8Array.of(1, 1), 1, undefined, SPEC);
+  first.close();
+  const healthy = recordingWorkers();
+  const second = leaseDecodePool({ key, size: 1, spawn: healthy.spawn, init: { type: 'init' }, idleMs: 20 });
+  assert.equal(healthy.made.length, 1, 'a fresh pool with workers was built');
+  assert.equal(fallbackClosed, 1, 'the idle pool it replaced is closed at once');
+  second.close();
+  await until(() => sharedPoolCount() === 0);
 });

@@ -84,6 +84,8 @@ async function coldOpen(viewer, url, fetchImpl, runs) {
     await sleep(300);
     performance.clearResourceTimings();
     const { openMs, firstPaintMs } = await viewer.loadStore(url, { lod: 0, fetch: fetchImpl });
+    // loadStore resolves null for the first paint when the frame cannot be had: that is no time to round.
+    if (firstPaintMs === null) throw new Error('the first frame could not be drawn: every cell it misses failed for good');
     const { requests, bytes } = viewer.store.stats.network;
     rows.push({
       run,
@@ -284,13 +286,18 @@ export async function runBenchmarks(viewer, { coldRuns = 5, switches = 30 } = {}
 const TIMEOUT_MS = 6000;
 const OPEN_TIMEOUT_MS = 60000;
 
-/** loadStore with a deadline, so a run that can never paint fails instead of hanging the benchmark. */
-function openWithin(viewer, url, options) {
+/**
+ * loadStore with a deadline, so a run that can never paint fails instead of hanging the benchmark. It rejects too when
+ * the first frame cannot be had (loadStore's firstPaintMs null).
+ */
+async function openWithin(viewer, url, options) {
   let timer;
   const deadline = new Promise((_, reject) => {
     timer = setTimeout(() => reject(new Error(`no complete first frame within ${OPEN_TIMEOUT_MS / 1000} s`)), OPEN_TIMEOUT_MS);
   });
-  return Promise.race([viewer.loadStore(url, options), deadline]).finally(() => clearTimeout(timer));
+  const opened = await Promise.race([viewer.loadStore(url, options), deadline]).finally(() => clearTimeout(timer));
+  if (opened !== null && opened.firstPaintMs === null) throw new Error('the first frame could not be drawn: every cell it misses failed for good');
+  return opened;
 }
 
 function percentile(sorted, q) {

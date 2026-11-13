@@ -11,6 +11,7 @@
 
 import { openStore } from '../chronozarr/decoder.js';
 import { anySignal } from '../chronozarr/http.js';
+import { Machine } from '../chronozarr/machine.js';
 import { redactText } from '../chronozarr/redact.js';
 import { COLORMAPS, colormapIndex } from '../shared/colormaps.js';
 import { channelBounds, computeStretchLo, describePixel, displayMode, dualPolRanges, findBand, inputConversion, inputIndices, nodataToCompare, normalizeBands, percentileRange, resolveProducts, toPhysical } from '../shared/products.js';
@@ -34,6 +35,19 @@ const STAND_IN_FINER_LEVELS = 2; // levels below the target that a stand-in may 
 const SEEK_DISTANCE = 4; // a time change of more than this many steps drops queued speculative fetches (as the viewer does)
 const EVENTS = ['open', 'loading', 'ready', 'error'];
 
+/**
+ * The layer's lifecycle. constructed: not on a map yet. opening: on a map; the store is being read, or the GPU is being
+ * set up on a store already read. open: the store is read and, with a GL context, drawable. failed: the open or the GPU
+ * setup failed for good; the layer draws nothing. It holds no store when the open failed, and keeps its store when only a
+ * later GPU setup failed. removed: taken off the map; it cannot be added again.
+ */
+const LAYER_MOVES = {
+  constructed: { add: 'opening', remove: 'removed' },
+  opening: { opened: 'open', fail: 'failed', remove: 'removed' },
+  open: { fail: 'failed', remove: 'removed' },
+  failed: { add: 'opening', remove: 'removed' },
+  removed: {},
+};
 
 const chunkId = (lod, row, col, t) => `${lod}/${row}/${col}/${t}`;
 const isAbort = (error) => error?.name === 'AbortError';
@@ -113,7 +127,7 @@ export class ChronozarrLayer {
   #gl = null;
   #gpu = null;
   #store = null;
-  #disposed = false;
+  #phase = new Machine('ChronozarrLayer', LAYER_MOVES, 'constructed');
   #geo = null;
   #meshes = new Map();
   #t;
@@ -167,6 +181,10 @@ export class ChronozarrLayer {
     this.#colormap = ChronozarrLayer.#checkColormap(colormap);
     this.#opacity = ChronozarrLayer.#checkOpacity(opacity);
     this.#stretchLo = stretchLo;
+    this.#newOpenPromise();
+  }
+
+  #newOpenPromise() {
     this.#opened = new Promise((resolve, reject) => {
       this.#resolveOpened = resolve;
       this.#rejectOpened = reject;
@@ -176,7 +194,7 @@ export class ChronozarrLayer {
 
   // ---- public API ----
 
-  /** Resolves with the ChronoStore once it is open (after the layer was added to a map); rejects if it cannot be used. */
+  /** Resolves with the ChronoStore once it is open; rejects if the attempt fails. A retry of the store open replaces the promise. */
   get opened() {
     return this.#opened;
   }
@@ -225,8 +243,12 @@ export class ChronozarrLayer {
     return this.#lastView.lod;
   }
 
-  /** Counters for diagnostics: GPU slots, uploads, evictions, cached meshes, pending cell loads. */
+  /**
+   * Counters for diagnostics: GPU slots, uploads, evictions, cached meshes, pending cell loads. `state` is 'failed'
+   * after a fatal failure, 'removed' after removal, and otherwise 'loading' or 'ready'.
+   */
   get stats() {
+    const phase = this.#phase.state;
     return {
       ...this.#counters,
       lod: this.#lastView.lod,
@@ -234,15 +256,15 @@ export class ChronozarrLayer {
       residentSlots: this.#gpu?.pool?.size ?? 0,
       meshes: this.#meshes.size,
       pending: this.#pending.size,
-      state: this.#state,
+      state: phase === 'failed' || phase === 'removed' ? phase : this.#state,
     };
   }
 
   /**
    * Listen for 'open' (store metadata read), 'loading' (the view needs data), 'ready' (everything the view needs is
    * on the GPU and no load is running, including a load that nothing in view needs any more; fires again after every
-   * pan, zoom or time change that had to wait for data) and 'error'
-   * (`event.error`; the layer keeps running). Returns a function that removes the listener.
+   * pan, zoom or time change that had to wait for data) and 'error' (`event.error`; `event.fatal` is true when the
+   * layer has stopped for good, see stats.state, and false when it keeps running). Returns a function that removes the listener.
    */
   on(type, listener) {
     if (!EVENTS.includes(type)) throw new RangeError(`ChronozarrLayer: unknown event "${type}"; use one of ${EVENTS.join(', ')}`);
@@ -296,7 +318,7 @@ export class ChronozarrLayer {
    */
   async getValueAt(lngLat, { t = this.#t } = {}) {
     const store = await this.#opened;
-    if (this.#disposed) throw new Error('ChronozarrLayer.getValueAt: the layer was removed');
+    if (this.#phase.state === 'removed') throw new Error('ChronozarrLayer.getValueAt: the layer was removed');
     if (!Number.isInteger(t) || t < 0 || t >= store.times.length) throw new RangeError(`ChronozarrLayer.getValueAt: timestep must be an integer in 0..${store.times.length - 1}, got ${t}`);
     const [lng, lat] = lngLatOf(lngLat);
     const [x, y] = this.#geo.projection.fromLonLat(lng, lat);
@@ -350,18 +372,28 @@ export class ChronozarrLayer {
   // ---- MapLibre CustomLayerInterface ----
 
   onAdd(map, gl) {
-    if (this.#disposed) throw new Error(`ChronozarrLayer "${this.id}" was removed; create a new layer instead of re-adding it`);
+    const phase = this.#phase.state;
+    if (phase === 'removed') throw new Error(`ChronozarrLayer "${this.id}" was removed; create a new layer instead of re-adding it`);
     this.#map = map;
     this.#gl = gl;
-    if (!this.#store) {
+    // While the store opens, the open in progress sets up the GPU with the map and context recorded here.
+    if (phase === 'opening') return;
+    if (phase === 'constructed' || (phase === 'failed' && this.#store === null)) {
+      if (phase === 'failed') this.#newOpenPromise();
+      this.#phase.send('add');
       this.#open();
       return;
     }
+    // The store is open: the layer is open, or it opened and only its GPU setup failed. Setting up the GPU on that
+    // store keeps it, so `opened` and getValueAt keep answering from the store the layer holds.
+    if (phase === 'failed') this.#phase.send('add');
     try {
-      this.#initGpu();
+      this.#initGpu(this.#store);
     } catch (error) {
       this.#fail(error);
+      return;
     }
+    if (this.#phase.state === 'opening') this.#phase.send('opened');
   }
 
   onRemove() {
@@ -370,7 +402,7 @@ export class ChronozarrLayer {
 
   render(glOrOptions, maybeOptions) {
     const options = maybeOptions ?? glOrOptions;
-    if (!this.#gpu?.pool || this.#disposed) return;
+    if (this.#gpu === null || this.#phase.state === 'removed') return;
     const matrix = options?.defaultProjectionData?.mainMatrix;
     if (!matrix) {
       this.#reportOnce('no-matrix', new Error('ChronozarrLayer needs MapLibre GL JS >= 5 (render options carry no defaultProjectionData.mainMatrix)'));
@@ -386,39 +418,42 @@ export class ChronozarrLayer {
 
   // ---- opening ----
 
+  /** Reads the store and, with a GL context, sets up the GPU; the layer holds the store only once both succeeded. */
   async #open() {
     let store;
+    let configured;
     try {
       const options = this.#options.storeOptions ?? {};
       const signal = options.signal ? anySignal([options.signal, this.#openController.signal]) : this.#openController.signal;
       store = await openStore(this.#options.url, { ...options, signal });
-      if (this.#disposed) {
+      if (this.#phase.state === 'removed') {
         store.close();
         return;
       }
-      await this.#configure(store);
-      if (this.#disposed) {
+      configured = await this.#configure(store);
+      if (this.#phase.state === 'removed') {
         store.close();
         return;
       }
+      if (this.#gl) this.#initGpu(store);
     } catch (error) {
       store?.close();
       this.#fail(error);
       return;
     }
     this.#store = store;
-    try {
-      if (this.#gl) this.#initGpu();
-    } catch (error) {
-      this.#fail(error);
-      return;
-    }
+    this.#geo = configured.geo;
+    this.#bandInfo = configured.bandInfo;
+    this.#phase.send('opened');
     this.#resolveOpened(store);
     this.#emit('open', { store });
     this.#repaint();
   }
 
-  /** Validates the store for map use and derives everything that does not depend on the GL context. Async because a CRS outside the built-in projections loads proj4. */
+  /**
+   * Validates the store for map use and derives everything that does not depend on the GL context: {bandInfo, geo}.
+   * It assigns nothing; #open does once the GPU is set up too. Async because a CRS outside the built-in projections loads proj4.
+   */
   async #configure(store) {
     const { url } = this.#options;
     if (!Array.isArray(store.transform)) throw new Error(`${url}: level 0 declares no affine "transform", so the store cannot be placed on a map. Re-encode it with the current chronozarr writer.`);
@@ -426,23 +461,25 @@ export class ChronozarrLayer {
     const projection = await createProjection(store);
 
     const bands = normalizeBands(store.attrs.bands);
-    this.#bandInfo = { bands, names: bands.map((band) => band.name), nodata: typeof store.nodata === 'number' ? store.nodata : null, products: resolveProducts(store.attrs.bands) };
+    const bandInfo = { bands, names: bands.map((band) => band.name), nodata: typeof store.nodata === 'number' ? store.nodata : null, products: resolveProducts(store.attrs.bands) };
     if (this.#t >= store.times.length) throw new RangeError(`${url}: timestep ${this.#t} is outside 0..${store.times.length - 1}`);
-    this.#resolveProduct(this.#productId, this.#band);
+    this.#resolveProduct(this.#productId, this.#band, bandInfo);
 
     const transforms = store.levels.map((_, lod) => levelTransform(store.transform, lod));
     const { width, height } = store.levels[0];
-    this.#geo = {
+    const geo = {
       projection,
       transforms,
       mercatorPerTexel0: mercatorPerTexel(projection, transforms[0], width, height),
       bounds: footprintBounds(projection, transforms[0], width, height),
       cells: store.levels.map(() => null),
     };
+    return { bandInfo, geo };
   }
 
-  #resolveProduct(id, band) {
-    const { names, products } = this.#bandInfo;
+  /** The product `id` and the index of `band` against the store's bands; throws RangeError for one the store cannot show. */
+  #resolveProduct(id, band, bandInfo = this.#bandInfo) {
+    const { names, products } = bandInfo;
     const product = products.find((p) => p.id === id);
     if (!product) throw new RangeError(`ChronozarrLayer: unknown product "${id}"; available: ${products.filter((p) => p.available).map((p) => p.id).join(', ')}`);
     if (!product.available) throw new RangeError(`ChronozarrLayer: product "${id}" needs ${product.missing.join(', ')} bands, which this store lacks (it has ${names.join(', ')})`);
@@ -452,25 +489,32 @@ export class ChronozarrLayer {
   }
 
   #fail(error) {
-    if (this.#disposed) return;
+    if (this.#phase.state === 'removed') return;
+    if (this.#phase.can('fail')) this.#phase.send('fail');
     this.#rejectOpened(error);
-    this.#emit('error', { error });
+    this.#emit('error', { error, fatal: true });
     console.error('ChronozarrLayer:', redactText(error));
   }
 
   #reportOnce(key, error) {
     if (this.#reported.has(key)) return;
     this.#reported.add(key);
-    this.#emit('error', { error });
+    this.#emit('error', { error, fatal: false });
     console.error('ChronozarrLayer:', redactText(error));
   }
 
   // ---- GL resources ----
 
-  #createProgram() {
+  #createProgram(store) {
     const gl = this.#gl;
     const vs = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-    const fs = compile(gl, gl.FRAGMENT_SHADER, fragmentShader({ dtype: this.#store.dtype, hasMask: this.#store.hasMask }));
+    let fs;
+    try {
+      fs = compile(gl, gl.FRAGMENT_SHADER, fragmentShader({ dtype: store.dtype, hasMask: store.hasMask }));
+    } catch (error) {
+      gl.deleteShader(vs);
+      throw error;
+    }
     const program = gl.createProgram();
     gl.attachShader(program, vs);
     gl.attachShader(program, fs);
@@ -501,30 +545,39 @@ export class ChronozarrLayer {
     return texture;
   }
 
-  /** Allocates the texture pool once both the store and the GL context exist. */
-  #initGpu() {
+  /**
+   * Allocates the program and the texture pool for `store` once both the store and the GL context exist. `#gpu` is
+   * assigned only when all of it exists; a step that throws deletes what the earlier steps created and leaves it null.
+   */
+  #initGpu(store) {
     const gl = this.#gl;
-    if (this.#gpu?.texture) return;
-    const store = this.#store;
+    if (this.#gpu !== null) return;
     const format = TEXTURE_FORMATS[store.dtype];
-    const gpu = this.#createProgram();
+    const gpu = this.#createProgram(store);
+    try {
+      const { nBand, chunkWidth, chunkHeight } = store.levels[0];
+      const slotBytes = nBand * chunkWidth * chunkHeight * format.Array.BYTES_PER_ELEMENT;
+      const maxLayers = gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS);
+      const slots = Math.min(Math.floor(this.#options.gpuBudgetBytes / slotBytes), Math.floor(maxLayers / nBand));
+      if (slots < 1) throw new Error(`ChronozarrLayer: the GPU budget (${this.#options.gpuBudgetBytes} bytes, ${maxLayers} array layers available) holds ${slots} chunk slots of ${slotBytes} bytes; at least 1 is needed. Raise gpuBudgetBytes.`);
+      if (chunkWidth > gl.getParameter(gl.MAX_TEXTURE_SIZE)) throw new Error(`ChronozarrLayer: chunks are ${chunkWidth} px wide, more than this GPU's MAX_TEXTURE_SIZE`);
+      gl.getError(); // clears one error left by earlier code, so the check below reports our own
+      gpu.texture = this.#allocateTexture(gl[format.internal], chunkWidth, chunkHeight, slots * nBand);
+      if (store.hasMask) gpu.maskTexture = this.#allocateTexture(gl.R8UI, chunkWidth, chunkHeight, slots);
+      const error = gl.getError();
+      if (error !== gl.NO_ERROR) throw new Error(`ChronozarrLayer: allocating ${slots} texture slots (${(slots * slotBytes) / MIB} MiB) failed with GL error ${error}. Lower gpuBudgetBytes.`);
+      gpu.pool = new SlotPool(slots);
+      if (store.hasMask) gpu.maskPool = new SlotPool(slots);
+      gpu.format = format;
+      gpu.slotLayers = nBand;
+      gpu.chunk = { width: chunkWidth, height: chunkHeight };
+    } catch (error) {
+      if (gpu.texture) gl.deleteTexture(gpu.texture);
+      if (gpu.maskTexture) gl.deleteTexture(gpu.maskTexture);
+      gl.deleteProgram(gpu.program);
+      throw error;
+    }
     this.#gpu = gpu;
-    const { nBand, chunkWidth, chunkHeight } = store.levels[0];
-    const slotBytes = nBand * chunkWidth * chunkHeight * format.Array.BYTES_PER_ELEMENT;
-    const maxLayers = gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS);
-    const slots = Math.min(Math.floor(this.#options.gpuBudgetBytes / slotBytes), Math.floor(maxLayers / nBand));
-    if (slots < 1) throw new Error(`ChronozarrLayer: the GPU budget (${this.#options.gpuBudgetBytes} bytes, ${maxLayers} array layers available) holds ${slots} chunk slots of ${slotBytes} bytes; at least 1 is needed. Raise gpuBudgetBytes.`);
-    if (chunkWidth > gl.getParameter(gl.MAX_TEXTURE_SIZE)) throw new Error(`ChronozarrLayer: chunks are ${chunkWidth} px wide, more than this GPU's MAX_TEXTURE_SIZE`);
-    gl.getError(); // clears one error left by earlier code, so the check below reports our own
-    gpu.texture = this.#allocateTexture(gl[format.internal], chunkWidth, chunkHeight, slots * nBand);
-    if (store.hasMask) gpu.maskTexture = this.#allocateTexture(gl.R8UI, chunkWidth, chunkHeight, slots);
-    const error = gl.getError();
-    if (error !== gl.NO_ERROR) throw new Error(`ChronozarrLayer: allocating ${slots} texture slots (${(slots * slotBytes) / MIB} MiB) failed with GL error ${error}. Lower gpuBudgetBytes.`);
-    gpu.pool = new SlotPool(slots);
-    if (store.hasMask) gpu.maskPool = new SlotPool(slots);
-    gpu.format = format;
-    gpu.slotLayers = nBand;
-    gpu.chunk = { width: chunkWidth, height: chunkHeight };
   }
 
   #disposeGl() {
@@ -546,8 +599,8 @@ export class ChronozarrLayer {
   }
 
   #dispose() {
-    if (this.#disposed) return;
-    this.#disposed = true;
+    if (this.#phase.state === 'removed') return;
+    this.#phase.send('remove');
     clearTimeout(this.#prefetchTimer);
     clearTimeout(this.#graceTimer);
     this.#prefetchController?.abort();
@@ -774,7 +827,7 @@ export class ChronozarrLayer {
         this.#seeding = false;
         this.#repaint();
         if (isAbort(error)) return;
-        this.#emit('error', { error });
+        this.#emit('error', { error, fatal: false });
         console.error('ChronozarrLayer: the coarse first paint failed to load', redactText(error));
       },
     );
@@ -996,12 +1049,12 @@ export class ChronozarrLayer {
         samples.push(...sampleCell(data, mask, store.levels[lod], extent));
       }
       const current = this.#sampleKey(this.#lastView.lod, this.#lastView.cells.map(([row, col]) => ({ row, col })), this.#t);
-      if (!signal.aborted && !this.#disposed && key === current) this.#sampledView = { key, values: samples };
+      if (!signal.aborted && this.#phase.state !== 'removed' && key === current) this.#sampledView = { key, values: samples };
     };
     collect().catch((error) => {
       if (!isAbort(error)) {
         this.#failed.set('samples', performance.now());
-        this.#emit('error', { error, lod, t });
+        this.#emit('error', { error, fatal: false, lod, t });
       }
     }).finally(() => {
       this.#pending.delete('samples');
@@ -1081,7 +1134,7 @@ export class ChronozarrLayer {
           return;
         }
         this.#failed.set(key, performance.now());
-        this.#emit('error', { error, lod, row, col, t });
+        this.#emit('error', { error, fatal: false, lod, row, col, t });
         console.error(`ChronozarrLayer: cell ${key} failed to load`, redactText(error));
         this.#repaint();
       },
@@ -1142,7 +1195,7 @@ export class ChronozarrLayer {
 
   /** Once the view has settled, let the reader fill its caches around t for the visible cells (store.prefetch). */
   #schedulePrefetch() {
-    if (!this.#options.prefetch || this.#disposed) return;
+    if (!this.#options.prefetch || this.#phase.state === 'removed') return;
     clearTimeout(this.#prefetchTimer);
     this.#prefetchTimer = setTimeout(() => this.#runPrefetch(), PREFETCH_DELAY_MS);
   }
@@ -1150,21 +1203,21 @@ export class ChronozarrLayer {
   #runPrefetch() {
     const store = this.#store;
     const { lod, cells } = this.#lastView;
-    if (!store || this.#disposed || cells.length === 0) return;
+    if (!store || this.#phase.state === 'removed' || cells.length === 0) return;
     const previous = this.#prefetchController;
     const controller = new AbortController();
     this.#prefetchController = controller;
     const seek = Math.abs(this.#t - this.#prefetchedAt) > SEEK_DISTANCE;
     this.#prefetchedAt = this.#t;
     const report = (error) => {
-      if (!isAbort(error)) this.#emit('error', { error, prefetch: true });
+      if (!isAbort(error)) this.#emit('error', { error, fatal: false, prefetch: true });
     };
     // The reader fetches each mask with its chunk, as a speculative read under the same allowances; a mask requested after
     // the chunk landed would be a demand read that holds the prefetch workers back.
     store
       .prefetch({ lod, cells, t: this.#t, direction: this.#direction, seek, masks: store.hasMask, signal: controller.signal })
       .then((result) => {
-        if (result.errors.length > 0) this.#emit('error', { error: result.errors[0].error, prefetch: true, errors: result.errors });
+        if (result.errors.length > 0) this.#emit('error', { error: result.errors[0].error, fatal: false, prefetch: true, errors: result.errors });
       }, report);
     // The new job has taken over the requests it shares with the old one (the reader plans synchronously): now the old one can stop.
     previous?.abort();

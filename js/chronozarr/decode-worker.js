@@ -1,5 +1,5 @@
 // Module worker: decodes compressed chunks off the main thread. It serves any array of any store: each decode
-// message carries the chunk spec, and the codec chain for a spec is built once and kept.
+// message carries the chunk spec, and the codec chain for a spec is built once and kept (a failed build is tried again).
 //   -> {type:'init', zarritaUrl, warm?}     <- {type:'ready'} | {type:'error', message}
 //        `warm`: specs whose codecs are instantiated before 'ready', so a worker that is ready can decode at once
 //   -> {type:'warm', spec}                  (instantiate the spec's codecs early; no reply)
@@ -7,16 +7,24 @@
 // Replies transfer either the decoded typed array or just packed words and block metadata.
 
 import { createChunkDecoder } from './codec.js';
+import { codecLoaders } from './codec-loaders.js';
 import { packUint16 } from './compact.js';
 
+const builtinRegistryUrl = new URL('../vendor/zarrita/codecs.js', import.meta.url).href;
 let zarrita = null;
 const decoders = new Map();
 
 function decoderFor(spec) {
-  let decoder = decoders.get(spec.key);
+  const { key } = spec;
+  let decoder = decoders.get(key);
   if (!decoder) {
     decoder = createChunkDecoder(zarrita, spec);
-    decoders.set(spec.key, decoder);
+    // A load that failed is forgotten, so the next message that needs the spec loads it again. The decode that
+    // awaits this promise still reports the error.
+    decoder.catch(() => {
+      if (decoders.get(key) === decoder) decoders.delete(key);
+    });
+    decoders.set(key, decoder);
   }
   return decoder;
 }
@@ -25,6 +33,7 @@ self.onmessage = async ({ data: message }) => {
   try {
     if (message.type === 'init') {
       zarrita = await import(message.zarritaUrl);
+      if (message.zarritaUrl === builtinRegistryUrl) zarrita = { registry: zarrita.registry, codecLoaders };
       // Best effort, as with a 'warm' message. Not ready until the codecs are: a job given to a worker that is still
       // fetching WebAssembly waits for it, while the pool's fallback decoder (a warm one) could have run the job.
       await Promise.all((message.warm ?? []).map(async (spec) => (await decoderFor(spec)).warmup())).catch(() => {});

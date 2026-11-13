@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import sys
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +15,7 @@ import pytest
 import xarray as xr
 import zarr
 from click.testing import CliRunner
+from zarr.errors import ZarrUserWarning
 
 import chronozarr
 from chronozarr.cli import main
@@ -1067,6 +1072,400 @@ def test_existing_output_is_refused_before_anything_is_read(tmp_path, tifs):
     with pytest.raises(FileExistsError, match="stores are immutable"):
         convert(write_csv(tmp_path / "m.csv", tifs), out, **OPTIONS)
     assert not (tmp_path / "store.convert-work").exists()
+
+
+def leave_an_interrupted_run(tmp_path, tifs, monkeypatch) -> tuple[Path, Path, Path]:
+    """A manifest whose conversion failed while staging: its work directory keeps three
+    timesteps. Returns the manifest, the output path (absent) and the work directory."""
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    original = CogManifestSource.read
+
+    def flaky(self, t):
+        if t == 3:
+            raise OSError("connection reset")
+        return original(self, t)
+
+    monkeypatch.setattr(CogManifestSource, "read", flaky)
+    out = tmp_path / "store"
+    with pytest.raises(OSError, match="connection reset"):
+        convert(manifest, out, read_ahead=1, **OPTIONS)
+    monkeypatch.undo()
+    work = tmp_path / "store.convert-work"
+    assert len(list(work.glob("t*.npy"))) == 3
+    return manifest, out, work
+
+
+KILLED_CONVERT = """
+import json
+import os
+import sys
+
+from chronozarr import schema
+from chronozarr.convert import convert
+
+
+def die(self):
+    os._exit(9)  # no handler and no cleanup runs, as when the process is killed
+
+
+schema.RootAttrs.to_attrs = die
+convert(sys.argv[1], sys.argv[2], **json.loads(sys.argv[3]))
+"""
+
+
+def kill_a_conversion_while_it_encodes(source: Path, out: Path, **options: Any) -> Path:
+    """Run a conversion in another process and end that process, with no cleanup, where its
+    encode would write the root attributes. Returns the work directory that it leaves."""
+    command = [sys.executable, "-c", KILLED_CONVERT, str(source), str(out), json.dumps(options)]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 9, result.stderr
+    assert "chronozarr" not in json.loads((out / "zarr.json").read_text())["attributes"]
+    return Path(options.get("work_dir", out.parent / f"{out.name}.convert-work"))
+
+
+def write_bare_group(out: Path) -> None:
+    """The first things an encode writes: the root group and a level group, without attributes."""
+    zarr.open_group(str(out), mode="w", zarr_format=3).create_group("0")
+
+
+@pytest.fixture(scope="module")
+def unfinished_encode(tmp_path_factory) -> tuple[Path, Path, Path]:
+    """One real interrupted encode for the tests that inspect copies of its output and work."""
+    path = tmp_path_factory.mktemp("interrupted-convert")
+    tif = write_tif(path / "source.tif", make_truth(1, 1, 8, 8)[0])
+    manifest = write_csv(path / "m.csv", [tif], dates=DATES[:1])
+    out = path / "store"
+    work = kill_a_conversion_while_it_encodes(manifest, out, **OPTIONS)
+    return manifest, out, work
+
+
+def copy_unfinished_encode(
+    tmp_path: Path, unfinished_encode: tuple[Path, Path, Path], work_dir: Path | None = None
+) -> tuple[Path, Path, Path]:
+    manifest, original, staging = unfinished_encode
+    out = shutil.copytree(original, tmp_path / "store")
+    work = shutil.copytree(staging, work_dir or tmp_path / "store.convert-work")
+    marker = work / "encoding"
+    record = json.loads(marker.read_text())
+    record["output"] = str(out.resolve())
+    marker.write_text(json.dumps(record))
+    return manifest, out, work
+
+
+IMMUTABLE = "{out} already exists and is not empty; stores are immutable, write to a new path"
+UNFINISHED = (
+    "{out} holds an unfinished store: the run that wrote it was interrupted, or is still "
+    "running. If no conversion is running, delete {out} and "
+)
+
+
+def reusable_message(out: Path, work: Path) -> str:
+    return UNFINISHED.format(out=out) + (
+        f"rerun with --resume --work-dir {work} to reuse the timesteps staged in {work}."
+    )
+
+
+def delete_both_message(out: Path, work: Path) -> str:
+    return UNFINISHED.format(out=out) + f"{work}, then rerun the conversion."
+
+
+def not_reusable_message(out: Path, work: Path) -> str:
+    return delete_both_message(out, work)[:-1] + (
+        f": the timesteps staged in {work} cannot be reused for this source."
+    )
+
+
+def test_a_conversion_killed_while_it_encodes_leaves_a_store_that_the_next_run_names(
+    tmp_path, tifs, truth
+):
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "store"
+    work = kill_a_conversion_while_it_encodes(manifest, out, **OPTIONS)
+    assert len(list(work.glob("t*.npy"))) == N_TIME
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, **OPTIONS)
+    assert str(error.value) == reusable_message(out, work)
+    assert (out / "zarr.json").is_file()
+
+    shutil.rmtree(out)
+    report = convert(manifest, out, resume=True, work_dir=work, **OPTIONS)
+    assert (report.n_staged, report.n_reused) == (0, N_TIME)
+    assert not work.exists()
+    assert (
+        "_chronozarr_encoding_run" not in json.loads((out / "zarr.json").read_text())["attributes"]
+    )
+    np.testing.assert_array_equal(stored(out), truth)
+
+
+def test_a_killed_conversion_of_a_zarr_source_says_to_delete_the_store_and_its_work_directory(
+    tmp_path, truth
+):
+    source = tmp_path / "in.zarr"
+    dataset_from(truth).assign_coords(band=[1, 2]).to_zarr(
+        source, zarr_format=3, consolidated=False
+    )
+    out = tmp_path / "store"
+    options: dict[str, Any] = {**OPTIONS, "crs": CRS}
+    work = kill_a_conversion_while_it_encodes(source, out, **options)
+    # The same refusal whatever the rerun passes: nothing, the resume this source cannot have,
+    # or the fresh work directory that the refusal of resume asks for.
+    for rerun in ({}, {"resume": True}, {"work_dir": tmp_path / "fresh"}):
+        with pytest.raises(FileExistsError) as error:
+            convert(source, out, **options, **rerun)
+        assert str(error.value) == not_reusable_message(out, work)
+
+    shutil.rmtree(out)
+    shutil.rmtree(work)
+    report = convert(source, out, **options)
+    assert (report.n_staged, report.n_reused) == (N_TIME, 0)
+    assert stored(out).shape == truth.shape
+
+
+@pytest.mark.parametrize("new_source", ["geotiff", "zarr"])
+def test_an_unfinished_store_with_a_different_input_keeps_its_staged_timesteps(
+    tmp_path, unfinished_encode, new_source
+):
+    manifest, out, work = copy_unfinished_encode(tmp_path, unfinished_encode)
+    options: dict[str, Any] = dict(OPTIONS)
+    if new_source == "geotiff":
+        tif = write_tif(tmp_path / "other.tif", make_truth(1, 1, 8, 8)[0])
+        source = write_csv(tmp_path / "other.csv", [tif], dates=DATES[:1])
+    else:
+        source = tmp_path / "other.zarr"
+        attribute_less_dataset(source, consolidated=False)
+        options["crs"] = CRS
+
+    with pytest.raises(FileExistsError) as error:
+        convert(source, out, **options)
+    assert str(error.value) == UNFINISHED.format(out=out) + (
+        "rerun without --resume and set --work-dir to a new directory. "
+        f"Keep the staged timesteps in {work}."
+    )
+
+    out.rename(tmp_path / "interrupted")
+    report = convert(manifest, out, resume=True, work_dir=work, **OPTIONS)
+    assert (report.n_staged, report.n_reused) == (0, 1)
+    np.testing.assert_array_equal(stored(out), make_truth(1, 1, 8, 8))
+
+
+def test_the_record_names_the_output_however_its_path_is_written(
+    tmp_path, unfinished_encode, monkeypatch
+):
+    manifest, _, _ = copy_unfinished_encode(tmp_path, unfinished_encode)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, Path("store"), resume=True, **OPTIONS)
+    assert str(error.value) == reusable_message(Path("store"), Path("store.convert-work"))
+
+
+def test_an_unfinished_store_names_the_explicit_work_directory_of_its_run(tmp_path, tifs):
+    explicit = tmp_path / "scratch"
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "store"
+    kill_a_conversion_while_it_encodes(manifest, out, work_dir=str(explicit), **OPTIONS)
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, work_dir=explicit, **OPTIONS)
+    assert str(error.value) == reusable_message(out, explicit)
+    # Without the work directory of that run, nothing records that the store is this run's.
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+
+
+def test_an_unfinished_store_whose_staged_timesteps_are_gone_says_to_delete_both(
+    tmp_path, unfinished_encode
+):
+    manifest, out, work = copy_unfinished_encode(tmp_path, unfinished_encode)
+    for staged in work.glob("t*.npy"):
+        staged.unlink()
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, **OPTIONS)
+    assert str(error.value) == delete_both_message(out, work)
+
+
+def test_a_root_without_the_run_id_is_refused_even_with_a_matching_path(
+    tmp_path, unfinished_encode
+):
+    manifest, out, _ = copy_unfinished_encode(tmp_path, unfinished_encode)
+    (out / "zarr.json").write_text(json.dumps({"zarr_format": 3, "node_type": "group"}))
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, resume=True, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+
+
+def test_a_bare_group_that_no_conversion_recorded_is_refused_as_not_empty(tmp_path, tifs):
+    out = tmp_path / "store"
+    write_bare_group(out)
+    with pytest.raises(FileExistsError) as error:
+        convert(write_csv(tmp_path / "m.csv", tifs), out, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+
+
+def test_a_conversion_that_failed_while_staging_records_no_encode(tmp_path, tifs, monkeypatch):
+    manifest, out, work = leave_an_interrupted_run(tmp_path, tifs, monkeypatch)
+    write_bare_group(out)
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, resume=True, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+    assert len(list(work.glob("t*.npy"))) == 3
+
+
+def test_a_work_directory_that_records_another_output_says_nothing_about_this_one(
+    tmp_path, unfinished_encode
+):
+    manifest, out, work = copy_unfinished_encode(tmp_path, unfinished_encode)
+    other = out.rename(tmp_path / "other")
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, other, work_dir=work, resume=True, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=other)
+
+
+CONSOLIDATED = {"kind": "inline", "must_understand": False, "metadata": {}}
+
+
+@pytest.mark.parametrize(
+    "root",
+    [
+        "not json",
+        "[]",
+        '{"attributes": "x"}',
+        {"zarr_format": 3, "node_type": "group", "attributes": {"title": "my data"}},
+        {"zarr_format": 3, "node_type": "array", "shape": [2], "attributes": {}},
+        {"zarr_format": 2, "node_type": "group", "attributes": {}},
+        {"node_type": "group", "attributes": {}},
+        {
+            "zarr_format": 3,
+            "node_type": "group",
+            "attributes": {},
+            "consolidated_metadata": CONSOLIDATED,
+        },
+    ],
+    ids=[
+        "not json",
+        "a list",
+        "attributes that are no object",
+        "foreign attributes",
+        "array root",
+        "zarr v2 format",
+        "no zarr_format",
+        "consolidated metadata",
+    ],
+)
+def test_with_an_encode_on_record_a_root_it_cannot_have_left_is_refused_as_not_empty(
+    tmp_path, unfinished_encode, root
+):
+    manifest, out, _ = copy_unfinished_encode(tmp_path, unfinished_encode)
+    root_file = out / "zarr.json"
+    if isinstance(root, str):
+        root_file.write_text(root)
+    else:
+        if isinstance(root.get("attributes"), dict):
+            root = {
+                **root,
+                "attributes": {
+                    **json.loads(root_file.read_text())["attributes"],
+                    **root["attributes"],
+                },
+            }
+        root_file.write_text(json.dumps(root))
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, resume=True, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+
+
+def attribute_less_dataset(path: Path, *, consolidated: bool) -> None:
+    a, _, c, _, e, f = TRANSFORM
+    times = make_times(3)
+    ds = xr.Dataset(
+        {"temp": (("time", "y", "x"), np.arange(3 * 4 * 5, dtype="float32").reshape(3, 4, 5))},
+        coords={
+            "time": times,
+            "y": f + e * (np.arange(4) + 0.5),
+            "x": c + a * (np.arange(5) + 0.5),
+        },
+    )
+    with warnings.catch_warnings():
+        # zarr-python warns that consolidated metadata is outside the Zarr v3 spec; this dataset
+        # is consolidated on purpose, as xarray writes one by default.
+        warnings.simplefilter("ignore", ZarrUserWarning)
+        ds.to_zarr(path, zarr_format=3, consolidated=consolidated)
+
+
+def test_a_failed_encode_does_not_claim_a_later_xarray_dataset_at_its_path(tmp_path, tifs):
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "store"
+    with pytest.raises(ValueError, match="chunk_size must be an even number"):
+        convert(manifest, out, chunk_size=3)
+    assert not out.exists()
+
+    attribute_less_dataset(out, consolidated=False)
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+    np.testing.assert_array_equal(
+        zarr.open_array(out, path="temp", mode="r")[:], np.arange(60).reshape(3, 4, 5)
+    )
+
+
+def test_a_killed_encode_does_not_claim_a_replacement_xarray_dataset(tmp_path, tifs):
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "store"
+    kill_a_conversion_while_it_encodes(manifest, out, **OPTIONS)
+    out.rename(tmp_path / "interrupted")
+    attribute_less_dataset(out, consolidated=False)
+
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+
+
+@pytest.mark.parametrize("consolidated", [True, False], ids=["consolidated", "unconsolidated"])
+def test_an_xarray_dataset_without_global_attributes_is_refused_as_not_empty(
+    tmp_path, tifs, consolidated
+):
+    out = tmp_path / "dataset.zarr"
+    attribute_less_dataset(out, consolidated=consolidated)
+    with pytest.raises(FileExistsError) as error:
+        convert(write_csv(tmp_path / "m.csv", tifs), out, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+
+
+def test_an_xarray_datatree_whose_children_look_like_levels_is_refused_as_not_empty(
+    tmp_path, tifs
+):
+    a, _, c, _, e, f = TRANSFORM
+    level = xr.Dataset(
+        {"data": (("time", "y", "x"), np.zeros((3, 4, 5), dtype="float32"))},
+        coords={
+            "time": make_times(3),
+            "y": f + e * (np.arange(4) + 0.5),
+            "x": c + a * (np.arange(5) + 0.5),
+        },
+    )
+    out = tmp_path / "tree.zarr"
+    tree = xr.DataTree.from_dict({"/0": level, "/1": level})
+    tree.to_zarr(out, zarr_format=3, consolidated=False)
+    with pytest.raises(FileExistsError) as error:
+        convert(write_csv(tmp_path / "m.csv", tifs), out, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+
+
+@pytest.mark.parametrize("consolidated", [True, False], ids=["consolidated", "unconsolidated"])
+def test_pointing_the_output_at_the_source_dataset_is_refused_as_not_empty(tmp_path, consolidated):
+    path = tmp_path / "dataset.zarr"
+    attribute_less_dataset(path, consolidated=consolidated)
+    with pytest.raises(FileExistsError) as error:
+        convert(path, path, crs=CRS, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=path)
+
+
+def test_a_finished_store_is_still_refused_as_immutable(tmp_path, tifs):
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "store"
+    convert(manifest, out, **OPTIONS)
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
 
 
 def test_custom_work_dir_is_used_and_cleaned(tmp_path, tifs):

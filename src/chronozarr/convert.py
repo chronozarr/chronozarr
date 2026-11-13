@@ -185,10 +185,12 @@ is rescaled and the store holds exactly the 8-bit (or 16-bit) values of the file
 
 from __future__ import annotations
 
+import enum
 import hashlib
 import json
 import shutil
 import time
+import uuid
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -274,14 +276,16 @@ from chronozarr._convert_source import (
     SourceInfo as SourceInfo,
 )
 from chronozarr._convert_source import (
+    StagedReuse,
+    _check_north_up,
+    icechunk_staged_reuse,
+    override_scaling,
+)
+from chronozarr._convert_source import (
     Step as Step,
 )
 from chronozarr._convert_source import (
     Validity as Validity,
-)
-from chronozarr._convert_source import (
-    _check_north_up,
-    override_scaling,
 )
 from chronozarr._convert_source import (
     check_bounds as check_bounds,
@@ -296,7 +300,7 @@ from chronozarr._convert_xarray import (
     _parse_dims,
 )
 from chronozarr.bands import assign_roles
-from chronozarr.encode import EncodeReport, encode
+from chronozarr.encode import _ENCODING_RUN_ATTR, EncodeReport, encode
 from chronozarr.icechunk import IcechunkInput, identity_note
 
 # Raw input bytes per second through `encode()` (spill, pyramid, zstd level 5, write). Measured
@@ -818,30 +822,151 @@ def _is_staged(work: Path, t: int, plan: Plan) -> bool:
     )
 
 
+class _OutputState(enum.Enum):
+    """What an output directory holds, as far as a conversion is concerned."""
+
+    FREE = "absent or empty"
+    FINISHED_STORE = "finished store"  # a root zarr.json whose attributes have a chronozarr block
+    # The root still carries the run ID recorded in the conversion's work directory.
+    UNFINISHED_STORE = "unfinished store"
+    OTHER = "something else"
+
+
+# The work directory records the intended path and run ID. The ID appears on the output
+# only when the encoder creates its root. Neither record alone identifies an unfinished output.
+_ENCODING_MARKER = "encoding"
+
+
+def _record_encode_start(work: Path, out_path: Path) -> str:
+    run = uuid.uuid4().hex
+    record = {"output": str(out_path.resolve()), "run": run}
+    (work / _ENCODING_MARKER).write_text(json.dumps(record), encoding="utf-8")
+    return run
+
+
+def _default_work_dir(out_path: Path) -> Path:
+    return out_path.parent / f"{out_path.name}.convert-work"
+
+
+def _encoding_work_dir(out_path: Path, work: Path, run: str) -> Path | None:
+    """Find the work directory for the run recorded on this output's root.
+
+    That is `work`, or else the default work directory of `out_path`: a rerun that names a fresh
+    work directory still finds the record of a run that named none.
+    """
+    expected = {"output": str(out_path.resolve()), "run": run}
+    for candidate in (work, _default_work_dir(out_path)):
+        try:
+            recorded = json.loads((candidate / _ENCODING_MARKER).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if recorded == expected:
+            return candidate
+    return None
+
+
+def _classify_output(out_path: Path, work: Path) -> tuple[_OutputState, Path | None]:
+    """Classify the output and return its work directory only when the two run IDs match."""
+    if not out_path.exists() or not any(out_path.iterdir()):
+        return _OutputState.FREE, None
+    try:
+        root = json.loads((out_path / "zarr.json").read_text())
+    except (OSError, ValueError):
+        return _OutputState.OTHER, None
+    if not isinstance(root, dict):
+        return _OutputState.OTHER, None
+    attributes = root.get("attributes", {})
+    if not isinstance(attributes, dict):
+        return _OutputState.OTHER, None
+    if "chronozarr" in attributes:
+        return _OutputState.FINISHED_STORE, None
+    run = attributes.get(_ENCODING_RUN_ATTR)
+    if (
+        root.get("zarr_format") == 3
+        and root.get("node_type") == "group"
+        and isinstance(run, str)
+        and len(attributes) == 1
+        and root.get("consolidated_metadata") is None
+    ):
+        recorded = _encoding_work_dir(out_path, work, run)
+        if recorded is not None:
+            return _OutputState.UNFINISHED_STORE, recorded
+    return _OutputState.OTHER, None
+
+
+def _plan_digest(fingerprint: Any) -> str:
+    return hashlib.sha256(json.dumps(fingerprint, sort_keys=True).encode()).hexdigest()
+
+
+def _recorded_plan_digest(plan_file: Path) -> str | None:
+    try:
+        recorded = json.loads(plan_file.read_text())
+    except (OSError, ValueError):
+        return None
+    digest = recorded.get("sha256") if isinstance(recorded, dict) else None
+    return digest if isinstance(digest, str) else None
+
+
+def _unfinished_store_error(out_path: Path, work: Path, plan: Plan | None) -> FileExistsError:
+    """The refusal for an unfinished store.
+
+    `work` records the encode. `plan` is the requested conversion and is None when `work`
+    holds no staged timesteps. A conversion still running in another process leaves the same
+    directory, so the message tells the user to delete only if none is running.
+    """
+    message = (
+        f"{out_path} holds an unfinished store: the run that wrote it was interrupted, or is "
+        f"still running. If no conversion is running, delete {out_path} and "
+    )
+    if plan is None:
+        return FileExistsError(f"{message}{work}, then rerun the conversion.")
+    if _recorded_plan_digest(work / "plan.json") != _plan_digest(plan.source.fingerprint()):
+        return FileExistsError(
+            f"{message}rerun without --resume and set --work-dir to a new directory. "
+            f"Keep the staged timesteps in {work}."
+        )
+    if plan.source.staged_reuse is StagedReuse.REUSABLE:
+        return FileExistsError(
+            f"{message}rerun with --resume --work-dir {work} to reuse the timesteps staged "
+            f"in {work}."
+        )
+    return FileExistsError(
+        f"{message}{work}, then rerun the conversion: the timesteps staged in {work} "
+        "cannot be reused for this source."
+    )
+
+
 def _check_work_dir(work: Path, plan: Plan, resume: bool) -> None:
     plan_file = work / "plan.json"
-    fingerprint = json.dumps(plan.source.fingerprint(), sort_keys=True)
-    digest = hashlib.sha256(fingerprint.encode()).hexdigest()
+    fingerprint = plan.source.fingerprint()
+    digest = _plan_digest(fingerprint)
     if work.exists() and any(work.iterdir()):
         if not resume:
-            if plan.source.kind == "Zarr store":
+            reuse = plan.source.staged_reuse
+            if reuse is StagedReuse.ZARR_CHUNKS_CAN_CHANGE:
                 raise FileExistsError(
                     f"{work} holds timesteps staged by an earlier run. Choose a fresh work "
                     "directory with --work-dir."
+                )
+            if reuse is StagedReuse.VIRTUAL_REFERENCES_UNBOUND:
+                raise FileExistsError(
+                    f"{work} holds timesteps staged by an earlier run. Choose a fresh work "
+                    "directory with --work-dir: a snapshot pins references, but this importer "
+                    "does not bind external object versions."
                 )
             raise FileExistsError(
                 f"{work} holds timesteps staged by an earlier run. Pass --resume to reuse them, "
                 "or delete the directory to start over"
             )
-        recorded = json.loads(plan_file.read_text()) if plan_file.is_file() else {}
-        if recorded.get("sha256") != digest:
+        recorded_digest = _recorded_plan_digest(plan_file)
+        if recorded_digest != digest:
             raise ValueError(
                 f"{work} was staged for a different input or options (plan hash "
-                f"{str(recorded.get('sha256'))[:12]} vs {digest[:12]}); delete it or rerun "
+                f"{str(recorded_digest)[:12]} vs {digest[:12]}); delete it or rerun "
                 "without --resume in a fresh work directory"
             )
     work.mkdir(parents=True, exist_ok=True)
-    plan_file.write_text(json.dumps({"sha256": digest, "plan": json.loads(fingerprint)}))
+    plan_file.write_text(json.dumps({"sha256": digest, "plan": fingerprint}))
 
 
 def _stage(
@@ -1019,7 +1144,12 @@ def convert(
     `encode_options` go to `chronozarr.encode`: chunk_size, codec, level, volatility,
     shard, shard_time, n_lods, workers, provenance.
     """
-    if isinstance(source, IcechunkInput) and source.virtual_prefixes and resume:
+    if (
+        resume
+        and isinstance(source, IcechunkInput)
+        and icechunk_staged_reuse(source.virtual_prefixes)
+        is StagedReuse.VIRTUAL_REFERENCES_UNBOUND
+    ):
         raise ValueError(
             "resume is unsupported for Icechunk imports allowing virtual sources: a snapshot "
             "pins references, but this importer does not bind external object versions; "
@@ -1045,11 +1175,20 @@ def convert(
                 "this source is already a manifest or is not a set of rasters"
             )
     out_path = Path(out)
-    if not dry_run and out_path.exists() and any(out_path.iterdir()):
+    work = Path(work_dir) if work_dir is not None else _default_work_dir(out_path)
+    output, unfinished_work = (
+        (_OutputState.FREE, None) if dry_run else _classify_output(out_path, work)
+    )
+    if output in (_OutputState.FINISHED_STORE, _OutputState.OTHER):
         raise FileExistsError(
             f"{out_path} already exists and is not empty; stores are immutable, write to a "
             "new path"
         )
+    if unfinished_work is not None and not any(unfinished_work.glob("t*.npy")):
+        raise _unfinished_store_error(out_path, unfinished_work, None)
+    # With timesteps staged, plan before refusing an unfinished output so the advice can check
+    # which plan produced them. Plan without `resume` in this case so the refusal names the
+    # unfinished store even when the source itself does not support resume.
     try:
         plan = plan_conversion(
             source,
@@ -1070,12 +1209,14 @@ def convert(
             calendar_to_gregorian=calendar_to_gregorian,
             bands_are_dates=bands_are_dates,
             mosaic_tiles=mosaic_tiles,
-            resume=resume,
+            resume=resume and unfinished_work is None,
         )
     except PreflightError as exc:
         if write_manifest_to is not None and exc.draft is not None:
             exc.wrote_manifest(_write_draft(exc.draft, Path(write_manifest_to)))
         raise
+    if unfinished_work is not None:
+        raise _unfinished_store_error(out_path, unfinished_work, plan)
     bands = list(plan.source.info.bands)
     if band_roles:
         bands = list(assign_roles(bands, band_roles))
@@ -1116,11 +1257,6 @@ def convert(
         report = migrate(plan.source, out_path, progress)
         return ConvertReport(plan, report, 0, 0, 0, time.perf_counter() - started)
 
-    work = (
-        Path(work_dir)
-        if work_dir is not None
-        else out_path.parent / f"{out_path.name}.convert-work"
-    )
     _check_work_dir(work, plan, resume)
     info = plan.source.info
     if isinstance(plan.source, XarraySource) and plan.source.calendar is not None:
@@ -1143,6 +1279,7 @@ def convert(
         read_s = time.perf_counter() - started
 
         started = time.perf_counter()
+        run = _record_encode_start(work, out_path)
         report = encode(
             _staged_timesteps(plan, work),
             out_path,
@@ -1152,16 +1289,18 @@ def convert(
             transform=info.grid.transform,
             nodata=info.nodata,
             mask=_staged_masks(plan, work) if info.mask else None,
+            _encoding_run=run,
             **encode_options,
         )
         encode_s = time.perf_counter() - started
     except BaseException as exc:
-        if plan.source.kind == "Zarr store":
+        reuse = plan.source.staged_reuse
+        if reuse is StagedReuse.ZARR_CHUNKS_CAN_CHANGE:
             exc.add_note(
                 f"staged timesteps are kept in {work} for inspection. Choose a fresh work "
                 "directory with --work-dir."
             )
-        elif isinstance(source, IcechunkInput) and source.virtual_prefixes:
+        elif reuse is StagedReuse.VIRTUAL_REFERENCES_UNBOUND:
             exc.add_note(
                 f"staged timesteps are kept in {work} for inspection; virtual-source resume "
                 "is unsupported without external object identities, so start a fresh import"

@@ -241,6 +241,32 @@ def test_pinned_materialized_snapshot_reuses_staged_timestep(tmp_path: Path) -> 
     )
 
 
+def test_virtual_source_rerun_is_told_to_choose_a_fresh_work_directory(tmp_path: Path) -> None:
+    path, _, snapshot = _repo(tmp_path, _dataset())
+    source = IcechunkInput(
+        path, _indexes(), snapshot=snapshot, virtual_prefixes=("s3://public-bucket/",)
+    )
+    out = tmp_path / "out"
+    work = tmp_path / "out.convert-work"
+
+    def interrupt(done: int, _total: int) -> None:
+        if done == 1:
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt) as interrupted:
+        convert(source, out, variable="temp", nodata=None, progress=interrupt, read_ahead=1)
+    assert "start a fresh import" in " ".join(interrupted.value.__notes__)
+    assert any(work.glob("t*.npy"))
+
+    with pytest.raises(FileExistsError) as rerun:
+        convert(source, out, variable="temp", nodata=None)
+    message = str(rerun.value)
+    assert "--resume" not in message
+    assert "--work-dir" in message
+    assert "external object versions" in message
+    assert any(work.glob("t*.npy"))
+
+
 def test_bounds_and_chunk_budget_fail_before_pixel_sampling(tmp_path: Path) -> None:
     path, _, _ = _repo(tmp_path, _dataset())
     cases: list[tuple[dict[str, int | slice], dict[str, Any], str]] = [

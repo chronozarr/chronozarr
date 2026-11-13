@@ -775,6 +775,70 @@ def test_explicit_port_serves_and_the_check_is_not_counted_as_the_browser(store)
     assert server.state.store_requests == 1
 
 
+def test_a_server_knows_that_it_was_closed(store):
+    server = serve_store(store)
+    assert not server.closed
+    server.close()
+    assert server.closed
+    assert store.resolve() not in view_module._servers
+
+
+def test_closing_a_closed_server_does_nothing(store):
+    server = serve_store(store)
+    server.close()
+    server.close()
+    assert server.closed
+    again = serve_store(store)  # a new server takes the place of the closed one
+    assert again is not server and not again.closed
+    server.close()
+    assert view_module._servers[store.resolve()] is again
+    assert get(f"{again.url}/zarr.json")[0] == 200
+
+
+def test_diagnose_of_a_closed_server_says_it_was_closed_and_gives_no_connectivity_advice(store):
+    access = local_access(store)
+    server = access.server
+    server.close()
+    for text in (server.diagnose(), access.diagnose({})):
+        assert "was closed" in text
+        assert "serve_store()" in text and "view()" in text
+        assert "No request for the store" not in text
+        assert "Chrome" not in text and "Remote notebooks" not in text
+        assert "connectivity is not the problem" not in text
+
+
+def test_a_server_stopped_by_a_failed_port_check_is_forgotten_when_closed(store, monkeypatch):
+    server = serve_store(store)
+
+    class _Unreachable:
+        def open(self, url: str, timeout: float) -> io.BytesIO:
+            raise urllib.error.URLError("refused")
+
+    monkeypatch.setattr(
+        view_module.urllib.request, "build_opener", lambda *handlers: _Unreachable()
+    )
+    with pytest.raises(OSError, match="does not answer"):
+        server._check_answers()
+    assert server.closed
+    server.close()
+    assert store.resolve() not in view_module._servers
+    again = serve_store(store)
+    assert again is not server and not again.closed
+
+
+def test_a_port_check_on_a_server_in_use_keeps_its_request_counts(store):
+    server = serve_store(store)
+    for _ in range(3):
+        get(f"{server.url}/zarr.json")
+    viewer_before = server.state.viewer_requests
+    last = server.state.last_store_request
+    assert server.state.store_requests == 3 and last is not None
+    server._check_answers()
+    assert server.state.store_requests == 3
+    assert server.state.viewer_requests == viewer_before
+    assert server.state.last_store_request == last
+
+
 def conditional_get(url: str, **headers: str) -> tuple[int, dict[str, str], bytes]:
     request = urllib.request.Request(url, headers=headers)
     try:

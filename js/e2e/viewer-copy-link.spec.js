@@ -44,7 +44,7 @@ test('copies the selected catalog dataset instead of the catalog default', async
   await page.route('**/catalog.json', (route) => route.fulfill({ json: [{ name: 'First', url: first }, { name: 'Second', url: second }] }));
   await open(page, `${servers.appUrl}/demo/index.html`);
   await page.locator('#catalog-select').selectOption(second);
-  await page.waitForFunction((url) => window.chronozarr.viewer.store.url === url, second);
+  await page.waitForFunction((url) => window.chronozarr.viewer.store?.url === url, second);
   await page.evaluate(() => window.chronozarr.ready);
   expect(new URL(page.url()).searchParams.has('store'), 'the address bar keeps its existing catalog behavior').toBe(false);
   await page.evaluate(() => {
@@ -75,7 +75,7 @@ test('offers the selected dataset and view to copy when the clipboard API is una
   await page.route('**/catalog.json', (route) => route.fulfill({ json: [{ name: 'First', url: first }, { name: 'Second', url: second }] }));
   await open(page, `${servers.appUrl}/demo/index.html`);
   await page.locator('#catalog-select').selectOption(second);
-  await page.waitForFunction((url) => window.chronozarr.viewer.store.url === url, second);
+  await page.waitForFunction((url) => window.chronozarr.viewer.store?.url === url, second);
   await page.evaluate(() => window.chronozarr.ready);
   await page.evaluate(() => {
     const { viewer } = window.chronozarr;

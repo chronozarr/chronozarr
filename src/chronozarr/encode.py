@@ -59,6 +59,9 @@ LEVEL_RANGE = {"zstd": (1, 22), "blosc-zstd-shuffle": (0, 9)}
 
 Codec = Literal["zstd", "blosc-zstd-shuffle"]
 
+# The final root attributes replace this marker from a conversion still being written.
+_ENCODING_RUN_ATTR = "_chronozarr_encoding_run"
+
 
 @dataclass(frozen=True)
 class LevelReport:
@@ -239,10 +242,12 @@ def _write_store(
     *,
     provenance: dict | None,
     cells_in_flight: int,
+    encoding_run: str | None,
 ) -> EncodeReport:
     cs = layout.chunk_size
     reference = schema.comparison_schedule(layout.n_time)
-    root = zarr.open_group(str(out), mode="w", zarr_format=3)
+    attrs = None if encoding_run is None else {_ENCODING_RUN_ATTR: encoding_run}
+    root = zarr.create_group(str(out), zarr_format=3, attributes=attrs)
     arrays = [_create_level(root, k, layout) for k in range(len(layout.shapes))]
     grids = [schema.grid_shape(h, w, cs) for h, w in layout.shapes]
     volatility = np.zeros(grids[0], dtype=np.float32)
@@ -357,7 +362,7 @@ def _write_store(
         shard_bytes=_shard_bytes(out, len(layout.shapes)) if layout.shard else None,
     )
     datasets = tuple(LevelRef(str(k), layout.crs.code) for k in range(len(layout.shapes)))
-    root.attrs.update(RootAttrs(meta, datasets).to_attrs())
+    root.attrs.put(RootAttrs(meta, datasets).to_attrs())
     with warnings.catch_warnings():
         # zarr-python warns that consolidated metadata is outside the Zarr v3 spec. chronozarr
         # writes it deliberately (spec 3.1) so a reader learns every array in one GET.
@@ -419,6 +424,7 @@ def encode(
     n_lods: int | None = None,
     workers: int | None = None,
     spill_dir: str | Path | None = None,
+    _encoding_run: str | None = None,
 ) -> EncodeReport:
     """Write `data` as a chronozarr store at `out` (spec 0.3.0, or 0.4.0 without an EPSG code).
 
@@ -556,7 +562,12 @@ def encode(
                 has_coverage=layout.has_coverage,
             )
         return _write_store(
-            out, layout, source, cells_in_flight=cells_in_flight, provenance=resolved_provenance
+            out,
+            layout,
+            source,
+            cells_in_flight=cells_in_flight,
+            provenance=resolved_provenance,
+            encoding_run=_encoding_run,
         )
     except BaseException:
         shutil.rmtree(out, ignore_errors=True)

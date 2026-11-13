@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import enum
 import math
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
@@ -79,10 +80,31 @@ class Step:
     valid: np.ndarray | None = None
 
 
+class StagedReuse(enum.Enum):
+    """Whether timesteps that a failed conversion staged can be reused by a rerun.
+
+    A source says which of the three it is. The answer decides the refusal of `--resume`, the
+    message for a rerun without it, and the note added to a failure.
+    """
+
+    REUSABLE = "reusable"
+    # The chunks of an ordinary Zarr store can change without its metadata changing, so staged
+    # timesteps may no longer match what the store holds.
+    ZARR_CHUNKS_CAN_CHANGE = "zarr chunks can change"
+    # An Icechunk snapshot pins references to external objects, but not those objects' versions.
+    VIRTUAL_REFERENCES_UNBOUND = "virtual references unbound"
+
+
+def icechunk_staged_reuse(virtual_prefixes: Sequence[str]) -> StagedReuse:
+    """The answer for an Icechunk import that allows these virtual source prefixes."""
+    return StagedReuse.VIRTUAL_REFERENCES_UNBOUND if virtual_prefixes else StagedReuse.REUSABLE
+
+
 class Source:
     """A timestep-addressable input on a known grid."""
 
     kind: str
+    staged_reuse: StagedReuse = StagedReuse.REUSABLE
     times: list[np.datetime64]
     info: SourceInfo
     # Indices of timesteps that are not on the target grid and must be warped (COG only).

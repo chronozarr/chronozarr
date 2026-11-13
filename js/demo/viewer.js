@@ -2,10 +2,12 @@
 // products on the GPU and shows decoded values on click. Opens ?store=<base url>.
 
 import { chunkKey, openStore, scrubCost } from '../chronozarr/decoder.js';
+import { Machine } from '../chronozarr/machine.js';
 import { buildSeries, chartRange, gapFilledTimes, seriesPath, seriesSpecs, timeFromX, validAt, windowPixels, xFromTime } from './chart.js';
 import { ASSUMED_BANDWIDTH, COARSE_FRAME_BYTES, COARSE_MAX_OVERHEAD, STAGE_LEAD_LATENCY_MAX_MS, STAGE_LEAD_MAX_MS, ancestorCells, coarseLoopDrifted, coarseLoopSteps, extraOverviewLod, planCoarseStages, stageLatencyLeadMs, stageLeadMs } from './coarse.js';
 import { fetchWithEarlyReads, takeEarlyRootMs } from './early.js';
 import { chooseFrame } from './frames.js';
+import { frameOutcome } from './status.js';
 import { BUFFER_BATCH, DEFAULT_STEPS_PER_SECOND, Playback, SPEEDS, START_BUFFER_SECONDS, bufferBatch, chooseMovieLevel, describeReason, linkAllows, linkSteps, roundSteps, snapSpeed, wireRatio } from './playback.js';
 import { applyEmbedAttributes, connectEmbed, parseEmbedParams } from './embed.js';
 import { PROBE_MAX_NEED, SCRUB_PREVIEW_STRIDE, SCRUB_WINDOW_MS, ScrubSpeed, chooseScrub, framesInSequence, nextPumpSteps, readyRun, savesData, scrubPreviewDate, scrubPreviewSteps, scrubPumpRequests, stepsAhead } from './scrub.js';
@@ -57,6 +59,7 @@ const LOD_BIAS = 0.5;
 const CELL_RETRY_DELAY_MS = 4000;
 const MAX_CELL_RETRIES = 3;
 const TOAST_MS = 12000;
+const PROGRESS_FADE_MS = 200;
 const SPEED_KEY = 'chronozarr.stepsPerSecond';
 const STRETCH_SAMPLES_PER_CELL = 300;
 const URL_SYNC_MS = 300;
@@ -84,6 +87,18 @@ const CHART = { width: 264, height: 124, left: 34, right: 256, top: 8, bottom: 1
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/**
+ * The viewer's store session. none: no store was asked for. opening: a store's metadata is being read; no store is
+ * open. open: `viewer.store` is the open store. failed: the last open failed; no store is open.
+ * `viewer.store` is non-null exactly while the session is open, and it is never a closed store.
+ */
+const SESSION_MOVES = {
+  none: { open: 'opening' },
+  opening: { open: 'opening', opened: 'open', failed: 'failed' },
+  open: { open: 'opening' },
+  failed: { open: 'opening' },
+};
 
 /** Whether the chart holds what it needs of timestep t: its values and, with a coverage variable, its coverage. */
 const chartHolds = (chart, t) => Boolean(chart.readings[t]) && (!chart.coverage || chart.coverage[t] !== undefined);
@@ -149,8 +164,10 @@ class Viewer {
   probe = null;
   /**
    * What the embed bridge listens to (embed.js): ready() when a store has opened, time({t}) on a timestep change,
-   * view() on a camera change, click({pixel, t, lod, info}) on a click inside the store, error({code, title, message}).
-   * Empty outside an embed.
+   * view() on a camera change, click({pixel, t, lod, info}) on a click inside the store, error({code, title, message}),
+   * status() when the store, frame outcome, displayed timestep or level, playback, export hold or notice code
+   * changes, and after a change of product, band, colormap, stretch, auto exposure or speed.
+   * status() is not called when `status.frame` reads 'loading' only because a render is queued. Empty outside an embed.
    */
   hooks = {};
   /** The viewer runs in an iframe of another page (?embed=1): the inspector is always a drawer. */
@@ -206,11 +223,27 @@ class Viewer {
   #gpuWindow = new GpuWindow();
   #cameraMovedAt = -Infinity;
   #prefetchAbort = null;
+  #session = new Machine('viewer session', SESSION_MOVES, 'none');
+  /** What the last render left on the canvas (status.js frameOutcome): 'none' while no store is open, 'loading' from an open to its first render. */
+  #frameOutcome = 'none';
+  /** Who waits in whenSettled(); resolved with the status once nothing is pending. */
+  #settledWaiters = [];
+  /** The values the data-* attributes and the `status` hook were last given (#publishStatus). */
+  #published = { store: null, frame: null, shownT: null, level: null, playback: null, exporting: null, error: null };
+  /** The notice on screen: null, or {code, toast} for the error box (toast false) or the toast. */
+  #notice = null;
+  /** Who waits for the next complete frame (whenPainted, and the open's first-frame wait); all are let go when a session ends. */
   #painted = [];
+  /** While an open waits for its first frame: ends that wait when every cell the frame misses has failed for good. */
+  #firstFrameUnavailable = null;
   #storeGeneration = 0;
   #tickElements = [];
   #wave = null;
   #toastTimer = 0;
+  /** The progress bar: 'hidden', 'loading' (it shows how much of a load has arrived) or 'complete' (full, its fade pending). */
+  #progress = 'hidden';
+  /** The fade of a complete progress bar, which hides it PROGRESS_FADE_MS after the load completed. */
+  #progressTimer = 0;
   #playback = null;
   #exportHold = null;
   #speed = loadSpeed();
@@ -261,12 +294,18 @@ class Viewer {
     this.#trackTimelineHeight();
     // Crossing the breakpoint either way starts the drawer closed rather than reopening one left open at the other width.
     window.matchMedia(`(width < ${DRAWER_BELOW}px)`).addEventListener('change', () => this.closeInspector());
+    // The data-* attributes of the status are there from the start, before any store is asked for.
+    this.#publishStatus();
   }
 
   /**
    * Open a store and resolve after the first complete frame is painted. The result has the time to open the
    * metadata (`openMs`), to the first frame that covers the whole view at some level (`coarseMs`, from the call;
-   * `coarseAfterMetadataMs`) and to the first complete frame at the target level (`firstPaintMs`).
+   * `coarseAfterMetadataMs`) and to the first complete frame at the target level (`firstPaintMs`). When every cell
+   * that frame misses has failed for good, it resolves without waiting longer, with `firstPaintMs` null: the store is
+   * open, and the frame status and the error toast say what is missing. It resolves null when a newer open took over,
+   * and rejects when the store cannot be opened. From the call on, the previous store is closed and no store is open
+   * until this one is.
    * @param {string} url
    * @param {{lod?:number, fetch?:typeof fetch, maxCacheBytes?:number, totalBytes?:number, workers?:number, camera?:{cx:number,cy:number,scale:number},
    *   viewSearch?:string, store?:object, startTime?:(store:object)=>Promise<number>}} [options]  `viewSearch`: a query string whose t, p, b, z, c parameters restore the view (see permalink.js).
@@ -274,25 +313,27 @@ class Viewer {
    *   `startTime`: where to start in time when `viewSearch` names no timestep (start-time.js); without it, the first timestep.
    */
   async loadStore(url, options = {}) {
-    ++this.#inspectRequest;
-    this.#playback?.pause();
-    this.#clearChart();
-    this.#abortBackground();
-    this.store?.close();
+    // 1. End the previous session. The session moves first and #endSession detaches the store before anything else, so
+    // that every status published on the way says that a store is opening and finds `viewer.store` null: never a status
+    // that says opening while `viewer.store` still holds the previous store. An open that was waiting for its first
+    // frame wakes up after this call has returned at its first await, and by then the generation below says that it was
+    // superseded.
+    this.#session.send('open');
     const generation = ++this.#storeGeneration;
+    this.#endSession();
     this.#hideError();
     this.#setProgress(0.02);
     const started = performance.now();
+
+    // 2. Read the store and where it starts in time; a newer open may take over at each await.
     let store = options.store ?? null;
     try {
       store ??= await openStore(url, { fetch: options.fetch, maxCacheBytes: options.maxCacheBytes, totalBytes: options.totalBytes, workers: options.workers });
       checkUniformChunks(store);
     } catch (error) {
-      const failure = await explainOpenError(error, { url });
-      if (generation === this.#storeGeneration) {
-        this.reportStoreOpenError(failure);
-        this.#setProgress(0);
-      }
+      // A store that this call opened and then refused is closed here: nothing else holds it or its decoder lease.
+      if (store !== null && store !== options.store) store.close();
+      await this.#failOpen(error, url, generation);
       throw error;
     }
     if (generation !== this.#storeGeneration) {
@@ -316,14 +357,64 @@ class Viewer {
     // A root read that the page started before this script loaded (early.js) took its round trip before `started`.
     this.#roundTripMs = Math.max(openMs, takeEarlyRootMs() ?? 0);
 
+    // 3. Set up the store and its renderer before publishing an open session.
+    try {
+      this.#initializeStore(store, options, startT);
+    } catch (error) {
+      if (this.store === store) this.#endSession();
+      else store.close();
+      await this.#failOpen(error, url, generation);
+      throw error;
+    }
+    this.#session.send('opened');
+    this.#frameOutcome = 'loading';
+    this.#updatePlayUi();
+    if (generation !== this.#storeGeneration) return null;
+    this.#hook('ready');
+    if (generation !== this.#storeGeneration) return null;
+
+    // 4. Wait for the first frame: true once it is painted, false when it cannot be had, true too when a newer open
+    // ended this session (the generation tells that case apart).
+    const firstFrame = new Promise((resolve) => {
+      this.#painted.push(() => resolve(true));
+      this.#firstFrameUnavailable = () => resolve(false);
+    });
+    this.#beginView('open');
+    this.renderNow();
+    const painted = await firstFrame;
+    if (generation !== this.#storeGeneration) return null;
+    this.#firstFrameUnavailable = null;
+    if (painted) this.#setProgress(1);
+    this.syncUrl();
+    const { startedAt, coarseAt } = this.#viewTiming;
+    return {
+      openMs,
+      firstPaintMs: painted ? performance.now() - started : null,
+      coarseMs: coarseAt === null ? null : coarseAt - started,
+      coarseAfterMetadataMs: coarseAt === null ? null : coarseAt - startedAt,
+    };
+  }
+
+  async #failOpen(error, url, generation) {
+    const failure = await explainOpenError(error, { url });
+    if (generation !== this.#storeGeneration) return;
+    this.#session.send('failed');
+    this.#setProgress(0);
+    this.reportStoreOpenError(failure);
+  }
+
+  #initializeStore(store, options, startT) {
+    prepareMovieCache(store, this.renderer.limits.maxSize);
+    this.#configurePool(store);
     this.store = store;
     store.evictionScore = (entry) => this.#storeScore(entry);
     this.bands = normalizeBands(store.attrs.bands);
     this.dtype = store.dtype;
-    prepareMovieCache(store, this.renderer.limits.maxSize);
-    this.#configurePool();
     this.#playback = this.#createPlayback();
     this.#movieMemo = null;
+    // A canvas resize while the store opened asked the next prefetch to seek. An open that restores a camera has nothing
+    // to seek from; an open that fits the view asks for the seek again in fit() below.
+    this.#seekPending = false;
     this.#clearScrub();
     this.#linear = { range: null, manual: false };
     this.#channelRanges = null;
@@ -361,27 +452,62 @@ class Viewer {
     this.#buildTimeline();
     this.#updateTimeUi();
     this.#updateFrameDate([]);
-    this.#updatePlayUi();
     this.#updateMeta();
     this.#updateSidebar(null);
     this.closeInspector();
     $('click-hint').classList.remove('hidden');
     this.#updateGapToggle();
-    this.#hook('ready');
+  }
 
-    const painted = this.whenPainted();
-    this.#beginView('open');
-    this.renderNow();
-    await painted;
-    this.#setProgress(1);
-    this.syncUrl();
-    const { startedAt, coarseAt } = this.#viewTiming;
-    return {
-      openMs,
-      firstPaintMs: performance.now() - started,
-      coarseMs: coarseAt === null ? null : coarseAt - started,
-      coarseAfterMetadataMs: coarseAt === null ? null : coarseAt - startedAt,
-    };
+  /**
+   * End the session of the store that is open, or of the open in progress, and leave nothing of it behind: afterwards
+   * no request, timer, animation frame or promise continuation of it acts on the viewer, every per-store field is back
+   * to its initial value, and the viewer is as it is before the first open (no store, Play and Export off, an empty
+   * sidebar). The previous Playback stays, paused, until the next session replaces it. The canvas keeps its last image
+   * and the timeline its ticks until the next store draws.
+   */
+  #endSession() {
+    // No store is open from here on: what is published below (pausing publishes) has no store and no frame. The store
+    // is detached first and closed near the end, after the work that still holds its requests has stopped.
+    const store = this.store;
+    this.store = null;
+    this.#frameOutcome = 'none';
+    // A click being inspected drops its result once the token has moved on.
+    ++this.#inspectRequest;
+    // Pausing runs #updatePlayUi, which queues a render and an address bar sync: pause first, so that both are cancelled below.
+    this.#playback?.pause();
+    // The scrub hands the requests of its pumps over to the next frame; #abortBackground, after it, stops those too.
+    this.#clearScrub();
+    // The pumps, the coarse loop, the demand wave, the GPU fill and the prefetch.
+    this.#abortBackground();
+    this.#clearChart();
+    cancelAnimationFrame(this.#rafId);
+    this.#rafId = 0;
+    clearTimeout(this.#urlTimer);
+    this.#urlTimer = 0;
+    this.#coarseLoopLod = -1;
+    this.#exportHold = null;
+    this.#seekPending = false;
+    this.#linkVerdict = null;
+    this.#movieMemo = null;
+    // The GPU fill reads the cells of the view: with none, a fill that a late callback schedules does nothing.
+    this.#view = { lod: 0, cells: new Set() };
+    this.#shown = null;
+    this.paintedT = -1;
+    this.#loading = false;
+    this.#keptKey = null;
+    this.#viewTiming = null;
+    this.#firstFrameUnavailable = null;
+    // An open waiting for its first frame wakes up, sees that its generation has passed and resolves null.
+    for (const resolve of this.#painted.splice(0)) resolve();
+    this.#updateSidebar(null);
+    this.closeInspector();
+    store?.close();
+    this.#updatePlayUi();
+    this.#updateFrameDate([]);
+    // #loading is false from here: the tick of the timestep asked for and the track lose their loading look.
+    this.#updateTimeUi();
+    this.#publishStatus();
   }
 
   /**
@@ -410,7 +536,9 @@ class Viewer {
     };
   }
 
+  /** Fit the whole store in the canvas, centered. Does nothing while no store is open. */
   fit() {
+    if (this.store === null) return;
     const level = this.store.levels[0];
     const { width, height } = this.canvas;
     const scale = Math.min(width / level.width, height / level.height) * 0.94;
@@ -461,6 +589,7 @@ class Viewer {
     this.#scheduleUrlSync();
   }
 
+  /** The scale of the fitted view, from the size of the open store's level 0: while no store is open there is none, and reading it throws, as it does before the first open. */
   get fitScale() {
     const level = this.store.levels[0];
     return Math.min(this.canvas.width / level.width, this.canvas.height / level.height) * 0.94;
@@ -647,9 +776,12 @@ class Viewer {
    * stretch), at `scale` times the canvas size. The level is the normal one when `timesteps` steps of the
    * visible cells fit the decoded cache, else the coarser one a movie would play at. It has its own small
    * texture pool and reads the decoded chunk cache, so the viewer keeps working while it runs. See export.js.
+   * `timesteps` defaults to every timestep of the store. It throws while no store is open.
    */
-  createExportSession({ scale = 1, timesteps = this.store.times.length } = {}) {
+  createExportSession({ scale = 1, timesteps } = {}) {
+    if (this.store === null) throw new Error('createExportSession needs an open store: none is open');
     const { store } = this;
+    if (timesteps === undefined) timesteps = store.times.length;
     const generation = this.#storeGeneration;
     const isStartingStore = () => this.#storeGeneration === generation;
     const requireStartingStore = () => {
@@ -662,18 +794,6 @@ class Viewer {
     const canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.round(this.canvas.width * scale));
     canvas.height = Math.max(1, Math.round(this.canvas.height * scale));
-    const hold = { lod, cells: new Set(cells.map(([row, col]) => `${row}/${col}`)) };
-    this.#exportHold = hold;
-    clearTimeout(this.#prefetchTimer);
-    this.#prefetchTimer = 0;
-    this.#prefetchAbort?.abort();
-    this.#coarseLoop?.controller.abort();
-    this.#coarseLoop = null;
-    const renderer = new Renderer(canvas);
-    const first = store.levels[0];
-    const bytesPerSample = first.chunkBytes / (first.nBand * first.chunkWidth * first.chunkHeight);
-    const slots = renderer.planSlots(first.nBand, first.chunkWidth, first.chunkHeight, POOL_BUDGET_BYTES, Math.max(4, 2 * cells.length + 4), bytesPerSample, store.hasMask, store.compactCacheEnabled);
-    renderer.configure({ dtype: this.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots, hasMask: store.hasMask, compact: store.compactCacheEnabled });
     const frame = {
       width: canvas.width,
       height: canvas.height,
@@ -683,6 +803,24 @@ class Viewer {
       stretchLo: this.#stretchLo ?? 0,
       nodata: this.#nodata,
     };
+    const renderer = new Renderer(canvas);
+    try {
+      const first = store.levels[0];
+      const bytesPerSample = first.chunkBytes / (first.nBand * first.chunkWidth * first.chunkHeight);
+      const slots = renderer.planSlots(first.nBand, first.chunkWidth, first.chunkHeight, POOL_BUDGET_BYTES, Math.max(4, 2 * cells.length + 4), bytesPerSample, store.hasMask, store.compactCacheEnabled);
+      renderer.configure({ dtype: this.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots, hasMask: store.hasMask, compact: store.compactCacheEnabled });
+    } catch (error) {
+      renderer.dispose();
+      throw error;
+    }
+    const hold = { lod, cells: new Set(cells.map(([row, col]) => `${row}/${col}`)) };
+    this.#exportHold = hold;
+    clearTimeout(this.#prefetchTimer);
+    this.#prefetchTimer = 0;
+    this.#prefetchAbort?.abort();
+    this.#coarseLoop?.controller.abort();
+    this.#coarseLoop = null;
+    this.#publishStatus();
     const chunksFor = (t) => cells.flatMap(([row, col]) => [t].map((ct) => [row, col, ct]));
     const masksReady = (t) => !store.hasMask || cells.every(([row, col]) => store.hasCachedMask(lod, row, col, t));
     return {
@@ -721,6 +859,7 @@ class Viewer {
         renderer.dispose();
         if (this.#exportHold !== hold) return;
         this.#exportHold = null;
+        this.#publishStatus();
         this.#schedulePrefetch();
       },
     };
@@ -730,8 +869,9 @@ class Viewer {
     return this.#playback;
   }
 
+  /** Play the movie; nothing while no store is open (the playback of a previous store stays paused). */
   play() {
-    this.#playback?.play();
+    if (this.#session.state === 'open') this.#playback?.play();
   }
 
   pause() {
@@ -739,7 +879,7 @@ class Viewer {
   }
 
   togglePlay() {
-    this.#playback?.toggle();
+    if (this.#session.state === 'open') this.#playback?.toggle();
   }
 
   /** Steps per second for movie playback, kept between visits. */
@@ -748,10 +888,12 @@ class Viewer {
     saveSpeed(this.#speed);
     this.#playback?.setSpeed(this.#speed);
     this.#updateSpeedUi();
+    this.#hook('status');
   }
 
-  /** Whether every visible cell has the chunks for timestep t in memory at the level that is drawn, so showing it needs no fetch. */
+  /** Whether every visible cell has the chunks for timestep t in memory at the level that is drawn, so showing it needs no fetch. False while no store is open. */
   isTimestepReady(t) {
+    if (this.store === null) return false;
     return this.#frameReady(this.#targetLod(), t);
   }
 
@@ -765,6 +907,7 @@ class Viewer {
     this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
+    this.#hook('status');
   }
 
   /** Colormap of the single-band product, an index in COLORMAPS (0 = gray). */
@@ -776,6 +919,7 @@ class Viewer {
     this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
+    this.#hook('status');
   }
 
   setBandChoice(index) {
@@ -787,6 +931,7 @@ class Viewer {
     this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
+    this.#hook('status');
   }
 
   requestRender() {
@@ -797,9 +942,118 @@ class Viewer {
     });
   }
 
-  /** Resolves after the next complete frame. */
+  /** Resolves after the next complete frame, or when the store is replaced before one is painted. */
   whenPainted() {
     return new Promise((resolve) => this.#painted.push(resolve));
+  }
+
+  /**
+   * What the viewer is doing, as a new plain object on each call:
+   * - `store`: the store session. 'none': no store was asked for; 'opening': a store's metadata is being read and no
+   *   store is open; 'open': `viewer.store` is the open store; 'failed': the last open failed and no store is open.
+   * - `frame`: what the last render left on the canvas. 'none': no store is open; 'loading': the frame asked for is not
+   *   on the canvas (a coarser frame, another timestep or nothing stands in), and also whenever a store is open and a
+   *   render is queued, since its outcome is not known yet; 'preview': a fast scrub's coarser frame of the timestep asked
+   *   for is on the canvas (it sharpens when the scrub ends); 'settled': the frame asked for is on the canvas at the
+   *   level the view settles on, and no render is queued; 'unavailable': the frame asked for cannot be had, because
+   *   every cell it misses has failed for good (until the view moves to another level or timestep).
+   * - `playback`: 'paused': no movie plays (always so while no store is open); 'starting': play was pressed and the
+   *   first frames are loading; 'playing': the movie steps; 'rebuffering': it stepped and now waits for frames.
+   * - `exporting`: an export session holds the cache (createExportSession, until its close()).
+   * - `t`: the timestep asked for. `shownT` and `level`: the timestep and level of the frame on the canvas, null before
+   *   the first.
+   * - `error`: the notice on screen, null when there is none: `code` as the `error` hook gives it, `toast` true for a
+   *   notice that fades on its own, false for the error box that stays until the next open. A page opened with no
+   *   store and no catalog shows the 'No store selected' box (reportNoStore): there `store` is 'none' and `error` has
+   *   code 'no_store'.
+   * @returns {{store: 'none' | 'opening' | 'open' | 'failed', frame: 'none' | 'loading' | 'preview' | 'settled' | 'unavailable',
+   *   playback: 'paused' | 'starting' | 'playing' | 'rebuffering', exporting: boolean, t: number, shownT: number | null,
+   *   level: number | null, error: null | {code: string, toast: boolean}}}
+   */
+  get status() {
+    const shown = this.#shown;
+    const notice = this.#notice;
+    return {
+      store: this.#session.state,
+      frame: this.#currentFrame(),
+      playback: this.#playbackPhase(),
+      exporting: this.#exportHold !== null,
+      t: this.t,
+      shownT: shown === null ? null : shown.t,
+      level: shown === null ? null : shown.lod,
+      error: notice === null ? null : { code: notice.code, toast: notice.toast },
+    };
+  }
+
+  /**
+   * Resolves with the status once nothing is pending: no store is opening, and the frame is 'settled', 'unavailable'
+   * or 'none'. It resolves on the next microtask when that holds already. A view change made before the call is waited
+   * for (its queued render makes the frame read 'loading'), and so is a fast scrub's preview, which sharpens when the
+   * scrub ends. It also resolves when the frame cannot be had and when an open fails.
+   */
+  whenSettled() {
+    if (this.#settled()) return Promise.resolve(this.status);
+    return new Promise((resolve) => this.#settledWaiters.push(resolve));
+  }
+
+  /** The frame of the status: the outcome of the last render, or 'loading' while a store is open and a render is queued. */
+  #currentFrame() {
+    return this.#rafId !== 0 && this.#session.state === 'open' ? 'loading' : this.#frameOutcome;
+  }
+
+  /** Whether nothing is pending (see whenSettled). */
+  #settled() {
+    if (this.#session.state === 'opening') return false;
+    const frame = this.#currentFrame();
+    return frame === 'settled' || frame === 'unavailable' || frame === 'none';
+  }
+
+  /**
+   * The playback of the status: the phase of the open store's Playback; 'paused' while no store is open, and in the
+   * moment of an open between the store and its Playback.
+   */
+  #playbackPhase() {
+    return (this.store ? this.#playback?.phase : null) ?? 'paused';
+  }
+
+  /**
+   * Publish what changed in the status: the data-store, data-frame and data-playback attributes of <html>, each written
+   * only when it differs from what was written last. Notify the `status` hook when the store, frame outcome,
+   * displayed timestep or level, playback, export hold or notice code changes. Resolve whenSettled() waiters once
+   * nothing is pending. data-frame is the outcome of the last render: it does not turn to 'loading' while a render is
+   * queued, so a script that has just changed the view awaits whenSettled() rather than reading the attribute.
+   * It runs at the end of every render: on a frame that changes nothing it costs a few comparisons.
+   */
+  #publishStatus() {
+    const published = this.#published;
+    const store = this.#session.state;
+    const frame = this.#frameOutcome;
+    const shownT = this.#shown?.t ?? null;
+    const level = this.#shown?.lod ?? null;
+    const playback = this.#playbackPhase();
+    const exporting = this.#exportHold !== null;
+    const error = this.#notice === null ? null : this.#notice.code;
+    const attributesChanged = store !== published.store || frame !== published.frame || playback !== published.playback;
+    if (attributesChanged) {
+      const { dataset } = document.documentElement;
+      if (store !== published.store) dataset.store = store;
+      if (frame !== published.frame) dataset.frame = frame;
+      if (playback !== published.playback) dataset.playback = playback;
+      published.store = store;
+      published.frame = frame;
+      published.playback = playback;
+    }
+    if (attributesChanged || shownT !== published.shownT || level !== published.level || exporting !== published.exporting || error !== published.error) {
+      published.shownT = shownT;
+      published.level = level;
+      published.exporting = exporting;
+      published.error = error;
+      this.#hook('status');
+    }
+    if (this.#settledWaiters.length > 0 && this.#settled()) {
+      const status = this.status;
+      for (const resolve of this.#settledWaiters.splice(0)) resolve(status);
+    }
   }
 
   /**
@@ -864,7 +1118,6 @@ class Viewer {
     this.#setLoading(!showing);
 
     if (showing) {
-      if ($('error-overlay').classList.contains('toast')) this.#hideError();
       this.#wave?.controller.abort();
       this.#wave = null;
       this.#setProgress(1);
@@ -880,6 +1133,7 @@ class Viewer {
         this.#gpuFill.schedule();
         this.#schedulePrefetch();
       }
+      if (this.#firstFrameUnavailable !== null && this.#failedForGood(missing)) this.#firstFrameUnavailable();
     }
     if (this.#retiringPumps.length) this.#abortRetiringPumps();
     this.#updateFrameDate(missing);
@@ -889,6 +1143,15 @@ class Viewer {
       this.#paintMs = painted ? ms : this.#paintMs;
       for (const resolve of this.#painted.splice(0)) resolve();
     }
+    // The level the view settles on, as #paintFrame tests it: a fast scrub's coarser level is not.
+    const sharp = showing && (!this.#scrubCoarser || choice.lod <= this.#scrubMemo.baseLod);
+    // The failures of the wave count only for its own level and timestep: a sampled scrub does not start a wave for this one.
+    const wave = this.#wave;
+    const failedForGood = !showing && wave !== null && wave.lod === lod && wave.t === t && this.#failedForGood(missing);
+    this.#frameOutcome = frameOutcome(true, showing, sharp, missing.length, failedForGood);
+    // The outcome is stored before anything publishes: hiding a toast publishes, and the status it gives is this render's.
+    if (showing && this.#notice?.toast) this.#hideError();
+    else this.#publishStatus();
     return { complete: showing, ms, lod, cells: cells.length };
   }
 
@@ -1011,8 +1274,10 @@ class Viewer {
   /**
    * Start background prefetch now and resolve with its result when it finishes or is aborted. `movie` plans it
    * for playback (the movie level, time treated as a loop) even while paused; it defaults to whether a movie plays.
+   * While no store is open it does nothing and resolves null.
    */
   prefetchNow({ movie = this.#playing } = {}) {
+    if (this.store === null) return Promise.resolve(null);
     clearTimeout(this.#prefetchTimer);
     this.#prefetchTimer = 0;
     this.#prefetchStartedAt = performance.now();
@@ -1295,13 +1560,13 @@ class Viewer {
     this.#prefetchAbort = null;
   }
 
-  #configurePool() {
-    const { store, renderer } = this;
+  #configurePool(store) {
+    const { renderer } = this;
     const first = store.levels[0];
     const wanted = store.levels.reduce((n, l) => n + l.gridRows * l.gridCols * l.nTime, 0);
     const bytesPerSample = first.chunkBytes / (first.nBand * first.chunkWidth * first.chunkHeight);
     const slots = renderer.planSlots(first.nBand, first.chunkWidth, first.chunkHeight, POOL_BUDGET_BYTES, wanted, bytesPerSample, store.hasMask, store.compactCacheEnabled);
-    renderer.configure({ dtype: this.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots, hasMask: store.hasMask, compact: store.compactCacheEnabled });
+    renderer.configure({ dtype: store.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots, hasMask: store.hasMask, compact: store.compactCacheEnabled });
     this.#maxVisibleCells = Math.floor(slots / 2);
   }
 
@@ -1719,6 +1984,12 @@ class Viewer {
   get autoExposure() { return this.#autoExposure; }
 
   setAutoExposure(enabled) {
+    this.#applyAutoExposure(enabled);
+    this.#hook('status');
+  }
+
+  /** What setAutoExposure does but tell the host: setStretch tells it once, after the range is set. */
+  #applyAutoExposure(enabled) {
     this.#autoExposure = Boolean(enabled);
     this.#exposureView = null;
     if (enabled) this.#linear.manual = false;
@@ -1736,11 +2007,12 @@ class Viewer {
       this.#updateStretchUi();
       return;
     }
-    this.setAutoExposure(false);
+    this.#applyAutoExposure(false);
     this.#linear = { range: [lo, hi], manual: true };
     this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
+    this.#hook('status');
   }
 
   /** Back to the range measured from the data on screen. */
@@ -1749,6 +2021,7 @@ class Viewer {
     this.#dirty = true;
     this.requestRender();
     this.#scheduleUrlSync();
+    this.#hook('status');
   }
 
   /** 2nd percentile of tone-mapped true-color samples (physical reflectance), kept fixed while scrubbing. 0 without red, green and blue bands. */
@@ -1914,6 +2187,12 @@ class Viewer {
     }
   }
 
+  /** Whether every cell of `missing` has failed for good in the current wave: none is asked for again until the view moves to another level or timestep. */
+  #failedForGood(missing) {
+    const failures = this.#wave?.failures;
+    return failures !== undefined && missing.length > 0 && missing.every(([row, col]) => failures.get(`${row}/${col}`) > MAX_CELL_RETRIES);
+  }
+
   /**
    * A chunk failed after the decoder's own retries. Not fatal: the cell keeps its coarser level or previous
    * timestep, the failure is shown as a toast with the URL, status and error, and the cell is requested again
@@ -1932,7 +2211,9 @@ class Viewer {
     );
     this.#setProgress(0);
     if (failures > MAX_CELL_RETRIES) {
-      this.requestRender();
+      // Rendered now, as a cell that lands is: the frame that says the cell cannot be had, and the open or the
+      // whenSettled() that waits on it, must not wait for an animation frame, which a hidden page never grants.
+      if (!wave.controller.signal.aborted) this.#render({ force: false });
       return;
     }
     setTimeout(() => {
@@ -2036,8 +2317,9 @@ class Viewer {
     try {
       [[values], mask] = await Promise.all([store.readPixels(lod, row, col, t, [[cellX, cellY]]), this.#maskRead(lod, row, col, t)]);
     } catch (error) {
+      // A toast, like a cell that fails to load: the frame on screen is still right, only this pixel's values are missing.
       if (request === this.#inspectRequest) {
-        this.#showError('Chunk load failed', redactText(error?.message ?? error), { code: 'chunk_load_failed' });
+        this.#showError('Chunk load failed', redactText(error?.message ?? error), { toast: true, code: 'chunk_load_failed' });
       }
       return;
     }
@@ -2426,7 +2708,10 @@ class Viewer {
             requested.delete(key);
             this.#drawGapOverlay();
           },
-          (error) => console.error(`gap overlay: coverage load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, redactText(error)),
+          (error) => {
+            // Closing the store at the end of its session aborts the read: that is no failure.
+            if (error.name !== 'AbortError') console.error(`gap overlay: coverage load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, redactText(error));
+          },
         );
       }
       return null;
@@ -2554,7 +2839,9 @@ class Viewer {
   }
 
   #updatePlayUi() {
-    const playing = this.#playback?.playing ?? false;
+    // While no store is open the previous store's paused Playback is not asked anything: its callbacks read the store.
+    const playback = this.store ? this.#playback : null;
+    const playing = playback?.playing ?? false;
     if (this.#wasPlaying && !playing) {
       this.requestRender();
       this.#scheduleUrlSync();
@@ -2567,16 +2854,21 @@ class Viewer {
     button.setAttribute('aria-label', button.title);
     button.disabled = !this.store;
     $('export-btn').disabled = !this.store;
-    const buffering = this.#playback?.buffering ?? false;
+    const buffering = playback?.buffering ?? false;
     button.classList.toggle('buffering', buffering);
     button.setAttribute('aria-busy', String(buffering));
     const hint = $('buffer-hint');
-    const { ahead, needed } = this.#playback?.buffered ?? { ahead: 0, needed: 0 };
+    const { ahead, needed } = playback?.buffered ?? { ahead: 0, needed: 0 };
     const text = buffering ? `buffering ${ahead} / ${needed}` : '';
     if (hint.textContent !== text) hint.textContent = text;
-    if (buffering) button.title = 'Buffering: playback starts when the next frames are loaded (Space to cancel)';
+    if (buffering) {
+      // Before the first step the movie starts; after it ran out of frames it resumes.
+      const wait = playback.phase === 'rebuffering' ? 'resumes' : 'starts';
+      button.title = `Buffering: playback ${wait} when the next frames are loaded (Space to cancel)`;
+    }
     if (!playing) this.#stopBufferPumps();
     this.#updateSpeedUi();
+    this.#publishStatus();
   }
 
   /** The slider shows the requested speed; when the display or the link cannot keep up the label adds what is delivered. */
@@ -2629,10 +2921,9 @@ class Viewer {
     if (label.textContent !== date) label.textContent = date;
 
     let message = '';
-    if (shown !== this.t) {
-      const failures = this.#wave?.failures;
-      const unavailable = failures && missing.some(([row, col]) => failures.get(`${row}/${col}`) > MAX_CELL_RETRIES);
-      const action = unavailable ? 'Unavailable' : this.#scrubMemo?.sampled && !this.#playing ? 'Selected' : 'Loading';
+    // While no store is open there is no timestep to load.
+    if (this.store !== null && shown !== this.t) {
+      const action = this.#failedForGood(missing) ? 'Unavailable' : this.#scrubMemo?.sampled && !this.#playing ? 'Selected' : 'Loading';
       message = `${action} ${this.#formatTime(this.t)}.`;
       if (shown !== undefined) message += ` Showing ${date}.`;
     }
@@ -2647,41 +2938,77 @@ class Viewer {
     this.#paintMs = null;
   }
 
+  /** The progress bar shows a load (0 < frac < 1), completes it (frac >= 1, then fades) or is hidden (frac <= 0). */
   #setProgress(frac) {
+    if (frac >= 1) {
+      // Every frame shown calls this, each frame of a movie too: only a bar that shows a load fills up and starts its
+      // fade. One that is complete already (its fade pending) or hidden stays as it is, with no new timer.
+      if (this.#progress !== 'loading') return;
+      this.#progress = 'complete';
+      const fill = $('progress-fill');
+      fill.style.width = '100%';
+      this.#progressTimer = setTimeout(() => {
+        this.#progressTimer = 0;
+        this.#progress = 'hidden';
+        fill.style.opacity = '0';
+      }, PROGRESS_FADE_MS);
+      return;
+    }
+    // A fade that is still pending belongs to a load that has finished: it must not hide the bar of this one.
+    if (this.#progressTimer !== 0) {
+      clearTimeout(this.#progressTimer);
+      this.#progressTimer = 0;
+    }
     const fill = $('progress-fill');
     if (frac <= 0) {
+      this.#progress = 'hidden';
       fill.style.opacity = '0';
       fill.style.width = '0';
-    } else if (frac >= 1) {
-      fill.style.width = '100%';
-      setTimeout(() => {
-        fill.style.opacity = '0';
-      }, 200);
     } else {
+      this.#progress = 'loading';
       fill.style.width = `${frac * 100}%`;
       fill.style.opacity = '1';
     }
   }
 
-  /** A toast is a non-blocking notice that fades on its own; otherwise the box stays until the next load. */
-  #showError(title, message, { toast = false, code = 'error' } = {}) {
-    this.#hook('error', { code, title, message });
+  /**
+   * A toast is a non-blocking notice that fades on its own; otherwise the box stays until the next load. This and
+   * #hideError are the only writers of the notice (#notice) and of the overlay's classes. `hostMessage` is the message
+   * the `error` hook gives the host page when it must say more than the box (the box is the same as `message` otherwise).
+   */
+  #showError(title, message, { toast = false, code = 'error', hostMessage = message } = {}) {
+    this.#hook('error', { code, title, message: hostMessage });
     clearTimeout(this.#toastTimer);
     $('error-title').textContent = title;
     $('error-message').textContent = message;
+    this.#notice = { code, toast };
     const overlay = $('error-overlay');
     overlay.classList.add('visible');
     overlay.classList.toggle('toast', toast);
     if (toast) this.#toastTimer = setTimeout(() => this.#hideError(), TOAST_MS);
+    this.#publishStatus();
   }
 
   #hideError() {
+    this.#notice = null;
     $('error-overlay').classList.remove('visible', 'toast');
     $('open-default-dataset').hidden = true;
+    this.#publishStatus();
   }
 
   reportStoreOpenError(failure) {
     this.#showError('Could not open store', failure.text, { code: 'store_open_failed' });
+  }
+
+  /**
+   * The page has no store to open and no catalog to fall back to: the box says how to give one, and the host page of
+   * an embed hears it as the error `no_store`, with the iframe URL as the place to add it.
+   */
+  reportNoStore() {
+    this.#showError('No store selected', 'Open this page with ?store=<base URL of a chronozarr store>.', {
+      code: 'no_store',
+      hostMessage: 'the iframe URL needs ?store=<base URL of a chronozarr store>.',
+    });
   }
 
   #updateSidebar(info) {
@@ -2738,7 +3065,7 @@ async function main() {
   viewer.inspectorUi = embed.controls;
   if (embed.controls) viewer.canvas.tabIndex = 0;
   viewer.extraQuery = embed.query;
-  const bridge = embed.embed ? connectEmbed(viewer, embed) : null;
+  if (embed.embed) connectEmbed(viewer, embed);
   window.chronozarr = {
     viewer,
     bench: (options) => import('./bench.js').then((m) => m.runBenchmarks(viewer, options)),
@@ -2844,10 +3171,7 @@ async function main() {
     // to a view (with a store, a timestep, a product, a zoom...) keeps meaning what it meant, t=0 when t is left out.
     open(catalog[0].url, { viewSearch: initialSearch, startTime: isBareVisit(initialSearch) ? latestCoveredTime : undefined });
   } else {
-    $('error-title').textContent = 'No store selected';
-    $('error-message').textContent = 'Open this page with ?store=<base URL of a chronozarr store>.';
-    $('error-overlay').classList.add('visible');
-    bridge?.post('error', { code: 'no_store', message: 'No store selected: the iframe URL needs ?store=<base URL of a chronozarr store>.' });
+    viewer.reportNoStore();
   }
 
 }
