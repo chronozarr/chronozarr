@@ -65,24 +65,29 @@ const projectionApart = {
 /**
  * The decode worker loads zarrita's codec registry from a URL that decoder.js sends it, because a worker sees no import
  * map and a package can be served from anywhere. In the build the registry is part of the worker, so the worker imports
- * it statically and the URL is not a file any more. Each edit must find its text: a change to the source that moves
- * one fails the build, not the page.
+ * it statically and the URL is not a file any more. The retry imports resolve beside the normal codec imports.
+ * Each edit must find its text: a change to the source that moves one fails the build, not the page.
  */
-const REGISTRY_EDITS = {
+const CODEC_EDITS = {
+  'chronozarr/codec-loaders.js': ['zstd', 'blosc', 'lz4'].map((name) => ({
+    from: `retryableCodec('../vendor/numcodecs/${name}.js',`,
+    to: `retryableCodec('./codecs/${name}.js',`,
+  })),
   'chronozarr/decode-worker.js': [
     { from: 'zarrita = await import(message.zarritaUrl);', to: 'zarrita = bundledZarrita;', head: "import * as bundledZarrita from '../vendor/zarrita/codecs.js';\n" },
+    { from: "new URL('../vendor/zarrita/codecs.js', import.meta.url).href", to: "'bundled'" },
   ],
   'chronozarr/decoder.js': [{ from: "new URL('../vendor/zarrita/codecs.js', import.meta.url).href", to: "'bundled'" }],
 };
-const registryInWorker = {
-  name: 'registry-in-worker',
+const builtCodecPaths = {
+  name: 'built-codec-paths',
   setup(esbuild) {
-    esbuild.onLoad({ filter: /chronozarr[\\/](decode-worker|decoder)\.js$/ }, async ({ path: file }) => {
-      const edits = REGISTRY_EDITS[path.relative(JS_DIR, file).split(path.sep).join('/')];
+    esbuild.onLoad({ filter: /chronozarr[\\/](codec-loaders|decode-worker|decoder)\.js$/ }, async ({ path: file }) => {
+      const edits = CODEC_EDITS[path.relative(JS_DIR, file).split(path.sep).join('/')];
       if (!edits) return undefined;
       let contents = await readFile(file, 'utf8');
       for (const { from, to, head = '' } of edits) {
-        if (!contents.includes(from)) throw new Error(`${file} no longer contains \`${from}\`: update REGISTRY_EDITS in support/build-viewer.mjs`);
+        if (!contents.includes(from)) throw new Error(`${file} no longer contains \`${from}\`: update CODEC_EDITS in support/build-viewer.mjs`);
         contents = head + contents.replace(from, to);
       }
       return { contents, loader: 'js', resolveDir: path.dirname(file) };
@@ -105,10 +110,10 @@ export async function buildViewer(outDir) {
 
   const entry = (...parts) => path.join(JS_DIR, ...parts);
   await Promise.all([
-    build({ ...COMMON, entryPoints: { viewer: entry('demo/viewer.js') }, outdir: demo, splitting: true, chunkNames: 'chunks/[name]-[hash]', plugins: [lazyCodecs, benchApart, projectionApart, registryInWorker] }),
+    build({ ...COMMON, entryPoints: { viewer: entry('demo/viewer.js') }, outdir: demo, splitting: true, chunkNames: 'chunks/[name]-[hash]', plugins: [lazyCodecs, benchApart, projectionApart, builtCodecPaths] }),
     build({ ...COMMON, entryPoints: { projection: entry('maplibre/projection.js') }, outdir: demo, splitting: true, chunkNames: 'chunks/[name]-[hash]' }),
-    build({ ...COMMON, entryPoints: { bench: entry('demo/bench.js') }, outdir: demo, plugins: [lazyCodecs, registryInWorker] }),
-    build({ ...COMMON, entryPoints: { 'decode-worker': entry('chronozarr/decode-worker.js') }, outdir: demo, plugins: [lazyCodecs, registryInWorker] }),
+    build({ ...COMMON, entryPoints: { bench: entry('demo/bench.js') }, outdir: demo, plugins: [lazyCodecs, builtCodecPaths] }),
+    build({ ...COMMON, entryPoints: { 'decode-worker': entry('chronozarr/decode-worker.js') }, outdir: demo, plugins: [lazyCodecs, builtCodecPaths] }),
     build({
       ...COMMON,
       entryPoints: ['zstd', 'blosc', 'lz4'].map((name) => entry('vendor/numcodecs', `${name}.js`)),

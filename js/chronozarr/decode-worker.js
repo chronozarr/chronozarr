@@ -7,8 +7,10 @@
 // Replies transfer either the decoded typed array or just packed words and block metadata.
 
 import { createChunkDecoder } from './codec.js';
+import { codecLoaders } from './codec-loaders.js';
 import { packUint16 } from './compact.js';
 
+const builtinRegistryUrl = new URL('../vendor/zarrita/codecs.js', import.meta.url).href;
 let zarrita = null;
 const decoders = new Map();
 
@@ -31,6 +33,7 @@ self.onmessage = async ({ data: message }) => {
   try {
     if (message.type === 'init') {
       zarrita = await import(message.zarritaUrl);
+      if (message.zarritaUrl === builtinRegistryUrl) zarrita = { registry: zarrita.registry, codecLoaders };
       // Best effort, as with a 'warm' message. Not ready until the codecs are: a job given to a worker that is still
       // fetching WebAssembly waits for it, while the pool's fallback decoder (a warm one) could have run the job.
       await Promise.all((message.warm ?? []).map(async (spec) => (await decoderFor(spec)).warmup())).catch(() => {});

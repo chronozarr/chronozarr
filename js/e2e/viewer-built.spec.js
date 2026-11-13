@@ -12,6 +12,7 @@ import path from 'node:path';
 import { startStaticServer } from '../support/static-server.js';
 import { scriptLevels } from '../support/script-levels.js';
 import { expect, test, writeBuiltViewerRoot } from './fixtures.js';
+import { COMPRESSORS, compressedStore, writeTree } from './make-node-fixtures.mjs';
 
 const GIVEN_ROOT = process.env.CHRONOZARR_VIEWER_ROOT;
 // Scripts a page may need before its first frame: the viewer, then a codec that the viewer or the worker loads when the store needs it.
@@ -85,4 +86,90 @@ test('an embed reads its store from the page and never the catalog', async ({ pa
   expect(startedBy(requests.filter((r) => r.url === `${store}zarr.json`))).toEqual([`${app.url}/demo/index.html`]);
   expect(app.requests.filter((r) => r.path.endsWith('catalog.json'))).toEqual([]);
   expect(servers.data.requests.filter((r) => r.path === '/u16_plain/zarr.json').length).toBe(1);
+});
+
+for (const built of [false, true]) {
+  test(`${built ? 'built' : 'source'} viewer decodes after the first Zstd module request gets a 503`, async ({ page, stores, servers, storeUrl, consoleErrors }) => {
+    const name = built ? 'retry-zstd-built' : 'retry-zstd-source';
+    const dir = path.join(stores.dir, name);
+    const spec = { nTime: 2, nBand: 1, height: 2, width: 2, chunk: 2, sharded: false, consolidated: true, transform: [10, 0, 500000, 0, -10, 4000000] };
+    await writeTree(dir, compressedStore(spec, COMPRESSORS.zstd));
+    const store = `${servers.dataUrl}/${name}/`;
+    // The source server here always serves the modules, even when the suite's default app serves a bundle.
+    const source = built ? null : await startStaticServer(path.resolve(import.meta.dirname, '..'));
+    try {
+      const origin = (source ?? app).url;
+      const codec = built ? '/demo/codecs/zstd.js' : '/vendor/numcodecs/zstd.js';
+      const requests = [];
+      await page.route((url) => url.origin === origin && url.pathname === codec, (route) => {
+        requests.push(route.request().url());
+        return requests.length === 1 ? route.fulfill({ status: 503, body: 'temporarily unavailable' }) : route.continue();
+      });
+      const plain = await storeUrl('u16_plain');
+      await page.goto(`${origin}/demo/index.html?store=${encodeURIComponent(plain)}`);
+      await page.waitForFunction(() => window.chronozarr?.ready);
+      await page.evaluate(() => window.chronozarr.ready);
+      const result = await page.evaluate(async (url) => {
+        const { viewer } = window.chronozarr;
+        // Start the open on the main thread, then read two chunks through the real decoder.
+        viewer.loadStore(url, { workers: 0 }).catch(() => {});
+        while (viewer.store?.url !== url) await new Promise((resolve) => setTimeout(resolve, 0));
+        const read = async (t) => {
+          try {
+            return Array.from(await viewer.store.getRaw(0, 0, 0, t));
+          } catch (error) {
+            return error.message;
+          }
+        };
+        return [await read(0), await read(1)];
+      }, store);
+      // The failed import reports a resource error even though the decoder recovers.
+      for (let i = consoleErrors.length - 1; i >= 0; i--) {
+        if (/Failed to load resource: .*503/.test(consoleErrors[i])) consoleErrors.splice(i, 1);
+      }
+      expect(result).toEqual([[1000, 1013, 1007, 1020], [1040, 1050, 1047, 1057]]);
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).not.toBe(requests[0]);
+    } finally {
+      await source?.close();
+    }
+  });
+}
+
+test('the decode worker also retries a failed Zstd module request', async ({ page, consoleErrors }) => {
+  await page.route(`${app.url}/worker-probe.html`, (route) => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Decode worker</title>' }));
+  await page.goto(`${app.url}/worker-probe.html`);
+  const codec = new URL('/demo/codecs/zstd.js', app.url);
+  // Playwright's context routing intercepts dedicated-worker requests as well as page requests.
+  const requests = [];
+  await page.context().route((url) => url.origin === codec.origin && url.pathname === codec.pathname, (route) => {
+    requests.push(route.request().url());
+    return requests.length === 1 ? route.fulfill({ status: 503, body: 'temporarily unavailable' }) : route.continue();
+  });
+  const bytes = [...COMPRESSORS.zstd.compress(new Uint8Array(Uint16Array.of(37).buffer))];
+  const result = await page.evaluate(async (bytes) => {
+    const worker = new Worker('/demo/decode-worker.js', { type: 'module' });
+    const send = (message) => new Promise((resolve, reject) => {
+      worker.onmessage = ({ data }) => resolve(data);
+      worker.onerror = reject;
+      worker.postMessage(message);
+    });
+    const spec = { key: 'retry-zstd', dtype: 'uint16', shape: [1], codecs: [
+      { name: 'bytes', configuration: { endian: 'little' } }, { name: 'zstd', configuration: { level: 5 } },
+    ] };
+    try {
+      const ready = await send({ type: 'init', zarritaUrl: 'bundled' });
+      const first = await send({ type: 'decode', id: 1, spec, bytes: Uint8Array.from(bytes) });
+      const retry = await send({ type: 'decode', id: 2, spec, bytes: Uint8Array.from(bytes) });
+      return { ready: ready.type, first: first.type, retry: retry.type, values: retry.data && [...retry.data] };
+    } finally {
+      worker.terminate();
+    }
+  }, bytes);
+  for (let i = consoleErrors.length - 1; i >= 0; i--) {
+    if (/Failed to load resource: .*503/.test(consoleErrors[i])) consoleErrors.splice(i, 1);
+  }
+  expect(result).toEqual({ ready: 'ready', first: 'error', retry: 'decoded', values: [37] });
+  expect(requests).toHaveLength(2);
+  expect(requests[1]).not.toBe(requests[0]);
 });

@@ -36,11 +36,12 @@ import { DTYPES, decodeSpec, isCellStorage, normalizeBands, parseSpatial, parseR
 import { DecodePool, MainThreadDecoder, leaseDecodePool } from './pool.js';
 import { ShardIndexError, parseShardIndex, shardIndexRange } from './shard.js';
 import { registry } from '../vendor/zarrita/codecs.js';
+import { codecLoaders } from './codec-loaders.js';
 
 export { FetchError };
 
 /** The part of zarrita the reader uses: the codec registry. Workers load the same module by URL. */
-const ZARRITA_CODECS = { registry };
+const ZARRITA_CODECS = { registry, codecLoaders };
 const ZARRITA_CODECS_URL = new URL('../vendor/zarrita/codecs.js', import.meta.url).href;
 const MIB = 1024 * 1024;
 const GIB = 1024 * MIB;
