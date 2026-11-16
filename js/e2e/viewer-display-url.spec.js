@@ -410,6 +410,35 @@ test('the notebook player keeps a command it has not sent yet when an older stat
   await page.waitForFunction((band) => window.values.state.speed === 9 && window.values.state.band === band, kept.otherBand);
 });
 
+test('the notebook player keeps the new speed when an old iframe status is in flight', async ({ page, servers, stores, storeUrl }) => {
+  await page.goto(await writePlayerHost(servers, stores, 'player-retarget', await storeUrl('u16_sharded')));
+  await page.waitForFunction(() => window.values.ready);
+  const viewer = page.frameLocator('iframe').locator('html');
+  await viewer.evaluate(() => window.chronozarr.viewer.whenSettled());
+  const next = await storeUrl('u16_plain');
+  const afterRetarget = await page.evaluate(async (url) => {
+    const frame = document.querySelector('iframe');
+    const outgoing = frame.contentWindow;
+    const { promise, resolve } = Promise.withResolvers();
+    function capture(event) {
+      if (event.source !== outgoing || event.data?.type !== 'chronozarr:status' || event.data.state.speed !== 6) return;
+      window.removeEventListener('message', capture);
+      resolve({ data: event.data, origin: event.origin, source: event.source });
+    }
+    window.addEventListener('message', capture);
+    outgoing.postMessage({ v: 1, type: 'chronozarr:set', speed: 6 }, new URL(frame.src).origin);
+    const stale = await promise;
+    window.model.set('speed', 9);
+    window.model.set('store_url', url);
+    // Replay the old viewer's actual status as a message that was still queued when the new store was requested.
+    window.dispatchEvent(new MessageEvent('message', stale));
+    return { ready: window.values.ready, speed: window.values.speed };
+  }, next);
+  expect(afterRetarget).toEqual({ ready: false, speed: 9 });
+  await page.waitForFunction(() => window.values.ready && window.values.state.speed === 9);
+  expect(await viewer.evaluate(() => ({ url: window.chronozarr.viewer.store.url, speed: window.chronozarr.viewer.speed }))).toEqual({ url: next, speed: 9 });
+});
+
 test('the notebook player keeps a display limit that is being typed when a status redraws the controls', async ({ page, servers, stores, storeUrl }) => {
   await page.goto(await writePlayerHost(servers, stores, 'player-typing', await storeUrl('u16_plain')));
   await page.waitForFunction(() => window.values.ready);

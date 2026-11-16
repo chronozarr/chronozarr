@@ -605,9 +605,15 @@ class Viewer {
    * `playing` and keeps its direction forward when it loops from the last timestep to the first.
    */
   goToTime(t, { playing = false, direction = null } = {}) {
-    if (!this.store) return;
-    if (!playing) this.#playback?.pause();
-    const next = clamp(t, 0, this.store.times.length - 1);
+    const { store } = this;
+    if (!store) return;
+    if (!playing) {
+      const generation = this.#storeGeneration;
+      this.#playback?.pause();
+      // A status callback can open another store while playback pauses.
+      if (generation !== this.#storeGeneration) return;
+    }
+    const next = clamp(t, 0, store.times.length - 1);
     if (next === this.t) return;
     if (!playing) {
       this.#beginView('time');

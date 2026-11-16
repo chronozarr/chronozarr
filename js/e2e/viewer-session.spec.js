@@ -487,6 +487,27 @@ test('a status callback can replace an open during playback', async ({ page, ser
   expect(servers.data.requests.slice(before).filter(({ path }) => path.startsWith('/u16_plain/'))).toEqual([]);
 });
 
+test('a manual step stops when the playback pause callback opens another store', async ({ page, servers, storeUrl }) => {
+  await openAt(page, servers, await storeUrl('u16_sharded'));
+  const next = await storeUrl('u8_rgb');
+  const wasPlaying = await page.evaluate(async (url) => {
+    const { viewer } = window.chronozarr;
+    await viewer.prefetchNow();
+    viewer.play();
+    viewer.hooks.status = () => {
+      if (viewer.status.playback !== 'paused') return;
+      delete viewer.hooks.status;
+      window.replacement = viewer.loadStore(url, { workers: 0 });
+    };
+    return viewer.playback.playing;
+  }, next);
+  expect(wasPlaying).toBe(true);
+  await page.keyboard.press('ArrowRight');
+  expect(await page.evaluate(() => window.replacement)).toMatchObject({ firstPaintMs: expect.any(Number) });
+  expect(await page.evaluate(() => window.chronozarr.viewer.store.url)).toBe(next);
+  expect(await waitForSettled(page)).toMatchObject({ store: 'open', frame: 'settled', playback: 'paused', t: 0, shownT: 0 });
+});
+
 test.describe('a store whose first frame cannot be had', () => {
   test.use({ expectedErrors: /Failed to load resource: .*503|request failed, giving up|chunk load failed|prefetch failed for chunk/ });
 

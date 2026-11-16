@@ -96,6 +96,48 @@ test('switching datasets during recording fails the export with a visible explan
   consoleErrors.splice(error, 1);
 });
 
+test('an export refuses a store opened by the playback pause callback', async ({ page, servers, storeUrl, consoleErrors }) => {
+  const first = await storeUrl('u16_sharded');
+  const next = (await storeUrl('u8_rgb')).replace(/\/$/, '');
+  await open(page, `${servers.appUrl}/demo/index.html?store=${encodeURIComponent(first)}`);
+  await page.locator('#export-btn').click();
+  await page.locator('#export-format').selectOption('gif');
+  await page.locator('#export-to').selectOption('1');
+  await page.locator('#export-size').selectOption('0.25');
+
+  await page.evaluate(async (url) => {
+    const { viewer } = window.chronozarr;
+    await viewer.prefetchNow();
+    const loadStore = viewer.loadStore.bind(viewer);
+    // The URL field validates the replacement first, so the pause callback can install it synchronously.
+    viewer.loadStore = (url, { store }) => {
+      delete viewer.loadStore;
+      viewer.play();
+      window.wasPlaying = viewer.playback.playing;
+      viewer.hooks.status = () => {
+        if (viewer.status.playback !== 'paused') return;
+        delete viewer.hooks.status;
+        window.replacement = loadStore(url, { store });
+      };
+      document.getElementById('export-start').click();
+      return window.replacement;
+    };
+    const input = document.getElementById('open-store-url');
+    input.value = url;
+    input.form.requestSubmit();
+  }, next);
+  const status = page.locator('#export-status');
+  await expect(status).toHaveText(/^(Export failed|Done)/);
+  expect(await page.evaluate(() => window.wasPlaying)).toBe(true);
+  expect(await page.evaluate(() => window.replacement)).toMatchObject({ firstPaintMs: expect.any(Number) });
+  expect(await page.evaluate(() => window.chronozarr.viewer.store.url)).toBe(next);
+  expect(await status.textContent()).toContain('The dataset changed during export. Start the export again.');
+  await expect(page.locator('#export-download')).toBeHidden();
+  const error = consoleErrors.findIndex((message) => message.includes('export failed: Error: The dataset changed during export.'));
+  expect(error).toBeGreaterThanOrEqual(0);
+  consoleErrors.splice(error, 1);
+});
+
 test('video export loads uncached frames in order when only one frame fits the cache', async ({ page, servers, storeUrl }) => {
   const store = await storeUrl('link_plain');
   await open(page, `${servers.appUrl}/demo/index.html?store=${encodeURIComponent(store)}`);

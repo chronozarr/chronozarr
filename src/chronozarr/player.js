@@ -30,7 +30,7 @@ export default {
     const status = document.createElement('div'); status.setAttribute('role', 'status');
     const hint = document.createElement('pre'); hint.hidden = true;
     hint.style.cssText = 'margin:0;white-space:pre-wrap;font:12px ui-monospace,monospace;opacity:.75';
-    const frame = document.createElement('iframe'); frame.title = 'chronozarr player';
+    let frame = document.createElement('iframe'); frame.title = 'chronozarr player';
     frame.style.cssText = 'width:100%;border:0;min-height:320px';
     frame.allow = 'fullscreen; local-network-access';
     controls.append(play, time, date, product, band, colormap, low, high, auto, legend, speed, open); box.append(controls, frame, status, hint); el.append(box);
@@ -53,6 +53,7 @@ export default {
       save(); draw();
     };
     const send = message => frame.contentWindow?.postMessage({ v: 1, ...message }, origin);
+    const loaded = (event) => { if (event.currentTarget === frame) send({ type: 'chronozarr:get' }); };
     function flush() {
       commandTimer = 0;
       if (!connected || disposed || !Object.keys(pending).length) return;
@@ -132,7 +133,14 @@ export default {
       if (model.get('band')) url.searchParams.set('b', model.get('band')); else url.searchParams.delete('b');
       if (limits) url.searchParams.set('r', limits.join(',')); else url.searchParams.delete('r');
       if (colormapId() !== 'gray') url.searchParams.set('cm', colormapId()); else url.searchParams.delete('cm');
-      frame.src = url.href; draw();
+      // A new iframe has its own message source, so queued messages from the previous viewer are ignored.
+      const previous = frame;
+      frame = previous.cloneNode(false);
+      frame.src = url.href;
+      frame.addEventListener('load', loaded);
+      previous.removeEventListener('load', loaded);
+      previous.replaceWith(frame);
+      draw();
       // A browser that cannot reach the viewer or the store often shows nothing and sends nothing.
       openTimer = setTimeout(() => {
         if (!connected && !disposed && !model.get('error').message) update({ error: { type: 'chronozarr:error', code: 'no_response', message: 'The viewer did not answer within 15 s: this browser may not reach the viewer or the store URL.' } });
@@ -218,8 +226,7 @@ export default {
     };
     low.onchange = high.onchange = applyLimits; auto.onclick = () => control('range', null);
     speed.onchange = () => control('speed', Number(speed.value));
-    const loaded = () => send({ type: 'chronozarr:get' });
-    frame.addEventListener('load', loaded); window.addEventListener('message', receive); start();
+    window.addEventListener('message', receive); start();
     return () => {
       disposed = true; clearTimeout(saveTimer); clearTimeout(commandTimer); clearTimeout(openTimer);
       window.removeEventListener('message', receive); frame.removeEventListener('load', loaded);

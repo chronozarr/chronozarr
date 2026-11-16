@@ -209,10 +209,12 @@ async function recordVideo(session, { format, from, to, stepsPerSecond, onProgre
  */
 export async function exportLoop(viewer, { format, from, to, stepsPerSecond, scale = 1, onProgress = () => {}, signal }) {
   if (!EXPORT_FORMATS.includes(format)) throw new RangeError(`unknown export format "${format}"; formats: ${EXPORT_FORMATS.join(', ')}`);
-  if (!(from >= 0 && to >= from && to < viewer.store.times.length)) throw new RangeError(`export range ${from}..${to} is outside 0..${viewer.store.times.length - 1}`);
-  const storeName = new URL(viewer.store.url, location.href).pathname.replace(/\/$/, '').split('/').slice(-2).join(' ');
+  const { store } = viewer;
+  if (!(from >= 0 && to >= from && to < store.times.length)) throw new RangeError(`export range ${from}..${to} is outside 0..${store.times.length - 1}`);
+  const storeName = new URL(store.url, location.href).pathname.replace(/\/$/, '').split('/').slice(-2).join(' ');
   const filename = exportFilename(storeName, format, from, to, (t) => viewer.timeLabel(t));
   viewer.pause();
+  if (viewer.store !== store) throw new Error('The dataset changed during export. Start the export again.');
   const started = performance.now();
   const session = viewer.createExportSession({ scale, timesteps: to - from + 1 });
   try {
