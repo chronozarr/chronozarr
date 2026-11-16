@@ -294,6 +294,7 @@ export function leaseDecodePool({ key, size, spawn, init, fallback, idleMs = WOR
     // A pool that has no usable workers is not shared any more. One that nobody holds is closed now; one that is
     // still leased is closed when its last lease is released.
     if (shared && shared.leases === 0) {
+      sharedPools.delete(key);
       clearTimeout(shared.timer);
       shared.pool.close();
     }

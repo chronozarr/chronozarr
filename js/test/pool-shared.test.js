@@ -181,3 +181,18 @@ test('an idle pool that fell back to the main thread is closed when the next lea
   second.close();
   await until(() => sharedPoolCount() === 0);
 });
+
+test('an idle fallback pool is removed even when its replacement cannot start', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const broken = recordingWorkers({ failInit: true });
+  const options = { key: 'shared-replacement-failed', size: 1, init: { type: 'init' }, idleMs: 1000 };
+  const fallback = { decode: async () => Uint16Array.of(1), close: t.mock.fn() };
+  const first = leaseDecodePool({ ...options, spawn: broken.spawn, fallback });
+  await first.decode(Uint8Array.of(1), 1, undefined, SPEC);
+  first.close();
+
+  const spawn = () => { throw new Error('replacement worker refused'); };
+  assert.throws(() => leaseDecodePool({ ...options, spawn }), /replacement worker refused/);
+  assert.equal(fallback.close.mock.callCount(), 1);
+  assert.equal(sharedPoolCount(), 0);
+});
