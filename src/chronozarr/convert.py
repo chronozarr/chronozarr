@@ -190,10 +190,10 @@ import hashlib
 import json
 import shutil
 import time
-import uuid
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -300,8 +300,9 @@ from chronozarr._convert_xarray import (
 from chronozarr._convert_xarray import (
     _parse_dims,
 )
+from chronozarr._file_lock import exclusive_file_lock
 from chronozarr.bands import assign_roles
-from chronozarr.encode import _ENCODING_RUN_ATTR, EncodeReport, encode
+from chronozarr.encode import EncodeReport, _prepare_destination, encode
 from chronozarr.icechunk import IcechunkInput, identity_note
 
 # Raw input bytes per second through `encode()` (spill, pyramid, zstd level 5, write). Measured
@@ -833,24 +834,27 @@ class _OutputState(enum.Enum):
     OTHER = "something else"
 
 
-# The work directory records the intended path and run ID. The ID appears on the output
-# only when the encoder creates its root. Neither record alone identifies an unfinished output.
+# Older converters recorded the intended path and run ID in the work directory and wrote that
+# ID to the output when they created its root. Both records identify an unfinished output.
 _ENCODING_MARKER = "encoding"
-
-
-def _record_encode_start(work: Path, out_path: Path) -> str:
-    run = uuid.uuid4().hex
-    record = {"output": str(out_path.resolve()), "run": run}
-    (work / _ENCODING_MARKER).write_text(json.dumps(record), encoding="utf-8")
-    return run
+_ENCODING_RUN_ATTR = "_chronozarr_encoding_run"
 
 
 def _default_work_dir(out_path: Path) -> Path:
     return out_path.parent / f"{out_path.name}.convert-work"
 
 
+def _work_lock(work: Path) -> AbstractContextManager[None]:
+    """Lock next to the resolved work directory so its removal leaves the lock in place."""
+    return exclusive_file_lock(
+        work.with_name(f".{work.name}.convert.lock"),
+        conflict_message=f"another conversion is already using {work}. "
+        "Retry after it finishes or specify a different --work-dir.",
+    )
+
+
 def _encoding_work_dir(out_path: Path, work: Path, run: str) -> Path | None:
-    """Find the work directory for the run recorded on this output's root.
+    """Find the work directory for a legacy run recorded on this output's root.
 
     That is `work`, or else the default work directory of `out_path`: a rerun that names a fresh
     work directory still finds the record of a run that named none.
@@ -866,9 +870,21 @@ def _encoding_work_dir(out_path: Path, work: Path, run: str) -> Path | None:
     return None
 
 
+def _output_is_free(out_path: Path) -> bool:
+    if out_path.is_dir():
+        return not any(out_path.iterdir())
+    return not out_path.exists() and not out_path.is_symlink()
+
+
+def _immutable_output_error(out_path: Path) -> FileExistsError:
+    return FileExistsError(
+        f"{out_path} already exists and is not empty; stores are immutable, write to a new path"
+    )
+
+
 def _classify_output(out_path: Path, work: Path) -> tuple[_OutputState, Path | None]:
-    """Classify the output and return its work directory only when the two run IDs match."""
-    if not out_path.exists() or not any(out_path.iterdir()):
+    """Classify the output, recognizing interrupted legacy writes when the two IDs match."""
+    if _output_is_free(out_path):
         return _OutputState.FREE, None
     try:
         root = json.loads((out_path / "zarr.json").read_text())
@@ -911,9 +927,8 @@ def _recorded_plan_digest(plan_file: Path) -> str | None:
 def _unfinished_store_error(out_path: Path, work: Path, plan: Plan | None) -> FileExistsError:
     """The refusal for an unfinished store.
 
-    `work` records the encode. `plan` is the requested conversion and is None when `work`
-    holds no staged timesteps. A conversion still running in another process leaves the same
-    directory, so the message tells the user to delete only if none is running.
+    `plan` is the requested conversion and is None when the work directory has no staged
+    timesteps. A legacy converter still running has the same two records.
     """
     message = (
         f"{out_path} holds an unfinished store: the run that wrote it was interrupted, or is "
@@ -971,6 +986,7 @@ def _check_work_dir(work: Path, plan: Plan, resume: bool) -> None:
                 f"{str(recorded_digest)[:12]} vs {digest[:12]}); delete it or rerun "
                 "without --resume in a fresh work directory"
             )
+        return
     work.mkdir(parents=True, exist_ok=True)
     plan_file.write_text(json.dumps({"sha256": digest, "plan": fingerprint}))
 
@@ -1147,6 +1163,7 @@ def convert(
     there. Timesteps are staged under `work_dir` (default `<out>.convert-work` beside `out`):
     it is removed on success and kept on failure. `resume=True` reuses its timesteps for
     supported sources. For an ordinary Zarr input, choose a fresh work directory after a failure.
+    A conversion sharing another active conversion's work directory raises `BlockingIOError`.
     `encode_options` go to `chronozarr.encode`: chunk_size, codec, level, volatility,
     shard, shard_time, n_lods, workers, provenance.
     """
@@ -1182,16 +1199,13 @@ def convert(
             )
     out_path = Path(out)
     work = Path(work_dir) if work_dir is not None else _default_work_dir(out_path)
-    output, unfinished_work = (
+    output, interrupted = (
         (_OutputState.FREE, None) if dry_run else _classify_output(out_path, work)
     )
     if output in (_OutputState.FINISHED_STORE, _OutputState.OTHER):
-        raise FileExistsError(
-            f"{out_path} already exists and is not empty; stores are immutable, write to a "
-            "new path"
-        )
-    if unfinished_work is not None and not any(unfinished_work.glob("t*.npy")):
-        raise _unfinished_store_error(out_path, unfinished_work, None)
+        raise _immutable_output_error(out_path)
+    if interrupted is not None and not any(interrupted.glob("t*.npy")):
+        raise _unfinished_store_error(out_path, interrupted, None)
     # With timesteps staged, plan before refusing an unfinished output so the advice can check
     # which plan produced them. Plan without `resume` in this case so the refusal names the
     # unfinished store even when the source itself does not support resume.
@@ -1215,14 +1229,14 @@ def convert(
             calendar_to_gregorian=calendar_to_gregorian,
             bands_are_dates=bands_are_dates,
             mosaic_tiles=mosaic_tiles,
-            resume=resume and unfinished_work is None,
+            resume=resume and interrupted is None,
         )
     except PreflightError as exc:
         if write_manifest_to is not None and exc.draft is not None:
             exc.wrote_manifest(_write_draft(exc.draft, Path(write_manifest_to)))
         raise
-    if unfinished_work is not None:
-        raise _unfinished_store_error(out_path, unfinished_work, plan)
+    if interrupted is not None:
+        raise _unfinished_store_error(out_path, interrupted, plan)
     bands = list(plan.source.info.bands)
     if band_roles:
         bands = list(assign_roles(bands, band_roles))
@@ -1263,61 +1277,69 @@ def convert(
         report = migrate(plan.source, out_path, progress)
         return ConvertReport(plan, report, 0, 0, 0, time.perf_counter() - started)
 
-    _check_work_dir(work, plan, resume)
-    info = plan.source.info
-    if isinstance(plan.source, XarraySource) and plan.source.calendar is not None:
-        encode_options["provenance"] = provenance_with_note(
-            str(source), plan.source.calendar, encode_options.get("provenance")
-        )
-    if isinstance(plan.source, XarraySource) and plan.source.icechunk_identity:
-        prior = encode_options.get("provenance")
-        provenance = (
-            dict(prior)
-            if prior
-            else {"sources": [str(source)], "composite": "none", "gap_fill": "none"}
-        )
-        note = identity_note(plan.source.icechunk_identity)
-        provenance["notes"] = f"{provenance['notes']}\n{note}" if provenance.get("notes") else note
-        encode_options["provenance"] = provenance
-    try:
-        started = time.perf_counter()
-        staged, reused = _stage(plan, work, read_ahead, progress)
-        if isinstance(plan.source, CogManifestSource):
-            plan.source.check_source_files()
-        read_s = time.perf_counter() - started
+    locked_work = work.resolve()
+    locked_work.parent.mkdir(parents=True, exist_ok=True)
+    with _work_lock(locked_work):
+        # A conversion may have finished while this one prepared its plan.
+        _prepare_destination(out_path)
+        _check_work_dir(locked_work, plan, resume)
+        info = plan.source.info
+        if isinstance(plan.source, XarraySource) and plan.source.calendar is not None:
+            encode_options["provenance"] = provenance_with_note(
+                str(source), plan.source.calendar, encode_options.get("provenance")
+            )
+        if isinstance(plan.source, XarraySource) and plan.source.icechunk_identity:
+            prior = encode_options.get("provenance")
+            provenance = (
+                dict(prior)
+                if prior
+                else {"sources": [str(source)], "composite": "none", "gap_fill": "none"}
+            )
+            note = identity_note(plan.source.icechunk_identity)
+            provenance["notes"] = (
+                f"{provenance['notes']}\n{note}" if provenance.get("notes") else note
+            )
+            encode_options["provenance"] = provenance
+        try:
+            started = time.perf_counter()
+            staged, reused = _stage(plan, locked_work, read_ahead, progress)
+            if isinstance(plan.source, CogManifestSource):
+                plan.source.check_source_files()
+            read_s = time.perf_counter() - started
 
-        started = time.perf_counter()
-        run = _record_encode_start(work, out_path)
-        report = encode(
-            _staged_timesteps(plan, work),
-            out_path,
-            times=np.array(plan.source.times, dtype="datetime64[ms]"),
-            bands=bands,
-            crs=info.grid.crs,
-            transform=info.grid.transform,
-            nodata=info.nodata,
-            mask=_staged_masks(plan, work) if info.mask else None,
-            _encoding_run=run,
-            **encode_options,
-        )
-        encode_s = time.perf_counter() - started
-    except BaseException as exc:
-        reuse = plan.source.staged_reuse
-        if (
-            isinstance(exc, RasterSourceChangedError)
-            or reuse is StagedReuse.ZARR_CHUNKS_CAN_CHANGE
-        ):
-            exc.add_note(
-                f"staged timesteps are kept in {work} for inspection. Choose a fresh work "
-                "directory with --work-dir."
+            started = time.perf_counter()
+            report = encode(
+                _staged_timesteps(plan, locked_work),
+                out_path,
+                times=np.array(plan.source.times, dtype="datetime64[ms]"),
+                bands=bands,
+                crs=info.grid.crs,
+                transform=info.grid.transform,
+                nodata=info.nodata,
+                mask=_staged_masks(plan, locked_work) if info.mask else None,
+                _scratch_parent=locked_work,
+                **encode_options,
             )
-        elif reuse is StagedReuse.VIRTUAL_REFERENCES_UNBOUND:
-            exc.add_note(
-                f"staged timesteps are kept in {work} for inspection; virtual-source resume "
-                "is unsupported without external object identities, so start a fresh import"
-            )
-        else:
-            exc.add_note(f"staged timesteps are kept in {work}; rerun with --resume to reuse them")
-        raise
-    shutil.rmtree(work)
+            encode_s = time.perf_counter() - started
+        except BaseException as exc:
+            reuse = plan.source.staged_reuse
+            if (
+                isinstance(exc, RasterSourceChangedError)
+                or reuse is StagedReuse.ZARR_CHUNKS_CAN_CHANGE
+            ):
+                exc.add_note(
+                    f"staged timesteps are kept in {work} for inspection. Choose a fresh work "
+                    "directory with --work-dir."
+                )
+            elif reuse is StagedReuse.VIRTUAL_REFERENCES_UNBOUND:
+                exc.add_note(
+                    f"staged timesteps are kept in {work} for inspection; virtual-source resume "
+                    "is unsupported without external object identities, so start a fresh import"
+                )
+            else:
+                exc.add_note(
+                    f"staged timesteps are kept in {work}; rerun with --resume to reuse them"
+                )
+            raise
+        shutil.rmtree(locked_work)
     return ConvertReport(plan, report, staged, reused, read_s, encode_s)

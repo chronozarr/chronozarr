@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 import numpy as np
@@ -983,6 +987,7 @@ def test_dry_run_reports_estimates_and_writes_nothing(tmp_path, tifs):
     assert report.encode is None
     assert not out.exists()
     assert not (tmp_path / "store.convert-work").exists()
+    assert not (tmp_path / ".store.convert-work.convert.lock").exists()
     plan = seen[0]
     assert plan.raw_bytes == N_TIME * N_BAND * HEIGHT * WIDTH * 2
     assert plan.timestep_bytes == N_BAND * HEIGHT * WIDTH * 2
@@ -1096,9 +1101,85 @@ def leave_an_interrupted_run(tmp_path, tifs, monkeypatch) -> tuple[Path, Path, P
     return manifest, out, work
 
 
+@pytest.mark.parametrize("explicit_work", [False, True], ids=["same-output", "shared-work-dir"])
+def test_concurrent_conversions_cannot_claim_the_same_work_dir(
+    tmp_path, monkeypatch, explicit_work
+):
+    first_pixels = np.full((1, 8, 8), 100, dtype=np.uint16)
+    second_pixels = np.full_like(first_pixels, 900)
+    first_tif = write_tif(tmp_path / "first.tif", first_pixels)
+    second_tif = write_tif(tmp_path / "second.tif", second_pixels)
+    first_manifest = write_csv(tmp_path / "first.csv", [first_tif], dates=DATES[:1])
+    second_manifest = write_csv(tmp_path / "second.csv", [second_tif], dates=DATES[:1])
+    first_out = tmp_path / "store"
+    second_out = tmp_path / "other" if explicit_work else first_out
+    work = tmp_path / "scratch" if explicit_work else tmp_path / "store.convert-work"
+    first_options: dict[str, Any] = {}
+    second_options: dict[str, Any] = {}
+    if explicit_work:
+        alias = tmp_path / "alias"
+        alias.mkdir()
+        first_options.update(work_dir=work, resume=True)
+        second_options.update(work_dir=alias / ".." / work.name, resume=True)
+
+    first_checked = Event()
+    allow_first_claim = Event()
+    first_staged = Event()
+    allow_first_encode = Event()
+    original_mkdir = Path.mkdir
+
+    def interleave_claims(path, *args, **kwargs):
+        if path.resolve() == work:
+            if not first_checked.is_set():
+                first_checked.set()
+                assert allow_first_claim.wait(30)
+            else:
+                # A second writer here has already decided that the work directory is empty.
+                allow_first_claim.set()
+                assert first_staged.wait(30)
+        return original_mkdir(path, *args, **kwargs)
+
+    def hold_after_staging(done, total):
+        if done == total:
+            first_staged.set()
+            assert allow_first_encode.wait(30)
+
+    monkeypatch.setattr(Path, "mkdir", interleave_claims)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first = executor.submit(
+            convert,
+            first_manifest,
+            first_out,
+            progress=hold_after_staging,
+            **first_options,
+            **OPTIONS,
+        )
+        try:
+            assert first_checked.wait(30)
+            with pytest.raises(BlockingIOError, match="another conversion is already using"):
+                convert(second_manifest, second_out, **second_options, **OPTIONS)
+                np.testing.assert_array_equal(stored(second_out), second_pixels[np.newaxis])
+        finally:
+            allow_first_claim.set()
+            allow_first_encode.set()
+        report = first.result(timeout=30)
+
+    assert (report.n_staged, report.n_reused) == (1, 0)
+    np.testing.assert_array_equal(stored(first_out), first_pixels[np.newaxis])
+    assert not work.exists()
+    if explicit_work:
+        report = convert(second_manifest, second_out, **second_options, **OPTIONS)
+        assert (report.n_staged, report.n_reused) == (1, 0)
+        np.testing.assert_array_equal(stored(second_out), second_pixels[np.newaxis])
+    else:
+        with pytest.raises(FileExistsError, match="stores are immutable"):
+            convert(second_manifest, second_out, **OPTIONS)
+
+
 KILLED_CONVERT = """
 import json
 import os
+import signal
 import sys
 
 from chronozarr import schema
@@ -1106,7 +1187,9 @@ from chronozarr.convert import convert
 
 
 def die(self):
-    os._exit(9)  # no handler and no cleanup runs, as when the process is killed
+    if hasattr(signal, "SIGKILL"):
+        os.kill(os.getpid(), signal.SIGKILL)
+    os._exit(9)  # abrupt exit without cleanup on Windows
 
 
 schema.RootAttrs.to_attrs = die
@@ -1118,9 +1201,10 @@ def kill_a_conversion_while_it_encodes(source: Path, out: Path, **options: Any) 
     """Run a conversion in another process and end that process, with no cleanup, where its
     encode would write the root attributes. Returns the work directory that it leaves."""
     command = [sys.executable, "-c", KILLED_CONVERT, str(source), str(out), json.dumps(options)]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    assert result.returncode == 9, result.stderr
-    assert "chronozarr" not in json.loads((out / "zarr.json").read_text())["attributes"]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+    killed = -signal.SIGKILL if hasattr(signal, "SIGKILL") else 9
+    assert result.returncode == killed, result.stderr
+    assert not out.exists()
     return Path(options.get("work_dir", out.parent / f"{out.name}.convert-work"))
 
 
@@ -1129,14 +1213,35 @@ def write_bare_group(out: Path) -> None:
     zarr.open_group(str(out), mode="w", zarr_format=3).create_group("0")
 
 
+def leave_legacy_unfinished_encode(source: Path, out: Path, **options: Any) -> Path:
+    """Stage real timesteps and reproduce the two records an old converter left after a kill."""
+
+    class StopBeforeEncoding(Exception):
+        pass
+
+    def stop_when_staged(done, total):
+        if done == total:
+            raise StopBeforeEncoding
+
+    with pytest.raises(StopBeforeEncoding):
+        convert(source, out, progress=stop_when_staged, **options)
+    work = Path(options.get("work_dir", out.parent / f"{out.name}.convert-work"))
+    run = "29feae2f3e514a6986a7b83483afb567"
+    group = zarr.open_group(str(out), mode="w", zarr_format=3)
+    group.attrs["_chronozarr_encoding_run"] = run
+    group.create_group("0")
+    (work / "encoding").write_text(json.dumps({"output": str(out.resolve()), "run": run}))
+    return work
+
+
 @pytest.fixture(scope="module")
 def unfinished_encode(tmp_path_factory) -> tuple[Path, Path, Path]:
-    """One real interrupted encode for the tests that inspect copies of its output and work."""
+    """One legacy interrupted encode for the tests that inspect copies of its output and work."""
     path = tmp_path_factory.mktemp("interrupted-convert")
     tif = write_tif(path / "source.tif", make_truth(1, 1, 8, 8)[0])
     manifest = write_csv(path / "m.csv", [tif], dates=DATES[:1])
     out = path / "store"
-    work = kill_a_conversion_while_it_encodes(manifest, out, **OPTIONS)
+    work = leave_legacy_unfinished_encode(manifest, out, **OPTIONS)
     return manifest, out, work
 
 
@@ -1176,12 +1281,12 @@ def not_reusable_message(out: Path, work: Path) -> str:
     )
 
 
-def test_a_conversion_killed_while_it_encodes_leaves_a_store_that_the_next_run_names(
+def test_a_legacy_conversion_killed_while_encoding_leaves_a_store_that_the_next_run_names(
     tmp_path, tifs, truth
 ):
     manifest = write_csv(tmp_path / "m.csv", tifs)
     out = tmp_path / "store"
-    work = kill_a_conversion_while_it_encodes(manifest, out, **OPTIONS)
+    work = leave_legacy_unfinished_encode(manifest, out, **OPTIONS)
     assert len(list(work.glob("t*.npy"))) == N_TIME
     with pytest.raises(FileExistsError) as error:
         convert(manifest, out, **OPTIONS)
@@ -1196,6 +1301,49 @@ def test_a_conversion_killed_while_it_encodes_leaves_a_store_that_the_next_run_n
         "_chronozarr_encoding_run" not in json.loads((out / "zarr.json").read_text())["attributes"]
     )
     np.testing.assert_array_equal(stored(out), truth)
+
+
+def test_a_conversion_killed_while_encoding_can_resume_without_an_output_to_delete(
+    tmp_path, tifs, truth
+):
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "store"
+    work = kill_a_conversion_while_it_encodes(manifest, out, **OPTIONS)
+    lock = tmp_path / ".store.convert-work.convert.lock"
+    lock_inode = lock.stat().st_ino
+    assert len(list(work.glob("t*.npy"))) == N_TIME
+    assert list(work.glob(".chronozarr-encode-*/store/zarr.json"))
+
+    report = convert(manifest, out, resume=True, **OPTIONS)
+    assert (report.n_staged, report.n_reused) == (0, N_TIME)
+    np.testing.assert_array_equal(stored(out), truth)
+    assert not work.exists()
+    assert lock.stat().st_ino == lock_inode
+
+
+def test_convert_resumes_staged_timesteps_after_late_encode_failure(
+    tmp_path, tifs, truth, monkeypatch
+):
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "store"
+    work = tmp_path / "store.convert-work"
+
+    def fail(_):
+        raise OSError("could not collect encode statistics")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(importlib.import_module("chronozarr.encode"), "_tree_stats", fail)
+        with pytest.raises(OSError, match="could not collect encode statistics") as error:
+            convert(manifest, out, **OPTIONS)
+    assert not out.exists()
+    assert len(list(work.glob("t*.npy"))) == N_TIME
+    assert not list(work.glob(".chronozarr-encode-*"))
+    assert any("rerun with --resume" in note for note in error.value.__notes__)
+
+    report = convert(manifest, out, resume=True, **OPTIONS)
+    assert (report.n_staged, report.n_reused) == (0, N_TIME)
+    np.testing.assert_array_equal(stored(out), truth)
+    assert not work.exists()
 
 
 def test_resume_refuses_a_geotiff_replaced_at_the_same_path(tmp_path):
@@ -1213,16 +1361,10 @@ def test_resume_refuses_a_geotiff_replaced_at_the_same_path(tmp_path):
     assert tif.stat().st_size == before.st_size
     assert tif.stat().st_mtime_ns == before.st_mtime_ns
 
-    with pytest.raises(FileExistsError, match="holds an unfinished store") as error:
-        convert(manifest, out, **OPTIONS)
-    advice = str(error.value)
-    out.rename(tmp_path / "interrupted")
     with pytest.raises(ValueError, match="different input or options"):
         convert(manifest, out, resume=True, **OPTIONS)
     with pytest.raises(FileExistsError, match="different input or options"):
         convert(manifest, out, **OPTIONS)
-    assert "without --resume" in advice
-    assert f"Keep the staged timesteps in {work}." in advice
     np.testing.assert_array_equal(np.load(work / "t000000.npy"), original)
 
     report = convert(manifest, out, work_dir=tmp_path / "fresh", **OPTIONS)
@@ -1247,7 +1389,6 @@ def test_resume_refuses_a_replaced_geotiff_mask_sidecar(tmp_path):
         dst.write_mask(mask)
     replacement.with_suffix(".tif.msk").replace(tif.with_suffix(".tif.msk"))
     assert tif.stat().st_ctime_ns == before.st_ctime_ns
-    out.rename(tmp_path / "interrupted")
 
     with pytest.raises(ValueError, match="different input or options"):
         convert(manifest, out, resume=True, **OPTIONS)
@@ -1292,7 +1433,7 @@ def test_a_killed_conversion_of_a_zarr_source_says_to_delete_the_store_and_its_w
     )
     out = tmp_path / "store"
     options: dict[str, Any] = {**OPTIONS, "crs": CRS}
-    work = kill_a_conversion_while_it_encodes(source, out, **options)
+    work = leave_legacy_unfinished_encode(source, out, **options)
     # The same refusal whatever the rerun passes: nothing, the resume this source cannot have,
     # or the fresh work directory that the refusal of resume asks for.
     for rerun in ({}, {"resume": True}, {"work_dir": tmp_path / "fresh"}):
@@ -1342,13 +1483,14 @@ def test_the_record_names_the_output_however_its_path_is_written(
     with pytest.raises(FileExistsError) as error:
         convert(manifest, Path("store"), resume=True, **OPTIONS)
     assert str(error.value) == reusable_message(Path("store"), Path("store.convert-work"))
+    assert not (tmp_path / ".store.convert-work.convert.lock").exists()
 
 
 def test_an_unfinished_store_names_the_explicit_work_directory_of_its_run(tmp_path, tifs):
     explicit = tmp_path / "scratch"
     manifest = write_csv(tmp_path / "m.csv", tifs)
     out = tmp_path / "store"
-    kill_a_conversion_while_it_encodes(manifest, out, work_dir=str(explicit), **OPTIONS)
+    leave_legacy_unfinished_encode(manifest, out, work_dir=str(explicit), **OPTIONS)
     with pytest.raises(FileExistsError) as error:
         convert(manifest, out, work_dir=explicit, **OPTIONS)
     assert str(error.value) == reusable_message(out, explicit)
@@ -1496,7 +1638,7 @@ def test_a_failed_encode_does_not_claim_a_later_xarray_dataset_at_its_path(tmp_p
 def test_a_killed_encode_does_not_claim_a_replacement_xarray_dataset(tmp_path, tifs):
     manifest = write_csv(tmp_path / "m.csv", tifs)
     out = tmp_path / "store"
-    kill_a_conversion_while_it_encodes(manifest, out, **OPTIONS)
+    leave_legacy_unfinished_encode(manifest, out, **OPTIONS)
     out.rename(tmp_path / "interrupted")
     attribute_less_dataset(out, consolidated=False)
 

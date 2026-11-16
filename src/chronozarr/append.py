@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import errno
 import json
 import os
 import shutil
-import sys
 import tempfile
 import time
 import warnings
@@ -23,6 +21,7 @@ import zarr
 from zarr.errors import ZarrUserWarning
 
 from chronozarr import schema
+from chronozarr._file_lock import exclusive_file_lock
 from chronozarr._writer import (
     DEFAULT_CELLS_IN_FLIGHT,
     VOLATILITY_SCALE,
@@ -46,11 +45,6 @@ from chronozarr._writer import (
 from chronozarr.crs import Crs, same_crs
 from chronozarr.decode import ChronoStore, open_store
 from chronozarr.schema import Band, Chronozarr, LevelRef, SchemaError, Transform
-
-if sys.platform == "win32":
-    import msvcrt
-else:
-    import fcntl
 
 # A `none` store does not record the nominal schedule its volatility was computed against
 # (spec 5); appended timesteps use the writer default.
@@ -567,34 +561,13 @@ def _append_lock(store: str | Path) -> Iterator[Path]:
     original = Path(store).resolve()
     if not original.is_dir():
         raise ValueError(f"{store} is not a local directory; append works on a local store")
-    # Leave the sibling file in place so every writer locks the same file, even while
-    # another process opens it. The OS releases the lock when the writer exits.
     lock_path = original.with_name(f".{original.name}.append.lock")
-    with lock_path.open("a+b") as lock:
-        fd = lock.fileno()
-        contention = (
-            (errno.EACCES,) if sys.platform == "win32" else (errno.EAGAIN, errno.EWOULDBLOCK)
-        )
-        try:
-            if sys.platform == "win32":
-                lock.seek(0)
-                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-            else:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            if exc.errno not in contention:
-                raise
-            raise BlockingIOError(
-                f"cannot append to {store}: another append is already running. "
-                "Retry after it finishes."
-            ) from exc
-        try:
-            yield original
-        finally:
-            if sys.platform == "win32":
-                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(fd, fcntl.LOCK_UN)
+    with exclusive_file_lock(
+        lock_path,
+        conflict_message=f"cannot append to {store}: another append is already running. "
+        "Retry after it finishes.",
+    ):
+        yield original
 
 
 def _append_working_copy(

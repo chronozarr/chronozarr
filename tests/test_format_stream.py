@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import importlib
+import os
+import shutil
+import stat
 import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
+from itertools import count
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
 from typing import Any
 
 import numpy as np
@@ -145,7 +150,14 @@ def test_failing_iterator_leaves_no_store_and_no_spill_files(tmp_path):
     assert _spill_dirs(tmp_path) == []
 
 
-@pytest.mark.parametrize("empty_destination", [False, True], ids=["absent", "empty"])
+_EMPTY_DESTINATION = pytest.param(
+    True,
+    id="empty",
+    marks=pytest.mark.skipif(os.name == "nt", reason="Windows rename requires an absent output"),
+)
+
+
+@pytest.mark.parametrize("empty_destination", [False, _EMPTY_DESTINATION])
 @pytest.mark.parametrize("iterator_fails", [False, True], ids=["write", "spill_failure"])
 def test_encode_preserves_a_store_created_during_spill(
     tmp_path, empty_destination, iterator_fails
@@ -175,12 +187,30 @@ def test_encode_preserves_a_store_created_during_spill(
     assert _spill_dirs(tmp_path) == []
 
 
-def test_competing_encodes_claim_the_destination_once(tmp_path):
+@pytest.mark.parametrize("empty_destination", [False, _EMPTY_DESTINATION])
+def test_competing_encodes_publish_the_destination_once(tmp_path, empty_destination, monkeypatch):
     path = tmp_path / "s"
-    path.mkdir()
+    if empty_destination:
+        path.mkdir()
     truth = make_truth(2, 1, 8, 8)
     candidates = [truth, truth + 1000]
     right_before_spilling = Barrier(2)
+    second_consolidating = Event()
+    first_finished = Event()
+    attempts = count()
+    consolidate = importlib.import_module("zarr").consolidate_metadata
+
+    def consolidate_in_order(*args, **kwargs):
+        if next(attempts) == 0:
+            # If both encodes can change the warning filter at once, make the later scope
+            # stay open until the first has already restored the original filter.
+            second_consolidating.wait(timeout=1)
+        else:
+            second_consolidating.set()
+            assert first_finished.wait(10)
+        return consolidate(*args, **kwargs)
+
+    monkeypatch.setattr("zarr.consolidate_metadata", consolidate_in_order)
 
     def encode_frames(frames):
         def steps():
@@ -189,7 +219,10 @@ def test_competing_encodes_claim_the_destination_once(tmp_path):
             right_before_spilling.wait(timeout=10)
             yield frames[1]
 
-        return chronozarr.encode(steps(), path, chunk_size=CS, **_stream_kwargs(frames))
+        try:
+            return chronozarr.encode(steps(), path, chunk_size=CS, **_stream_kwargs(frames))
+        finally:
+            first_finished.set()
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         jobs = [pool.submit(encode_frames, candidate) for candidate in candidates]
@@ -208,7 +241,7 @@ def test_competing_encodes_claim_the_destination_once(tmp_path):
 
 
 @pytest.mark.parametrize("replace_directory", [False, True], ids=["root", "directory"])
-def test_encode_preserves_a_replacement_after_claiming_the_destination(
+def test_encode_preserves_a_replacement_when_root_finalization_fails(
     tmp_path, monkeypatch, replace_directory
 ):
     path = tmp_path / "s"
@@ -220,10 +253,12 @@ def test_encode_preserves_a_replacement_after_claiming_the_destination(
 
     def replace_output(_):
         if replace_directory:
-            path.rename(tmp_path / "original")
+            if path.exists():
+                path.rename(tmp_path / "original")
             replacement.rename(path)
         else:
             # Publish a new root and array in the same directory.
+            path.mkdir(exist_ok=True)
             (replacement / "foreign").rename(path / "foreign")
             (replacement / "zarr.json").replace(path / "zarr.json")
         raise RuntimeError("root finalization failed")
@@ -235,7 +270,176 @@ def test_encode_preserves_a_replacement_after_claiming_the_destination(
     assert all((path / name).read_bytes() == value for name, value in foreign_tree.items())
 
 
-@pytest.mark.parametrize("empty_destination", [False, True], ids=["absent", "empty"])
+def test_encode_never_writes_chunks_into_a_replacement_store(tmp_path, monkeypatch):
+    path = tmp_path / "s"
+    replacement = tmp_path / "replacement"
+    truth = make_truth(2, 1, 8, 8)
+    chronozarr.encode(make_da(truth + 1000), replacement, chunk_size=CS)
+    foreign_tree = _tree(replacement)
+
+    encode_module = importlib.import_module("chronozarr.encode")
+    write_cell = encode_module._encode_cell
+
+    def install_replacement_then_write(*args, **kwargs):
+        # The writer has opened its group and built its array handles.
+        if path.exists():
+            path.rename(tmp_path / "original")
+        replacement.rename(path)
+        return write_cell(*args, **kwargs)
+
+    monkeypatch.setattr(encode_module, "_encode_cell", install_replacement_then_write)
+    with pytest.raises(FileExistsError, match="stores are immutable"):
+        chronozarr.encode(make_da(truth), path, chunk_size=CS, workers=1)
+
+    assert _tree(path) == foreign_tree
+
+
+@pytest.mark.parametrize(
+    "collision",
+    [
+        "directory",
+        "file",
+        pytest.param(
+            "symlink",
+            marks=pytest.mark.skipif(
+                os.name == "nt", reason="creating a Windows symlink can require extra privileges"
+            ),
+        ),
+    ],
+)
+def test_encode_rename_does_not_replace_a_competing_destination(tmp_path, monkeypatch, collision):
+    path = tmp_path / "s"
+    foreign = tmp_path / "foreign"
+    truth = make_truth(2, 1, 8, 8)
+    chronozarr.encode(make_da(truth + 1000), foreign, chunk_size=CS)
+    foreign_tree = _tree(foreign)
+    rename = os.rename
+
+    def publish_competitor_then_rename(src, dst, *args, **kwargs):
+        if Path(dst) == path:
+            if collision == "symlink":
+                path.symlink_to(foreign, target_is_directory=True)
+            elif collision == "file":
+                path.write_bytes(b"foreign file")
+            else:
+                rename(foreign, path)
+        return rename(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "rename", publish_competitor_then_rename)
+    with pytest.raises(FileExistsError, match="stores are immutable"):
+        chronozarr.encode(make_da(truth), path, chunk_size=CS)
+
+    if collision == "symlink":
+        assert path.is_symlink() and path.resolve() == foreign
+    if collision == "file":
+        assert path.read_bytes() == b"foreign file"
+    else:
+        assert _tree(path) == foreign_tree
+
+
+def test_encode_cleanup_preserves_a_store_published_during_cleanup(tmp_path, monkeypatch):
+    path = tmp_path / "s"
+    replacement = tmp_path / "replacement"
+    truth = make_truth(2, 1, 8, 8)
+    chronozarr.encode(make_da(truth + 1000), replacement, chunk_size=CS)
+    foreign_tree = _tree(replacement)
+    failed = False
+    remove_tree = shutil.rmtree
+
+    def fail(_):
+        nonlocal failed
+        failed = True
+        raise RuntimeError("root finalization failed")
+
+    def install_replacement_then_remove(target, *args, **kwargs):
+        if failed and replacement.exists():
+            if path.exists():
+                path.rename(tmp_path / "original")
+            replacement.rename(path)
+        return remove_tree(target, *args, **kwargs)
+
+    monkeypatch.setattr(schema.RootAttrs, "to_attrs", fail)
+    monkeypatch.setattr(shutil, "rmtree", install_replacement_then_remove)
+    with pytest.raises(RuntimeError, match="root finalization failed"):
+        chronozarr.encode(make_da(truth), path, chunk_size=CS)
+
+    assert _tree(path) == foreign_tree
+
+
+@pytest.mark.parametrize("empty_destination", [False, _EMPTY_DESTINATION])
+def test_encode_leaves_no_output_when_collecting_its_report_fails(
+    tmp_path, monkeypatch, empty_destination
+):
+    path = tmp_path / "s"
+    if empty_destination:
+        path.mkdir()
+
+    def fail(_):
+        raise OSError("report size calculation failed")
+
+    encode_module = importlib.import_module("chronozarr.encode")
+    monkeypatch.setattr(encode_module, "_tree_stats", fail)
+    with pytest.raises(OSError, match="report size calculation failed"):
+        chronozarr.encode(make_da(make_truth(2, 1, 8, 8)), path, chunk_size=CS)
+
+    assert list(tmp_path.iterdir()) == ([path] if empty_destination else [])
+    if empty_destination:
+        assert list(path.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows rename requires an absent output")
+def test_encode_refuses_a_symlink_retargeted_during_spill(tmp_path):
+    path = tmp_path / "s"
+    first_target = tmp_path / "empty"
+    first_target.mkdir()
+    path.symlink_to(first_target, target_is_directory=True)
+    replacement = tmp_path / "replacement"
+    truth = make_truth(2, 1, 8, 8)
+    chronozarr.encode(make_da(truth + 1000), replacement, chunk_size=CS)
+    foreign_tree = _tree(replacement)
+
+    def steps():
+        yield truth[0]
+        path.unlink()
+        path.symlink_to(replacement, target_is_directory=True)
+        yield truth[1]
+
+    with pytest.raises(FileExistsError, match="output destination changed"):
+        chronozarr.encode(steps(), path, chunk_size=CS, **_stream_kwargs(truth))
+
+    assert path.resolve() == replacement.resolve()
+    assert list(first_target.iterdir()) == []
+    assert _tree(replacement) == foreign_tree
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows rename requires an absent output")
+def test_encode_through_a_stable_output_symlink_preserves_target_permissions(tmp_path):
+    path = tmp_path / "s"
+    target = tmp_path / "target"
+    target.mkdir()
+    target.chmod(0o750)
+    path.symlink_to(target, target_is_directory=True)
+
+    truth = make_truth(2, 1, 8, 8)
+    chronozarr.encode(make_da(truth), path, chunk_size=CS)
+
+    assert path.is_symlink()
+    assert stat.S_IMODE(target.stat().st_mode) == 0o750
+    np.testing.assert_array_equal(chronozarr.open_store(path).to_xarray().values, truth)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory publication")
+def test_encode_requires_an_absent_destination_on_windows(tmp_path):
+    path = tmp_path / "s"
+    path.mkdir()
+
+    with pytest.raises(FileExistsError, match="on Windows"):
+        chronozarr.encode(make_da(make_truth(2, 1, 8, 8)), path, chunk_size=CS)
+
+    assert list(path.iterdir()) == []
+
+
+@pytest.mark.parametrize("empty_destination", [False, _EMPTY_DESTINATION])
 def test_encode_failure_during_consolidation_cleans_its_own_store(
     tmp_path, monkeypatch, empty_destination
 ):
@@ -255,7 +459,8 @@ def test_encode_failure_during_consolidation_cleans_its_own_store(
         assert not path.exists()
 
 
-def test_encode_can_spill_into_an_initially_empty_destination(tmp_path):
+@pytest.mark.skipif(os.name == "nt", reason="Windows rename requires an absent output")
+def test_encode_can_spill_on_the_filesystem_of_an_initially_empty_destination(tmp_path):
     path = tmp_path / "s"
     path.mkdir()
     truth = make_truth(2, 1, 8, 8)

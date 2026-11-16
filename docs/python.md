@@ -19,7 +19,9 @@ After slicing the spatial axes, update the transform attribute or drop it to inf
 
 `crs` is an authority code such as `EPSG:32631`, or WKT2 text for a CRS with no code, such as a Lambert conformal conic or a sinusoidal grid. Without `crs`, `encode` reads `da.attrs["crs"]`. WKT1, PROJJSON and PROJ strings are converted to WKT2 when pyproj is installed. A store whose CRS has an EPSG code is written as spec 0.3.0 and any other as 0.4.0. `convert` keeps the CRS of its sources as it finds it and does not reproject unless you pass `--crs` for another CRS with `--resampling`.
 
-The output directory must not exist, or it must be empty. The store is unsharded unless you pass `shard=True`.
+Use a new output path. On macOS and other POSIX systems, an empty directory also works, including a symbolic link to one. The encoder builds the complete store on the same filesystem and publishes it with a single directory rename. On Windows that rename requires an absent destination.
+
+A force-killed encoder can leave a private `.chronozarr-encode-*` directory next to the output. Once its process has stopped, you can remove that scratch directory. The store is unsharded unless you pass `shard=True`.
 
 ## Read a store
 
