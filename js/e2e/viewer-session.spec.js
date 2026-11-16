@@ -444,6 +444,49 @@ test.describe('two opens that overlap', () => {
   });
 });
 
+test('a status callback can replace an open during playback', async ({ page, servers, storeUrl }) => {
+  await openAt(page, servers, await storeUrl('u16_sharded'));
+  const supersededUrl = await storeUrl('u16_plain');
+  const newestUrl = (await storeUrl('u8_rgb')).replace(/\/$/, '');
+  const before = servers.data.requests.length;
+  const outcome = await page.evaluate(async ([supersededUrl, newestUrl]) => {
+    const { viewer } = window.chronozarr;
+    await viewer.prefetchNow();
+    const loadStore = viewer.loadStore.bind(viewer);
+    const { promise, resolve } = Promise.withResolvers();
+    // Take the real store validated by the URL field, then open it from the callback with no metadata await.
+    viewer.loadStore = (url, { store }) => {
+      delete viewer.loadStore;
+      viewer.play();
+      const wasPlaying = viewer.status.playback !== 'paused';
+      let newest;
+      let settled;
+      viewer.hooks.status = () => {
+        if (viewer.status.store !== 'opening') return;
+        delete viewer.hooks.status;
+        settled = viewer.whenSettled();
+        newest = loadStore(url, { store });
+      };
+      const superseded = loadStore(supersededUrl, { workers: 0 });
+      resolve(Promise.all([superseded, newest]).then(async ([first, latest]) => ({ first, latest, wasPlaying, url: viewer.store.url, status: await settled })));
+      return newest;
+    };
+    const input = document.getElementById('open-store-url');
+    input.value = newestUrl;
+    input.form.requestSubmit();
+    return promise;
+  }, [supersededUrl, newestUrl]);
+
+  expect(outcome).toEqual({
+    first: null,
+    latest: expect.objectContaining({ firstPaintMs: expect.any(Number) }),
+    wasPlaying: true,
+    url: newestUrl,
+    status: { store: 'open', frame: 'settled', playback: 'paused', exporting: false, t: 0, shownT: 0, level: 0, error: null },
+  });
+  expect(servers.data.requests.slice(before).filter(({ path }) => path.startsWith('/u16_plain/'))).toEqual([]);
+});
+
 test.describe('a store whose first frame cannot be had', () => {
   test.use({ expectedErrors: /Failed to load resource: .*503|request failed, giving up|chunk load failed|prefetch failed for chunk/ });
 

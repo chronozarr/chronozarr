@@ -313,20 +313,20 @@ class Viewer {
    *   `startTime`: where to start in time when `viewSearch` names no timestep (start-time.js); without it, the first timestep.
    */
   async loadStore(url, options = {}) {
-    // 1. End the previous session. The session moves first and #endSession detaches the store before anything else, so
-    // that every status published on the way says that a store is opening and finds `viewer.store` null: never a status
-    // that says opening while `viewer.store` still holds the previous store. An open that was waiting for its first
-    // frame wakes up after this call has returned at its first await, and by then the generation below says that it was
-    // superseded.
+    // 1. End the previous session before publishing opening. A status hook can synchronously start another open.
     this.#session.send('open');
     const generation = ++this.#storeGeneration;
     this.#endSession();
-    this.#hideError();
     this.#setProgress(0.02);
+    let store = options.store ?? null;
+    this.#hideError(); // Clearing the old notice also publishes the opening status.
+    if (generation !== this.#storeGeneration) {
+      if (store !== this.store) store?.close();
+      return null;
+    }
     const started = performance.now();
 
     // 2. Read the store and where it starts in time; a newer open may take over at each await.
-    let store = options.store ?? null;
     try {
       store ??= await openStore(url, { fetch: options.fetch, maxCacheBytes: options.maxCacheBytes, totalBytes: options.totalBytes, workers: options.workers });
       checkUniformChunks(store);
@@ -467,14 +467,13 @@ class Viewer {
    * and the timeline its ticks until the next store draws.
    */
   #endSession() {
-    // No store is open from here on: what is published below (pausing publishes) has no store and no frame. The store
-    // is detached first and closed near the end, after the work that still holds its requests has stopped.
+    // Detach before pausing so the playback callback cannot publish status or queue work during teardown.
+    // Close near the end, after the work that still holds its requests has stopped.
     const store = this.store;
     this.store = null;
     this.#frameOutcome = 'none';
     // A click being inspected drops its result once the token has moved on.
     ++this.#inspectRequest;
-    // Pausing runs #updatePlayUi, which queues a render and an address bar sync: pause first, so that both are cancelled below.
     this.#playback?.pause();
     // The scrub hands the requests of its pumps over to the next frame; #abortBackground, after it, stops those too.
     this.#clearScrub();
@@ -507,7 +506,6 @@ class Viewer {
     this.#updateFrameDate([]);
     // #loading is false from here: the tick of the timestep asked for and the track lose their loading look.
     this.#updateTimeUi();
-    this.#publishStatus();
   }
 
   /**
@@ -2843,7 +2841,7 @@ class Viewer {
     // While no store is open the previous store's paused Playback is not asked anything: its callbacks read the store.
     const playback = this.store ? this.#playback : null;
     const playing = playback?.playing ?? false;
-    if (this.#wasPlaying && !playing) {
+    if (playback && this.#wasPlaying && !playing) {
       this.requestRender();
       this.#scheduleUrlSync();
     }
@@ -2869,7 +2867,7 @@ class Viewer {
     }
     if (!playing) this.#stopBufferPumps();
     this.#updateSpeedUi();
-    this.#publishStatus();
+    if (playback) this.#publishStatus();
   }
 
   /** The slider shows the requested speed; when the display or the link cannot keep up the label adds what is delivered. */
