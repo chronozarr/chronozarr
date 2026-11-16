@@ -2219,7 +2219,8 @@ class Viewer {
     setTimeout(() => {
       if (this.#wave !== wave) return;
       wave.cells.delete(cell);
-      this.requestRender();
+      // Hidden pages may withhold animation callbacks, but the retry must still advance the frame.
+      this.#render({ force: false });
     }, CELL_RETRY_DELAY_MS * failures);
   }
 

@@ -80,26 +80,17 @@ const recordStatusHook = (page) =>
 const pauseClock = async (page) => page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1000);
 
 /**
- * From the moment the viewer has asked for every cell of a frame for the last time (the first request and the three
- * retries of MAX_CELL_RETRIES in viewer.js), the page grants no animation frame, as a hidden tab or an offscreen iframe
- * does: requestAnimationFrame never calls back. The retries need animation frames to be asked for; what follows the
- * last failures must not. window.framesWithheld says that the page got there.
+ * Let the viewer start the load, then withhold animation frames as in a hidden tab or offscreen iframe.
+ * Neither a retry nor the final status should depend on a callback being granted.
  */
-const withholdFramesAfterLastAttempts = (page) =>
+const withholdFramesOnLoad = (page) =>
   page.evaluate(() => {
     const { viewer } = window.chronozarr;
-    const attempts = 4;
-    let cells = null;
-    let asked = 0;
     window.framesWithheld = false;
     viewer.probe = (event) => {
       if (event.type !== 'load-start' || window.framesWithheld) return;
-      cells ??= event.cells;
-      asked += event.cells;
-      if (asked >= cells * attempts) {
-        window.requestAnimationFrame = () => 1;
-        window.framesWithheld = true;
-      }
+      window.requestAnimationFrame = () => 1;
+      window.framesWithheld = true;
     };
   });
 
@@ -294,7 +285,7 @@ test('a preview that hides a toast neither ends whenSettled nor publishes the ou
   expect(await page.evaluate(() => window.settled)).toEqual(expect.objectContaining({ frame: 'settled', t: 2, level: 0 }));
 });
 
-test.describe('a frame whose cells fail for good', () => {
+test.describe('a frame with failed cells', () => {
   test.use({ expectedErrors: /Failed to load resource: .*503|request failed, giving up|chunk load failed|prefetch failed for chunk/ });
 
   test('is unavailable, and whenSettled resolves with it', async ({ page, servers, storeUrl }) => {
@@ -326,7 +317,7 @@ test.describe('a frame whose cells fail for good', () => {
     await page.clock.install();
     await openViewer(page, servers, url);
     await waitForSettled(page);
-    await withholdFramesAfterLastAttempts(page);
+    await withholdFramesOnLoad(page);
     await page.evaluate(() => window.chronozarr.viewer.goToTime(3));
     await startSettledWait(page);
     await expect
@@ -338,7 +329,7 @@ test.describe('a frame whose cells fail for good', () => {
         { timeout: 60_000, intervals: [100] },
       )
       .toBe(false);
-    expect(await page.evaluate(() => window.framesWithheld), 'the page granted no animation frame after the last attempts').toBe(true);
+    expect(await page.evaluate(() => window.framesWithheld), 'the page granted no animation frame after the load started').toBe(true);
     expect(await page.evaluate(() => window.settled)).toEqual(expect.objectContaining({ store: 'open', frame: 'unavailable', t: 3 }));
   });
 
@@ -350,7 +341,7 @@ test.describe('a frame whose cells fail for good', () => {
     await openViewer(page, servers, first);
     await waitForSettled(page);
     await page.route(/\/u16_plain\/\d+\/data\/c\//, (route) => route.fulfill({ status: 503, headers: { 'Access-Control-Allow-Origin': '*' } }));
-    await withholdFramesAfterLastAttempts(page);
+    await withholdFramesOnLoad(page);
     await page.evaluate((url) => {
       window.openOutcome = 'pending';
       window.chronozarr.viewer.loadStore(url).then((result) => {
@@ -366,8 +357,42 @@ test.describe('a frame whose cells fail for good', () => {
         { timeout: 60_000, intervals: [100] },
       )
       .toBe(false);
-    expect(await page.evaluate(() => window.framesWithheld), 'the page granted no animation frame after the last attempts').toBe(true);
+    expect(await page.evaluate(() => window.framesWithheld), 'the page granted no animation frame after the load started').toBe(true);
     expect(await page.evaluate(() => window.openOutcome)).toEqual(expect.objectContaining({ firstPaintMs: null }));
+  });
+
+  test('an open retries a transient first-frame failure without animation frames', async ({ page, servers, storeUrl }) => {
+    const first = await storeUrl('u16_sharded');
+    const url = await storeUrl('u16_plain');
+    await page.clock.install();
+    await openViewer(page, servers, first);
+    await waitForSettled(page);
+    await withholdFramesOnLoad(page);
+    await page.evaluate((url) => {
+      const cell = `${url}0/data/c/0/0/0/0`;
+      window.failedCell = false;
+      const fetchChunk = (request) => {
+        if (request.url === cell && !window.failedCell) {
+          window.failedCell = true;
+          // 403 reaches the viewer's retry loop immediately after a single failed request.
+          return Promise.resolve(new Response(null, { status: 403 }));
+        }
+        return fetch(request);
+      };
+      window.openOutcome = 'pending';
+      window.chronozarr.viewer.loadStore(url, { lod: 0, fetch: fetchChunk, workers: 0 }).then((result) => {
+        window.openOutcome = result;
+      });
+    }, url);
+    await startSettledWait(page);
+    await expect.poll(async () => {
+      await page.clock.runFor(1500);
+      return page.evaluate(() => window.openOutcome === 'pending');
+    }).toBe(false);
+
+    expect(await page.evaluate(() => window.framesWithheld && window.failedCell)).toBe(true);
+    expect(await page.evaluate(() => window.openOutcome.firstPaintMs)).toBeGreaterThan(0);
+    expect(await page.evaluate(() => window.settled)).toEqual(expect.objectContaining({ store: 'open', frame: 'settled', t: 0 }));
   });
 });
 
