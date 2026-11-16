@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import tracemalloc
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 
 import numpy as np
@@ -11,6 +13,7 @@ import pytest
 import xarray as xr
 
 import chronozarr
+from chronozarr import schema
 from tests.narrow import required
 from tests.synthetic import CRS, TRANSFORM, make_da, make_times, make_truth
 
@@ -140,6 +143,128 @@ def test_failing_iterator_leaves_no_store_and_no_spill_files(tmp_path):
         chronozarr.encode(steps(), tmp_path / "s", chunk_size=CS, **_stream_kwargs(truth))
     assert not (tmp_path / "s").exists()
     assert _spill_dirs(tmp_path) == []
+
+
+@pytest.mark.parametrize("empty_destination", [False, True], ids=["absent", "empty"])
+@pytest.mark.parametrize("iterator_fails", [False, True], ids=["write", "spill_failure"])
+def test_encode_preserves_a_store_created_during_spill(
+    tmp_path, empty_destination, iterator_fails
+):
+    path = tmp_path / "s"
+    if empty_destination:
+        path.mkdir()
+    truth = make_truth(2, 1, 8, 8)
+    foreign_tree = {}
+
+    def steps():
+        yield truth[0]
+        xr.Dataset({"foreign": ("x", np.array([23, 42], dtype=np.uint16))}).to_zarr(
+            path, mode="w", zarr_format=3, consolidated=False
+        )
+        foreign_tree.update(_tree(path))
+        if iterator_fails:
+            raise RuntimeError("next timestep failed")
+        yield truth[1]
+
+    error = RuntimeError if iterator_fails else FileExistsError
+    message = "next timestep failed" if iterator_fails else "stores are immutable"
+    with pytest.raises(error, match=message):
+        chronozarr.encode(steps(), path, chunk_size=CS, **_stream_kwargs(truth))
+
+    assert foreign_tree and _tree(path) == foreign_tree
+    assert _spill_dirs(tmp_path) == []
+
+
+def test_competing_encodes_claim_the_destination_once(tmp_path):
+    path = tmp_path / "s"
+    path.mkdir()
+    truth = make_truth(2, 1, 8, 8)
+    candidates = [truth, truth + 1000]
+    right_before_spilling = Barrier(2)
+
+    def encode_frames(frames):
+        def steps():
+            yield frames[0]
+            # Both calls passed the first check of the empty destination.
+            right_before_spilling.wait(timeout=10)
+            yield frames[1]
+
+        return chronozarr.encode(steps(), path, chunk_size=CS, **_stream_kwargs(frames))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        jobs = [pool.submit(encode_frames, candidate) for candidate in candidates]
+        winners = []
+        for job, candidate in zip(jobs, candidates, strict=True):
+            try:
+                job.result()
+            except FileExistsError:
+                continue
+            winners.append(candidate)
+
+    assert len(winners) == 1
+    assert chronozarr.validate(path) == []
+    np.testing.assert_array_equal(chronozarr.open_store(path).to_xarray().values, winners[0])
+    assert _spill_dirs(tmp_path) == []
+
+
+@pytest.mark.parametrize("replace_directory", [False, True], ids=["root", "directory"])
+def test_encode_preserves_a_replacement_after_claiming_the_destination(
+    tmp_path, monkeypatch, replace_directory
+):
+    path = tmp_path / "s"
+    replacement = tmp_path / "replacement"
+    xr.Dataset({"foreign": ("x", np.array([23, 42], dtype=np.uint16))}).to_zarr(
+        replacement, mode="w", zarr_format=3, consolidated=False
+    )
+    foreign_tree = _tree(replacement)
+
+    def replace_output(_):
+        if replace_directory:
+            path.rename(tmp_path / "original")
+            replacement.rename(path)
+        else:
+            # Publish a new root and array in the same directory.
+            (replacement / "foreign").rename(path / "foreign")
+            (replacement / "zarr.json").replace(path / "zarr.json")
+        raise RuntimeError("root finalization failed")
+
+    monkeypatch.setattr(schema.RootAttrs, "to_attrs", replace_output)
+    with pytest.raises(RuntimeError, match="root finalization failed"):
+        chronozarr.encode(make_da(make_truth(2, 1, 8, 8)), path, chunk_size=CS)
+
+    assert all((path / name).read_bytes() == value for name, value in foreign_tree.items())
+
+
+@pytest.mark.parametrize("empty_destination", [False, True], ids=["absent", "empty"])
+def test_encode_failure_during_consolidation_cleans_its_own_store(
+    tmp_path, monkeypatch, empty_destination
+):
+    path = tmp_path / "s"
+    if empty_destination:
+        path.mkdir()
+
+    def fail(_):
+        raise RuntimeError("consolidation failed")
+
+    monkeypatch.setattr("zarr.consolidate_metadata", fail)
+    with pytest.raises(RuntimeError, match="consolidation failed"):
+        chronozarr.encode(make_da(make_truth(2, 1, 8, 8)), path, chunk_size=CS)
+    if empty_destination:
+        assert list(path.iterdir()) == []
+    else:
+        assert not path.exists()
+
+
+def test_encode_can_spill_into_an_initially_empty_destination(tmp_path):
+    path = tmp_path / "s"
+    path.mkdir()
+    truth = make_truth(2, 1, 8, 8)
+
+    chronozarr.encode(iter(truth), path, chunk_size=CS, spill_dir=path, **_stream_kwargs(truth))
+
+    assert chronozarr.validate(path) == []
+    np.testing.assert_array_equal(chronozarr.open_store(path).to_xarray().values, truth)
+    assert _spill_dirs(path) == []
 
 
 @pytest.mark.parametrize(

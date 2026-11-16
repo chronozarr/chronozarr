@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import stat
 import tempfile
 import time
+import uuid
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
@@ -17,6 +21,7 @@ import numpy as np
 import xarray as xr
 import zarr
 from zarr.codecs import BloscCodec, ZstdCodec
+from zarr.core.buffer import Buffer
 from zarr.errors import ZarrUserWarning
 
 from chronozarr import schema
@@ -59,7 +64,7 @@ LEVEL_RANGE = {"zstd": (1, 22), "blosc-zstd-shuffle": (0, 9)}
 
 Codec = Literal["zstd", "blosc-zstd-shuffle"]
 
-# The final root attributes replace this marker from a conversion still being written.
+# The final root attributes replace this marker from an encode still being written.
 _ENCODING_RUN_ATTR = "_chronozarr_encoding_run"
 
 
@@ -242,12 +247,13 @@ def _write_store(
     *,
     provenance: dict | None,
     cells_in_flight: int,
-    encoding_run: str | None,
+    encoding_run: str,
 ) -> EncodeReport:
     cs = layout.chunk_size
     reference = schema.comparison_schedule(layout.n_time)
-    attrs = None if encoding_run is None else {_ENCODING_RUN_ATTR: encoding_run}
-    root = zarr.create_group(str(out), zarr_format=3, attributes=attrs)
+    root = zarr.open_group(str(out), mode="r+", zarr_format=3, use_consolidated=False)
+    if root.attrs.get(_ENCODING_RUN_ATTR) != encoding_run:
+        raise _occupied_output(out)
     arrays = [_create_level(root, k, layout) for k in range(len(layout.shapes))]
     grids = [schema.grid_shape(h, w, cs) for h, w in layout.shapes]
     volatility = np.zeros(grids[0], dtype=np.float32)
@@ -362,12 +368,20 @@ def _write_store(
         shard_bytes=_shard_bytes(out, len(layout.shapes)) if layout.shard else None,
     )
     datasets = tuple(LevelRef(str(k), layout.crs.code) for k in range(len(layout.shapes)))
-    root.attrs.put(RootAttrs(meta, datasets).to_attrs())
+    attrs = RootAttrs(meta, datasets).to_attrs()
+    if not _records_encode(out, encoding_run):
+        raise _occupied_output(out)
+    # Keep the claim through consolidation, which replaces the root metadata. The last root
+    # write publishes the completed store without the claim.
+    root.attrs.put({**attrs, _ENCODING_RUN_ATTR: encoding_run})
     with warnings.catch_warnings():
         # zarr-python warns that consolidated metadata is outside the Zarr v3 spec. chronozarr
         # writes it deliberately (spec 3.1) so a reader learns every array in one GET.
         warnings.simplefilter("ignore", ZarrUserWarning)
-        zarr.consolidate_metadata(str(out))
+        root = zarr.consolidate_metadata(str(out))
+    if not _records_encode(out, encoding_run):
+        raise _occupied_output(out)
+    root.attrs.put(attrs)
 
     total_bytes, n_files = _tree_stats(out)
     return EncodeReport(
@@ -391,6 +405,59 @@ def _write_store(
 
 
 # --- Public entry point -----------------------------------------------------------------------
+
+
+def _occupied_output(out: Path) -> FileExistsError:
+    return FileExistsError(
+        f"{out} already exists and is not empty; stores are immutable, write to a new path"
+    )
+
+
+def _claim_output(out: Path, encoding_run: str, spill: Path | None) -> tuple[os.stat_result, bool]:
+    """Exclusively create the root metadata and return the claimed directory's identity."""
+    metadata: dict[str, Buffer] = {}
+    zarr.create_group(metadata, zarr_format=3, attributes={_ENCODING_RUN_ATTR: encoding_run})
+    root = out / "zarr.json"
+    try:
+        out.mkdir(parents=True)
+        created = True
+    except FileExistsError:
+        created = False
+
+    root_identity = None
+    try:
+        claimed = out.lstat()
+        if not stat.S_ISDIR(claimed.st_mode) or any(entry != spill for entry in out.iterdir()):
+            raise _occupied_output(out)
+        try:
+            file = root.open("xb")
+        except FileExistsError as error:
+            raise _occupied_output(out) from error
+        with file:
+            root_identity = os.fstat(file.fileno())
+            # A foreign writer might use another format or add a file before we claim the root.
+            if not os.path.samestat(claimed, out.lstat()) or any(
+                entry not in (root, spill) for entry in out.iterdir()
+            ):
+                raise _occupied_output(out)
+            file.write(metadata[root.name].to_bytes())
+    except BaseException:
+        # The directory was never ours to clean recursively. Remove only an owned claim and
+        # try to remove a new directory only if it is still empty.
+        with suppress(OSError):
+            if root_identity is not None and os.path.samestat(root_identity, root.lstat()):
+                root.unlink()
+        if created:
+            with suppress(OSError):
+                out.rmdir()
+        raise
+    return claimed, created
+
+
+def _records_encode(out: Path, encoding_run: str) -> bool:
+    root = json.loads((out / "zarr.json").read_bytes())
+    attrs = root.get("attributes") if isinstance(root, dict) else None
+    return isinstance(attrs, dict) and attrs.get(_ENCODING_RUN_ATTR) == encoding_run
 
 
 def _check_codec(codec: str, level: int | None) -> int:
@@ -477,7 +544,7 @@ def encode(
     the number of timesteps, about 15 MB per timestep for four 512 px bands at the default
     `workers`.
 
-    Removes the partially written store if encoding fails.
+    Removes its partially written store if encoding fails.
     """
     if chunk_size < 2 or chunk_size % 2:
         raise ValueError(f"chunk_size must be an even number, got {chunk_size}")
@@ -532,13 +599,16 @@ def encode(
     )
 
     out = Path(out)
-    existed = out.exists()
-    if existed and any(out.iterdir()):
-        raise FileExistsError(
-            f"{out} already exists and is not empty; stores are immutable, write to a new path"
-        )
+    if (out.exists() and (not out.is_dir() or any(out.iterdir()))) or (
+        out.is_symlink() and not out.is_dir()
+    ):
+        raise _occupied_output(out)
+    # Keep an existing symlink to an empty directory and write to its target.
+    destination = out.resolve()
 
     spill: Path | None = None
+    claimed: os.stat_result | None = None
+    encoding_run = _encoding_run if _encoding_run is not None else uuid.uuid4().hex
     try:
         if prepared.da is not None:
             source: _Source = _ArraySource(
@@ -553,7 +623,7 @@ def encode(
                 tempfile.mkdtemp(
                     prefix=f".{out.name}-spill-", dir=str(spill_dir) if spill_dir else out.parent
                 )
-            )
+            ).resolve()
             source = _spill_timesteps(
                 prepared,
                 spill,
@@ -561,18 +631,25 @@ def encode(
                 has_mask=layout.has_mask,
                 has_coverage=layout.has_coverage,
             )
+        claimed, created = _claim_output(destination, encoding_run, spill)
         return _write_store(
-            out,
+            destination,
             layout,
             source,
             cells_in_flight=cells_in_flight,
             provenance=resolved_provenance,
-            encoding_run=_encoding_run,
+            encoding_run=encoding_run,
         )
     except BaseException:
-        shutil.rmtree(out, ignore_errors=True)
-        if existed:
-            out.mkdir()
+        if claimed is not None:
+            # If the directory or its root was replaced, it is no longer ours to remove.
+            with suppress(OSError, ValueError):
+                if os.path.samestat(claimed, destination.lstat()) and _records_encode(
+                    destination, encoding_run
+                ):
+                    shutil.rmtree(destination)
+                    if not created:
+                        destination.mkdir()
         raise
     finally:
         if spill is not None:
