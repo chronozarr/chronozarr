@@ -136,6 +136,56 @@ for (const built of [false, true]) {
   });
 }
 
+test('the source reader decodes Zstd even if a separate codec dependency would fail to load', async ({ page, consoleErrors }) => {
+  const source = await startStaticServer(path.resolve(import.meta.dirname, '..'));
+  try {
+    await page.route(`${source.url}/reader-probe.html`, (route) => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Reader</title>' }));
+    const codec = '/vendor/numcodecs/zstd.js';
+    const requests = [];
+    let failedDependency = false;
+    await page.route((url) => url.origin === source.url && url.pathname.startsWith('/vendor/numcodecs/'), (route) => {
+      const { pathname, search } = new URL(route.request().url());
+      requests.push(pathname + search);
+      // On the old module graph the shared helper fails once. Retrying the codec's URL cannot reload that helper.
+      if (pathname !== codec && !failedDependency) {
+        failedDependency = true;
+        return route.fulfill({ status: 503, body: 'temporarily unavailable' });
+      }
+      return route.continue();
+    });
+    await page.goto(`${source.url}/reader-probe.html`);
+    const bytes = [...COMPRESSORS.zstd.compress(new Uint8Array(Uint16Array.of(37).buffer))];
+    const result = await page.evaluate(async (bytes) => {
+      const { MainThreadDecoder } = await import('/chronozarr/pool.js');
+      const { codecLoaders } = await import('/chronozarr/codec-loaders.js');
+      const { registry } = await import('/vendor/zarrita/codecs.js');
+      const decoder = new MainThreadDecoder({ registry, codecLoaders });
+      const spec = { key: 'zstd-probe', dtype: 'uint16', shape: [1], codecs: [
+        { name: 'bytes', configuration: { endian: 'little' } }, { name: 'zstd', configuration: { level: 5 } },
+      ] };
+      const read = async () => {
+        try {
+          return Array.from(await decoder.decode(Uint8Array.from(bytes), 0, undefined, spec));
+        } catch (error) {
+          return error.message;
+        }
+      };
+      try {
+        return [await read(), await read()];
+      } finally {
+        decoder.close();
+      }
+    }, bytes);
+    for (let i = consoleErrors.length - 1; i >= 0; i--) {
+      if (/Failed to load resource: .*503/.test(consoleErrors[i])) consoleErrors.splice(i, 1);
+    }
+    expect(result).toEqual([[37], [37]]);
+    expect(requests).toEqual([codec]);
+  } finally {
+    await source.close();
+  }
+});
+
 test('the decode worker also retries a failed Zstd module request', async ({ page, consoleErrors }) => {
   await page.route(`${app.url}/worker-probe.html`, (route) => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Decode worker</title>' }));
   await page.goto(`${app.url}/worker-probe.html`);

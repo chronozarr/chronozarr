@@ -144,7 +144,7 @@ The layer draws on the Web Mercator projection. It supports stores in UTM, EPSG:
 
 chronozarr is Apache-2.0 (`LICENSE`). The package vendors six MIT-licensed packages.
 
-Trevor Manz wrote three of them: zarrita, @zarrita/storage and numcodecs. They are vendored unmodified apart from a header comment, and their licenses sit beside them. The header of each file records the package version and the SHA-256 of the published file.
+Trevor Manz wrote zarrita, @zarrita/storage and numcodecs. Their licenses sit beside the vendored files. The zarrita and @zarrita/storage files retain their published code with browser-local import paths, and each header records the package version and SHA-256 of the published file.
 
 | Path | Package | Version | License |
 |---|---|---|---|
@@ -157,6 +157,6 @@ Trevor Manz wrote three of them: zarrita, @zarrita/storage and numcodecs. They a
 
 The viewer export uses gifenc, written by Matt DesLauriers. It is one file, and its license text is in the header of that file, which the viewer build keeps at the end of `viewer.js`. The built viewer has the license texts of the other four packages in `demo/LICENSES.txt`; their header comments stay in its scripts, where the files are bundled.
 
-`vendor/numcodecs/blosc.js`, `lz4.js` and `zstd.js` embed WebAssembly builds of Blosc (with its bundled zlib and snappy), LZ4 and Zstandard. Those C libraries carry their own permissive upstream licenses, BSD-style and zlib. numcodecs ships no separate notice for them.
+`vendor/numcodecs/blosc.js`, `lz4.js` and `zstd.js` are bundled individually so the browser can retry each from a single URL. Their headers record the numcodecs and esbuild versions, the published entry's SHA-256 and a hash of all bundled sources. The modules embed WebAssembly builds of Blosc (with its bundled zlib and snappy), LZ4 and Zstandard. Those C libraries carry their own permissive upstream licenses, BSD-style and zlib. numcodecs ships no separate notice for them.
 
 `vendor/proj4/proj4.js` is not a copy of a published file. esbuild bundles and minifies proj4's core, wkt-parser and the projections stores use (`js/support/proj4-entry.js`), which is about 26 KB gzipped against 42.3 KB for proj4's own build. Its header records both versions, the esbuild version and a SHA-256 over every source file, and both licenses sit beside it. `node js/support/vendor.mjs` regenerates it and `--check` verifies it.
