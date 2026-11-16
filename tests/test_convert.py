@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -1195,6 +1196,91 @@ def test_a_conversion_killed_while_it_encodes_leaves_a_store_that_the_next_run_n
         "_chronozarr_encoding_run" not in json.loads((out / "zarr.json").read_text())["attributes"]
     )
     np.testing.assert_array_equal(stored(out), truth)
+
+
+def test_resume_refuses_a_geotiff_replaced_at_the_same_path(tmp_path):
+    original = np.full((1, 8, 8), 100, dtype=np.uint16)
+    updated = np.full_like(original, 200)
+    tif = write_tif(tmp_path / "source.tif", original)
+    manifest = write_csv(tmp_path / "m.csv", [tif], dates=DATES[:1])
+    out = tmp_path / "store"
+    work = kill_a_conversion_while_it_encodes(manifest, out, **OPTIONS)
+
+    before = tif.stat()
+    replacement = write_tif(tmp_path / "replacement.tif", updated)
+    os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+    replacement.replace(tif)
+    assert tif.stat().st_size == before.st_size
+    assert tif.stat().st_mtime_ns == before.st_mtime_ns
+
+    with pytest.raises(FileExistsError, match="holds an unfinished store") as error:
+        convert(manifest, out, **OPTIONS)
+    advice = str(error.value)
+    out.rename(tmp_path / "interrupted")
+    with pytest.raises(ValueError, match="different input or options"):
+        convert(manifest, out, resume=True, **OPTIONS)
+    with pytest.raises(FileExistsError, match="different input or options"):
+        convert(manifest, out, **OPTIONS)
+    assert "without --resume" in advice
+    assert f"Keep the staged timesteps in {work}." in advice
+    np.testing.assert_array_equal(np.load(work / "t000000.npy"), original)
+
+    report = convert(manifest, out, work_dir=tmp_path / "fresh", **OPTIONS)
+    assert (report.n_staged, report.n_reused) == (1, 0)
+    np.testing.assert_array_equal(stored(out), updated[np.newaxis])
+
+
+def test_resume_refuses_a_replaced_geotiff_mask_sidecar(tmp_path):
+    values = np.full((1, 8, 8), 100, dtype=np.uint16)
+    tif = write_tif(tmp_path / "source.tif", values)
+    mask = np.full((8, 8), 255, dtype=np.uint8)
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=False), rasterio.open(tif, "r+") as dst:
+        dst.write_mask(mask)
+    manifest = write_csv(tmp_path / "m.csv", [tif], dates=DATES[:1])
+    out = tmp_path / "store"
+    work = kill_a_conversion_while_it_encodes(manifest, out, **OPTIONS)
+    before = tif.stat()
+
+    replacement = write_tif(tmp_path / "replacement.tif", values)
+    mask[0, 0] = 0
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=False), rasterio.open(replacement, "r+") as dst:
+        dst.write_mask(mask)
+    replacement.with_suffix(".tif.msk").replace(tif.with_suffix(".tif.msk"))
+    assert tif.stat().st_ctime_ns == before.st_ctime_ns
+    out.rename(tmp_path / "interrupted")
+
+    with pytest.raises(ValueError, match="different input or options"):
+        convert(manifest, out, resume=True, **OPTIONS)
+    assert np.load(work / "m000000.npy")[0, 0] == 1
+
+    convert(manifest, out, work_dir=tmp_path / "fresh", **OPTIONS)
+    np.testing.assert_array_equal(chronozarr.open_store(out).read_mask(0), mask != 0)
+
+
+@pytest.mark.parametrize("change_at", ["after sampling", "during staging"])
+def test_convert_refuses_a_geotiff_changed_during_conversion(tmp_path, change_at):
+    tif = write_tif(tmp_path / "source.tif", np.full((1, 8, 8), 100, dtype=np.uint16))
+    manifest = write_csv(tmp_path / "m.csv", [tif], dates=DATES[:1])
+    out = tmp_path / "store"
+
+    def replace_source():
+        write_tif(tif, np.full((1, 8, 8), 200, dtype=np.uint16))
+
+    def replace_after_staging(done, _total):
+        if done == 1:
+            replace_source()
+
+    with pytest.raises(ValueError, match="changed during conversion") as error:
+        convert(
+            manifest,
+            out,
+            on_plan=(lambda _: replace_source()) if change_at == "after sampling" else None,
+            progress=replace_after_staging if change_at == "during staging" else None,
+            **OPTIONS,
+        )
+    assert not out.exists()
+    if change_at == "during staging":
+        assert "fresh work directory" in "\n".join(error.value.__notes__)
 
 
 def test_a_killed_conversion_of_a_zarr_source_says_to_delete_the_store_and_its_work_directory(

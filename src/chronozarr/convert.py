@@ -214,6 +214,7 @@ from chronozarr._convert_cog import (
 )
 from chronozarr._convert_cog import (
     BandSeries,
+    RasterSourceChangedError,
     _tolerate_unlocated_frames,
     open_band_series,
 )
@@ -941,6 +942,7 @@ def _check_work_dir(work: Path, plan: Plan, resume: bool) -> None:
     fingerprint = plan.source.fingerprint()
     digest = _plan_digest(fingerprint)
     if work.exists() and any(work.iterdir()):
+        recorded_digest = _recorded_plan_digest(plan_file)
         if not resume:
             reuse = plan.source.staged_reuse
             if reuse is StagedReuse.ZARR_CHUNKS_CAN_CHANGE:
@@ -954,11 +956,15 @@ def _check_work_dir(work: Path, plan: Plan, resume: bool) -> None:
                     "directory with --work-dir: a snapshot pins references, but this importer "
                     "does not bind external object versions."
                 )
+            if recorded_digest != digest:
+                raise FileExistsError(
+                    f"{work} holds timesteps staged for a different input or options. "
+                    "Keep it for inspection and choose a fresh work directory with --work-dir."
+                )
             raise FileExistsError(
                 f"{work} holds timesteps staged by an earlier run. Pass --resume to reuse them, "
                 "or delete the directory to start over"
             )
-        recorded_digest = _recorded_plan_digest(plan_file)
         if recorded_digest != digest:
             raise ValueError(
                 f"{work} was staged for a different input or options (plan hash "
@@ -1276,6 +1282,8 @@ def convert(
     try:
         started = time.perf_counter()
         staged, reused = _stage(plan, work, read_ahead, progress)
+        if isinstance(plan.source, CogManifestSource):
+            plan.source.check_source_files()
         read_s = time.perf_counter() - started
 
         started = time.perf_counter()
@@ -1295,7 +1303,10 @@ def convert(
         encode_s = time.perf_counter() - started
     except BaseException as exc:
         reuse = plan.source.staged_reuse
-        if reuse is StagedReuse.ZARR_CHUNKS_CAN_CHANGE:
+        if (
+            isinstance(exc, RasterSourceChangedError)
+            or reuse is StagedReuse.ZARR_CHUNKS_CAN_CHANGE
+        ):
             exc.add_note(
                 f"staged timesteps are kept in {work} for inspection. Choose a fresh work "
                 "directory with --work-dir."
