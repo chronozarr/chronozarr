@@ -183,19 +183,31 @@ export class DecodePool {
   #dispatch() {
     for (const worker of this.#workers) {
       if (!worker.ready || worker.busy) continue;
-      let job = this.#queue.shift();
-      while (job?.signal?.aborted) {
-        job.signal.removeEventListener('abort', job.onAbort);
-        job.reject(abortError());
-        job = this.#queue.shift();
+      for (;;) {
+        const job = this.#queue.shift();
+        if (!job) return;
+        if (job.signal?.aborted) {
+          job.signal.removeEventListener('abort', job.onAbort);
+          job.reject(abortError());
+          continue;
+        }
+        worker.busy = true;
+        worker.current = job.id;
+        this.#jobs.set(job.id, job);
+        try {
+          const own = job.bytes.byteOffset === 0 && job.bytes.buffer.byteLength === job.bytes.byteLength;
+          const bytes = own ? job.bytes : job.bytes.slice();
+          worker.handle.postMessage({ type: 'decode', id: job.id, spec: job.spec, bytes, compact: !!job.options.compact }, [bytes.buffer]);
+          break;
+        } catch (error) {
+          // The worker never received this job. Reuse its slot for the next queued job.
+          this.#jobs.delete(job.id);
+          worker.busy = false;
+          worker.current = null;
+          job.signal?.removeEventListener('abort', job.onAbort);
+          job.reject(error);
+        }
       }
-      if (!job) return;
-      worker.busy = true;
-      worker.current = job.id;
-      this.#jobs.set(job.id, job);
-      const own = job.bytes.byteOffset === 0 && job.bytes.buffer.byteLength === job.bytes.byteLength;
-      const bytes = own ? job.bytes : job.bytes.slice();
-      worker.handle.postMessage({ type: 'decode', id: job.id, spec: job.spec, bytes, compact: !!job.options.compact }, [bytes.buffer]);
     }
   }
 

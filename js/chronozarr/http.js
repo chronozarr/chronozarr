@@ -230,6 +230,7 @@ export class HttpStore {
 /**
  * Wraps a zarrita-style readable (`get`, `getRange` with {signal}) so its calls go through the limiter and
  * are counted. The readable decides for itself how to retry; priority is not passed on to it.
+ * Returned bytes belong to Chronozarr, just as they do when reading from HttpStore.
  */
 export class LimitedReadable {
   #readable;
@@ -263,7 +264,8 @@ export class LimitedReadable {
         const bytes = await read();
         received = bytes?.length ?? 0;
         this.#network.bytes += received;
-        return bytes;
+        // The readable may reuse its buffers, including for ranges. Our workers can transfer these copies.
+        return bytes == null ? bytes : new Uint8Array(bytes);
       } catch (error) {
         aborted = isAbort(error);
         throw error;
