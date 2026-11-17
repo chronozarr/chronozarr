@@ -65,14 +65,10 @@ const projectionApart = {
 /**
  * The decode worker loads zarrita's codec registry from a URL that decoder.js sends it, because a worker sees no import
  * map and a package can be served from anywhere. In the build the registry is part of the worker, so the worker imports
- * it statically and the URL is not a file any more. The retry imports resolve beside the normal codec imports.
+ * it statically and the URL is not a file any more.
  * Each edit must find its text: a change to the source that moves one fails the build, not the page.
  */
 const CODEC_EDITS = {
-  'chronozarr/codec-loaders.js': ['zstd', 'blosc', 'lz4'].map((name) => ({
-    from: `retryableCodec('../vendor/numcodecs/${name}.js',`,
-    to: `retryableCodec('./codecs/${name}.js',`,
-  })),
   'chronozarr/decode-worker.js': [
     {
       from: "const builtinRegistryUrl = new URL('../vendor/zarrita/codecs.js', import.meta.url).href;\n",
@@ -89,7 +85,7 @@ const CODEC_EDITS = {
 const builtCodecPaths = {
   name: 'built-codec-paths',
   setup(esbuild) {
-    esbuild.onLoad({ filter: /chronozarr[\\/](codec-loaders|decode-worker|decoder)\.js$/ }, async ({ path: file }) => {
+    esbuild.onLoad({ filter: /chronozarr[\\/](decode-worker|decoder)\.js$/ }, async ({ path: file }) => {
       const edits = CODEC_EDITS[path.relative(JS_DIR, file).split(path.sep).join('/')];
       if (!edits) return undefined;
       let contents = await readFile(file, 'utf8');
