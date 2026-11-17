@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import os
 import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -316,6 +318,34 @@ def test_set_band_roles_refusals_leave_the_store_alone(tmp_path):
     (path / "zarr.json").write_text(json.dumps(document))
     with pytest.raises(ValueError, match="does not validate"):
         set_band_roles(path, {"a": "red"})
+
+
+def test_set_band_roles_uses_a_shared_lock_for_a_maximum_length_store_name(tmp_path, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("uses the POSIX NAME_MAX for the fixture filesystem")
+    name_limit = os.pathconf(tmp_path, "PC_NAME_MAX")
+    if name_limit < 32:
+        pytest.skip("the fixture filesystem does not report a usable NAME_MAX")
+    path = tmp_path / ("s" * name_limit)
+    _store(path, ["a"])
+    renamed_lock = path.with_name(f".{path.name}.append.lock")
+    with pytest.raises(OSError) as failure:
+        renamed_lock.touch()
+    assert failure.value.errno == errno.ENAMETOOLONG
+
+    da = make_da(make_truth(1, 1, 40, 50), ["a"])
+
+    def assign_while_trying_to_append(bands, roles):
+        with pytest.raises(BlockingIOError, match="band-role update holds the store lock"):
+            chronozarr.append(path, da)
+        return assign_roles(bands, roles)
+
+    # Assigning roles reads the mapping while the writer owns the bounded lock. An append
+    # must follow the same fallback and report that lock's contention before copying.
+    monkeypatch.setattr("chronozarr.bands.assign_roles", assign_while_trying_to_append)
+    set_band_roles(path, {"a": "red"})
+    assert _stored_bands(path)[0].common_name == "red"
+    assert chronozarr.validate(path) == []
 
 
 # --- encode and convert ---

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import subprocess
 import sys
+from importlib import import_module
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,7 @@ import chronozarr
 from chronozarr import schema
 from chronozarr._writer import VOLATILITY_SCALE
 from chronozarr.append import AppendReport, append, is_store
+from chronozarr.bands import set_band_roles
 from chronozarr.cli import main
 from chronozarr.convert import convert
 from chronozarr.doctor import diagnose
@@ -296,6 +298,116 @@ def test_concurrent_append_is_refused_through_root_publication(tmp_path, monkeyp
     assert append(contender, later).n_time == 3
     assert chronozarr.validate(store) == []
     np.testing.assert_array_equal(chronozarr.open_store(store).times, da.time.values)
+    np.testing.assert_array_equal(decoded(store), data)
+
+
+def test_band_role_overlap_during_append_leaves_the_store_unchanged_and_retryable(
+    tmp_path, monkeypatch
+):
+    data = make_truth(3, 1, 8, 8)
+    da = make_da(data, ["coastal_band"])
+    store = tmp_path / "store"
+    chronozarr.encode(da.isel(time=slice(2)), store, chunk_size=CHUNK)
+    before = digests(store)
+    module = import_module("chronozarr.append")
+    append_in_place = module._append_in_place
+
+    def update_after_building_the_copy(*args, **kwargs):
+        report = append_in_place(*args, **kwargs)
+        set_band_roles(store, {"coastal_band": "red"})
+        return report
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_append_in_place", update_after_building_the_copy)
+        with pytest.raises(BlockingIOError, match="another append or band-role update"):
+            append(store, da.isel(time=slice(2, 3)))
+
+    assert digests(store) == before
+    assert chronozarr.validate(store) == []
+    set_band_roles(store, {"coastal_band": "red"})
+    assert append(store, da.isel(time=slice(2, 3))).n_time == 3
+    assert chronozarr.validate(store) == []
+    assert chronozarr.open_store(store).attrs.bands[0].common_name == "red"
+    np.testing.assert_array_equal(decoded(store), data)
+
+
+def test_append_overlap_during_band_role_update_is_refused_and_retryable(tmp_path, monkeypatch):
+    data = make_truth(3, 1, 8, 8)
+    da = make_da(data, ["coastal_band"])
+    store = tmp_path / "store"
+    chronozarr.encode(da.isel(time=slice(2)), store, chunk_size=CHUNK)
+    before = digests(store)
+    module = import_module("chronozarr.bands")
+    assign_roles = module.assign_roles
+
+    def append_after_reading_the_root(bands, roles):
+        updated = assign_roles(bands, roles)
+        with pytest.raises(BlockingIOError, match="band-role update holds the store lock"):
+            append(store, da.isel(time=slice(2, 3)))
+        assert digests(store) == before
+        return updated
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "assign_roles", append_after_reading_the_root)
+        set_band_roles(store, {"coastal_band": "red"})
+
+    assert changed(before, digests(store)) == {"zarr.json"}
+    np.testing.assert_array_equal(decoded(store), data[:2])
+    assert append(store, da.isel(time=slice(2, 3))).n_time == 3
+    assert chronozarr.validate(store) == []
+    assert chronozarr.open_store(store).attrs.bands[0].common_name == "red"
+    np.testing.assert_array_equal(decoded(store), data)
+
+
+@pytest.mark.parametrize("use_alias", [False, True], ids=["same-path", "symlink"])
+def test_band_roles_cli_reports_append_contention_during_publication(
+    tmp_path, monkeypatch, use_alias
+):
+    data = make_truth(3, 1, 8, 8)
+    da = make_da(data, ["coastal_band"])
+    store = tmp_path / "store"
+    chronozarr.encode(da.isel(time=slice(2)), store, chunk_size=CHUNK)
+    contender = store
+    if use_alias:
+        contender = tmp_path / "alias"
+        try:
+            contender.symlink_to(store, target_is_directory=True)
+        except OSError as error:
+            pytest.skip(f"directory symlinks unavailable: {error}")
+    command = [
+        sys.executable,
+        "-c",
+        "from chronozarr.cli import main; main()",
+        "bands",
+        str(contender),
+        "--band-role",
+        "coastal_band=red",
+    ]
+    attempts: list[subprocess.CompletedProcess[str]] = []
+    replace = Path.replace
+
+    def run_bands_with_intermediate_metadata(path, target):
+        result = replace(path, target)
+        if target == store.resolve() / "0/data/zarr.json":
+            # A child now names the new shape while the root still names the old time axis.
+            attempts.append(
+                subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+            )
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "replace", run_bands_with_intermediate_metadata)
+        assert append(store, da.isel(time=slice(2, 3))).n_time == 3
+
+    assert len(attempts) == 1
+    blocked = attempts[0]
+    assert blocked.returncode == 1, blocked.stdout + blocked.stderr
+    assert "another append or band-role update is already running" in blocked.stderr
+    assert chronozarr.open_store(store).attrs.bands[0].common_name is None
+    retried = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert chronozarr.open_store(store).attrs.bands[0].common_name == "red"
+    assert chronozarr.validate(store) == []
     np.testing.assert_array_equal(decoded(store), data)
 
 
