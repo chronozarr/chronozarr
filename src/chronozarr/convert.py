@@ -218,7 +218,6 @@ from chronozarr._convert_cog import (
 )
 from chronozarr._convert_cog import (
     BandSeries,
-    _tolerate_unlocated_frames,
     open_band_series,
 )
 from chronozarr._convert_cog import (
@@ -499,7 +498,6 @@ def _sample_indices(n: int) -> list[int]:
     return sorted({0, n // 2, n - 1})[:SAMPLE_TIMESTEPS]
 
 
-@_tolerate_unlocated_frames
 def plan_conversion(
     source_path: str | Path | IcechunkInput,
     *,
@@ -1154,7 +1152,6 @@ def _write_draft(draft: ManifestDraft, path: Path) -> str:
     )
 
 
-@_tolerate_unlocated_frames
 def convert(
     source: str | Path | IcechunkInput,
     out: str | Path,

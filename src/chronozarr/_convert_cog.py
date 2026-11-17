@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import re
-import warnings
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from functools import wraps
 from pathlib import Path
-from typing import Any, NoReturn, ParamSpec, TypeVar
+from typing import Any, NoReturn
 from urllib.parse import urlparse
 
 import numpy as np
@@ -23,6 +21,7 @@ from chronozarr._convert_gdal_open import (
     HDF4_FIX,
     SubdatasetChoiceError,
     hdf4_without_driver,
+    open_raster,
     opened,
 )
 from chronozarr._convert_manifest import Entry, ManifestDraft
@@ -58,6 +57,7 @@ from chronozarr._convert_tiles import (
     same_date_problems,
 )
 from chronozarr._convert_tiles import OPTION as TILES_OPTION
+from chronozarr._warning_scope import raster_warning_scope
 from chronozarr.schema import Band, Transform
 
 GDAL_ENV = {
@@ -81,12 +81,6 @@ SIDECAR_SUFFIXES = (".png", ".bil", ".flt", ".asc")
 PIXEL_INTERLEAVE_NOTE_BYTES = 2_000_000_000
 
 RESAMPLING_METHODS = ("nearest", "bilinear", "cubic", "average", "mode", "min", "max", "med")
-
-
-_P = ParamSpec("_P")
-
-
-_R = TypeVar("_R")
 
 
 _GDAL_SUBDATASET = re.compile(r"^[A-Za-z][A-Za-z0-9_]+:")
@@ -218,7 +212,7 @@ def _open_planned_raster(uri: str, header: _CogHeader) -> Iterator[Any]:
     for path, version in header.mask_candidates.items():
         if path not in header.files and _optional_file_version(Path(path)) != version:
             raise SourceFileChangedError(path)
-    with rasterio.Env(**_gdal_env(header.dataset)), rasterio.open(header.dataset) as src:
+    with rasterio.Env(**_gdal_env(header.dataset)), open_raster(header.dataset) as src:
         yield src
         _check_file_versions(header.mask_candidates)
         if _raster_file_versions(_local_path(uri), src) != header.files:
@@ -237,25 +231,6 @@ def _gdal_env(uri: str) -> dict[str, str]:
     if uri.split("?", 1)[0].lower().endswith(SIDECAR_SUFFIXES) or _has_local_tiff_mask(uri):
         return {**GDAL_ENV, "GDAL_DISABLE_READDIR_ON_OPEN": "TRUE"}
     return GDAL_ENV
-
-
-def _tolerate_unlocated_frames(func: Callable[_P, _R]) -> Callable[_P, _R]:
-    """Run `func` without rasterio's warning for a source that has no geotransform.
-
-    Such a frame is valid input when `bounds` locates it, and an error with its own message
-    otherwise, so the warning (an error under `-W error`) adds nothing. The filter is set once, by
-    the calling thread; the reader threads share it (a filter set per thread would race).
-    """
-
-    @wraps(func)
-    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
-        from rasterio.errors import NotGeoreferencedWarning
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", NotGeoreferencedWarning)
-            return func(*args, **kwargs)
-
-    return wrapper
 
 
 _COLOR_NAMES = ("red", "green", "blue")
@@ -1111,13 +1086,15 @@ class CogManifestSource(Source):
         for output, band in zip(data, header.data_indexes, strict=True):
             source = src.read(band, out_dtype=working_dtype.name)
             source[source_invalid] = marker
-            reproject(
-                source=source,
-                destination=warped,
-                src_nodata=marker,
-                dst_nodata=marker,
-                **warp_options,
-            )
+            # Keep the shared filter until Rasterio's internal memory-dataset scopes exit.
+            with raster_warning_scope():
+                reproject(
+                    source=source,
+                    destination=warped,
+                    src_nodata=marker,
+                    dst_nodata=marker,
+                    **warp_options,
+                )
             valid &= warped != marker if integer else ~np.isnan(warped)
             if limits is not None:
                 np.clip(warped, limits.min, limits.max, out=warped)

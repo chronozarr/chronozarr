@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from chronozarr._convert_discover import ZIP_SUFFIX, zip_raster
+from chronozarr._warning_scope import raster_warning_scope
 
 _HDF4_SIGNATURE = b"\x0e\x03\x13\x01"
 HDF4_DETAIL = (
@@ -164,7 +165,7 @@ def opened(
     import rasterio
 
     name = dataset_name(uri)
-    with rasterio.Env(**env_for(name)), rasterio.open(name) as top:
+    with rasterio.Env(**env_for(name)), open_raster(name) as top:
         subdatasets = _subdatasets(top, name)
         if not subdatasets and variable is not None:
             raise SubdatasetChoiceError(
@@ -175,5 +176,13 @@ def opened(
             yield top, name, None
             return
         chosen = _choose(subdatasets, variable, uri)
-        with rasterio.open(chosen.name) as sub:
+        with open_raster(chosen.name) as sub:
             yield sub, chosen.name, chosen.leaf
+
+
+def open_raster(name: str) -> Any:
+    """Open a raster that may get its geotransform from the conversion's bounds."""
+    import rasterio
+
+    with raster_warning_scope():
+        return rasterio.open(name)
