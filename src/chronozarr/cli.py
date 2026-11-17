@@ -1489,10 +1489,12 @@ def bands_command(store: str, band_roles: tuple[str, ...], dry_run: bool) -> Non
     """
     roles = _band_roles(band_roles)
     with _command_errors():
-        opened = open_store(store)
-        bands = opened.attrs.bands
-        if roles:
-            bands = set_band_roles(store, roles) if not dry_run else assign_roles(bands, roles)
+        if roles and not dry_run:
+            bands = set_band_roles(store, roles)
+        else:
+            bands = open_store(store).attrs.bands
+            if roles:
+                bands = assign_roles(bands, roles)
     click.echo(f"store:     {store}")
     if roles:
         click.echo("dry run: nothing was written" if dry_run else "common names written")

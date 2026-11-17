@@ -8,6 +8,7 @@ first, collects what differs per file, and reads each timestep from the file tha
 from __future__ import annotations
 
 import importlib.util
+import stat
 import threading
 from collections import OrderedDict
 from collections.abc import Iterator, Mapping, Sequence
@@ -36,9 +37,12 @@ from chronozarr._convert_source import (
     SourceInfo,
     StagedReuse,
     Step,
+    _check_file_version,
     _crs_string,
     _decide_validity,
     _declared_nodata,
+    _file_version,
+    _FileVersion,
     _logical_packed_dtype,
     _same_crs,
     _scaling,
@@ -135,11 +139,26 @@ def open_zarr(source: str | Path, **kwargs: Any) -> xr.Dataset:
 def _open_dataset(source: str) -> xr.Dataset:
     if source.lower().endswith(NETCDF_SUFFIXES):
         if not Path(source).is_file():
-            raise FileNotFoundError(f"NetCDF file {source} does not exist")
+            raise _missing_netcdf(source)
         raw = open_netcdf(source, mask_and_scale=False, decode_times=False)
     else:
         raw = _open_raw_zarr(source)
     return decode_dimension_coordinates(raw, redact_url(source))
+
+
+def _missing_netcdf(path: str) -> FileNotFoundError:
+    return FileNotFoundError(f"NetCDF file {path} does not exist")
+
+
+def _netcdf_file_version(path: str) -> _FileVersion:
+    file = Path(path)
+    try:
+        status = file.stat()
+    except FileNotFoundError:
+        raise _missing_netcdf(path) from None
+    if not stat.S_ISREG(status.st_mode):
+        raise _missing_netcdf(path)
+    return _file_version(file, status=status)
 
 
 def _open_raw_zarr(source: str) -> xr.Dataset:
@@ -677,6 +696,13 @@ class XarraySource(Source):
                 "change without changing the metadata. Run without --resume and choose a "
                 "fresh work directory with --work-dir."
             )
+        # Snapshot the first file before opening it and each series member in _check_member
+        # before inspecting its metadata.
+        self._file_versions: dict[str, _FileVersion] = {}
+        if icechunk_source is None and self.kind in ("NetCDF file", "NetCDF files"):
+            # Use the same absolute paths for stat checks and lazy backend opens.
+            self.files = tuple(str(Path(path).absolute()) for path in self.files)
+            self._file_versions[self.files[0]] = _netcdf_file_version(self.files[0])
         self._dataset: xr.Dataset | None = None
         self._open = _OpenFiles(self.files)
         dataset = (
@@ -701,6 +727,7 @@ class XarraySource(Source):
                 scale,
                 offset,
             )
+            self.check_source_files()
         except BaseException:
             dataset.close()
             raise
@@ -889,6 +916,7 @@ class XarraySource(Source):
     ) -> tuple[np.ndarray | None, list[Problem]]:
         """The times of another file of the series, and what differs from the first file."""
         try:
+            self._file_versions[path] = _netcdf_file_version(path)
             with _open_dataset(path) as dataset:
                 if self.variable not in dataset.data_vars:
                     names = [str(n) for n in dataset.data_vars if n != mask_var]
@@ -953,7 +981,12 @@ class XarraySource(Source):
             lines.append(f"  {when}  {path}")
         return lines
 
+    def check_source_files(self) -> None:
+        for path, version in self._file_versions.items():
+            _check_file_version(path, version)
+
     def fingerprint(self) -> Any:
+        self.check_source_files()
         grid = self.info.grid
         return {
             "kind": "xarray",
@@ -970,6 +1003,7 @@ class XarraySource(Source):
                 else {}
             ),
             **({"files": list(self.files)} if len(self.files) > 1 else {}),
+            **({"local_files": self._file_versions.copy()} if self._file_versions else {}),
             "variable": self.variable,
             "grid": [grid.crs, list(grid.transform), grid.height, grid.width],
             "bands": [b.to_attrs() for b in self.info.bands],
@@ -984,11 +1018,19 @@ class XarraySource(Source):
     @contextmanager
     def _arrays(self, k: int) -> Iterator[tuple[xr.DataArray, xr.DataArray | None]]:
         """The variable and the mask variable of file `k`, open while the caller reads them."""
-        if self._dataset is not None:
-            yield self._select(self._dataset, self.files[k])
-            return
-        with self._open.use(k) as dataset:
-            yield self._select(dataset, self.files[k])
+        path = self.files[k]
+        version = self._file_versions.get(path)
+        if version is not None:
+            _check_file_version(path, version)
+        try:
+            if self._dataset is not None:
+                yield self._select(self._dataset, path)
+            else:
+                with self._open.use(k) as dataset:
+                    yield self._select(dataset, path)
+        finally:
+            if version is not None:
+                _check_file_version(path, version)
 
     def _select(self, dataset: xr.Dataset, where: str) -> tuple[xr.DataArray, xr.DataArray | None]:
         da = dataset[self.variable].isel({d: 0 for d in self._squeezed})

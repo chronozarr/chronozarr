@@ -8,9 +8,9 @@ import shutil
 import tempfile
 import time
 import warnings
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -21,7 +21,7 @@ import zarr
 from zarr.errors import ZarrUserWarning
 
 from chronozarr import schema
-from chronozarr._file_lock import exclusive_file_lock
+from chronozarr._file_lock import local_store_write_lock
 from chronozarr._writer import (
     DEFAULT_CELLS_IN_FLIGHT,
     VOLATILITY_SCALE,
@@ -549,25 +549,20 @@ def append(
 ) -> AppendReport:
     """Validate append in a working copy, then publish only changed objects, root last.
 
-    A concurrent append to the same store raises BlockingIOError. Publication writes the
-    root last and can expose intermediate states to readers.
+    A concurrent append or band-role update to the same store raises BlockingIOError.
+    Publication writes the root last and can expose intermediate states to readers.
     """
     with _append_lock(store) as original:
         return _append_working_copy(original, data, **options)
 
 
-@contextmanager
-def _append_lock(store: str | Path) -> Iterator[Path]:
-    original = Path(store).resolve()
-    if not original.is_dir():
-        raise ValueError(f"{store} is not a local directory; append works on a local store")
-    lock_path = original.with_name(f".{original.name}.append.lock")
-    with exclusive_file_lock(
-        lock_path,
-        conflict_message=f"cannot append to {store}: another append is already running. "
-        "Retry after it finishes.",
-    ):
-        yield original
+def _append_lock(store: str | Path) -> AbstractContextManager[Path]:
+    return local_store_write_lock(
+        Path(store),
+        invalid_message=f"{store} is not a local directory; append works on a local store",
+        conflict_message=f"cannot append to {store}: another append is already running "
+        "or a band-role update holds the store lock. Retry after it finishes.",
+    )
 
 
 def _append_working_copy(

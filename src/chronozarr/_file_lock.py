@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import errno
+import hashlib
+import os
 import sys
+import unicodedata
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 if sys.platform == "win32":
@@ -39,3 +42,28 @@ def exclusive_file_lock(path: Path, *, conflict_message: str) -> Iterator[None]:
                 msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
             else:
                 fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextmanager
+def local_store_write_lock(
+    store: Path, *, invalid_message: str, conflict_message: str
+) -> Iterator[Path]:
+    """Coordinate append and band-role changes at a store's canonical local path."""
+    original = store.resolve()
+    if not original.is_dir():
+        raise ValueError(invalid_message)
+    # Keep the original append lock name so already installed append clients still share it.
+    lock_path = original.with_name(f".{original.name}.append.lock")
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(exclusive_file_lock(lock_path, conflict_message=conflict_message))
+        except OSError as error:
+            if error.errno != errno.ENAMETOOLONG and getattr(error, "winerror", None) != 206:
+                raise
+            # An old client cannot have this overlong lock. Use the same bounded name for
+            # both writers, including on filesystems that coalesce case or Unicode variants.
+            name = unicodedata.normalize("NFC", original.name.casefold())
+            digest = hashlib.sha256(os.fsencode(name)).hexdigest()[:32]
+            fallback = original.with_name(f".chronozarr-write-{digest}.lock")
+            stack.enter_context(exclusive_file_lock(fallback, conflict_message=conflict_message))
+        yield original

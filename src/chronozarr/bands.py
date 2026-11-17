@@ -22,6 +22,7 @@ import zarr
 from zarr.errors import ZarrUserWarning
 
 from chronozarr import schema
+from chronozarr._file_lock import local_store_write_lock
 from chronozarr.schema import Band
 
 # STAC eo extension common names for bands. A store may carry any of them.
@@ -196,16 +197,26 @@ def set_band_roles(store: str | Path, roles: Mapping[str, str | None]) -> tuple[
 
     Only the root `zarr.json` changes: the bands attribute, and the consolidated metadata when
     the store has it (rewritten, as the stored copy of every child would otherwise be stale).
-    Data, scale, offset and units are untouched. Nothing is written when the store does not
-    validate or the assignment is refused.
+    Data, scale, offset and units are untouched. The store is unchanged when validation
+    or the assignment fails.
+
+    Requires write access to the same sibling lock file as append. A concurrent append or
+    band-role update raises BlockingIOError; retry after it finishes.
     """
-    path = Path(store)
-    if not path.is_dir():
-        raise ValueError(f"{store} is not a local directory; set roles on a local copy")
+    with local_store_write_lock(
+        Path(store),
+        invalid_message=f"{store} is not a local directory; set roles on a local copy",
+        conflict_message=f"cannot set band roles on {store}: "
+        "another append or band-role update is already running. Retry after it finishes.",
+    ) as path:
+        return _set_band_roles(path, roles)
+
+
+def _set_band_roles(path: Path, roles: Mapping[str, str | None]) -> tuple[Band, ...]:
     problems = schema.validate(path)
     if problems:
         shown = "\n  ".join(problems[:5])
-        raise ValueError(f"{store} does not validate, so nothing was changed:\n  {shown}")
+        raise ValueError(f"{path} does not validate, so nothing was changed:\n  {shown}")
     root = zarr.open_group(path, mode="r+", zarr_format=3, use_consolidated=False)
     parsed = schema.parse_root_attrs(root.attrs.asdict())
     bands = assign_roles(parsed.chronozarr.bands, roles)

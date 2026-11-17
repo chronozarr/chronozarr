@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import enum
 import math
+import os
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -15,6 +17,29 @@ from chronozarr.schema import Band, Transform, axis_unit
 
 Bounds = tuple[float, float, float, float]  # west, south, east, north in the units of the CRS
 _EDGE_TOLERANCE = 1e-6  # degrees; a pixel edge at 180 that arithmetic puts a hair beyond
+_FileVersion = tuple[int, int, int, int, int]
+
+
+class SourceFileChangedError(ValueError):
+    """A local file changed while its conversion was reading or staging timesteps."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(f"{path}: source file changed during conversion")
+
+
+def _file_version(path: Path, *, status: os.stat_result | None = None) -> _FileVersion:
+    """Identify a local file version without reading its data or tracking read access times."""
+    stat = path.stat() if status is None else status
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+def _check_file_version(path: str, before: _FileVersion) -> None:
+    try:
+        after = _file_version(Path(path))
+    except OSError as exc:
+        raise SourceFileChangedError(path) from exc
+    if before != after:
+        raise SourceFileChangedError(path)
 
 
 @dataclass(frozen=True)
@@ -119,6 +144,9 @@ class Source:
     def fingerprint(self) -> Any:
         """JSON-able identity of what `read` will produce, for resume."""
         raise NotImplementedError
+
+    def check_source_files(self) -> None:
+        """Recheck any bound local files before using the finished staging snapshot."""
 
 
 def check_bounds(values: object, where: str) -> Bounds:
