@@ -35,6 +35,7 @@ from chronozarr.convert import (
 )
 from tests.fixtures import cog_sources as fx
 from tests.fixtures import png_frames as pf
+from tests.narrow import array_at
 from tests.synthetic import CRS, TRANSFORM, make_da, make_times, make_truth
 
 pytestmark = pytest.mark.unit
@@ -1003,6 +1004,186 @@ def test_dry_run_reports_estimates_and_writes_nothing(tmp_path, tifs):
     actual = convert(manifest, out, **OPTIONS).encode
     assert actual is not None
     assert 0.25 < plan.est_output_bytes / actual.total_bytes < 4.0
+
+
+def test_dry_run_does_not_disrupt_concurrent_conversion_consolidation(tmp_path, monkeypatch):
+    values = make_truth(1, 1, 8, 8)[0]
+    tif = write_tif(tmp_path / "scene.tif", values)
+    manifest = write_csv(tmp_path / "input.csv", [tif], dates=DATES[:1])
+    dry_out = tmp_path / "unused"
+    out = tmp_path / "store"
+    planned, may_return, dry_returned = Event(), Event(), Event()
+
+    def hold_dry_run(_plan):
+        planned.set()
+        assert may_return.wait(15), "the writer did not reach consolidation"
+
+    def dry_run():
+        try:
+            return convert(manifest, dry_out, dry_run=True, on_plan=hold_dry_run, chunk_size=8)
+        finally:
+            dry_returned.set()
+
+    consolidate = zarr.consolidate_metadata
+
+    def finish_dry_run_then_consolidate(*args, **kwargs):
+        may_return.set()
+        assert dry_returned.wait(15), "the dry run did not return"
+        return consolidate(*args, **kwargs)
+
+    monkeypatch.setattr(zarr, "consolidate_metadata", finish_dry_run_then_consolidate)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", ZarrUserWarning)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            dry_job = executor.submit(dry_run)
+            try:
+                assert planned.wait(15), "the dry run did not finish planning"
+                report = convert(manifest, out, chunk_size=8)
+            finally:
+                may_return.set()
+                dry_report = dry_job.result(timeout=15)
+        with pytest.raises(ZarrUserWarning, match="caller still treats this as an error"):
+            warnings.warn("caller still treats this as an error", ZarrUserWarning, stacklevel=1)
+
+    assert dry_report.encode is None
+    assert not dry_out.exists()
+    assert not (tmp_path / "unused.convert-work").exists()
+    assert report.encode is not None
+    assert chronozarr.validate(out) == []
+    root = zarr.open_group(out, use_consolidated=True, mode="r")
+    assert array_at(root, "0/data").shape == (1, 1, 8, 8)
+    np.testing.assert_array_equal(stored(out), values[None])
+
+
+def test_conversion_raster_open_can_log_to_an_encode_callback(tmp_path):
+    tif = write_tif(tmp_path / "scene.tif", make_truth(1, 1, 8, 8)[0])
+    manifest = write_csv(tmp_path / "input.csv", [tif], dates=DATES[:1])
+    outer, nested = tmp_path / "outer", tmp_path / "nested"
+    # A logging handler runs synchronously inside rasterio.open. A subprocess timeout
+    # keeps a self-wait in the writer from hanging the test process.
+    script = """
+import logging
+import sys
+from unittest.mock import patch
+import warnings
+
+import pytest
+import rasterio
+from rasterio.errors import NotGeoreferencedWarning
+from zarr.errors import ZarrUserWarning
+
+import chronozarr
+from chronozarr.convert import convert
+from tests.synthetic import make_da, make_truth
+
+source, outer, nested = sys.argv[1:]
+logger = logging.getLogger("conversion-test.raster-open")
+original_open = rasterio.open
+
+
+class EncodeOnOpen(logging.Handler):
+    def emit(self, record):
+        chronozarr.encode(make_da(make_truth(1, 1, 8, 8) + 1000), nested, chunk_size=8)
+
+
+handler = EncodeOnOpen()
+logger.addHandler(handler)
+
+
+def logging_open(*args, **kwargs):
+    if handler in logger.handlers:
+        logger.warning("opening raster")
+        logger.removeHandler(handler)
+        warnings.warn("raster filter remains active", NotGeoreferencedWarning)
+    return original_open(*args, **kwargs)
+
+
+with warnings.catch_warnings(action="error"):
+    with patch.object(rasterio, "open", logging_open):
+        convert(source, outer, chunk_size=8)
+    for category in (NotGeoreferencedWarning, ZarrUserWarning):
+        with pytest.raises(category):
+            warnings.warn("caller still treats this as an error", category)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(manifest), str(outer), str(nested)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    for path, offset in [(outer, 0), (nested, 1000)]:
+        assert chronozarr.validate(path) == []
+        np.testing.assert_array_equal(stored(path), make_truth(1, 1, 8, 8) + offset)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="fork is POSIX only")
+def test_fork_drops_the_warning_scope_of_a_thread_missing_from_the_child():
+    # Exercise the warning guard directly so the forked child never calls GDAL.
+    script = """
+from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import get_context
+import signal
+from threading import Event
+import warnings
+
+from rasterio.errors import NotGeoreferencedWarning
+
+from chronozarr._warning_scope import exclusive_warning_scope, raster_open_warnings
+
+opened, release = Event(), Event()
+
+
+def hold_scope():
+    with raster_open_warnings():
+        opened.set()
+        assert release.wait(20)
+
+
+def in_child():
+    signal.alarm(5)
+    try:
+        warnings.warn("test the inherited warning policy", NotGeoreferencedWarning)
+    except NotGeoreferencedWarning:
+        strict = True
+    else:
+        strict = False
+    with exclusive_warning_scope():
+        assert strict, "the child kept the vanished thread's warning filter"
+    signal.alarm(0)
+
+
+warnings.simplefilter("error", NotGeoreferencedWarning)
+warnings.filterwarnings(
+    "ignore",
+    message=r"This process .* is multi-threaded, use of fork",
+    category=DeprecationWarning,
+)
+child = get_context("fork").Process(target=in_child)
+with ThreadPoolExecutor(max_workers=1) as executor:
+    opener = executor.submit(hold_scope)
+    try:
+        assert opened.wait(10)
+        child.start()
+        child.join(10)
+        if child.is_alive():
+            child.kill()
+            child.join(5)
+            raise AssertionError("the forked child's warning scope hung")
+        assert child.exitcode == 0, f"the forked child exited with status {child.exitcode}"
+    finally:
+        release.set()
+    opener.result(timeout=5)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_progress_reports_every_staged_timestep(tmp_path, tifs):

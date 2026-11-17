@@ -5,20 +5,17 @@ from __future__ import annotations
 import os
 import tempfile
 import time
-import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
-from threading import Lock
 from typing import Literal
 
 import numpy as np
 import xarray as xr
 import zarr
 from zarr.codecs import BloscCodec, ZstdCodec
-from zarr.errors import ZarrUserWarning
 
 from chronozarr import schema
 from chronozarr._local_output import (
@@ -27,6 +24,7 @@ from chronozarr._local_output import (
     _private_output,
     _publish_output,
 )
+from chronozarr._warning_scope import consolidate_zarr_metadata
 from chronozarr._writer import (
     DEFAULT_CELLS_IN_FLIGHT,
     VOLATILITY_SCALE,
@@ -65,7 +63,6 @@ LEVEL_RANGE = {"zstd": (1, 22), "blosc-zstd-shuffle": (0, 9)}
 
 
 Codec = Literal["zstd", "blosc-zstd-shuffle"]
-_CONSOLIDATION_LOCK = Lock()
 
 
 @dataclass(frozen=True)
@@ -366,13 +363,7 @@ def _write_store(
     )
     datasets = tuple(LevelRef(str(k), layout.crs.code) for k in range(len(layout.shapes)))
     root.attrs.put(RootAttrs(meta, datasets).to_attrs())
-    # Two encodes may reach this point together. Serialize their changes to Python's global
-    # warning filters.
-    with _CONSOLIDATION_LOCK, warnings.catch_warnings():
-        # zarr-python warns that consolidated metadata is outside the Zarr v3 spec. chronozarr
-        # writes it deliberately (spec 3.1) so a reader learns every array in one GET.
-        warnings.simplefilter("ignore", ZarrUserWarning)
-        zarr.consolidate_metadata(str(out))
+    consolidate_zarr_metadata(str(out))
 
     total_bytes, n_files = _tree_stats(out)
     return EncodeReport(

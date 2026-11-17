@@ -7,7 +7,6 @@ import os
 import shutil
 import tempfile
 import time
-import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
@@ -18,10 +17,10 @@ from typing import Any
 import numpy as np
 import xarray as xr
 import zarr
-from zarr.errors import ZarrUserWarning
 
 from chronozarr import schema
 from chronozarr._file_lock import local_store_write_lock
+from chronozarr._warning_scope import consolidate_zarr_metadata
 from chronozarr._writer import (
     DEFAULT_CELLS_IN_FLIGHT,
     VOLATILITY_SCALE,
@@ -367,10 +366,7 @@ def _commit_metadata(
     # `multiscales` is not rewritten: it stays byte-identical (spec 8.3), so a store published
     # with `pixels_per_tile` keeps it.
     target.root.attrs.update({"chronozarr": updated.to_attrs()})
-    with warnings.catch_warnings():
-        # Consolidated metadata is deliberate (spec 3.1); see encode._write_store.
-        warnings.simplefilter("ignore", ZarrUserWarning)
-        zarr.consolidate_metadata(str(target.path))
+    consolidate_zarr_metadata(str(target.path))
 
 
 # --- Entry point ---------------------------------------------------------------------------------

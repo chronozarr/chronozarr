@@ -13,16 +13,15 @@ mirror js/shared/products.js; tests/test_bands.py fails when they drift.
 from __future__ import annotations
 
 import json
-import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import zarr
-from zarr.errors import ZarrUserWarning
 
 from chronozarr import schema
 from chronozarr._file_lock import local_store_write_lock
+from chronozarr._warning_scope import consolidate_zarr_metadata
 from chronozarr.schema import Band
 
 # STAC eo extension common names for bands. A store may carry any of them.
@@ -226,10 +225,7 @@ def _set_band_roles(path: Path, roles: Mapping[str, str | None]) -> tuple[Band, 
     had_consolidated = document.get("consolidated_metadata") is not None
     root.attrs.update({"chronozarr": replace(parsed.chronozarr, bands=bands).to_attrs()})
     if had_consolidated:
-        with warnings.catch_warnings():
-            # Consolidated metadata is deliberate (spec 3.1); see encode._write_store.
-            warnings.simplefilter("ignore", ZarrUserWarning)
-            zarr.consolidate_metadata(str(path))
+        consolidate_zarr_metadata(str(path))
     return bands
 
 
