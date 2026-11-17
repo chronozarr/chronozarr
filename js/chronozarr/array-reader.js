@@ -1,13 +1,24 @@
 // General declared Zarr layouts. The ordinary one-chunk profile stays on the worker fast path.
 import { createCodecPipeline } from '../vendor/zarrita/codecs.js';
+import { codecLoaders } from './codec-loaders.js';
 import { DTYPES } from './metadata.js';
 import { parseShardIndex, shardIndexRange } from './shard.js';
 
 const product = (shape) => shape.reduce((a, b) => a * b, 1);
 
+function defaultCodecLoader(name) {
+  const codec = name.startsWith('numcodecs.') ? name.slice('numcodecs.'.length) : name;
+  return codecLoaders.get(codec);
+}
+
 /** One reusable array handle, with one index per shard. Logical cells always return (band,y,x) C-order. */
 export function createArrayReader(storage, path, readable, closeSignal) {
-  const codec = createCodecPipeline({ dataType: storage.dtype, shape: storage.innerShape, codecs: storage.innerCodecs, fillValue: storage.fillValue });
+  const codec = createCodecPipeline({
+    dataType: storage.dtype,
+    shape: storage.innerShape,
+    codecs: storage.innerCodecs,
+    fillValue: storage.fillValue,
+  }, defaultCodecLoader);
   const indexes = new Map();
   const rank = storage.shape.length;
   const indexShape = storage.sharded ? storage.shardShape.map((n, i) => n / storage.innerShape[i]) : null;

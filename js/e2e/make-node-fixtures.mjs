@@ -66,18 +66,21 @@ function repackShard(shard, nTime, compress) {
   return out;
 }
 
-/** A synthetic store as { path: bytes } with the data chunks compressed and the codec chain of the data arrays extended. */
-export function compressedStore(spec, compressor) {
+/** A synthetic store as { path: bytes } with compressed data chunks and an optional byte order for 16-bit data. */
+export function compressedStore(spec, compressor, { endian = 'little' } = {}) {
   const files = buildSyntheticStore(spec).files;
+  const compress = endian === 'big' ? (bytes) => compressor.compress(Buffer.from(bytes).swap16()) : compressor.compress;
   const arrays = {};
   for (const [key, bytes] of files) {
     if (key.endsWith('/data/zarr.json')) {
       const meta = JSON.parse(new TextDecoder().decode(bytes));
-      (spec.sharded ? meta.codecs[0].configuration.codecs : meta.codecs).push(compressor.codec);
+      const codecs = spec.sharded ? meta.codecs[0].configuration.codecs : meta.codecs;
+      codecs[0].configuration.endian = endian;
+      codecs.push(compressor.codec);
       arrays[key.slice(1, -'/zarr.json'.length)] = meta;
       files.set(key, json(meta));
     } else if (key.includes('/data/c/')) {
-      files.set(key, spec.sharded ? repackShard(bytes, spec.nTime, compressor.compress) : compressor.compress(bytes));
+      files.set(key, spec.sharded ? repackShard(bytes, spec.nTime, compress) : compress(bytes));
     }
   }
   const root = JSON.parse(new TextDecoder().decode(files.get('/zarr.json')));
