@@ -34,6 +34,7 @@ from chronozarr._convert_source import (
     Grid,
     Source,
     SourceInfo,
+    StagedReuse,
     Step,
     _crs_string,
     _decide_validity,
@@ -43,6 +44,7 @@ from chronozarr._convert_source import (
     _scaling,
     _settle_nan,
     _value_valid,
+    icechunk_staged_reuse,
     override_scaling,
 )
 from chronozarr._install import extra_hint
@@ -659,11 +661,17 @@ class XarraySource(Source):
             )
         self.files = tuple(files) if files is not None else (source,)
         self.source = source
+        self.staged_reuse = StagedReuse.REUSABLE
         if files is not None:
             self.kind = "NetCDF files"
+        elif source.lower().endswith(NETCDF_SUFFIXES):
+            self.kind = "NetCDF file"
         else:
-            self.kind = "NetCDF file" if source.lower().endswith(NETCDF_SUFFIXES) else "Zarr store"
-        if resume and icechunk_source is None and self.kind == "Zarr store":
+            self.kind = "Zarr store"
+            self.staged_reuse = StagedReuse.ZARR_CHUNKS_CAN_CHANGE
+        if icechunk_source is not None:
+            self.staged_reuse = icechunk_staged_reuse(icechunk_source.virtual_prefixes)
+        if resume and self.staged_reuse is StagedReuse.ZARR_CHUNKS_CAN_CHANGE:
             raise ValueError(
                 "resume is unsupported for ordinary Zarr inputs because their chunks can "
                 "change without changing the metadata. Run without --resume and choose a "

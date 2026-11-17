@@ -25,6 +25,7 @@ const codec = { fromConfig: () => ({ decode: async (bytes) => bytes, encode: asy
 export const registry = new Map([
   ['zstd', async () => { globalThis.registryLog.push('zstd:start'); await new Promise((r) => setTimeout(r, 40)); globalThis.registryLog.push('zstd:done'); return codec; }],
   ['lz4', async () => { throw new Error('this codec cannot load'); }],
+  ['gzip', async () => { globalThis.gzipLoads = (globalThis.gzipLoads ?? 0) + 1; if (globalThis.gzipLoads === 1) throw new Error('network error while fetching the codec'); return codec; }],
 ]);
 `,
   );
@@ -68,4 +69,18 @@ test('a codec that fails to warm does not keep the worker from saying ready: the
   assert.equal(posted.length, 1);
   assert.deepEqual([posted[0].type, posted[0].id], ['error', 7]);
   assert.match(posted[0].message, /cannot load/);
+});
+
+test('a codec that fails to load once is loaded again by the next decode', async () => {
+  posted.length = 0;
+  await send({ type: 'init', zarritaUrl: registryUrl });
+  posted.length = 0;
+  await send({ type: 'decode', id: 8, spec: spec('flaky', 'gzip'), bytes: new Uint8Array(8) });
+  assert.deepEqual([posted[0].type, posted[0].id], ['error', 8]);
+  assert.match(posted[0].message, /network error while fetching the codec/);
+  posted.length = 0;
+  await send({ type: 'decode', id: 9, spec: spec('flaky', 'gzip'), bytes: new Uint8Array(8) });
+  assert.deepEqual([posted[0].type, posted[0].id], ['decoded', 9]);
+  assert.equal(posted[0].data.length, 4);
+  assert.equal(globalThis.gzipLoads, 2);
 });

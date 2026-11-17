@@ -16,6 +16,8 @@
 // steps per second the link can feed (`linkSteps`), and the effective speed is the lowest of that, the requested speed and the
 // display rate. Frames that are in memory already need no link, so the speed comes back up as they are.
 
+import { Machine } from '../chronozarr/machine.js';
+
 /** Selectable speeds, steps per second: every integer up to 15, then coarser up to 60. */
 export const SPEEDS = [...Array.from({ length: 15 }, (_, i) => i + 1), 20, 24, 30, 40, 48, 60];
 export const DEFAULT_STEPS_PER_SECOND = 4;
@@ -43,6 +45,17 @@ export function roundSteps(stepsPerSecond) {
   return stepsPerSecond < 2 ? Math.round(stepsPerSecond * 10) / 10 : Math.round(stepsPerSecond);
 }
 
+/**
+ * The phases of playback. paused: not on. starting: on, waiting for the frames of the first step. playing: stepping.
+ * rebuffering: on, ran out of frames after it had started.
+ */
+const PLAYBACK_MOVES = {
+  paused: { play: 'starting' },
+  starting: { filled: 'playing', pause: 'paused' },
+  playing: { dry: 'rebuffering', pause: 'paused' },
+  rebuffering: { filled: 'playing', pause: 'paused' },
+};
+
 export class Playback {
   #count;
   #getIndex;
@@ -59,10 +72,8 @@ export class Playback {
   #startSeconds;
   #lowSeconds;
   #stepsPerSecond;
-  #playing = false;
-  #buffering = false;
+  #phase = new Machine('playback', PLAYBACK_MOVES, 'paused');
   #bufferingSince = null;
-  #bufferingWraps = false;
   #restart = false;
   #playStartedAt = 0;
   #lastFillAt = -Infinity;
@@ -145,14 +156,20 @@ export class Playback {
     return stepsPerSecond;
   }
 
+  /** 'paused', 'starting' (waiting for the frames of the first step), 'playing' or 'rebuffering' (ran out of frames after it had started). */
+  get phase() {
+    return this.#phase.state;
+  }
+
   /** Whether playback is on: true while it buffers too (the frames it will play are being loaded), false after pause(). */
   get playing() {
-    return this.#playing;
+    return this.#phase.state !== 'paused';
   }
 
   /** Whether playback is on but waiting for frames: before the first step, or after it ran out. */
   get buffering() {
-    return this.#buffering;
+    const phase = this.#phase.state;
+    return phase === 'starting' || phase === 'rebuffering';
   }
 
   get stepsPerSecond() {
@@ -184,7 +201,7 @@ export class Playback {
 
   /** The steps per second the link can feed right now, never below MIN_LINK_STEPS_PER_SECOND; Infinity while nothing limits it or it is not playing. */
   get linkStepsPerSecond() {
-    if (!this.#playing || !this.#linkSteps) return Infinity;
+    if (this.#phase.state === 'paused' || !this.#linkSteps) return Infinity;
     const steps = this.#linkSteps();
     return Number.isFinite(steps) ? Math.max(MIN_LINK_STEPS_PER_SECOND, steps) : Infinity;
   }
@@ -245,8 +262,8 @@ export class Playback {
 
   /** Start playing from the timestep on screen once enough frames are ready: the first step happens at once, then one per interval. */
   play() {
-    if (this.#playing) return;
-    this.#playing = true;
+    if (this.#phase.state !== 'paused') return;
+    this.#phase.send('play');
     this.stats = Playback.#emptyStats();
     this.#lastStepAt = null;
     this.#expectedIndex = null;
@@ -259,24 +276,21 @@ export class Playback {
     this.#due = this.#playStartedAt;
     const needed = this.#needed(this.#startSeconds);
     if (this.#readyAhead(needed) >= needed) {
-      this.#buffering = false;
+      this.#phase.send('filled');
       this.#onChange?.();
       this.#step(this.#due);
     } else {
-      this.#buffering = true;
       this.#bufferingSince = this.#playStartedAt;
-      this.#bufferingWraps = false;
       this.#onChange?.();
       this.#requestFill(this.#playStartedAt, true);
     }
-    if (this.#playing) this.#queueFrame();
+    if (this.playing) this.#queueFrame();
   }
 
   /** Stop. Also what a manual scrub calls, so playback never fights the user. */
   pause() {
-    if (!this.#playing) return;
-    this.#playing = false;
-    this.#buffering = false;
+    if (this.#phase.state === 'paused') return;
+    this.#phase.send('pause');
     this.#bufferingSince = null;
     if (this.#frame !== null) this.#cancelFrame(this.#frame);
     this.#frame = null;
@@ -284,7 +298,7 @@ export class Playback {
   }
 
   toggle() {
-    if (this.#playing) this.pause();
+    if (this.playing) this.pause();
     else this.play();
   }
 
@@ -292,7 +306,7 @@ export class Playback {
   setSpeed(stepsPerSecond) {
     this.#stepsPerSecond = Playback.#checkSpeed(stepsPerSecond);
     this.#onChange?.();
-    if (!this.#playing || this.#buffering) return;
+    if (this.#phase.state !== 'playing') return;
     this.#due = (this.#lastStepAt ?? this.#now()) + this.#interval;
   }
 
@@ -302,7 +316,7 @@ export class Playback {
 
   #onFrame(frameTime) {
     this.#frame = null;
-    if (!this.#playing) return;
+    if (this.#phase.state === 'paused') return;
     if (this.#lastFrameAt !== null) {
       this.#frameDeltas.push(frameTime - this.#lastFrameAt);
       if (this.#frameDeltas.length > MAX_REFRESH_SAMPLES) this.#frameDeltas.shift();
@@ -312,13 +326,13 @@ export class Playback {
       this.pause();
       return;
     }
-    if (this.#buffering) this.#whileBuffering(frameTime);
+    if (this.#phase.state !== 'playing') this.#whileBuffering(frameTime);
     else {
       const low = Math.min(this.#needed(this.#lowSeconds), Math.max(1, Math.ceil(this.#needed(this.#startSeconds) * 0.75)));
       if (this.#readyAhead(low) < low) this.#requestFill(frameTime);
       this.#step(frameTime);
     }
-    if (this.#playing) {
+    if (this.#phase.state !== 'paused') {
       this.#queueFrame();
       const effective = roundSteps(this.effectiveStepsPerSecond);
       if (effective !== this.#reportedEffective) {
@@ -339,7 +353,7 @@ export class Playback {
         this.stats.bufferingMs += waited;
         this.stats.longestBufferingMs = Math.max(this.stats.longestBufferingMs, waited);
       }
-      this.#buffering = false;
+      this.#phase.send('filled');
       this.#bufferingSince = null;
       this.#restart = true;
       this.#due = now;
@@ -355,6 +369,8 @@ export class Playback {
   }
 
   #step(now) {
+    // The owner's callbacks run right before a step (onChange, prepare) and may have paused playback.
+    if (this.#phase.state !== 'playing') return;
     const index = this.#getIndex();
     if (this.#expectedIndex !== null && index !== this.#expectedIndex) {
       this.pause();
@@ -386,7 +402,7 @@ export class Playback {
 
   /** The next frame is not ready when it is due: stop and fill the buffer again instead of holding on one frame. */
   #runDry(now, next) {
-    this.#buffering = true;
+    this.#phase.send('dry');
     this.#bufferingSince = now;
     this.#reportedAhead = null;
     this.stats.bufferingPauses++;

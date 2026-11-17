@@ -93,6 +93,77 @@ chronozarr link https://data.example.org/my_store --time 71 --lonlat -64.62,-3.4
 - `link` refuses a point that the store does not cover and prints what it does cover. The viewer would move such a centre to the nearest edge without a message.
 - `--zoom Z` is `z`, the number of screen pixels that draw one stored pixel. At 1 each stored pixel is one screen pixel, at 4 it is a square of 4 by 4, and at 0.5 one screen pixel shows 2 by 2 stored pixels. The map shows its width in screen pixels, times the pixel size, divided by the zoom: on a map 1,000 pixels wide, a store with 10 m pixels shows 10 km at zoom 1, 2.5 km at zoom 4 and 20 km at zoom 0.5. A centre without `--zoom` gets zoom 1. A zoom without a centre zooms on the middle of the store. The viewer cannot draw more than 16 device pixels per stored pixel, or less than half of what fits the whole store, and moves a zoom beyond that to the limit.
 
+## Automating the viewer
+
+A script that drives the viewer in a browser, such as a test, a screenshot job or an agent, can read what the viewer is doing instead of waiting a fixed time. The viewer page publishes this on `window.chronozarr.viewer`. A host page that embeds the hosted viewer in an iframe is on another origin and cannot reach that object. For it, the `chronozarr:status` message carries the same fields: see [`chronozarr:status`](embedding.md#chronozarrstatus) in the embedding guide.
+
+### The status
+
+`window.chronozarr.viewer.status` returns a snapshot object. It is a plain object, so a browser automation tool can return it from the page.
+
+| Field | Values | Meaning |
+|---|---|---|
+| `store` | `none`, `opening`, `open`, `failed` | `none`: no store is open and none is being opened, as on a page that was given no store. `opening`: a store is being read. `open`: a store is open. `failed`: the last open failed and no store is open. |
+| `frame` | `none`, `loading`, `preview`, `settled`, `unavailable` | The outcome of the last render of the view. `none`: no store is open. `loading`: the frame asked for is not on the canvas, which shows a coarser frame, another timestep or nothing yet. `preview`: a coarser frame of the timestep asked for is on the canvas, as during a fast scrub. `settled`: the frame asked for is on the canvas at the level the view settles on. `unavailable`: the frame cannot be had, because every chunk it misses failed for good. In the status, `frame` also reads `loading` from the moment a change of view queues a render until that render has run. |
+| `playback` | `paused`, `starting`, `playing`, `rebuffering` | `paused`: playback is stopped, or no store is open. `starting`: playback was asked for and the viewer loads the frames of the first step. `playing`: the timestep advances at the playback speed. `rebuffering`: playback ran out of frames and waits for them. |
+| `exporting` | `true`, `false` | `true` while an export to MP4, WebM or GIF runs. |
+| `t` | integer | The timestep asked for. |
+| `shownT` | integer or `null` | The timestep of the frame on the canvas. `null` before the first frame. |
+| `level` | integer or `null` | The pyramid level of the frame on the canvas. Level 0 is full resolution. `null` before the first frame. |
+| `error` | `null` or `{code, toast}` | The notice on screen, `null` when there is none. `code` is `store_open_failed`, `no_store`, `chunk_load_failed` or `playback_failed`, as in the [error codes of the embedding guide](embedding.md#chronozarrerror). `toast` is `true` for a notice that fades by itself and `false` for the error box that stays until the next open. |
+
+### Waiting for the viewer
+
+`await window.chronozarr.viewer.whenSettled()` resolves with the status once nothing is pending: no store is opening, and `frame` is `settled`, `unavailable` or `none`. It resolves on the next microtask when that holds already.
+
+- A change of view made before the call is waited for, including a change of timestep, zoom, centre or product.
+- A `preview` frame is not settled. The wait ends when the scrub ends and the frame at the final level is on the canvas.
+- When the frame cannot be had, it resolves with `frame: 'unavailable'` after the viewer has given up on the chunks, and `error` holds the `chunk_load_failed` notice.
+- When an open fails, it resolves with `store: 'failed'`, `frame: 'none'` and `error.code` `store_open_failed`. A `?store=` value that cannot be read as an address resolves with `store: 'none'` and the same error code.
+- It does not wait for playback to stop, for an export to end or for a notice to fade. Read `playback`, `exporting` and `error` in the status it returns.
+
+Before the page starts to open a store, the viewer has `store: 'none'` and `frame: 'none'`, which counts as settled, and `whenSettled()` resolves at once. A script that loads a page with `?store=` first waits for `window.chronozarr.ready`. It exists once the page has started to open the store, and its promise resolves with the result of the open. `firstPaintMs` in that result is a number when the first complete frame is drawn, and `null` when every cell of that frame failed for good. The promise resolves with nothing (`undefined`) when the open failed, and with `null` when a newer open replaced it.
+
+### Attributes of the page
+
+The viewer keeps three attributes on the `<html>` element, from the start of the page: `data-store`, `data-frame` and `data-playback`. `data-store` and `data-playback` hold the `store` and `playback` of the status. `data-frame` holds the outcome of the last render: unlike `frame` in the status, it does not turn to `loading` while a render is only queued. A script can wait for a value with a selector such as `html[data-frame="settled"]`.
+
+The attributes change at the start, the success and the failure of an open, when a render ends with another frame outcome (a frame is drawn, or a view change makes it load), and when playback changes between `paused`, `starting`, `playing` and `rebuffering`. A notice and an export leave them as they are. `t` is not an attribute: a change of timestep changes `data-frame` only when the render it queues ends with another outcome, as any change of view does. A script that has changed the view therefore awaits `whenSettled()` first, and reads the attributes after it.
+
+### Example
+
+This Playwright script opens a store, goes to a timestep, waits for its frame and takes a screenshot. The launch arguments give the page WebGL2 on a machine without a GPU.
+
+```js
+import { chromium } from 'playwright';
+
+const store = 'https://data.chronozarr.org/ucayali_santa_maria_v03';
+const browser = await chromium.launch({
+  args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+});
+const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+await page.goto(`https://chronozarr.org/demo/?store=${encodeURIComponent(store)}`);
+
+// The first complete frame: ready resolves with nothing when the store could not be opened,
+// and with a null firstPaintMs when every cell of the first frame failed.
+await page.waitForFunction(() => window.chronozarr?.ready);
+const opened = await page.evaluate(() => window.chronozarr.ready);
+if (!opened || opened.firstPaintMs === null) throw new Error(`the viewer could not open ${store}`);
+
+// Go to timestep 12 and wait until its frame is on the canvas.
+const status = await page.evaluate(() => {
+  const { viewer } = window.chronozarr;
+  viewer.goToTime(12);
+  return viewer.whenSettled();
+});
+console.log(status.frame, status.shownT, status.error);
+
+await page.screenshot({ path: 'timestep-12.png' });
+await browser.close();
+```
+
+`status.frame` is `settled` and `status.shownT` is 12 when the frame was drawn. When the chunks of the timestep cannot be read, `status.frame` is `unavailable` and `status.error` names the failure.
+
 ## What the browser downloads
 
 The map is divided into cells of 512 by 512 pixels. For each view, the browser downloads the cells on the screen, at the current timestep, at the level of detail that matches the zoom. It also downloads the timesteps around the current one in the background. Stepping through time then usually needs no new download. A link to a store gives read access to the whole store, but the browser fetches only what the view needs.

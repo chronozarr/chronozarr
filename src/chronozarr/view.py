@@ -19,6 +19,7 @@ listens on 127.0.0.1.
 from __future__ import annotations
 
 import contextlib
+import enum
 import errno
 import html
 import importlib
@@ -115,10 +116,15 @@ class ServerState:
     last_store_request: float | None = None  # time.monotonic()
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def reset_counts(self) -> None:
+    def counts(self) -> tuple[int, int, float | None]:
+        """The request counters as they are now, for `restore_counts`."""
         with self._lock:
-            self.store_requests = self.viewer_requests = 0
-            self.last_store_request = None
+            return self.store_requests, self.viewer_requests, self.last_store_request
+
+    def restore_counts(self, counts: tuple[int, int, float | None]) -> None:
+        """Put the counters back to what `counts()` returned."""
+        with self._lock:
+            self.store_requests, self.viewer_requests, self.last_store_request = counts
 
     def record(self, *, store: bool, viewer: bool) -> None:
         with self._lock:
@@ -280,8 +286,18 @@ class _Server(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+class _Phase(enum.Enum):
+    """Where a `StoreServer` is in its life: it serves until it is stopped, and never again."""
+
+    SERVING = "serving"
+    CLOSED = "closed"
+
+
 class StoreServer:
-    """A running local HTTP server for one store directory. It listens on loopback only."""
+    """A running local HTTP server for one store directory. It listens on loopback only.
+
+    After `close()` the object stays, with `closed` true; `serve_store()` starts a new server.
+    """
 
     def __init__(
         self,
@@ -292,6 +308,7 @@ class StoreServer:
         viewer_dir: Path | None = None,
     ) -> None:
         self.store = store
+        self._phase = _Phase.SERVING
         self.state = ServerState(viewer_root=viewer_dir)
         handler = partial(StoreRequestHandler, root=store, prefix=store.name, state=self.state)
         in_use = OSError(
@@ -315,7 +332,11 @@ class StoreServer:
             self._check_answers()
 
     def _check_answers(self) -> None:
-        """Fail unless this server, and not another process, answers on its port."""
+        """Fail unless this server, and not another process, answers on its port.
+
+        The check's own request is not counted: the counters are what they were before it.
+        """
+        before = self.state.counts()
         expected = (self.store / "zarr.json").read_bytes()
         try:
             direct = urllib.request.build_opener(
@@ -335,12 +356,18 @@ class StoreServer:
                 f"port {self.port} answered with something other than {self.store}/zarr.json. "
                 "Another process owns it; pick another port."
             )
-        self.state.reset_counts()  # the check was not the browser
+        self.state.restore_counts(before)  # the check was not the browser
 
     def _stop(self) -> None:
         self._server.shutdown()
         self._server.server_close()
         self._thread.join(timeout=5)
+        self._phase = _Phase.CLOSED
+
+    @property
+    def closed(self) -> bool:
+        """False while the server serves; true once `close()` or a failed port check stopped it."""
+        return self._phase is _Phase.CLOSED
 
     @property
     def port(self) -> int:
@@ -366,10 +393,10 @@ class StoreServer:
         return access_for(self).diagnose()
 
     def close(self) -> None:
+        """Stop serving and forget this server. A closed server is left as it is."""
         with _lock:
-            self._server.shutdown()
-            self._server.server_close()
-            self._thread.join(timeout=5)
+            if not self.closed:
+                self._stop()
             if _servers.get(self.store) is self:
                 del _servers[self.store]
             known = _accesses.get(self.store)
@@ -551,6 +578,12 @@ class LocalAccess:
 
     def diagnose(self, environ: Mapping[str, str] | None = None) -> str:
         server = self.server
+        if server.closed:
+            return (
+                f"chronozarr local store server\n  store      {server.store}\n"
+                "This server was closed and no longer answers. serve_store() or view() starts "
+                "a new one."
+            )
         state = server.state
         last = state.last_store_request
         seen = "never" if last is None else f"{time.monotonic() - last:.0f} s ago"

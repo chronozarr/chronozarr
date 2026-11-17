@@ -27,7 +27,7 @@ export async function createChunkDecoder(zarrita, spec) {
 
   const chain = [];
   for (const { name, configuration } of compressors) {
-    const load = BYTES_TO_BYTES.has(name) ? zarrita.registry.get(name) : undefined;
+    const load = BYTES_TO_BYTES.has(name) ? zarrita.codecLoaders?.get(name) ?? zarrita.registry.get(name) : undefined;
     if (!load) throw new Error(`unsupported codec "${name}" (supported: ${[...BYTES_TO_BYTES].join(', ')})`);
     const codec = (await load()).fromConfig(configuration ?? {}, { dataType: spec.dtype, shape: spec.shape, codecs: spec.codecs, fillValue: 0 });
     chain.push({ name, codec });

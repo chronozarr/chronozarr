@@ -30,13 +30,16 @@ export default {
     const status = document.createElement('div'); status.setAttribute('role', 'status');
     const hint = document.createElement('pre'); hint.hidden = true;
     hint.style.cssText = 'margin:0;white-space:pre-wrap;font:12px ui-monospace,monospace;opacity:.75';
-    const frame = document.createElement('iframe'); frame.title = 'chronozarr player';
+    let frame = document.createElement('iframe'); frame.title = 'chronozarr player';
     frame.style.cssText = 'width:100%;border:0;min-height:320px';
     frame.allow = 'fullscreen; local-network-access';
     controls.append(play, time, date, product, band, colormap, low, high, auto, legend, speed, open); box.append(controls, frame, status, hint); el.append(box);
     let origin, connected = false, disposed = false, suppress = false, saveTimer = 0, commandTimer = 0, openTimer = 0;
     let pending = {};
     let activeBand = '';
+    // The code of the notice that the viewer's last status carried, in chronozarr:status or chronozarr:ready (null:
+    // none), to tell an error the viewer showed from one that answered a command.
+    let shownError = null;
     const bandRanges = new Map();
     const colormapId = () => model.get('colormap') ?? 'gray';
     const subscriptions = [];
@@ -50,11 +53,13 @@ export default {
       save(); draw();
     };
     const send = message => frame.contentWindow?.postMessage({ v: 1, ...message }, origin);
+    const loaded = (event) => { if (event.currentTarget === frame) send({ type: 'chronozarr:get' }); };
     function flush() {
       commandTimer = 0;
       if (!connected || disposed || !Object.keys(pending).length) return;
       send({ type: 'chronozarr:set', ...pending }); pending = {};
-      send({ type: 'chronozarr:get' }); // v1 has no separate playback/product acknowledgement.
+      // A viewer that sends chronozarr:status reports the result by itself; one deployed before it has no other way to acknowledge a command.
+      send({ type: 'chronozarr:get' });
     }
     function queue(key, value) {
       if (['product', 'band'].includes(key) && !value) return;
@@ -76,7 +81,9 @@ export default {
       product.value = model.get('product'); speed.value = String(model.get('speed'));
       band.value = model.get('band') ?? ''; colormap.value = colormapId();
       const limits = model.get('range');
-      low.value = limits?.[0] ?? ''; high.value = limits?.[1] ?? '';
+      // A limit that is being typed is left as it is; its change event sends it.
+      if (!low.matches(':focus')) low.value = limits?.[0] ?? '';
+      if (!high.matches(':focus')) high.value = limits?.[1] ?? '';
       const advanced = model.get('controls') === true;
       for (const control of [date, product, speed]) control.hidden = !advanced;
       const single = advanced && model.get('product') === 'band';
@@ -108,7 +115,7 @@ export default {
       return url.href.replaceAll('%2C', ',');
     }
     function start() {
-      connected = false; pending = {}; activeBand = ''; bandRanges.clear(); clearTimeout(commandTimer); clearTimeout(openTimer);
+      connected = false; pending = {}; activeBand = ''; shownError = null; bandRanges.clear(); clearTimeout(commandTimer); clearTimeout(openTimer);
       update({ ready: false, error: {}, times: [], products: [], bands: [], state: {}, click: {} });
       status.textContent = 'Opening store…'; product.replaceChildren();
       // A path on the notebook's own origin (a jupyter-server-proxy route) resolves against this page.
@@ -126,7 +133,14 @@ export default {
       if (model.get('band')) url.searchParams.set('b', model.get('band')); else url.searchParams.delete('b');
       if (limits) url.searchParams.set('r', limits.join(',')); else url.searchParams.delete('r');
       if (colormapId() !== 'gray') url.searchParams.set('cm', colormapId()); else url.searchParams.delete('cm');
-      frame.src = url.href; draw();
+      // A new iframe has its own message source, so queued messages from the previous viewer are ignored.
+      const previous = frame;
+      frame = previous.cloneNode(false);
+      frame.src = url.href;
+      frame.addEventListener('load', loaded);
+      previous.removeEventListener('load', loaded);
+      previous.replaceWith(frame);
+      draw();
       // A browser that cannot reach the viewer or the store often shows nothing and sends nothing.
       openTimer = setTimeout(() => {
         if (!connected && !disposed && !model.get('error').message) update({ error: { type: 'chronozarr:error', code: 'no_response', message: 'The viewer did not answer within 15 s: this browser may not reach the viewer or the store URL.' } });
@@ -140,7 +154,12 @@ export default {
       if (message.type === 'chronozarr:ready') {
         const first = !connected;
         connected = true; clearTimeout(openTimer);
-        if (model.get('error').code === 'no_response') update({ error: {} });
+        // ready carries the viewer's status. Before the first ready the player sent no command, so an error it holds is
+        // its own no_response or a notice of the viewer: it stays only while the viewer still shows it. A later ready
+        // answers get, and keeps the error that a command brought.
+        const carried = message.status?.error?.code ?? null;
+        if (first && model.get('error').code !== undefined && model.get('error').code !== carried) update({ error: {} });
+        shownError = carried;
         status.textContent = model.get('error').message ?? '';
         product.replaceChildren();
         for (const item of message.products.filter(item => item.available)) product.add(new Option(item.name, item.id));
@@ -158,6 +177,24 @@ export default {
           state, t: state.t, product: state.product, band: state.band, range: state.range ?? null,
           colormap: state.colormap ?? 'gray', playing: state.playing, speed: state.speed });
         if (desired) { pending = desired; flush(); }
+      } else if (message.type === 'chronozarr:status') {
+        const state = message.state;
+        // A command that has not been sent yet is newer than the status: its keys keep the value the user chose, and
+        // a band change keeps the band and limits it set up for the viewer.
+        if (pending.band === undefined) {
+          activeBand = state.band;
+          bandRanges.set(activeBand, state.range ?? null);
+        }
+        const values = { t: state.t, product: state.product, band: state.band, range: state.range ?? null,
+          colormap: state.colormap ?? 'gray', playing: state.playing, speed: state.speed };
+        for (const key of Object.keys(pending)) delete values[key];
+        update({ state, ...values });
+        // The error is cleared only when the viewer showed it as a notice and no longer does. An error that answered a
+        // command was never part of a status: it stays until another error replaces it or the player restarts.
+        if (message.error === null && shownError !== null && model.get('error').code === shownError) {
+          update({ error: {} }); status.textContent = '';
+        }
+        shownError = message.error?.code ?? null;
       } else if (message.type === 'chronozarr:time') {
         update({ t: message.t, state: { ...model.get('state'), t: message.t, time: message.time } });
       } else if (message.type === 'chronozarr:view') {
@@ -165,7 +202,9 @@ export default {
       } else if (message.type === 'chronozarr:click') update({ click: message });
       else if (message.type === 'chronozarr:error') {
         update({ error: message }); status.textContent = message.message;
-        if (connected) send({ type: 'chronozarr:get' });
+        // A viewer without chronozarr:status answers get with ready, which carries the state after the error. After a
+        // store failed to open the viewer answers get with that same error, so the player does not ask then.
+        if (connected && message.code !== 'store_open_failed' && message.code !== 'no_store') send({ type: 'chronozarr:get' });
       }
     };
     const listen = (key, callback) => { model.on(`change:${key}`, callback); subscriptions.push([`change:${key}`, callback]); };
@@ -187,8 +226,7 @@ export default {
     };
     low.onchange = high.onchange = applyLimits; auto.onclick = () => control('range', null);
     speed.onchange = () => control('speed', Number(speed.value));
-    const loaded = () => send({ type: 'chronozarr:get' });
-    frame.addEventListener('load', loaded); window.addEventListener('message', receive); start();
+    window.addEventListener('message', receive); start();
     return () => {
       disposed = true; clearTimeout(saveTimer); clearTimeout(commandTimer); clearTimeout(openTimer);
       window.removeEventListener('message', receive); frame.removeEventListener('load', loaded);

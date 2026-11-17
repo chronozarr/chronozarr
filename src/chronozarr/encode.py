@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import os
-import shutil
 import tempfile
 import time
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
+from threading import Lock
 from typing import Literal
 
 import numpy as np
@@ -20,6 +21,12 @@ from zarr.codecs import BloscCodec, ZstdCodec
 from zarr.errors import ZarrUserWarning
 
 from chronozarr import schema
+from chronozarr._local_output import (
+    _prepare_destination,
+    _prepare_store,
+    _private_output,
+    _publish_output,
+)
 from chronozarr._writer import (
     DEFAULT_CELLS_IN_FLIGHT,
     VOLATILITY_SCALE,
@@ -58,6 +65,7 @@ LEVEL_RANGE = {"zstd": (1, 22), "blosc-zstd-shuffle": (0, 9)}
 
 
 Codec = Literal["zstd", "blosc-zstd-shuffle"]
+_CONSOLIDATION_LOCK = Lock()
 
 
 @dataclass(frozen=True)
@@ -242,7 +250,7 @@ def _write_store(
 ) -> EncodeReport:
     cs = layout.chunk_size
     reference = schema.comparison_schedule(layout.n_time)
-    root = zarr.open_group(str(out), mode="w", zarr_format=3)
+    root = zarr.create_group(str(out), zarr_format=3)
     arrays = [_create_level(root, k, layout) for k in range(len(layout.shapes))]
     grids = [schema.grid_shape(h, w, cs) for h, w in layout.shapes]
     volatility = np.zeros(grids[0], dtype=np.float32)
@@ -357,8 +365,10 @@ def _write_store(
         shard_bytes=_shard_bytes(out, len(layout.shapes)) if layout.shard else None,
     )
     datasets = tuple(LevelRef(str(k), layout.crs.code) for k in range(len(layout.shapes)))
-    root.attrs.update(RootAttrs(meta, datasets).to_attrs())
-    with warnings.catch_warnings():
+    root.attrs.put(RootAttrs(meta, datasets).to_attrs())
+    # Two encodes may reach this point together. Serialize their changes to Python's global
+    # warning filters.
+    with _CONSOLIDATION_LOCK, warnings.catch_warnings():
         # zarr-python warns that consolidated metadata is outside the Zarr v3 spec. chronozarr
         # writes it deliberately (spec 3.1) so a reader learns every array in one GET.
         warnings.simplefilter("ignore", ZarrUserWarning)
@@ -419,6 +429,8 @@ def encode(
     n_lods: int | None = None,
     workers: int | None = None,
     spill_dir: str | Path | None = None,
+    _scratch_parent: Path | None = None,
+    _destination: Path | None = None,
 ) -> EncodeReport:
     """Write `data` as a chronozarr store at `out` (spec 0.3.0, or 0.4.0 without an EPSG code).
 
@@ -428,7 +440,8 @@ def encode(
             iterable of per-timestep (band, y, x) arrays in time order, which needs `times`,
             `crs`, `transform` and `bands`. An iterable is written once to cell-major temp
             files, then encoded cell by cell, so memory does not grow with the raster.
-        out: Directory to create. Must not exist or must be empty (stores are immutable).
+        out: Directory to create under a writable parent directory. On Linux and macOS,
+            a writable empty directory also works when its permissions can be preserved.
         crs: An authority code such as "EPSG:32631", or WKT2 text for a CRS that has no code.
             WKT1, PROJJSON and PROJ strings are converted to WKT2 when pyproj is installed. A
             CRS with an EPSG code gives a 0.3.0 store and any other a 0.4.0 store. Falls back to
@@ -471,7 +484,7 @@ def encode(
     the number of timesteps, about 15 MB per timestep for four 512 px bands at the default
     `workers`.
 
-    Removes the partially written store if encoding fails.
+    Builds the store privately on the output filesystem, then publishes it with one rename.
     """
     if chunk_size < 2 or chunk_size % 2:
         raise ValueError(f"chunk_size must be an even number, got {chunk_size}")
@@ -525,44 +538,48 @@ def encode(
         volatility=volatility,
     )
 
-    out = Path(out)
-    existed = out.exists()
-    if existed and any(out.iterdir()):
-        raise FileExistsError(
-            f"{out} already exists and is not empty; stores are immutable, write to a new path"
-        )
-
-    spill: Path | None = None
-    try:
-        if prepared.da is not None:
-            source: _Source = _ArraySource(
-                prepared.da,
-                prepared.mask if isinstance(prepared.mask, xr.DataArray) else None,
-                prepared.coverage if isinstance(prepared.coverage, xr.DataArray) else None,
-                chunk_size,
-            )
-        else:
-            out.parent.mkdir(parents=True, exist_ok=True)
-            spill = Path(
-                tempfile.mkdtemp(
-                    prefix=f".{out.name}-spill-", dir=str(spill_dir) if spill_dir else out.parent
+    out = Path(out).absolute()
+    # Keep an existing symlink to an empty directory and write to its target.
+    destination = _prepare_destination(out, expected=_destination)
+    with _private_output(
+        destination, prefix=".chronozarr-encode-", scratch_parent=_scratch_parent
+    ) as scratch_path:
+        store = scratch_path / "store"
+        with ExitStack() as spill_cleanup:
+            if prepared.da is not None:
+                source: _Source = _ArraySource(
+                    prepared.da,
+                    prepared.mask if isinstance(prepared.mask, xr.DataArray) else None,
+                    prepared.coverage if isinstance(prepared.coverage, xr.DataArray) else None,
+                    chunk_size,
                 )
+            else:
+                spill_parent = Path(spill_dir).resolve() if spill_dir else scratch_path
+                if spill_parent == destination:
+                    spill_parent = scratch_path
+                spill = Path(
+                    spill_cleanup.enter_context(
+                        tempfile.TemporaryDirectory(
+                            prefix=".chronozarr-spill-",
+                            dir=spill_parent,
+                            ignore_cleanup_errors=True,
+                        )
+                    )
+                )
+                source = _spill_timesteps(
+                    prepared,
+                    spill,
+                    chunk_size=chunk_size,
+                    has_mask=layout.has_mask,
+                    has_coverage=layout.has_coverage,
+                )
+            original = _prepare_store(store, out, destination)
+            report = _write_store(
+                store,
+                layout,
+                source,
+                cells_in_flight=cells_in_flight,
+                provenance=resolved_provenance,
             )
-            source = _spill_timesteps(
-                prepared,
-                spill,
-                chunk_size=chunk_size,
-                has_mask=layout.has_mask,
-                has_coverage=layout.has_coverage,
-            )
-        return _write_store(
-            out, layout, source, cells_in_flight=cells_in_flight, provenance=resolved_provenance
-        )
-    except BaseException:
-        shutil.rmtree(out, ignore_errors=True)
-        if existed:
-            out.mkdir()
-        raise
-    finally:
-        if spill is not None:
-            shutil.rmtree(spill, ignore_errors=True)
+        _publish_output(store, out, destination, original)
+    return report

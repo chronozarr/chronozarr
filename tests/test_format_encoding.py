@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import stat
 import warnings
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -14,7 +18,7 @@ from zarr.errors import ZarrUserWarning
 from zarr.storage import LocalStore
 
 import chronozarr
-from chronozarr import schema
+from chronozarr import _convert_legacy, schema
 from chronozarr.convert import convert
 from chronozarr.crs import Crs
 from tests.narrow import array_at, attrs_block, required
@@ -181,6 +185,93 @@ def test_exact_legacy_conversion_preserves_existing_overviews(tmp_path, shard, e
         for key, value in source_bytes.items():
             if "/c/" in key:
                 assert (tmp_path / "new" / key).read_bytes() == value
+
+
+def _plain_legacy_store(path, truth):
+    build_store(path, truth, shard=False, chunk_size=4, volatility=False)
+    root = zarr.open_group(path, mode="r+", use_consolidated=False)
+    meta = attrs_block(root, "chronozarr")
+    meta.update(spec_version="0.2.0", temporal={"encoding": "none"})
+    root.attrs.update(
+        {
+            "chronozarr": meta,
+            "multiscales": [{"datasets": [{"path": str(k)} for k in range(len(meta["levels"]))]}],
+        }
+    )
+    consolidate(path)
+
+
+@pytest.mark.parametrize("fail_migration", [False, True], ids=["copy", "cleanup"])
+def test_legacy_migration_leaves_a_competing_store_byte_identical(
+    tmp_path, monkeypatch, fail_migration
+):
+    source, destination, competitor = (tmp_path / name for name in ("old", "new", "competitor"))
+    truth = make_truth(2, 1, 8, 8)
+    _plain_legacy_store(source, truth)
+    build_store(competitor, truth + 1000, shard=False, chunk_size=4, volatility=False)
+
+    def files(path: Path):
+        return {p.relative_to(path): p.read_bytes() for p in path.rglob("*") if p.is_file()}
+
+    expected = files(competitor)
+    original = files(source)
+
+    def publish_competitor():
+        if destination.exists():
+            destination.rename(tmp_path / "displaced")
+        competitor.rename(destination)
+
+    if fail_migration:
+        failed = False
+        remove = shutil.rmtree
+
+        def fail_verify(*args):
+            nonlocal failed
+            failed = True
+            raise RuntimeError("migration verification failed")
+
+        def publish_then_remove(path, *args, **kwargs):
+            if failed and competitor.exists():
+                publish_competitor()
+            return remove(path, *args, **kwargs)
+
+        monkeypatch.setattr(_convert_legacy, "verify", fail_verify)
+        monkeypatch.setattr(shutil, "rmtree", publish_then_remove)
+        with pytest.raises(RuntimeError, match="migration verification failed"):
+            convert(source, destination)
+    else:
+        copy = shutil.copytree
+
+        def publish_then_copy(src, dst, *args, **kwargs):
+            if Path(src) == source:
+                publish_competitor()
+            return copy(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(shutil, "copytree", publish_then_copy)
+        with pytest.raises(FileExistsError, match="stores are immutable"):
+            convert(source, destination)
+
+    assert files(destination) == expected
+    assert chronozarr.validate(destination) == []
+    np.testing.assert_array_equal(
+        chronozarr.open_store(destination).to_xarray().values, truth + 1000
+    )
+    assert files(source) == original
+    assert list(tmp_path.glob(".chronozarr-migrate-*")) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows rename requires an absent output")
+def test_legacy_migration_preserves_a_preexisting_directory_mode(tmp_path):
+    source, destination = tmp_path / "old", tmp_path / "new"
+    truth = make_truth(2, 1, 8, 8)
+    _plain_legacy_store(source, truth)
+    source.chmod(0o755)
+    destination.mkdir(mode=0o700)
+
+    convert(source, destination)
+
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o700
+    np.testing.assert_array_equal(chronozarr.open_store(destination).to_xarray().values, truth)
 
 
 def test_native_xarray(tmp_path):

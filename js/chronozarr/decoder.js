@@ -36,11 +36,12 @@ import { DTYPES, decodeSpec, isCellStorage, normalizeBands, parseSpatial, parseR
 import { DecodePool, MainThreadDecoder, leaseDecodePool } from './pool.js';
 import { ShardIndexError, parseShardIndex, shardIndexRange } from './shard.js';
 import { registry } from '../vendor/zarrita/codecs.js';
+import { codecLoaders } from './codec-loaders.js';
 
 export { FetchError };
 
 /** The part of zarrita the reader uses: the codec registry. Workers load the same module by URL. */
-const ZARRITA_CODECS = { registry };
+const ZARRITA_CODECS = { registry, codecLoaders };
 const ZARRITA_CODECS_URL = new URL('../vendor/zarrita/codecs.js', import.meta.url).href;
 const MIB = 1024 * 1024;
 const GIB = 1024 * MIB;
@@ -315,29 +316,35 @@ export async function openStore(baseUrl, options = {}) {
   } else {
     decoder = new MainThreadDecoder(ZARRITA_CODECS);
   }
-  for (const spec of chunkSpecs) decoder.warm?.(spec);
+  // openStore holds the decoder (and its lease on the shared workers) until the store exists and owns it.
+  try {
+    for (const spec of chunkSpecs) decoder.warm?.(spec);
 
-  return new ChronoStore({
-    url: baseUrl,
-    cz,
-    notes,
-    datasets,
-    names,
-    levelMirror: cz.levels ?? null,
-    transform,
-    crs: geometry[0],
-    dataMetas,
-    storage,
-    specs,
-    readable,
-    decoder,
-    network,
-    bandwidth,
-    limiter,
-    clock,
-    budgets,
-    policy,
-  });
+    return new ChronoStore({
+      url: baseUrl,
+      cz,
+      notes,
+      datasets,
+      names,
+      levelMirror: cz.levels ?? null,
+      transform,
+      crs: geometry[0],
+      dataMetas,
+      storage,
+      specs,
+      readable,
+      decoder,
+      network,
+      bandwidth,
+      limiter,
+      clock,
+      budgets,
+      policy,
+    });
+  } catch (error) {
+    decoder.close();
+    throw error;
+  }
 }
 
 function parseStoreJson(bytes, baseUrl, key) {

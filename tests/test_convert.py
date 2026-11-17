@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
+import importlib
 import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 import numpy as np
@@ -11,6 +20,7 @@ import pytest
 import xarray as xr
 import zarr
 from click.testing import CliRunner
+from zarr.errors import ZarrUserWarning
 
 import chronozarr
 from chronozarr.cli import main
@@ -18,13 +28,14 @@ from chronozarr.convert import (
     CogManifestSource,
     PreflightError,
     _gdal_env,
+    _work_lock,
     convert,
     plan_conversion,
     read_manifest,
 )
 from tests.fixtures import cog_sources as fx
 from tests.fixtures import png_frames as pf
-from tests.synthetic import CRS, TRANSFORM, make_times, make_truth
+from tests.synthetic import CRS, TRANSFORM, make_da, make_times, make_truth
 
 pytestmark = pytest.mark.unit
 
@@ -977,6 +988,7 @@ def test_dry_run_reports_estimates_and_writes_nothing(tmp_path, tifs):
     assert report.encode is None
     assert not out.exists()
     assert not (tmp_path / "store.convert-work").exists()
+    assert not list(tmp_path.glob(".chronozarr-convert-*.lock"))
     plan = seen[0]
     assert plan.raw_bytes == N_TIME * N_BAND * HEIGHT * WIDTH * 2
     assert plan.timestep_bytes == N_BAND * HEIGHT * WIDTH * 2
@@ -1069,10 +1081,757 @@ def test_existing_output_is_refused_before_anything_is_read(tmp_path, tifs):
     assert not (tmp_path / "store.convert-work").exists()
 
 
+def leave_an_interrupted_run(tmp_path, tifs, monkeypatch) -> tuple[Path, Path, Path]:
+    """A manifest whose conversion failed while staging: its work directory keeps three
+    timesteps. Returns the manifest, the output path (absent) and the work directory."""
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    original = CogManifestSource.read
+
+    def flaky(self, t):
+        if t == 3:
+            raise OSError("connection reset")
+        return original(self, t)
+
+    monkeypatch.setattr(CogManifestSource, "read", flaky)
+    out = tmp_path / "store"
+    with pytest.raises(OSError, match="connection reset"):
+        convert(manifest, out, read_ahead=1, **OPTIONS)
+    monkeypatch.undo()
+    work = tmp_path / "store.convert-work"
+    assert len(list(work.glob("t*.npy"))) == 3
+    return manifest, out, work
+
+
+@pytest.mark.parametrize("explicit_work", [False, True], ids=["same-output", "shared-work-dir"])
+def test_concurrent_conversions_cannot_claim_the_same_work_dir(
+    tmp_path, monkeypatch, explicit_work
+):
+    first_pixels = np.full((1, 8, 8), 100, dtype=np.uint16)
+    second_pixels = np.full_like(first_pixels, 900)
+    first_tif = write_tif(tmp_path / "first.tif", first_pixels)
+    second_tif = write_tif(tmp_path / "second.tif", second_pixels)
+    first_manifest = write_csv(tmp_path / "first.csv", [first_tif], dates=DATES[:1])
+    second_manifest = write_csv(tmp_path / "second.csv", [second_tif], dates=DATES[:1])
+    first_out = tmp_path / "store"
+    second_out = tmp_path / "other" if explicit_work else first_out
+    work = tmp_path / "scratch" if explicit_work else tmp_path / "store.convert-work"
+    first_options: dict[str, Any] = {}
+    second_options: dict[str, Any] = {}
+    if explicit_work:
+        alias = tmp_path / "alias"
+        alias.mkdir()
+        first_options.update(work_dir=work, resume=True)
+        second_options.update(work_dir=alias / ".." / work.name, resume=True)
+
+    first_checked = Event()
+    allow_first_claim = Event()
+    first_staged = Event()
+    allow_first_encode = Event()
+    original_mkdir = Path.mkdir
+
+    def interleave_claims(path, *args, **kwargs):
+        if path.resolve() == work:
+            if not first_checked.is_set():
+                first_checked.set()
+                assert allow_first_claim.wait(30)
+            else:
+                # A second writer here has already decided that the work directory is empty.
+                allow_first_claim.set()
+                assert first_staged.wait(30)
+        return original_mkdir(path, *args, **kwargs)
+
+    def hold_after_staging(done, total):
+        if done == total:
+            first_staged.set()
+            assert allow_first_encode.wait(30)
+
+    monkeypatch.setattr(Path, "mkdir", interleave_claims)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first = executor.submit(
+            convert,
+            first_manifest,
+            first_out,
+            progress=hold_after_staging,
+            **first_options,
+            **OPTIONS,
+        )
+        try:
+            assert first_checked.wait(30)
+            with pytest.raises(BlockingIOError, match="another conversion is already using"):
+                convert(second_manifest, second_out, **second_options, **OPTIONS)
+                np.testing.assert_array_equal(stored(second_out), second_pixels[np.newaxis])
+        finally:
+            allow_first_claim.set()
+            allow_first_encode.set()
+        report = first.result(timeout=30)
+
+    assert (report.n_staged, report.n_reused) == (1, 0)
+    np.testing.assert_array_equal(stored(first_out), first_pixels[np.newaxis])
+    assert not work.exists()
+    if explicit_work:
+        report = convert(second_manifest, second_out, **second_options, **OPTIONS)
+        assert (report.n_staged, report.n_reused) == (1, 0)
+        np.testing.assert_array_equal(stored(second_out), second_pixels[np.newaxis])
+    else:
+        with pytest.raises(FileExistsError, match="stores are immutable"):
+            convert(second_manifest, second_out, **OPTIONS)
+
+
+KILLED_CONVERT = """
+import json
+import os
+import signal
+import sys
+
+from chronozarr import schema
+from chronozarr.convert import convert
+
+
+def die(self):
+    if hasattr(signal, "SIGKILL"):
+        os.kill(os.getpid(), signal.SIGKILL)
+    os._exit(9)  # abrupt exit without cleanup on Windows
+
+
+schema.RootAttrs.to_attrs = die
+convert(sys.argv[1], sys.argv[2], **json.loads(sys.argv[3]))
+"""
+
+
+def kill_a_conversion_while_it_encodes(source: Path, out: Path, **options: Any) -> Path:
+    """Run a conversion in another process and end that process, with no cleanup, where its
+    encode would write the root attributes. Returns the work directory that it leaves."""
+    command = [sys.executable, "-c", KILLED_CONVERT, str(source), str(out), json.dumps(options)]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+    killed = -signal.SIGKILL if hasattr(signal, "SIGKILL") else 9
+    assert result.returncode == killed, result.stderr
+    assert not out.exists()
+    return Path(options.get("work_dir", out.parent / f"{out.name}.convert-work"))
+
+
+def write_bare_group(out: Path) -> None:
+    """The first things an encode writes: the root group and a level group, without attributes."""
+    zarr.open_group(str(out), mode="w", zarr_format=3).create_group("0")
+
+
+def leave_legacy_unfinished_encode(source: Path, out: Path, **options: Any) -> Path:
+    """Stage real timesteps and reproduce the two records an old converter left after a kill."""
+
+    class StopBeforeEncoding(Exception):
+        pass
+
+    def stop_when_staged(done, total):
+        if done == total:
+            raise StopBeforeEncoding
+
+    with pytest.raises(StopBeforeEncoding):
+        convert(source, out, progress=stop_when_staged, **options)
+    work = Path(options.get("work_dir", out.parent / f"{out.name}.convert-work"))
+    run = "29feae2f3e514a6986a7b83483afb567"
+    group = zarr.open_group(str(out), mode="w", zarr_format=3)
+    group.attrs["_chronozarr_encoding_run"] = run
+    group.create_group("0")
+    (work / "encoding").write_text(json.dumps({"output": str(out.resolve()), "run": run}))
+    return work
+
+
+@pytest.fixture(scope="module")
+def unfinished_encode(tmp_path_factory) -> tuple[Path, Path, Path]:
+    """One legacy interrupted encode for the tests that inspect copies of its output and work."""
+    path = tmp_path_factory.mktemp("interrupted-convert")
+    tif = write_tif(path / "source.tif", make_truth(1, 1, 8, 8)[0])
+    manifest = write_csv(path / "m.csv", [tif], dates=DATES[:1])
+    out = path / "store"
+    work = leave_legacy_unfinished_encode(manifest, out, **OPTIONS)
+    return manifest, out, work
+
+
+def copy_unfinished_encode(
+    tmp_path: Path, unfinished_encode: tuple[Path, Path, Path], work_dir: Path | None = None
+) -> tuple[Path, Path, Path]:
+    manifest, original, staging = unfinished_encode
+    out = shutil.copytree(original, tmp_path / "store")
+    work = shutil.copytree(staging, work_dir or tmp_path / "store.convert-work")
+    marker = work / "encoding"
+    record = json.loads(marker.read_text())
+    record["output"] = str(out.resolve())
+    marker.write_text(json.dumps(record))
+    return manifest, out, work
+
+
+IMMUTABLE = "{out} already exists and is not empty; stores are immutable, write to a new path"
+UNFINISHED = (
+    "{out} holds an unfinished store: the run that wrote it was interrupted, or is still "
+    "running. If no conversion is running, delete {out} and "
+)
+
+
+def reusable_message(out: Path, work: Path) -> str:
+    return UNFINISHED.format(out=out) + (
+        f"rerun with --resume --work-dir {work} to reuse the timesteps staged in {work}."
+    )
+
+
+def delete_both_message(out: Path, work: Path) -> str:
+    return UNFINISHED.format(out=out) + f"{work}, then rerun the conversion."
+
+
+def not_reusable_message(out: Path, work: Path) -> str:
+    return delete_both_message(out, work)[:-1] + (
+        f": the timesteps staged in {work} cannot be reused for this source."
+    )
+
+
+def test_a_legacy_conversion_killed_while_encoding_leaves_a_store_that_the_next_run_names(
+    tmp_path, tifs, truth
+):
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "store"
+    work = leave_legacy_unfinished_encode(manifest, out, **OPTIONS)
+    assert len(list(work.glob("t*.npy"))) == N_TIME
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, **OPTIONS)
+    assert str(error.value) == reusable_message(out, work)
+    assert (out / "zarr.json").is_file()
+
+    shutil.rmtree(out)
+    report = convert(manifest, out, resume=True, work_dir=work, **OPTIONS)
+    assert (report.n_staged, report.n_reused) == (0, N_TIME)
+    assert not work.exists()
+    assert (
+        "_chronozarr_encoding_run" not in json.loads((out / "zarr.json").read_text())["attributes"]
+    )
+    np.testing.assert_array_equal(stored(out), truth)
+
+
+def test_a_conversion_killed_while_encoding_can_resume_without_an_output_to_delete(
+    tmp_path, tifs, truth
+):
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "store"
+    work = kill_a_conversion_while_it_encodes(manifest, out, **OPTIONS)
+    (lock,) = tmp_path.glob(".chronozarr-convert-*.lock")
+    lock_inode = lock.stat().st_ino
+    assert len(list(work.glob("t*.npy"))) == N_TIME
+    assert list(work.glob(".chronozarr-encode-*/store/zarr.json"))
+
+    report = convert(manifest, out, resume=True, **OPTIONS)
+    assert (report.n_staged, report.n_reused) == (0, N_TIME)
+    np.testing.assert_array_equal(stored(out), truth)
+    assert not work.exists()
+    assert lock.stat().st_ino == lock_inode
+
+
+def test_convert_resumes_staged_timesteps_after_late_encode_failure(
+    tmp_path, tifs, truth, monkeypatch
+):
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "store"
+    work = tmp_path / "store.convert-work"
+
+    def fail(_):
+        raise OSError("could not collect encode statistics")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(importlib.import_module("chronozarr.encode"), "_tree_stats", fail)
+        with pytest.raises(OSError, match="could not collect encode statistics") as error:
+            convert(manifest, out, **OPTIONS)
+    assert not out.exists()
+    assert len(list(work.glob("t*.npy"))) == N_TIME
+    assert not list(work.glob(".chronozarr-encode-*"))
+    assert any("rerun with --resume" in note for note in error.value.__notes__)
+
+    report = convert(manifest, out, resume=True, **OPTIONS)
+    assert (report.n_staged, report.n_reused) == (0, N_TIME)
+    np.testing.assert_array_equal(stored(out), truth)
+    assert not work.exists()
+
+
+def test_resume_refuses_a_geotiff_replaced_at_the_same_path(tmp_path):
+    original = np.full((1, 8, 8), 100, dtype=np.uint16)
+    updated = np.full_like(original, 200)
+    tif = write_tif(tmp_path / "source.tif", original)
+    manifest = write_csv(tmp_path / "m.csv", [tif], dates=DATES[:1])
+    out = tmp_path / "store"
+    work = kill_a_conversion_while_it_encodes(manifest, out, **OPTIONS)
+
+    before = tif.stat()
+    replacement = write_tif(tmp_path / "replacement.tif", updated)
+    os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+    replacement.replace(tif)
+    assert tif.stat().st_size == before.st_size
+    assert tif.stat().st_mtime_ns == before.st_mtime_ns
+
+    with pytest.raises(ValueError, match="different input or options"):
+        convert(manifest, out, resume=True, **OPTIONS)
+    with pytest.raises(FileExistsError, match="different input or options"):
+        convert(manifest, out, **OPTIONS)
+    np.testing.assert_array_equal(np.load(work / "t000000.npy"), original)
+
+    report = convert(manifest, out, work_dir=tmp_path / "fresh", **OPTIONS)
+    assert (report.n_staged, report.n_reused) == (1, 0)
+    np.testing.assert_array_equal(stored(out), updated[np.newaxis])
+
+
+def test_resume_refuses_a_replaced_geotiff_mask_sidecar(tmp_path):
+    values = np.full((1, 8, 8), 100, dtype=np.uint16)
+    tif = write_tif(tmp_path / "source.tif", values)
+    mask = np.full((8, 8), 255, dtype=np.uint8)
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=False), rasterio.open(tif, "r+") as dst:
+        dst.write_mask(mask)
+    manifest = write_csv(tmp_path / "m.csv", [tif], dates=DATES[:1])
+    out = tmp_path / "store"
+    work = kill_a_conversion_while_it_encodes(manifest, out, **OPTIONS)
+    before = tif.stat()
+
+    replacement = write_tif(tmp_path / "replacement.tif", values)
+    mask[0, 0] = 0
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=False), rasterio.open(replacement, "r+") as dst:
+        dst.write_mask(mask)
+    replacement.with_suffix(".tif.msk").replace(tif.with_suffix(".tif.msk"))
+    assert tif.stat().st_ctime_ns == before.st_ctime_ns
+
+    with pytest.raises(ValueError, match="different input or options"):
+        convert(manifest, out, resume=True, **OPTIONS)
+    assert np.load(work / "m000000.npy")[0, 0] == 1
+
+    convert(manifest, out, work_dir=tmp_path / "fresh", **OPTIONS)
+    np.testing.assert_array_equal(chronozarr.open_store(out).read_mask(0), mask != 0)
+
+
+@pytest.mark.parametrize("change_at", ["after sampling", "during staging"])
+def test_convert_refuses_a_geotiff_changed_during_conversion(tmp_path, change_at):
+    tif = write_tif(tmp_path / "source.tif", np.full((1, 8, 8), 100, dtype=np.uint16))
+    manifest = write_csv(tmp_path / "m.csv", [tif], dates=DATES[:1])
+    out = tmp_path / "store"
+
+    def replace_source():
+        write_tif(tif, np.full((1, 8, 8), 200, dtype=np.uint16))
+
+    def replace_after_staging(done, _total):
+        if done == 1:
+            replace_source()
+
+    with pytest.raises(ValueError, match="changed during conversion") as error:
+        convert(
+            manifest,
+            out,
+            on_plan=(lambda _: replace_source()) if change_at == "after sampling" else None,
+            progress=replace_after_staging if change_at == "during staging" else None,
+            **OPTIONS,
+        )
+    assert not out.exists()
+    if change_at == "during staging":
+        assert "fresh work directory" in "\n".join(error.value.__notes__)
+
+
+def test_a_killed_conversion_of_a_zarr_source_says_to_delete_the_store_and_its_work_directory(
+    tmp_path, truth
+):
+    source = tmp_path / "in.zarr"
+    dataset_from(truth).assign_coords(band=[1, 2]).to_zarr(
+        source, zarr_format=3, consolidated=False
+    )
+    out = tmp_path / "store"
+    options: dict[str, Any] = {**OPTIONS, "crs": CRS}
+    work = leave_legacy_unfinished_encode(source, out, **options)
+    # The same refusal whatever the rerun passes: nothing, the resume this source cannot have,
+    # or the fresh work directory that the refusal of resume asks for.
+    for rerun in ({}, {"resume": True}, {"work_dir": tmp_path / "fresh"}):
+        with pytest.raises(FileExistsError) as error:
+            convert(source, out, **options, **rerun)
+        assert str(error.value) == not_reusable_message(out, work)
+
+    shutil.rmtree(out)
+    shutil.rmtree(work)
+    report = convert(source, out, **options)
+    assert (report.n_staged, report.n_reused) == (N_TIME, 0)
+    assert stored(out).shape == truth.shape
+
+
+@pytest.mark.parametrize("new_source", ["geotiff", "zarr"])
+def test_an_unfinished_store_with_a_different_input_keeps_its_staged_timesteps(
+    tmp_path, unfinished_encode, new_source
+):
+    manifest, out, work = copy_unfinished_encode(tmp_path, unfinished_encode)
+    options: dict[str, Any] = dict(OPTIONS)
+    if new_source == "geotiff":
+        tif = write_tif(tmp_path / "other.tif", make_truth(1, 1, 8, 8)[0])
+        source = write_csv(tmp_path / "other.csv", [tif], dates=DATES[:1])
+    else:
+        source = tmp_path / "other.zarr"
+        attribute_less_dataset(source, consolidated=False)
+        options["crs"] = CRS
+
+    with pytest.raises(FileExistsError) as error:
+        convert(source, out, **options)
+    assert str(error.value) == UNFINISHED.format(out=out) + (
+        "rerun without --resume and set --work-dir to a new directory. "
+        f"Keep the staged timesteps in {work}."
+    )
+
+    out.rename(tmp_path / "interrupted")
+    report = convert(manifest, out, resume=True, work_dir=work, **OPTIONS)
+    assert (report.n_staged, report.n_reused) == (0, 1)
+    np.testing.assert_array_equal(stored(out), make_truth(1, 1, 8, 8))
+
+
+def test_the_record_names_the_output_however_its_path_is_written(
+    tmp_path, unfinished_encode, monkeypatch
+):
+    manifest, _, _ = copy_unfinished_encode(tmp_path, unfinished_encode)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, Path("store"), resume=True, **OPTIONS)
+    assert str(error.value) == reusable_message(Path("store"), Path("store.convert-work"))
+    assert not list(tmp_path.glob(".chronozarr-convert-*.lock"))
+
+
+def test_an_unfinished_store_names_the_explicit_work_directory_of_its_run(tmp_path, tifs):
+    explicit = tmp_path / "scratch"
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "store"
+    leave_legacy_unfinished_encode(manifest, out, work_dir=str(explicit), **OPTIONS)
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, work_dir=explicit, **OPTIONS)
+    assert str(error.value) == reusable_message(out, explicit)
+    # Without the work directory of that run, nothing records that the store is this run's.
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+
+
+def test_an_unfinished_store_whose_staged_timesteps_are_gone_says_to_delete_both(
+    tmp_path, unfinished_encode
+):
+    manifest, out, work = copy_unfinished_encode(tmp_path, unfinished_encode)
+    for staged in work.glob("t*.npy"):
+        staged.unlink()
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, **OPTIONS)
+    assert str(error.value) == delete_both_message(out, work)
+
+
+def test_a_root_without_the_run_id_is_refused_even_with_a_matching_path(
+    tmp_path, unfinished_encode
+):
+    manifest, out, _ = copy_unfinished_encode(tmp_path, unfinished_encode)
+    (out / "zarr.json").write_text(json.dumps({"zarr_format": 3, "node_type": "group"}))
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, resume=True, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+
+
+def test_a_bare_group_that_no_conversion_recorded_is_refused_as_not_empty(tmp_path, tifs):
+    out = tmp_path / "store"
+    write_bare_group(out)
+    with pytest.raises(FileExistsError) as error:
+        convert(write_csv(tmp_path / "m.csv", tifs), out, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+
+
+def test_a_conversion_that_failed_while_staging_records_no_encode(tmp_path, tifs, monkeypatch):
+    manifest, out, work = leave_an_interrupted_run(tmp_path, tifs, monkeypatch)
+    write_bare_group(out)
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, resume=True, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+    assert len(list(work.glob("t*.npy"))) == 3
+
+
+def test_a_work_directory_that_records_another_output_says_nothing_about_this_one(
+    tmp_path, unfinished_encode
+):
+    manifest, out, work = copy_unfinished_encode(tmp_path, unfinished_encode)
+    other = out.rename(tmp_path / "other")
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, other, work_dir=work, resume=True, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=other)
+
+
+CONSOLIDATED = {"kind": "inline", "must_understand": False, "metadata": {}}
+
+
+@pytest.mark.parametrize(
+    "root",
+    [
+        "not json",
+        "[]",
+        '{"attributes": "x"}',
+        {"zarr_format": 3, "node_type": "group", "attributes": {"title": "my data"}},
+        {"zarr_format": 3, "node_type": "array", "shape": [2], "attributes": {}},
+        {"zarr_format": 2, "node_type": "group", "attributes": {}},
+        {"node_type": "group", "attributes": {}},
+        {
+            "zarr_format": 3,
+            "node_type": "group",
+            "attributes": {},
+            "consolidated_metadata": CONSOLIDATED,
+        },
+    ],
+    ids=[
+        "not json",
+        "a list",
+        "attributes that are no object",
+        "foreign attributes",
+        "array root",
+        "zarr v2 format",
+        "no zarr_format",
+        "consolidated metadata",
+    ],
+)
+def test_with_an_encode_on_record_a_root_it_cannot_have_left_is_refused_as_not_empty(
+    tmp_path, unfinished_encode, root
+):
+    manifest, out, _ = copy_unfinished_encode(tmp_path, unfinished_encode)
+    root_file = out / "zarr.json"
+    if isinstance(root, str):
+        root_file.write_text(root)
+    else:
+        if isinstance(root.get("attributes"), dict):
+            root = {
+                **root,
+                "attributes": {
+                    **json.loads(root_file.read_text())["attributes"],
+                    **root["attributes"],
+                },
+            }
+        root_file.write_text(json.dumps(root))
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, resume=True, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+
+
+def attribute_less_dataset(path: Path, *, consolidated: bool) -> None:
+    a, _, c, _, e, f = TRANSFORM
+    times = make_times(3)
+    ds = xr.Dataset(
+        {"temp": (("time", "y", "x"), np.arange(3 * 4 * 5, dtype="float32").reshape(3, 4, 5))},
+        coords={
+            "time": times,
+            "y": f + e * (np.arange(4) + 0.5),
+            "x": c + a * (np.arange(5) + 0.5),
+        },
+    )
+    with warnings.catch_warnings():
+        # zarr-python warns that consolidated metadata is outside the Zarr v3 spec; this dataset
+        # is consolidated on purpose, as xarray writes one by default.
+        warnings.simplefilter("ignore", ZarrUserWarning)
+        ds.to_zarr(path, zarr_format=3, consolidated=consolidated)
+
+
+def test_a_failed_encode_does_not_claim_a_later_xarray_dataset_at_its_path(tmp_path, tifs):
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "store"
+    with pytest.raises(ValueError, match="chunk_size must be an even number"):
+        convert(manifest, out, chunk_size=3)
+    assert not out.exists()
+
+    attribute_less_dataset(out, consolidated=False)
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+    np.testing.assert_array_equal(
+        zarr.open_array(out, path="temp", mode="r")[:], np.arange(60).reshape(3, 4, 5)
+    )
+
+
+def test_a_killed_encode_does_not_claim_a_replacement_xarray_dataset(tmp_path, tifs):
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "store"
+    leave_legacy_unfinished_encode(manifest, out, **OPTIONS)
+    out.rename(tmp_path / "interrupted")
+    attribute_less_dataset(out, consolidated=False)
+
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+
+
+@pytest.mark.parametrize("consolidated", [True, False], ids=["consolidated", "unconsolidated"])
+def test_an_xarray_dataset_without_global_attributes_is_refused_as_not_empty(
+    tmp_path, tifs, consolidated
+):
+    out = tmp_path / "dataset.zarr"
+    attribute_less_dataset(out, consolidated=consolidated)
+    with pytest.raises(FileExistsError) as error:
+        convert(write_csv(tmp_path / "m.csv", tifs), out, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+
+
+def test_an_xarray_datatree_whose_children_look_like_levels_is_refused_as_not_empty(
+    tmp_path, tifs
+):
+    a, _, c, _, e, f = TRANSFORM
+    level = xr.Dataset(
+        {"data": (("time", "y", "x"), np.zeros((3, 4, 5), dtype="float32"))},
+        coords={
+            "time": make_times(3),
+            "y": f + e * (np.arange(4) + 0.5),
+            "x": c + a * (np.arange(5) + 0.5),
+        },
+    )
+    out = tmp_path / "tree.zarr"
+    tree = xr.DataTree.from_dict({"/0": level, "/1": level})
+    tree.to_zarr(out, zarr_format=3, consolidated=False)
+    with pytest.raises(FileExistsError) as error:
+        convert(write_csv(tmp_path / "m.csv", tifs), out, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+
+
+@pytest.mark.parametrize("consolidated", [True, False], ids=["consolidated", "unconsolidated"])
+def test_pointing_the_output_at_the_source_dataset_is_refused_as_not_empty(tmp_path, consolidated):
+    path = tmp_path / "dataset.zarr"
+    attribute_less_dataset(path, consolidated=consolidated)
+    with pytest.raises(FileExistsError) as error:
+        convert(path, path, crs=CRS, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=path)
+
+
+def test_a_finished_store_is_still_refused_as_immutable(tmp_path, tifs):
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "store"
+    convert(manifest, out, **OPTIONS)
+    with pytest.raises(FileExistsError) as error:
+        convert(manifest, out, **OPTIONS)
+    assert str(error.value) == IMMUTABLE.format(out=out)
+
+
 def test_custom_work_dir_is_used_and_cleaned(tmp_path, tifs):
     work = tmp_path / "scratch" / "stage"
     convert(write_csv(tmp_path / "m.csv", tifs), tmp_path / "store", work_dir=work, **OPTIONS)
     assert not work.exists()
+
+
+@pytest.mark.parametrize("nested", ["output", "work", "both"])
+def test_convert_refuses_overlapping_work_and_output_before_writing(tmp_path, tifs, nested):
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    parent = tmp_path / "job"
+    work = parent / "work" if nested == "work" else parent
+    out = parent / "out" if nested == "output" else parent
+
+    with pytest.raises(ValueError, match=r"output .* and work directory .* must be separate"):
+        convert(manifest, out, work_dir=work, **OPTIONS)
+
+    assert not parent.exists()
+
+
+def test_convert_cleanup_preserves_a_store_that_replaced_staging(tmp_path, monkeypatch):
+    pixels = np.full((1, 1, 8, 8), 100, dtype=np.uint16)
+    manifest = write_csv(
+        tmp_path / "m.csv", [write_tif(tmp_path / "input.tif", pixels[0])], DATES[:1]
+    )
+    work = tmp_path / "stage"
+    out = tmp_path / "out"
+    unrelated = tmp_path / "unrelated"
+    preserved = tmp_path / "moved-stage"
+    chronozarr.encode(make_da(pixels + 800), unrelated, **OPTIONS)
+    rename, remove = os.rename, shutil.rmtree
+
+    def install_unrelated_store(path):
+        if Path(path) == work and unrelated.exists():
+            rename(work, preserved)
+            rename(unrelated, work)
+
+    def rename_with_replacement(src, dst, *args, **kwargs):
+        install_unrelated_store(src)
+        return rename(src, dst, *args, **kwargs)
+
+    def remove_with_replacement(path, *args, **kwargs):
+        install_unrelated_store(path)
+        return remove(path, *args, **kwargs)
+
+    # Hook either directory operation so the existing recursive cleanup and the private
+    # detach are both tested with the replacement arriving just before their first action.
+    monkeypatch.setattr(os, "rename", rename_with_replacement)
+    monkeypatch.setattr(shutil, "rmtree", remove_with_replacement)
+    report = convert(manifest, out, work_dir=work, **OPTIONS)
+
+    assert report.n_staged == 1
+    assert preserved.is_dir()
+    assert not unrelated.exists()
+    np.testing.assert_array_equal(stored(work), pixels + 800)
+    np.testing.assert_array_equal(stored(out), pixels)
+
+
+@pytest.mark.parametrize("name", ["independent", ".chronozarr-encode-independent"])
+def test_convert_cleanup_preserves_a_store_added_inside_staging(tmp_path, tifs, truth, name):
+    work = tmp_path / "stage"
+    unrelated = work / name
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "out"
+
+    def publish_separate_store(done, total):
+        if done == total:
+            chronozarr.encode(make_da(truth + 1), unrelated, **OPTIONS)
+
+    report = convert(manifest, out, work_dir=work, progress=publish_separate_store, **OPTIONS)
+    assert report.n_staged == N_TIME
+    np.testing.assert_array_equal(stored(unrelated), truth + 1)
+    np.testing.assert_array_equal(stored(out), truth)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="directory symlinks can require privileges on Windows")
+def test_convert_refuses_an_output_parent_retargeted_while_staging(tmp_path, tifs, truth):
+    original, other = tmp_path / "first", tmp_path / "second"
+    original.mkdir()
+    other.mkdir()
+    alias, replacement = tmp_path / "current", tmp_path / "replacement"
+    alias.symlink_to(original, target_is_directory=True)
+    replacement.symlink_to(other, target_is_directory=True)
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+
+    def retarget(done, total):
+        if done == total:
+            replacement.replace(alias)
+
+    with pytest.raises(FileExistsError, match="output destination changed"):
+        convert(manifest, alias / "store", progress=retarget, **OPTIONS)
+
+    assert not (original / "store").exists()
+    assert not (other / "store").exists()
+    assert len(list((original / "store.convert-work").glob("t*.npy"))) == N_TIME
+    assert not (other / "store.convert-work").exists()
+    alias.unlink()
+    alias.symlink_to(original, target_is_directory=True)
+    report = convert(manifest, alias / "store", resume=True, **OPTIONS)
+    assert (report.n_staged, report.n_reused) == (0, N_TIME)
+    np.testing.assert_array_equal(stored(original / "store"), truth)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires standard POSIX long filename limits")
+@pytest.mark.parametrize("explicit", [False, True])
+def test_convert_lock_supports_long_output_and_work_names(tmp_path, tifs, truth, explicit):
+    if os.pathconf(tmp_path, "PC_NAME_MAX") < 254:
+        pytest.skip("filesystem does not support the long names tested here")
+    out = tmp_path / ("store" if explicit else "o" * 233)
+    work = tmp_path / ("w" * 254) if explicit else out.with_name(out.name + ".convert-work")
+    manifest = write_csv(tmp_path / "m.csv", tifs[:1], DATES[:1])
+    options = {"work_dir": work} if explicit else {}
+
+    report = convert(manifest, out, **options, **OPTIONS)
+
+    assert report.n_staged == 1
+    np.testing.assert_array_equal(stored(out), truth[:1])
+    assert not work.exists()
+
+
+def test_convert_work_lock_matches_case_and_unicode_aliases(tmp_path):
+    work = tmp_path / ("w" * 240 + "é")
+    alias = tmp_path / ("W" * 240 + "E\N{COMBINING ACUTE ACCENT}")
+    try:
+        work.mkdir()
+    except OSError as error:
+        pytest.skip(f"filesystem does not support the long name tested here: {error}")
+    if not alias.exists() or not alias.samefile(work):
+        pytest.skip("this filesystem distinguishes the two spellings")
+
+    with (
+        _work_lock(work.resolve()),
+        pytest.raises(BlockingIOError, match="another conversion is already using"),
+        _work_lock(alias.resolve()),
+    ):
+        pytest.fail("both aliases acquired the same work directory")
 
 
 def test_plan_lines_mention_warped_timesteps(tmp_path, tifs, truth):

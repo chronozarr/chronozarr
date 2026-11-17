@@ -14,6 +14,9 @@ export async function openViewer(page, servers, storeUrl) {
   return timings;
 }
 
+/** Wait until the viewer has nothing pending (no store opening, no render queued); returns the status `viewer.whenSettled()` resolves with. */
+export const waitForSettled = (page) => page.evaluate(() => window.chronozarr.viewer.whenSettled());
+
 export const waitForPaintedTime = (page, t) => page.waitForFunction((want) => window.chronozarr.viewer.paintedT === want, t);
 
 /** Level-0 pixels of the 200 x 200 stores that the GPU/CPU comparison reads: the nodata columns, cell edges and corners. */
@@ -41,18 +44,12 @@ export const SAMPLE_PIXELS = [
 export async function captureFrame(page, pixels = SAMPLE_PIXELS) {
   // Manual steps less than 300 ms apart are a scrub, and a scrub draws a coarser level until it ends, 300 ms after its last step.
   // Three key presses of a test are one on a page that answers quickly (the built viewer, a fast runner), so the frame to compare
-  // with the CPU render is the one the viewer settles on once the scrub is over: wait until the level it draws stops changing.
+  // with the CPU render is the one the viewer settles on once the scrub is over: end the scrub, then wait until the viewer's
+  // status says its frame is settled (or cannot be had) and no store is opening.
   await page.evaluate(async () => {
     const { viewer } = window.chronozarr;
     viewer.endScrub();
-    let previous = null;
-    let steady = 0;
-    for (const started = performance.now(); steady < 3 && performance.now() - started < 5000; ) {
-      await new Promise((resolve) => setTimeout(resolve, 40));
-      const { lod } = viewer.renderNow();
-      steady = lod === previous ? steady + 1 : 0;
-      previous = lod;
-    }
+    await viewer.whenSettled();
   });
   return page.evaluate(
     ({ pixels, background }) => {

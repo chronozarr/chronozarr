@@ -12,7 +12,7 @@ chronozarr is a Zarr v3 layout convention for raster time series, with a Python 
 - The grid is the native projected CRS (for example UTM), north up. Stored data is not Web Mercator.
 - A store is static files. Hosting needs no server: a bucket or CDN with CORS is enough.
 
-Depth: https://chronozarr.org/llms.txt lists every page, https://chronozarr.org/llms-full.txt joins them, and each page is Markdown at `https://chronozarr.org/<route>.md`. The routes this file cites: `/quickstart.md`, `/guides/convert.md`, `/guides/preview.md`, `/guides/share.md`, `/guides/publish.md`, `/guides/analyze.md`, `/guides/append.md`, `/guides/sentinel-2.md`, `/guides/png-frames.md`, `/guides/notebooks.md`, `/guides/private.md`, `/guides/embedding.md`, `/guides/viewer-distribution.md`, `/guides/hosting-requirements.md`, `/guides/hosting-providers.md`, `/reference/cli.md`, `/reference/python.md`, `/specification.md`, `/troubleshooting.md`.
+Depth: https://chronozarr.org/llms.txt lists every page, https://chronozarr.org/llms-full.txt joins them, and each page is Markdown at `https://chronozarr.org/<route>.md`. The routes this file cites: `/quickstart.md`, `/guides/convert.md`, `/guides/preview.md`, `/guides/share.md`, `/guides/publish.md`, `/guides/analyze.md`, `/guides/append.md`, `/guides/sentinel-2.md`, `/guides/png-frames.md`, `/guides/notebooks.md`, `/guides/private.md`, `/guides/embedding.md`, `/viewer.md`, `/guides/viewer-distribution.md`, `/guides/hosting-requirements.md`, `/guides/hosting-providers.md`, `/reference/cli.md`, `/reference/python.md`, `/specification.md`, `/troubleshooting.md`.
 
 ## Install
 
@@ -65,6 +65,7 @@ Extras: `geo` (rasterio: GeoTIFF/COG input, `export-cog`, `stac`; pyproj: `link 
 | Bands the viewer's products do not find (True color, NDVI, ...) | `chronozarr bands STORE`, then `chronozarr bands STORE --band-role b4=red,b8=nir` (also `--band-role` on `convert` and `encode`) |
 | A private store | Read `/guides/private.md`; a viewer link does not gate access |
 | The viewer in a web page | `/guides/embedding.md`; self-hosted viewer: `/guides/viewer-distribution.md` |
+| A browser script, test or agent that drives the viewer | Open `?store=URL`, wait for `window.chronozarr.ready`, then `await window.chronozarr.viewer.whenSettled()`. It resolves with `{store, frame, playback, error, ...}` once the frame of the timestep asked for is drawn (`frame` is `settled`, or `unavailable` when its chunks failed) or when an open fails (`store` is `failed`, `frame` is `none`). The `data-frame` attribute of `<html>` is that frame's outcome but does not turn to `loading` while a render is queued, so await `whenSettled()` after changing the view, then read it. An iframe host reads the `chronozarr:status` message. See `/viewer.md#automating-the-viewer` |
 | An error message | `/troubleshooting.md` |
 
 ## Read in Python

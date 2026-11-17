@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import re
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import wraps
 from pathlib import Path
@@ -83,6 +84,55 @@ _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
 
+_FileVersion = tuple[int, int, int, int, int]
+_GDAL_SUBDATASET = re.compile(r"^[A-Za-z][A-Za-z0-9_]+:")
+
+
+class RasterSourceChangedError(ValueError):
+    """A local raster or one of its dependencies changed after it was opened."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(f"{path}: source file changed during conversion")
+
+
+def _local_path(name: str) -> Path | None:
+    if "://" in name or name.startswith("/vsi") or _GDAL_SUBDATASET.match(name):
+        return None
+    return Path(name).absolute()
+
+
+def _file_version(path: Path) -> _FileVersion:
+    stat = path.stat()
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+def _raster_file_versions(uri: str, src: Any) -> dict[str, _FileVersion]:
+    """The local source and its GDAL dependencies, including external masks and world files."""
+    path = _local_path(uri)
+    if path is None and not uri.startswith("file://"):
+        return {}  # Leave remote reads to GDAL. It reports real paths for file:// inputs.
+    files = {p for name in src.files if (p := _local_path(name)) is not None}
+    if path is not None:
+        files.add(path)
+    versions = {}
+    for file in sorted(files):
+        try:
+            versions[str(file)] = _file_version(file)
+        except OSError as exc:
+            raise RasterSourceChangedError(str(file)) from exc
+    return versions
+
+
+def _check_file_versions(versions: dict[str, _FileVersion]) -> None:
+    for path, before in versions.items():
+        try:
+            after = _file_version(Path(path))
+        except OSError as exc:
+            raise RasterSourceChangedError(path) from exc
+        if before != after:
+            raise RasterSourceChangedError(path)
+
+
 def _frame_grid(src: Any, crs: str | None, bounds: Bounds | None) -> Grid:
     """The grid of one opened frame: its own CRS and geotransform, `crs` standing in for a
     missing CRS, or the grid `bounds` gives a frame that has no geotransform."""
@@ -124,6 +174,7 @@ def _frame_grid(src: Any, crs: str | None, bounds: Bounds | None) -> Grid:
 @dataclass(frozen=True)
 class _CogHeader:
     dataset: str  # what GDAL opens to read it: the file, the raster in a zip or a subdataset
+    files: dict[str, _FileVersion]
     driver: str  # GDAL driver short name: GTiff, PNG, ...
     grid: Grid
     own_grid: bool  # the file carries its own CRS and geotransform (else `grid` came from options)
@@ -142,6 +193,17 @@ class _CogHeader:
     @property
     def count(self) -> int:
         return len(self.data_indexes)
+
+
+@contextmanager
+def _open_planned_raster(uri: str, header: _CogHeader) -> Iterator[Any]:
+    import rasterio
+
+    _check_file_versions(header.files)
+    with rasterio.Env(**_gdal_env(header.dataset)), rasterio.open(header.dataset) as src:
+        yield src
+        if _raster_file_versions(uri, src) != header.files:
+            raise RasterSourceChangedError(uri)
 
 
 def _has_local_tiff_mask(uri: str) -> bool:
@@ -190,6 +252,12 @@ def _read_header(
     import rasterio
     from rasterio.enums import ColorInterp, Interleaving, MaskFlags
 
+    path = _local_path(uri)
+    try:
+        before = _file_version(path) if path is not None else None
+    except OSError:
+        # Let GDAL give its normal diagnostic if the source is missing or cannot be opened.
+        before = None
     try:
         with opened(uri, variable, _gdal_env) as (src, dataset, subdataset):
             if src.driver == "PNG" and ColorInterp.palette in src.colorinterp:
@@ -221,8 +289,12 @@ def _read_header(
                 _scaling(float(src.scales[i - 1]), float(src.offsets[i - 1]), f"band {i}")
                 for i in indexes
             ]
+            files = _raster_file_versions(uri, src)
+            if path is not None and before is not None and files[str(path)] != before:
+                raise RasterSourceChangedError(uri)
             return _CogHeader(
                 dataset=dataset,
+                files=files,
                 driver=src.driver,
                 grid=grid,
                 own_grid=src.crs is not None and not src.transform.is_identity,
@@ -533,6 +605,11 @@ class CogManifestSource(Source):
         headers = [h for _, h in good]
         self._headers = headers
         self._tile_headers = dict(good)
+        self._file_versions: dict[str, _FileVersion] = {}
+        for header in headers:
+            for path, version in header.files.items():
+                if self._file_versions.setdefault(path, version) != version:
+                    raise RasterSourceChangedError(path)
         if self._layout is not None:
             self.times = list(self._layout.times)
         if all(h.driver == "PNG" for h in headers):
@@ -847,10 +924,15 @@ class CogManifestSource(Source):
             *(f"  {show_time(e.time)}  {e.uri}" for e in self.entries),
         ]
 
+    def check_source_files(self) -> None:
+        _check_file_versions(self._file_versions)
+
     def fingerprint(self) -> Any:
+        self.check_source_files()
         return {
             "kind": "manifest",
             "entries": [[e.uri, str(e.time)] for e in self.entries],
+            **({"local_files": self._file_versions.copy()} if self._file_versions else {}),
             **(
                 {"band_indexes": [list(h.data_indexes) for h in self._headers]}
                 if self._band_series is not None
@@ -889,7 +971,7 @@ class CogManifestSource(Source):
         data = np.empty((info.n_band, grid.height, grid.width), dtype=info.dtype)
         valid = np.empty((grid.height, grid.width), dtype=np.uint8) if info.mask else None
         try:
-            with rasterio.Env(**_gdal_env(header.dataset)), rasterio.open(header.dataset) as src:
+            with _open_planned_raster(entry.uri, header) as src:
                 if t in self.warped:
                     assert valid is not None
                     self._read_warped(src, header, data, valid)
@@ -921,10 +1003,7 @@ class CogManifestSource(Source):
         for uri, window in tiles:
             header = self._tile_headers[uri]
             try:
-                with (
-                    rasterio.Env(**_gdal_env(header.dataset)),
-                    rasterio.open(header.dataset) as src,
-                ):
+                with _open_planned_raster(uri, header) as src:
                     for top in range(0, window.height, self.chunk_size):
                         rows = min(self.chunk_size, window.height - top)
                         read_window = ((top, top + rows), (0, window.width))

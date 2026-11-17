@@ -56,3 +56,15 @@ A local run of either runner refuses to start when the 1-minute load is above ha
 node js/support/gate-bench/store.mjs /tmp/gates/store-long --times 48
 node js/support/gate-bench/link.mjs --base /tmp/gates/viewers/base --head /tmp/gates/viewers/head --store /tmp/gates/store-long --out /tmp/gates/link.json
 ```
+
+## Lifecycles
+
+The long-lived objects of the viewer, the reader, the embed and the map layer keep their mode in one named state, with a table of the moves it accepts (`js/chronozarr/machine.js`). A move the table does not list throws.
+
+Find the tables with `rg -n "new Machine\(" js`.
+
+A new mode is a new state in the table, not a new flag or a nullable field next to it.
+
+The per-store state of the viewer is reset where its session ends, not where the next store opens.
+
+The viewer publishes one status (`viewer.status`, `data-*` attributes on `<html>`). A browser test that has changed the view waits with `waitForSettled(page)` from `js/e2e/viewer-helpers.js`, or with `await viewer.whenSettled()` in the page, and not with a sleep.
