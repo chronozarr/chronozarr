@@ -18,13 +18,13 @@ import zarr
 from zarr.codecs import BloscCodec, ZstdCodec
 
 from chronozarr import schema
+from chronozarr._consolidate import consolidate_zarr_metadata
 from chronozarr._local_output import (
     _prepare_destination,
     _prepare_store,
     _private_output,
     _publish_output,
 )
-from chronozarr._warning_scope import consolidate_zarr_metadata
 from chronozarr._writer import (
     DEFAULT_CELLS_IN_FLIGHT,
     VOLATILITY_SCALE,
@@ -363,7 +363,7 @@ def _write_store(
     )
     datasets = tuple(LevelRef(str(k), layout.crs.code) for k in range(len(layout.shapes)))
     root.attrs.put(RootAttrs(meta, datasets).to_attrs())
-    consolidate_zarr_metadata(str(out))
+    consolidate_zarr_metadata(out)
 
     total_bytes, n_files = _tree_stats(out)
     return EncodeReport(

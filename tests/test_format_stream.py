@@ -12,9 +12,8 @@ import subprocess
 import sys
 import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
-from itertools import count
 from pathlib import Path
-from threading import Barrier, Event
+from threading import Barrier
 from typing import Any
 
 import numpy as np
@@ -198,35 +197,20 @@ def test_competing_encodes_publish_the_destination_once(tmp_path, empty_destinat
         path.mkdir()
     truth = make_truth(2, 1, 8, 8)
     candidates = [truth, truth + 1000]
-    right_before_spilling = Barrier(2)
-    second_consolidating = Event()
-    first_finished = Event()
-    attempts = count()
-    consolidate = importlib.import_module("zarr").consolidate_metadata
+    ready_to_publish = Barrier(2)
+    encode_module = importlib.import_module("chronozarr.encode")
+    publish = encode_module._publish_output
 
-    def consolidate_in_order(*args, **kwargs):
-        if next(attempts) == 0:
-            # If both encodes can change the warning filter at once, make the later scope
-            # stay open until the first has already restored the original filter.
-            second_consolidating.wait(timeout=1)
-        else:
-            second_consolidating.set()
-            assert first_finished.wait(10)
-        return consolidate(*args, **kwargs)
+    def publish_together(store, *args, **kwargs):
+        # Both encoders must finish their own private store before either can rename it.
+        assert (store / "zarr.json").is_file()
+        ready_to_publish.wait(timeout=15)
+        return publish(store, *args, **kwargs)
 
-    monkeypatch.setattr("zarr.consolidate_metadata", consolidate_in_order)
+    monkeypatch.setattr(encode_module, "_publish_output", publish_together)
 
     def encode_frames(frames):
-        def steps():
-            yield frames[0]
-            # Both calls passed the first check of the empty destination.
-            right_before_spilling.wait(timeout=10)
-            yield frames[1]
-
-        try:
-            return chronozarr.encode(steps(), path, chunk_size=CS, **_stream_kwargs(frames))
-        finally:
-            first_finished.set()
+        return chronozarr.encode(iter(frames), path, chunk_size=CS, **_stream_kwargs(frames))
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         jobs = [pool.submit(encode_frames, candidate) for candidate in candidates]
@@ -599,7 +583,8 @@ def test_encode_failure_during_consolidation_cleans_its_own_store(
     def fail(_):
         raise RuntimeError("consolidation failed")
 
-    monkeypatch.setattr("zarr.consolidate_metadata", fail)
+    encode_module = importlib.import_module("chronozarr.encode")
+    monkeypatch.setattr(encode_module, "consolidate_zarr_metadata", fail)
     with pytest.raises(RuntimeError, match="consolidation failed"):
         chronozarr.encode(make_da(make_truth(2, 1, 8, 8)), path, chunk_size=CS)
     if empty_destination:

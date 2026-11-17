@@ -12,6 +12,7 @@ import numpy as np
 import zarr
 
 from chronozarr import schema
+from chronozarr._consolidate import consolidate_zarr_metadata
 from chronozarr._convert_source import Grid, Source, SourceInfo, Step
 from chronozarr._local_output import (
     _prepare_destination,
@@ -19,7 +20,6 @@ from chronozarr._local_output import (
     _private_output,
     _publish_output,
 )
-from chronozarr._warning_scope import consolidate_zarr_metadata
 from chronozarr._writer import _mean_comparison, _shard_bytes
 from chronozarr.crs import Crs
 from chronozarr.encode import EncodeReport, LevelReport, _tree_stats
@@ -247,7 +247,7 @@ def migrate(
                 meta, tuple(schema.LevelRef(str(k), meta.crs) for k in range(len(summaries)))
             ).to_attrs()
         )
-        consolidate_zarr_metadata(str(store))
+        consolidate_zarr_metadata(store)
         problems = schema.validate(store)
         if problems:
             raise ValueError("migration validation failed: " + "; ".join(problems))

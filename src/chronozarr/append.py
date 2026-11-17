@@ -19,8 +19,8 @@ import xarray as xr
 import zarr
 
 from chronozarr import schema
+from chronozarr._consolidate import consolidate_zarr_metadata
 from chronozarr._file_lock import local_store_write_lock
-from chronozarr._warning_scope import consolidate_zarr_metadata
 from chronozarr._writer import (
     DEFAULT_CELLS_IN_FLIGHT,
     VOLATILITY_SCALE,
@@ -366,7 +366,7 @@ def _commit_metadata(
     # `multiscales` is not rewritten: it stays byte-identical (spec 8.3), so a store published
     # with `pixels_per_tile` keeps it.
     target.root.attrs.update({"chronozarr": updated.to_attrs()})
-    consolidate_zarr_metadata(str(target.path))
+    consolidate_zarr_metadata(target.path)
 
 
 # --- Entry point ---------------------------------------------------------------------------------

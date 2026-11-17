@@ -1024,14 +1024,17 @@ def test_dry_run_does_not_disrupt_concurrent_conversion_consolidation(tmp_path, 
         finally:
             dry_returned.set()
 
-    consolidate = zarr.consolidate_metadata
+    encode_module = importlib.import_module("chronozarr.encode")
+    consolidate = encode_module.consolidate_zarr_metadata
 
     def finish_dry_run_then_consolidate(*args, **kwargs):
         may_return.set()
         assert dry_returned.wait(15), "the dry run did not return"
         return consolidate(*args, **kwargs)
 
-    monkeypatch.setattr(zarr, "consolidate_metadata", finish_dry_run_then_consolidate)
+    monkeypatch.setattr(
+        encode_module, "consolidate_zarr_metadata", finish_dry_run_then_consolidate
+    )
     with warnings.catch_warnings():
         warnings.simplefilter("error", ZarrUserWarning)
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -1055,15 +1058,17 @@ def test_dry_run_does_not_disrupt_concurrent_conversion_consolidation(tmp_path, 
     np.testing.assert_array_equal(stored(out), values[None])
 
 
-def test_conversion_raster_open_can_log_to_an_encode_callback(tmp_path):
+@pytest.mark.parametrize("dispatch", ["inline", "worker-thread", "warp-worker"])
+def test_conversion_raster_open_can_log_to_a_writer_callback(tmp_path, dispatch):
     tif = write_tif(tmp_path / "scene.tif", make_truth(1, 1, 8, 8)[0])
     manifest = write_csv(tmp_path / "input.csv", [tif], dates=DATES[:1])
     outer, nested = tmp_path / "outer", tmp_path / "nested"
-    # A logging handler runs synchronously inside rasterio.open. A subprocess timeout
-    # keeps a self-wait in the writer from hanging the test process.
+    # A logging handler runs inside rasterio.open and waits for the write to finish.
+    # A subprocess timeout catches a deadlock on either thread.
     script = """
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 import warnings
 
@@ -1074,26 +1079,43 @@ from zarr.errors import ZarrUserWarning
 
 import chronozarr
 from chronozarr.convert import convert
-from tests.synthetic import make_da, make_truth
+from tests.synthetic import CRS, TRANSFORM, make_da, make_truth
 
-source, outer, nested = sys.argv[1:]
+source, outer, nested, dispatch = sys.argv[1:]
 logger = logging.getLogger("conversion-test.raster-open")
 original_open = rasterio.open
+logged = False
 
 
-class EncodeOnOpen(logging.Handler):
-    def emit(self, record):
+def write_nested():
+    if dispatch == "warp-worker":
+        a, b, c, d, e, f = TRANSFORM
+        report = convert(
+            source, nested, crs=CRS, transform=(a, b, c + a, d, e, f), shape=(8, 7),
+            resampling="nearest", chunk_size=8,
+        )
+        assert report.plan.warped == 1
+    else:
         chronozarr.encode(make_da(make_truth(1, 1, 8, 8) + 1000), nested, chunk_size=8)
 
 
-handler = EncodeOnOpen()
-logger.addHandler(handler)
+class WriteOnOpen(logging.Handler):
+    def emit(self, record):
+        if dispatch == "inline":
+            write_nested()
+        else:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                executor.submit(write_nested).result()
+
+
+logger.addHandler(WriteOnOpen())
 
 
 def logging_open(*args, **kwargs):
-    if handler in logger.handlers:
+    global logged
+    if not logged:
+        logged = True
         logger.warning("opening raster")
-        logger.removeHandler(handler)
         warnings.warn("raster filter remains active", NotGeoreferencedWarning)
     return original_open(*args, **kwargs)
 
@@ -1106,16 +1128,19 @@ with warnings.catch_warnings(action="error"):
             warnings.warn("caller still treats this as an error", category)
 """
     result = subprocess.run(
-        [sys.executable, "-c", script, str(manifest), str(outer), str(nested)],
+        [sys.executable, "-c", script, str(manifest), str(outer), str(nested), dispatch],
         capture_output=True,
         text=True,
         timeout=30,
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    for path, offset in [(outer, 0), (nested, 1000)]:
-        assert chronozarr.validate(path) == []
-        np.testing.assert_array_equal(stored(path), make_truth(1, 1, 8, 8) + offset)
+    truth = make_truth(1, 1, 8, 8)
+    assert chronozarr.validate(outer) == []
+    assert chronozarr.validate(nested) == []
+    np.testing.assert_array_equal(stored(outer), truth)
+    expected = truth[..., 1:] if dispatch == "warp-worker" else truth + 1000
+    np.testing.assert_array_equal(stored(nested), expected)
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="fork is POSIX only")
@@ -1130,13 +1155,13 @@ import warnings
 
 from rasterio.errors import NotGeoreferencedWarning
 
-from chronozarr._warning_scope import exclusive_warning_scope, raster_open_warnings
+from chronozarr._warning_scope import raster_warning_scope
 
 opened, release = Event(), Event()
 
 
 def hold_scope():
-    with raster_open_warnings():
+    with raster_warning_scope():
         opened.set()
         assert release.wait(20)
 
@@ -1149,7 +1174,7 @@ def in_child():
         strict = True
     else:
         strict = False
-    with exclusive_warning_scope():
+    with raster_warning_scope():
         assert strict, "the child kept the vanished thread's warning filter"
     signal.alarm(0)
 

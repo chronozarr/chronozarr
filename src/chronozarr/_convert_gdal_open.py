@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from chronozarr._convert_discover import ZIP_SUFFIX, zip_raster
-from chronozarr._warning_scope import raster_open_warnings
+from chronozarr._warning_scope import raster_warning_scope
 
 _HDF4_SIGNATURE = b"\x0e\x03\x13\x01"
 HDF4_DETAIL = (
@@ -184,5 +184,5 @@ def open_raster(name: str) -> Any:
     """Open a raster that may get its geotransform from the conversion's bounds."""
     import rasterio
 
-    with raster_open_warnings():
+    with raster_warning_scope():
         return rasterio.open(name)

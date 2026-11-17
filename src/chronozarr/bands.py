@@ -20,8 +20,8 @@ from pathlib import Path
 import zarr
 
 from chronozarr import schema
+from chronozarr._consolidate import consolidate_zarr_metadata
 from chronozarr._file_lock import local_store_write_lock
-from chronozarr._warning_scope import consolidate_zarr_metadata
 from chronozarr.schema import Band
 
 # STAC eo extension common names for bands. A store may carry any of them.
@@ -225,7 +225,7 @@ def _set_band_roles(path: Path, roles: Mapping[str, str | None]) -> tuple[Band, 
     had_consolidated = document.get("consolidated_metadata") is not None
     root.attrs.update({"chronozarr": replace(parsed.chronozarr, bands=bands).to_attrs()})
     if had_consolidated:
-        consolidate_zarr_metadata(str(path))
+        consolidate_zarr_metadata(path)
     return bands
 
 

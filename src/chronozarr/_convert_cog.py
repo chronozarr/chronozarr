@@ -57,7 +57,7 @@ from chronozarr._convert_tiles import (
     same_date_problems,
 )
 from chronozarr._convert_tiles import OPTION as TILES_OPTION
-from chronozarr._warning_scope import exclusive_warning_scope
+from chronozarr._warning_scope import raster_warning_scope
 from chronozarr.schema import Band, Transform
 
 GDAL_ENV = {
@@ -1086,8 +1086,8 @@ class CogManifestSource(Source):
         for output, band in zip(data, header.data_indexes, strict=True):
             source = src.read(band, out_dtype=working_dtype.name)
             source[source_invalid] = marker
-            # Rasterio opens temporary memory datasets using its own catch_warnings scope.
-            with exclusive_warning_scope():
+            # Keep the shared filter until Rasterio's internal memory-dataset scopes exit.
+            with raster_warning_scope():
                 reproject(
                     source=source,
                     destination=warped,
