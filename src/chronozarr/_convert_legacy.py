@@ -15,6 +15,12 @@ from zarr.errors import ZarrUserWarning
 
 from chronozarr import schema
 from chronozarr._convert_source import Grid, Source, SourceInfo, Step
+from chronozarr._local_output import (
+    _prepare_destination,
+    _prepare_store,
+    _private_output,
+    _publish_output,
+)
 from chronozarr._writer import _mean_comparison, _shard_bytes
 from chronozarr.crs import Crs
 from chronozarr.encode import EncodeReport, LevelReport, _tree_stats
@@ -114,22 +120,33 @@ class LegacySource(Source):
         return {"source": str(self.path.resolve()), "metadata": self.meta}
 
 
-def migrate(source: LegacySource, out: Path, progress: Any = None) -> EncodeReport:
-    """Copy plain chunks; rewrite encoded data without recomputing any overview pixels.
-
-    Compare every cell/time/band/plane and coordinate before returning success. Originals stay
-    untouched. A failed destination is removed, so it cannot be mistaken for a valid migration.
-    """
-    if out.exists() and any(out.iterdir()):
-        raise FileExistsError(f"{out} is not empty; choose a new destination")
-    if out.resolve() == source.path.resolve() or source.path.resolve() in out.resolve().parents:
+def migrate(
+    source: LegacySource, out: Path, progress: Any = None, *, _destination: Path | None = None
+) -> EncodeReport:
+    """Copy plain chunks and rewrite encoded data privately, keeping the original overviews."""
+    out = out.absolute()
+    destination = _prepare_destination(out, expected=_destination)
+    original = source.path.resolve()
+    if destination == original or original in destination.parents:
         raise ValueError("conversion destination must be outside the source store")
     summaries = []
     reports = []
     started = time.perf_counter()
-    try:
-        shutil.copytree(source.path, out, dirs_exist_ok=True)
-        root = zarr.open_group(out, mode="r+", use_consolidated=False)
+    with _private_output(destination, prefix=".chronozarr-migrate-") as scratch:
+        store = scratch / "store"
+        previous = _prepare_store(store, out, destination)
+        if previous is not None:
+            # Keep the pre-existing destination's root permissions. Its inherited rules are
+            # already on the private store, so they apply while the children are created.
+            for entry in source.path.iterdir():
+                target = store / entry.name
+                if entry.is_dir():
+                    shutil.copytree(entry, target)
+                else:
+                    shutil.copy2(entry, target)
+        else:
+            shutil.copytree(source.path, store)
+        root = zarr.open_group(store, mode="r+", use_consolidated=False)
         for k, original in enumerate(source.data):
             group = schema.get_group(root, str(k), "destination")
             # copytree carries v0.2 attributes; replace each node rather than merge them.
@@ -191,7 +208,7 @@ def migrate(source: LegacySource, out: Path, progress: Any = None) -> EncodeRepo
                     0,
                     0,
                     time.perf_counter() - started,
-                    _tree_stats(out / str(k))[0],
+                    _tree_stats(store / str(k))[0],
                 )
             )
         meta = schema.Chronozarr(
@@ -205,7 +222,7 @@ def migrate(source: LegacySource, out: Path, progress: Any = None) -> EncodeRepo
             provenance=source.meta.get("provenance"),
             levels=tuple(summaries),
             volatility_path=source.meta.get("volatility_path"),
-            shard_bytes=_shard_bytes(out, len(summaries), source.meta["variable"])
+            shard_bytes=_shard_bytes(store, len(summaries), source.meta["variable"])
             if source.data[0].shards is not None
             else None,
         )
@@ -233,24 +250,23 @@ def migrate(source: LegacySource, out: Path, progress: Any = None) -> EncodeRepo
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", ZarrUserWarning)
-            zarr.consolidate_metadata(out)
-        problems = schema.validate(out)
+            zarr.consolidate_metadata(store)
+        problems = schema.validate(store)
         if problems:
             raise ValueError("migration validation failed: " + "; ".join(problems))
         verify(source, root, progress)
-        size, files = _tree_stats(out)
+        size, files = _tree_stats(store)
         compression = schema._compression_config(source.data[0])
         config = compression.get("configuration", {})
-        return EncodeReport(
+        report = EncodeReport(
             tuple(reports),
             size,
             files,
             compression["name"],
             int(config.get("level", config.get("clevel", 0))),
         )
-    except BaseException:
-        shutil.rmtree(out, ignore_errors=True)
-        raise
+        _publish_output(store, out, destination, previous)
+    return report
 
 
 def verify(source: LegacySource, destination: zarr.Group, progress: Any = None) -> None:

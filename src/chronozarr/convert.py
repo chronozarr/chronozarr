@@ -188,12 +188,16 @@ from __future__ import annotations
 import enum
 import hashlib
 import json
+import os
 import shutil
+import stat
+import tempfile
 import time
+import unicodedata
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -301,8 +305,9 @@ from chronozarr._convert_xarray import (
     _parse_dims,
 )
 from chronozarr._file_lock import exclusive_file_lock
+from chronozarr._local_output import _prepare_destination
 from chronozarr.bands import assign_roles
-from chronozarr.encode import EncodeReport, _prepare_destination, encode
+from chronozarr.encode import EncodeReport, encode
 from chronozarr.icechunk import IcechunkInput, identity_note
 
 # Raw input bytes per second through `encode()` (spill, pyramid, zstd level 5, write). Measured
@@ -846,8 +851,12 @@ def _default_work_dir(out_path: Path) -> Path:
 
 def _work_lock(work: Path) -> AbstractContextManager[None]:
     """Lock next to the resolved work directory so its removal leaves the lock in place."""
+    # Bound the lock name even when the work name uses the full filesystem limit. Use the
+    # same key for alternate case and Unicode spellings on filesystems that alias them.
+    name = unicodedata.normalize("NFC", work.name.casefold())
+    key = hashlib.sha256(os.fsencode(name)).hexdigest()
     return exclusive_file_lock(
-        work.with_name(f".{work.name}.convert.lock"),
+        work.with_name(f".chronozarr-convert-{key}.lock"),
         conflict_message=f"another conversion is already using {work}. "
         "Retry after it finishes or specify a different --work-dir.",
     )
@@ -952,11 +961,78 @@ def _unfinished_store_error(out_path: Path, work: Path, plan: Plan | None) -> Fi
     )
 
 
-def _check_work_dir(work: Path, plan: Plan, resume: bool) -> None:
+def _same_work_dir(work: Path, original: os.stat_result) -> bool:
+    try:
+        current = work.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISDIR(current.st_mode) and os.path.samestat(current, original)
+
+
+def _only_staged_files(work: Path) -> bool:
+    try:
+        for entry in work.iterdir():
+            if entry.name in ("plan.json", _ENCODING_MARKER) and entry.is_file():
+                continue
+            if (
+                entry.name.startswith(".chronozarr-encode-")
+                and entry.is_dir()
+                and not entry.is_symlink()
+                and not (entry / "zarr.json").exists()
+            ):
+                continue  # private scratch left by a force-killed encoder
+            name = entry.name.removesuffix(".part")
+            if (
+                name.startswith(("t", "m"))
+                and name.endswith(".npy")
+                and name[1:-4].isdigit()
+                and entry.is_file()
+            ):
+                continue
+            return False
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _remove_staging(work: Path, original: os.stat_result) -> None:
+    """Detach verified staging before recursively removing it."""
+    if not _same_work_dir(work, original) or not _only_staged_files(work):
+        return
+    private = Path(tempfile.mkdtemp(prefix=".chronozarr-cleanup-", dir=work.parent))
+    detached = private / "work"
+    try:
+        try:
+            work.rename(detached)
+        except FileNotFoundError:
+            return
+        # Compare again inside the private directory. A concurrent rename can change what
+        # we detached, so comparing only before the move would not establish ownership.
+        if _same_work_dir(detached, original) and _only_staged_files(detached):
+            shutil.rmtree(detached)
+            return
+        if os.path.lexists(work):
+            raise FileExistsError(
+                f"{work} changed during cleanup. Its previous contents are at {detached}"
+            )
+        try:
+            detached.rename(work)
+        except OSError as error:
+            error.add_note(f"staging cleanup preserved the detached directory at {detached}")
+            raise
+    finally:
+        with suppress(OSError):
+            private.rmdir()
+
+
+def _check_work_dir(work: Path, plan: Plan, resume: bool) -> os.stat_result:
     plan_file = work / "plan.json"
     fingerprint = plan.source.fingerprint()
     digest = _plan_digest(fingerprint)
-    if work.exists() and any(work.iterdir()):
+    original = work.lstat() if work.exists() else None
+    if original is not None and not stat.S_ISDIR(original.st_mode):
+        raise FileExistsError(f"{work} is already occupied. Choose a separate work directory")
+    if original is not None and any(work.iterdir()):
         recorded_digest = _recorded_plan_digest(plan_file)
         if not resume:
             reuse = plan.source.staged_reuse
@@ -986,9 +1062,15 @@ def _check_work_dir(work: Path, plan: Plan, resume: bool) -> None:
                 f"{str(recorded_digest)[:12]} vs {digest[:12]}); delete it or rerun "
                 "without --resume in a fresh work directory"
             )
-        return
+        if not _same_work_dir(work, original):
+            raise FileExistsError(f"work directory changed during conversion: {work}")
+        return original
     work.mkdir(parents=True, exist_ok=True)
+    original = work.lstat()
+    if not stat.S_ISDIR(original.st_mode) or any(work.iterdir()):
+        raise FileExistsError(f"{work} changed before it could be used for staging")
     plan_file.write_text(json.dumps({"sha256": digest, "plan": fingerprint}))
+    return original
 
 
 def _stage(
@@ -1161,8 +1243,10 @@ def convert(
 
     `on_plan` receives the `Plan` (sizes, estimates) before any data is staged; `dry_run` stops
     there. Timesteps are staged under `work_dir` (default `<out>.convert-work` beside `out`):
-    it is removed on success and kept on failure. `resume=True` reuses its timesteps for
-    supported sources. For an ordinary Zarr input, choose a fresh work directory after a failure.
+    the two locations must be separate directories. Staging is kept if the conversion fails.
+    Success removes the work directory when it contains only conversion staging.
+    `resume=True` reuses its timesteps for supported sources. For an ordinary Zarr input, choose
+    a fresh work directory after a failure.
     A conversion sharing another active conversion's work directory raises `BlockingIOError`.
     `encode_options` go to `chronozarr.encode`: chunk_size, codec, level, volatility,
     shard, shard_time, n_lods, workers, provenance.
@@ -1206,6 +1290,9 @@ def convert(
         raise _immutable_output_error(out_path)
     if interrupted is not None and not any(interrupted.glob("t*.npy")):
         raise _unfinished_store_error(out_path, interrupted, None)
+    target = out_path.absolute()
+    destination = target if dry_run else target.resolve()
+    locked_work = work if dry_run else work.resolve()
     # With timesteps staged, plan before refusing an unfinished output so the advice can check
     # which plan produced them. Plan without `resume` in this case so the refusal names the
     # unfinished store even when the source itself does not support resume.
@@ -1237,6 +1324,16 @@ def convert(
         raise
     if interrupted is not None:
         raise _unfinished_store_error(out_path, interrupted, plan)
+    from chronozarr._convert_legacy import LegacySource, migrate
+
+    if (
+        not dry_run
+        and not isinstance(plan.source, LegacySource)
+        and (destination.is_relative_to(locked_work) or locked_work.is_relative_to(destination))
+    ):
+        raise ValueError(
+            f"conversion output {out_path} and work directory {work} must be separate"
+        )
     bands = list(plan.source.info.bands)
     if band_roles:
         bands = list(assign_roles(bands, band_roles))
@@ -1248,8 +1345,6 @@ def convert(
         on_plan(plan)
     if dry_run:
         return ConvertReport(plan, None, 0, 0, 0.0, 0.0)
-
-    from chronozarr._convert_legacy import LegacySource, migrate
 
     if isinstance(plan.source, LegacySource):
         if band_roles:
@@ -1274,15 +1369,14 @@ def convert(
                     "legacy migration preserves chunks; writer overrides are forbidden"
                 )
         started = time.perf_counter()
-        report = migrate(plan.source, out_path, progress)
+        report = migrate(plan.source, target, progress, _destination=destination)
         return ConvertReport(plan, report, 0, 0, 0, time.perf_counter() - started)
 
-    locked_work = work.resolve()
     locked_work.parent.mkdir(parents=True, exist_ok=True)
     with _work_lock(locked_work):
         # A conversion may have finished while this one prepared its plan.
-        _prepare_destination(out_path)
-        _check_work_dir(locked_work, plan, resume)
+        _prepare_destination(target, expected=destination)
+        original_work = _check_work_dir(locked_work, plan, resume)
         info = plan.source.info
         if isinstance(plan.source, XarraySource) and plan.source.calendar is not None:
             encode_options["provenance"] = provenance_with_note(
@@ -1303,6 +1397,8 @@ def convert(
         try:
             started = time.perf_counter()
             staged, reused = _stage(plan, locked_work, read_ahead, progress)
+            if not _same_work_dir(locked_work, original_work):
+                raise FileExistsError(f"work directory changed during conversion: {work}")
             if isinstance(plan.source, CogManifestSource):
                 plan.source.check_source_files()
             read_s = time.perf_counter() - started
@@ -1310,7 +1406,7 @@ def convert(
             started = time.perf_counter()
             report = encode(
                 _staged_timesteps(plan, locked_work),
-                out_path,
+                target,
                 times=np.array(plan.source.times, dtype="datetime64[ms]"),
                 bands=bands,
                 crs=info.grid.crs,
@@ -1318,6 +1414,7 @@ def convert(
                 nodata=info.nodata,
                 mask=_staged_masks(plan, locked_work) if info.mask else None,
                 _scratch_parent=locked_work,
+                _destination=destination,
                 **encode_options,
             )
             encode_s = time.perf_counter() - started
@@ -1341,5 +1438,5 @@ def convert(
                     f"staged timesteps are kept in {work}; rerun with --resume to reuse them"
                 )
             raise
-        shutil.rmtree(locked_work)
+        _remove_staging(locked_work, original_work)
     return ConvertReport(plan, report, staged, reused, read_s, encode_s)

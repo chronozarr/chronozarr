@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import errno
 import importlib
 import os
 import shutil
 import stat
+import struct
+import subprocess
+import sys
 import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
 from itertools import count
@@ -426,6 +430,151 @@ def test_encode_through_a_stable_output_symlink_preserves_target_permissions(tmp
     assert path.is_symlink()
     assert stat.S_IMODE(target.stat().st_mode) == 0o750
     np.testing.assert_array_equal(chronozarr.open_store(path).to_xarray().values, truth)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows rename requires an absent output")
+@pytest.mark.parametrize("mode", [0o700, 0o555], ids=["owner-only", "read-only"])
+def test_encode_honors_permissions_tightened_during_spill(tmp_path, mode, monkeypatch):
+    if mode == 0o555 and os.geteuid() == 0:
+        pytest.skip("root can write inside read-only directories")
+    path = tmp_path / "s"
+    path.mkdir(mode=0o755)
+    truth = make_truth(2, 1, 8, 8)
+
+    def steps():
+        yield truth[0]
+        path.chmod(mode)
+        yield truth[1]
+
+    def encode():
+        return chronozarr.encode(steps(), path, chunk_size=CS, **_stream_kwargs(truth))
+
+    if mode == 0o555:
+
+        def check_permissions_before_writing(*args, **kwargs):
+            pytest.fail("started writing despite the destination becoming read-only")
+
+        encode_module = importlib.import_module("chronozarr.encode")
+        monkeypatch.setattr(encode_module, "_write_store", check_permissions_before_writing)
+        with pytest.raises(PermissionError, match="output directory must be writable"):
+            encode()
+        assert list(path.iterdir()) == []
+    else:
+        encode()
+        np.testing.assert_array_equal(chronozarr.open_store(path).to_xarray().values, truth)
+    assert stat.S_IMODE(path.stat().st_mode) == mode
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows rename requires an absent output")
+def test_encode_refuses_permissions_changed_after_the_private_store_is_prepared(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "s"
+    path.mkdir(mode=0o755)
+    encode_module = importlib.import_module("chronozarr.encode")
+    write_store = encode_module._write_store
+
+    def tighten_after_writing(*args, **kwargs):
+        report = write_store(*args, **kwargs)
+        path.chmod(0o700)
+        return report
+
+    monkeypatch.setattr(encode_module, "_write_store", tighten_after_writing)
+    with pytest.raises(FileExistsError, match="output destination changed"):
+        chronozarr.encode(make_da(make_truth(2, 1, 8, 8)), path, chunk_size=CS)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o700
+    assert list(tmp_path.iterdir()) == [path]
+    assert list(path.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows rename requires an absent output")
+def test_encode_needs_write_access_to_the_destination_parent(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root can write inside read-only directories")
+    parent = tmp_path / "protected"
+    parent.mkdir()
+    path = parent / "s"
+    path.mkdir()
+    parent.chmod(0o555)
+
+    try:
+        with pytest.raises(
+            PermissionError, match="atomic publication needs a writable destination parent"
+        ):
+            chronozarr.encode(make_da(make_truth(2, 1, 8, 8)), path, chunk_size=CS)
+    finally:
+        parent.chmod(0o700)
+    assert list(parent.iterdir()) == [path]
+    assert list(path.iterdir()) == []
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS extended ACLs")
+def test_encode_preserves_a_darwin_directory_acl_and_its_inheritance(tmp_path):
+    path = tmp_path / "s"
+    path.mkdir(mode=0o750)
+    rule = "everyone allow readsecurity,file_inherit,directory_inherit"
+    subprocess.run(["/bin/chmod", "+a", rule, str(path)], check=True)
+
+    def acl(directory: Path) -> list[str]:
+        result = subprocess.run(
+            ["/bin/ls", "-lde", str(directory)], check=True, capture_output=True, text=True
+        )
+        return result.stdout.splitlines()[1:]
+
+    expected = acl(path)
+    chronozarr.encode(make_da(make_truth(2, 1, 8, 8)), path, chunk_size=CS)
+    assert acl(path) == expected
+    assert any("inherited allow readsecurity" in line for line in acl(path / "0"))
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS extended ACLs")
+def test_encode_refuses_the_darwin_acl_of_an_unwritable_empty_destination(tmp_path, monkeypatch):
+    path = tmp_path / "s"
+    path.mkdir()
+    subprocess.run(["/bin/chmod", "+a", "everyone deny add_subdirectory", str(path)], check=True)
+    if os.access(path, os.W_OK):
+        pytest.skip("the effective user can write despite the ACL")
+
+    def check_permissions_before_writing(*args, **kwargs):
+        pytest.fail("started writing despite the destination ACL")
+
+    encode_module = importlib.import_module("chronozarr.encode")
+    monkeypatch.setattr(encode_module, "_write_store", check_permissions_before_writing)
+    with pytest.raises(PermissionError, match="output directory must be writable"):
+        chronozarr.encode(make_da(make_truth(2, 1, 8, 8)), path, chunk_size=CS)
+    assert list(path.iterdir()) == []
+    assert not os.access(path, os.W_OK)
+
+
+def test_encode_preserves_linux_access_and_default_acls(tmp_path):
+    if sys.platform != "linux":
+        pytest.skip("Linux POSIX ACL xattrs")
+    path = tmp_path / "s"
+    path.mkdir(mode=0o750)
+    # Linux's version 2 ACL xattr: owner rwx, named user r-x, group r-x, mask r-x, other none.
+    acl = struct.pack("<I", 2) + b"".join(
+        struct.pack("<HHI", tag, mode, uid)
+        for tag, mode, uid in [
+            (1, 7, 0xFFFFFFFF),
+            (2, 5, 12345),
+            (4, 5, 0xFFFFFFFF),
+            (16, 5, 0xFFFFFFFF),
+            (32, 0, 0xFFFFFFFF),
+        ]
+    )
+    attributes = ("system.posix_acl_access", "system.posix_acl_default")
+    try:
+        for name in attributes:
+            os.setxattr(path, name, acl)
+    except OSError as error:
+        if error.errno != errno.ENOTSUP:
+            raise
+        pytest.skip("the fixture filesystem has no POSIX ACL support")
+
+    chronozarr.encode(make_da(make_truth(2, 1, 8, 8)), path, chunk_size=CS)
+    for directory in (path, path / "0"):
+        for name in attributes:
+            assert os.getxattr(directory, name) == acl
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows directory publication")

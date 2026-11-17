@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import errno
 import os
-import shutil
-import stat
 import tempfile
 import time
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack, suppress
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Lock
@@ -24,6 +21,12 @@ from zarr.codecs import BloscCodec, ZstdCodec
 from zarr.errors import ZarrUserWarning
 
 from chronozarr import schema
+from chronozarr._local_output import (
+    _prepare_destination,
+    _prepare_store,
+    _private_output,
+    _publish_output,
+)
 from chronozarr._writer import (
     DEFAULT_CELLS_IN_FLIGHT,
     VOLATILITY_SCALE,
@@ -395,43 +398,6 @@ def _write_store(
 # --- Public entry point -----------------------------------------------------------------------
 
 
-def _occupied_output(out: Path) -> FileExistsError:
-    return FileExistsError(
-        f"{out} already exists and is not empty; stores are immutable, write to a new path"
-    )
-
-
-def _prepare_destination(out: Path) -> tuple[Path, int | None]:
-    """Resolve an available destination and remember an existing empty directory's mode."""
-    destination = out.resolve()
-    try:
-        mode = destination.lstat().st_mode
-    except FileNotFoundError:
-        if out.is_symlink():
-            raise _occupied_output(out) from None
-        return destination, None
-    if not stat.S_ISDIR(mode) or any(destination.iterdir()):
-        raise _occupied_output(out)
-    if os.name == "nt":
-        raise FileExistsError(
-            f"{out} already exists; atomic directory publication on Windows needs an absent path"
-        )
-    return destination, stat.S_IMODE(mode)
-
-
-def _publish_output(store: Path, out: Path, destination: Path) -> None:
-    if out.resolve() != destination:
-        raise FileExistsError(f"output destination changed while encoding: {out}")
-    try:
-        # A directory rename can replace an empty directory on POSIX. The filesystem rejects
-        # any nonempty directory, regular file or link that now occupies the destination name.
-        os.rename(store, destination)
-    except OSError as error:
-        if error.errno in (errno.EEXIST, errno.ENOTEMPTY, errno.ENOTDIR):
-            raise _occupied_output(out) from error
-        raise
-
-
 def _check_codec(codec: str, level: int | None) -> int:
     if codec not in DEFAULT_LEVEL:
         raise ValueError(f"codec must be one of {list(DEFAULT_LEVEL)}, got {codec!r}")
@@ -464,6 +430,7 @@ def encode(
     workers: int | None = None,
     spill_dir: str | Path | None = None,
     _scratch_parent: Path | None = None,
+    _destination: Path | None = None,
 ) -> EncodeReport:
     """Write `data` as a chronozarr store at `out` (spec 0.3.0, or 0.4.0 without an EPSG code).
 
@@ -473,7 +440,8 @@ def encode(
             iterable of per-timestep (band, y, x) arrays in time order, which needs `times`,
             `crs`, `transform` and `bands`. An iterable is written once to cell-major temp
             files, then encoded cell by cell, so memory does not grow with the raster.
-        out: Directory to create. It must be absent, or on POSIX it can be empty.
+        out: Directory to create under a writable parent directory. On Linux and macOS,
+            a writable empty directory also works when its permissions can be preserved.
         crs: An authority code such as "EPSG:32631", or WKT2 text for a CRS that has no code.
             WKT1, PROJJSON and PROJ strings are converted to WKT2 when pyproj is installed. A
             CRS with an EPSG code gives a 0.3.0 store and any other a 0.4.0 store. Falls back to
@@ -572,20 +540,10 @@ def encode(
 
     out = Path(out).absolute()
     # Keep an existing symlink to an empty directory and write to its target.
-    destination, output_mode = _prepare_destination(out)
-    parent = destination.parent
-    parent.mkdir(parents=True, exist_ok=True)
-    # A colocated conversion work directory can hold the private store and spill. Keeping
-    # the build by the destination works even when explicitly staged work is on another disk.
-    if (
-        _scratch_parent is not None
-        and _scratch_parent.parent == parent
-        and _scratch_parent.stat().st_dev == parent.stat().st_dev
-    ):
-        parent = _scratch_parent
-
-    scratch_path = Path(tempfile.mkdtemp(prefix=".chronozarr-encode-", dir=parent))
-    try:
+    destination = _prepare_destination(out, expected=_destination)
+    with _private_output(
+        destination, prefix=".chronozarr-encode-", scratch_parent=_scratch_parent
+    ) as scratch_path:
         store = scratch_path / "store"
         with ExitStack() as spill_cleanup:
             if prepared.da is not None:
@@ -615,6 +573,7 @@ def encode(
                     has_mask=layout.has_mask,
                     has_coverage=layout.has_coverage,
                 )
+            original = _prepare_store(store, out, destination)
             report = _write_store(
                 store,
                 layout,
@@ -622,13 +581,5 @@ def encode(
                 cells_in_flight=cells_in_flight,
                 provenance=resolved_provenance,
             )
-        if output_mode is not None:
-            store.chmod(output_mode)
-        _publish_output(store, out, destination)
-    except BaseException:
-        shutil.rmtree(scratch_path, ignore_errors=True)
-        raise
-    # Publication is already complete, so an error removing the empty wrapper cannot fail it.
-    with suppress(OSError):
-        scratch_path.rmdir()
+        _publish_output(store, out, destination, original)
     return report

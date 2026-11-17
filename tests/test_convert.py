@@ -28,13 +28,14 @@ from chronozarr.convert import (
     CogManifestSource,
     PreflightError,
     _gdal_env,
+    _work_lock,
     convert,
     plan_conversion,
     read_manifest,
 )
 from tests.fixtures import cog_sources as fx
 from tests.fixtures import png_frames as pf
-from tests.synthetic import CRS, TRANSFORM, make_times, make_truth
+from tests.synthetic import CRS, TRANSFORM, make_da, make_times, make_truth
 
 pytestmark = pytest.mark.unit
 
@@ -987,7 +988,7 @@ def test_dry_run_reports_estimates_and_writes_nothing(tmp_path, tifs):
     assert report.encode is None
     assert not out.exists()
     assert not (tmp_path / "store.convert-work").exists()
-    assert not (tmp_path / ".store.convert-work.convert.lock").exists()
+    assert not list(tmp_path.glob(".chronozarr-convert-*.lock"))
     plan = seen[0]
     assert plan.raw_bytes == N_TIME * N_BAND * HEIGHT * WIDTH * 2
     assert plan.timestep_bytes == N_BAND * HEIGHT * WIDTH * 2
@@ -1309,7 +1310,7 @@ def test_a_conversion_killed_while_encoding_can_resume_without_an_output_to_dele
     manifest = write_csv(tmp_path / "m.csv", tifs)
     out = tmp_path / "store"
     work = kill_a_conversion_while_it_encodes(manifest, out, **OPTIONS)
-    lock = tmp_path / ".store.convert-work.convert.lock"
+    (lock,) = tmp_path.glob(".chronozarr-convert-*.lock")
     lock_inode = lock.stat().st_ino
     assert len(list(work.glob("t*.npy"))) == N_TIME
     assert list(work.glob(".chronozarr-encode-*/store/zarr.json"))
@@ -1483,7 +1484,7 @@ def test_the_record_names_the_output_however_its_path_is_written(
     with pytest.raises(FileExistsError) as error:
         convert(manifest, Path("store"), resume=True, **OPTIONS)
     assert str(error.value) == reusable_message(Path("store"), Path("store.convert-work"))
-    assert not (tmp_path / ".store.convert-work.convert.lock").exists()
+    assert not list(tmp_path.glob(".chronozarr-convert-*.lock"))
 
 
 def test_an_unfinished_store_names_the_explicit_work_directory_of_its_run(tmp_path, tifs):
@@ -1700,6 +1701,137 @@ def test_custom_work_dir_is_used_and_cleaned(tmp_path, tifs):
     work = tmp_path / "scratch" / "stage"
     convert(write_csv(tmp_path / "m.csv", tifs), tmp_path / "store", work_dir=work, **OPTIONS)
     assert not work.exists()
+
+
+@pytest.mark.parametrize("nested", ["output", "work", "both"])
+def test_convert_refuses_overlapping_work_and_output_before_writing(tmp_path, tifs, nested):
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    parent = tmp_path / "job"
+    work = parent / "work" if nested == "work" else parent
+    out = parent / "out" if nested == "output" else parent
+
+    with pytest.raises(ValueError, match=r"output .* and work directory .* must be separate"):
+        convert(manifest, out, work_dir=work, **OPTIONS)
+
+    assert not parent.exists()
+
+
+def test_convert_cleanup_preserves_a_store_that_replaced_staging(tmp_path, monkeypatch):
+    pixels = np.full((1, 1, 8, 8), 100, dtype=np.uint16)
+    manifest = write_csv(
+        tmp_path / "m.csv", [write_tif(tmp_path / "input.tif", pixels[0])], DATES[:1]
+    )
+    work = tmp_path / "stage"
+    out = tmp_path / "out"
+    unrelated = tmp_path / "unrelated"
+    preserved = tmp_path / "moved-stage"
+    chronozarr.encode(make_da(pixels + 800), unrelated, **OPTIONS)
+    rename, remove = os.rename, shutil.rmtree
+
+    def install_unrelated_store(path):
+        if Path(path) == work and unrelated.exists():
+            rename(work, preserved)
+            rename(unrelated, work)
+
+    def rename_with_replacement(src, dst, *args, **kwargs):
+        install_unrelated_store(src)
+        return rename(src, dst, *args, **kwargs)
+
+    def remove_with_replacement(path, *args, **kwargs):
+        install_unrelated_store(path)
+        return remove(path, *args, **kwargs)
+
+    # Hook either directory operation so the existing recursive cleanup and the private
+    # detach are both tested with the replacement arriving just before their first action.
+    monkeypatch.setattr(os, "rename", rename_with_replacement)
+    monkeypatch.setattr(shutil, "rmtree", remove_with_replacement)
+    report = convert(manifest, out, work_dir=work, **OPTIONS)
+
+    assert report.n_staged == 1
+    assert preserved.is_dir()
+    assert not unrelated.exists()
+    np.testing.assert_array_equal(stored(work), pixels + 800)
+    np.testing.assert_array_equal(stored(out), pixels)
+
+
+@pytest.mark.parametrize("name", ["independent", ".chronozarr-encode-independent"])
+def test_convert_cleanup_preserves_a_store_added_inside_staging(tmp_path, tifs, truth, name):
+    work = tmp_path / "stage"
+    unrelated = work / name
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+    out = tmp_path / "out"
+
+    def publish_separate_store(done, total):
+        if done == total:
+            chronozarr.encode(make_da(truth + 1), unrelated, **OPTIONS)
+
+    report = convert(manifest, out, work_dir=work, progress=publish_separate_store, **OPTIONS)
+    assert report.n_staged == N_TIME
+    np.testing.assert_array_equal(stored(unrelated), truth + 1)
+    np.testing.assert_array_equal(stored(out), truth)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="directory symlinks can require privileges on Windows")
+def test_convert_refuses_an_output_parent_retargeted_while_staging(tmp_path, tifs, truth):
+    original, other = tmp_path / "first", tmp_path / "second"
+    original.mkdir()
+    other.mkdir()
+    alias, replacement = tmp_path / "current", tmp_path / "replacement"
+    alias.symlink_to(original, target_is_directory=True)
+    replacement.symlink_to(other, target_is_directory=True)
+    manifest = write_csv(tmp_path / "m.csv", tifs)
+
+    def retarget(done, total):
+        if done == total:
+            replacement.replace(alias)
+
+    with pytest.raises(FileExistsError, match="output destination changed"):
+        convert(manifest, alias / "store", progress=retarget, **OPTIONS)
+
+    assert not (original / "store").exists()
+    assert not (other / "store").exists()
+    assert len(list((original / "store.convert-work").glob("t*.npy"))) == N_TIME
+    assert not (other / "store.convert-work").exists()
+    alias.unlink()
+    alias.symlink_to(original, target_is_directory=True)
+    report = convert(manifest, alias / "store", resume=True, **OPTIONS)
+    assert (report.n_staged, report.n_reused) == (0, N_TIME)
+    np.testing.assert_array_equal(stored(original / "store"), truth)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires standard POSIX long filename limits")
+@pytest.mark.parametrize("explicit", [False, True])
+def test_convert_lock_supports_long_output_and_work_names(tmp_path, tifs, truth, explicit):
+    if os.pathconf(tmp_path, "PC_NAME_MAX") < 254:
+        pytest.skip("filesystem does not support the long names tested here")
+    out = tmp_path / ("store" if explicit else "o" * 233)
+    work = tmp_path / ("w" * 254) if explicit else out.with_name(out.name + ".convert-work")
+    manifest = write_csv(tmp_path / "m.csv", tifs[:1], DATES[:1])
+    options = {"work_dir": work} if explicit else {}
+
+    report = convert(manifest, out, **options, **OPTIONS)
+
+    assert report.n_staged == 1
+    np.testing.assert_array_equal(stored(out), truth[:1])
+    assert not work.exists()
+
+
+def test_convert_work_lock_matches_case_and_unicode_aliases(tmp_path):
+    work = tmp_path / ("w" * 240 + "é")
+    alias = tmp_path / ("W" * 240 + "E\N{COMBINING ACUTE ACCENT}")
+    try:
+        work.mkdir()
+    except OSError as error:
+        pytest.skip(f"filesystem does not support the long name tested here: {error}")
+    if not alias.exists() or not alias.samefile(work):
+        pytest.skip("this filesystem distinguishes the two spellings")
+
+    with (
+        _work_lock(work.resolve()),
+        pytest.raises(BlockingIOError, match="another conversion is already using"),
+        _work_lock(alias.resolve()),
+    ):
+        pytest.fail("both aliases acquired the same work directory")
 
 
 def test_plan_lines_mention_warped_timesteps(tmp_path, tifs, truth):
