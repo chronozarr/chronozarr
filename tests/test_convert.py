@@ -1425,6 +1425,77 @@ def test_convert_refuses_a_geotiff_changed_during_conversion(tmp_path, change_at
         assert "fresh work directory" in "\n".join(error.value.__notes__)
 
 
+@pytest.mark.parametrize(
+    ("source_kind", "change_at"),
+    [
+        ("path", "during header read"),
+        ("path", "after sampling"),
+        ("path", "during staging"),
+        ("file URI", "after sampling"),
+        ("symlink", "after sampling"),
+    ],
+)
+def test_convert_refuses_a_geotiff_mask_added_during_conversion(
+    tmp_path, monkeypatch, source_kind, change_at
+):
+    pixels = np.full((1, 8, 8), 100, dtype=np.uint16)
+    tif = write_tif(tmp_path / "source.tif", pixels)
+    source = tif
+    if source_kind == "symlink":
+        source = tmp_path / "alias.tif"
+        try:
+            source.symlink_to(tif)
+        except OSError as exc:
+            pytest.skip(f"symlinks unavailable: {exc}")
+    deferred = write_tif(tmp_path / "deferred.tif", pixels)
+    mask = np.full((8, 8), 255, dtype=np.uint8)
+    mask[0, 0] = 0
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=False), rasterio.open(deferred, "r+") as dst:
+        dst.write_mask(mask)
+    uri = source.as_uri() if source_kind == "file URI" else str(source)
+    manifest = tmp_path / "m.csv"
+    manifest.write_text(f"uri,datetime\n{uri},{DATES[0]}\n")
+    out = tmp_path / "store"
+    before = tif.stat()
+
+    def install_mask():
+        deferred.with_suffix(".tif.msk").replace(source.with_suffix(".tif.msk"))
+        assert tif.stat().st_ctime_ns == before.st_ctime_ns
+
+    def install_after_staging(done, _total):
+        if done == 1:
+            install_mask()
+
+    with monkeypatch.context() as patch:
+        if change_at == "during header read":
+            cog = importlib.import_module("chronozarr._convert_cog")
+            original = cog._frame_grid
+
+            def grid_after_open(*args):
+                install_mask()
+                return original(*args)
+
+            patch.setattr(cog, "_frame_grid", grid_after_open)
+        with pytest.raises(
+            ValueError, match=r"\.tif\.msk: source file changed during conversion"
+        ) as error:
+            convert(
+                manifest,
+                out,
+                on_plan=(lambda _: install_mask()) if change_at == "after sampling" else None,
+                progress=install_after_staging if change_at == "during staging" else None,
+                **OPTIONS,
+            )
+    assert not out.exists()
+    if change_at == "during staging":
+        assert "fresh work directory" in "\n".join(error.value.__notes__)
+        with pytest.raises(ValueError, match="different input or options"):
+            convert(manifest, out, resume=True, **OPTIONS)
+
+    convert(manifest, out, work_dir=tmp_path / "fresh", **OPTIONS)
+    np.testing.assert_array_equal(chronozarr.open_store(out).read_mask(0), mask != 0)
+
+
 def test_a_killed_conversion_of_a_zarr_source_says_to_delete_the_store_and_its_work_directory(
     tmp_path, truth
 ):
@@ -1879,6 +1950,13 @@ def test_local_geotiff_external_mask_is_preserved(tmp_path):
     opened = chronozarr.open_store(target)
     np.testing.assert_array_equal(opened.read_mask(0), mask != 0)
     np.testing.assert_allclose(opened.physical(0)[0], [[11, np.nan], [13, 14]])
+
+    # Keep the resume fingerprint compatible with earlier versions that recorded GDAL's file list.
+    plan = plan_conversion(tmp_path, **OPTIONS)
+    with rasterio.open(tif) as source:
+        source.read_masks()  # GDAL discovers external masks on first use.
+        files = {str(Path(file).absolute()) for file in source.files}
+    assert set(plan.source.fingerprint()["local_files"]) == files
 
 
 def test_internal_mask_and_band_scaling_survive_conversion(tmp_path):

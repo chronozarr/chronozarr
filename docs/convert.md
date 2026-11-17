@@ -251,7 +251,7 @@ chronozarr convert manifest.csv my_store
 
 A CSV manifest has the columns `uri` and `datetime`, and an optional `bands` column with names separated by `;`. A JSON manifest is a list of `{"uri": ..., "datetime": ...}` objects. Relative paths are relative to the manifest. The target grid is the grid of the first file, unless you give `--crs`, `--transform` and `--shape`. Files on another grid need `--resampling`.
 
-Resume checks the filesystem identity and timestamps of local raster files and their sidecars. If a local input changed, or the original run predates these checks, start with a fresh `--work-dir`. For hosted inputs, keep the objects at each URI unchanged across runs and use a fresh work directory when they change.
+Resume checks the filesystem identity and timestamps of local rasters, their sidecars, and each local NetCDF file. If a local input changed, or the original run predates these checks, keep the old staging for inspection and start with a fresh `--work-dir`. On Windows, use a fresh work directory after an in-place edit that preserves the file's size and modification time. For hosted inputs, keep the objects at each URI unchanged across runs and use a fresh work directory when they change.
 
 ## From NetCDF or Zarr
 
