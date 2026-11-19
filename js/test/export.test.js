@@ -135,6 +135,7 @@ test('a refusal notice replaces the status text and leaves the controls of the s
 });
 
 function fakeRecorderEnvironment({ onStop }) {
+  const calls = { rendered: [], read: [], requested: [], recorderStops: 0, trackStops: 0, closed: 0 };
   class FakeMediaRecorder {
     static isTypeSupported(type) {
       return type === 'video/webm';
@@ -149,19 +150,31 @@ function fakeRecorderEnvironment({ onStop }) {
 
     stop() {
       this.state = 'inactive';
+      calls.recorderStops++;
       onStop();
       queueMicrotask(() => this.onstop());
     }
   }
-  const track = { requestFrame() {}, stop() {} };
+  const track = {
+    requestFrame() { calls.requested.push(calls.rendered.at(-1)); },
+    stop() { calls.trackStops++; },
+  };
   const stream = { getVideoTracks: () => [track], getTracks: () => [track] };
   const session = {
     canvas: { width: 16, height: 16, captureStream: () => stream },
     fits: () => false,
     isReady: () => true,
     prepare: async () => {},
-    render: () => true,
-    close() {},
+    render(t) {
+      calls.rendered.push(t);
+      return true;
+    },
+    readPixels() {
+      const t = calls.rendered.at(-1);
+      calls.read.push(t);
+      return Uint8Array.from({ length: 16 * 16 * 4 }, (_, i) => i % 4 === 3 ? 255 : (t + 1) * 50);
+    },
+    close() { calls.closed++; },
   };
   const viewer = {
     store: { url: 'http://localhost/stores/a/b', times: [0, 1, 2] },
@@ -169,18 +182,27 @@ function fakeRecorderEnvironment({ onStop }) {
     pause() {},
     createExportSession: () => session,
   };
-  return { FakeMediaRecorder, viewer };
+  return { FakeMediaRecorder, viewer, session, calls };
 }
 
 async function withBrowserGlobals(FakeMediaRecorder, body) {
-  const before = { MediaRecorder: globalThis.MediaRecorder, location: globalThis.location };
+  const before = {
+    MediaRecorder: globalThis.MediaRecorder,
+    location: globalThis.location,
+    requestAnimationFrame: globalThis.requestAnimationFrame,
+    cancelAnimationFrame: globalThis.cancelAnimationFrame,
+  };
   globalThis.MediaRecorder = FakeMediaRecorder;
   globalThis.location = { href: 'http://localhost/demo/index.html' };
+  globalThis.requestAnimationFrame = (callback) => setTimeout(() => callback(performance.now()), 1);
+  globalThis.cancelAnimationFrame = (handle) => clearTimeout(handle);
   try {
     return await body();
   } finally {
     globalThis.MediaRecorder = before.MediaRecorder;
     globalThis.location = before.location;
+    globalThis.requestAnimationFrame = before.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = before.cancelAnimationFrame;
   }
 }
 
@@ -201,3 +223,57 @@ test('an export that is not cancelled returns its file when the recorder finishe
   assert.equal(result.frames, 1);
   assert.equal(result.filename, 'chronozarr-a-b-t1-to-t1.webm');
 });
+
+for (const [stage, failedCall, expectedReads] of [
+  ['palette sampling', 2, [0]],
+  ['frame encoding', 5, [0, 1, 2, 0]],
+]) {
+  test(`GIF export rejects an incomplete render during ${stage} and closes its session`, async () => {
+    const { FakeMediaRecorder, viewer, session, calls } = fakeRecorderEnvironment({ onStop() {} });
+    const render = session.render;
+    session.render = (t) => {
+      render(t);
+      return calls.rendered.length !== failedCall;
+    };
+    await withBrowserGlobals(FakeMediaRecorder, () => assert.rejects(
+      exportLoop(viewer, { format: 'gif', from: 0, to: 2, stepsPerSecond: 1000 }),
+      /timestep 1 could not be rendered completely/i,
+    ));
+    assert.equal(calls.rendered.length, failedCall, 'stop at the first incomplete render');
+    assert.deepEqual(calls.read, expectedReads, 'read only complete frames');
+    assert.equal(calls.closed, 1, 'release the export session after the error');
+  });
+}
+
+test('GIF export writes every complete frame and closes its session', async () => {
+  const { FakeMediaRecorder, viewer, calls } = fakeRecorderEnvironment({ onStop() {} });
+  const result = await withBrowserGlobals(FakeMediaRecorder, () => exportLoop(viewer, { format: 'gif', from: 0, to: 2, stepsPerSecond: 1000 }));
+  const bytes = new Uint8Array(await result.blob.arrayBuffer());
+  const text = String.fromCharCode(...bytes);
+  assert.equal(text.slice(0, 6), 'GIF89a');
+  assert.equal(text.split('\x21\xf9\x04').length - 1, 3, 'one encoded image per requested timestep');
+  assert.equal(result.frames, 3);
+  assert.deepEqual(calls.rendered, [0, 1, 2, 0, 1, 2]);
+  assert.deepEqual(calls.read, calls.rendered);
+  assert.equal(calls.closed, 1);
+});
+
+for (const failedTime of [0, 2]) {
+  test(`video export rejects an incomplete render at timestep ${failedTime} and closes its recorder and session`, { timeout: 5000 }, async () => {
+    const { FakeMediaRecorder, viewer, session, calls } = fakeRecorderEnvironment({ onStop() {} });
+    const render = session.render;
+    session.render = (t) => {
+      render(t);
+      return t !== failedTime;
+    };
+    await withBrowserGlobals(FakeMediaRecorder, () => assert.rejects(
+      exportLoop(viewer, { format: 'webm', from: 0, to: 2, stepsPerSecond: 1000 }),
+      new RegExp(`timestep ${failedTime} could not be rendered completely`, 'i'),
+    ));
+    assert.deepEqual(calls.rendered, failedTime === 0 ? [0] : [0, 1, 2]);
+    assert.deepEqual(calls.requested, failedTime === 0 ? [] : [0, 1], 'do not record the incomplete frame');
+    assert.equal(calls.recorderStops, 1);
+    assert.equal(calls.trackStops, 1);
+    assert.equal(calls.closed, 1);
+  });
+}

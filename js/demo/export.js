@@ -87,6 +87,10 @@ async function ensureLoaded(session, t, signal) {
   }
 }
 
+function renderFrame(session, t) {
+  if (!session.render(t)) throw new Error(`Timestep ${t} could not be rendered completely. Try zooming in to show fewer cells.`);
+}
+
 /** Fetch the whole range first (when it fits the cache) so recording runs without waiting on the network. */
 async function preload(session, from, to, onProgress, signal) {
   const total = to - from + 1;
@@ -105,7 +109,7 @@ async function encodeGif(session, { from, to, stepsPerSecond, onProgress, signal
   const samples = [];
   for (const t of paletteSampleTimes(from, to)) {
     await ensureLoaded(session, t, signal);
-    session.render(t);
+    renderFrame(session, t);
     samples.push(subsamplePixels(session.readPixels(), PALETTE_PIXEL_STRIDE));
   }
   const sampled = new Uint8Array(samples.reduce((n, s) => n + s.length, 0));
@@ -120,7 +124,7 @@ async function encodeGif(session, { from, to, stepsPerSecond, onProgress, signal
   for (let i = 0; i < total; i++) {
     signal?.throwIfAborted();
     await ensureLoaded(session, from + i, signal);
-    session.render(from + i);
+    renderFrame(session, from + i);
     const index = applyPalette(flipRows(session.readPixels(), width, height), palette);
     gif.writeFrame(index, width, height, i === 0 ? { palette, delay, repeat: 0 } : { delay });
     onProgress({ stage: 'encoding', done: i + 1, total });
@@ -144,7 +148,7 @@ async function recordVideo(session, { format, from, to, stepsPerSecond, onProgre
     recorder.onerror = (event) => reject(event.error ?? new Error('MediaRecorder failed'));
   });
   const frame = (t) => {
-    session.render(t);
+    renderFrame(session, t);
     track.requestFrame();
   };
   try {
@@ -166,12 +170,17 @@ async function recordVideo(session, { format, from, to, stepsPerSecond, onProgre
           lowSeconds: 1 / stepsPerSecond,
           getIndex: () => index,
           goTo: (i) => {
-            index = i;
-            frame(from + i);
-            onProgress({ stage: 'recording', done: i + 1, total });
-            if (i === total - 1) {
+            try {
+              index = i;
+              frame(from + i);
+              onProgress({ stage: 'recording', done: i + 1, total });
+              if (i === total - 1) {
+                player.pause();
+                resolve();
+              }
+            } catch (error) {
               player.pause();
-              resolve();
+              reject(error);
             }
           },
           isReady: (i) => session.isReady(from + i),
