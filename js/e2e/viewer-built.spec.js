@@ -88,12 +88,15 @@ test('an embed reads its store from the page and never the catalog', async ({ pa
   expect(servers.data.requests.filter((r) => r.path === '/u16_plain/zarr.json').length).toBe(1);
 });
 
-for (const built of [false, true]) {
-  test(`${built ? 'built' : 'source'} viewer decodes after the first Zstd module request gets a 503`, async ({ page, stores, servers, storeUrl, consoleErrors }) => {
-    const name = built ? 'retry-zstd-built' : 'retry-zstd-source';
+for (const { built, endian } of [
+  { built: false, endian: 'little' }, { built: true, endian: 'little' },
+  { built: false, endian: 'big' }, { built: true, endian: 'big' },
+]) {
+  test(`${built ? 'built' : 'source'} viewer decodes ${endian}-endian pixels after the first Zstd module request gets a 503`, async ({ page, stores, servers, storeUrl, consoleErrors }) => {
+    const name = `retry-zstd-${endian}-${built ? 'built' : 'source'}`;
     const dir = path.join(stores.dir, name);
     const spec = { nTime: 2, nBand: 1, height: 2, width: 2, chunk: 2, sharded: false, consolidated: true, transform: [10, 0, 500000, 0, -10, 4000000] };
-    await writeTree(dir, compressedStore(spec, COMPRESSORS.zstd));
+    await writeTree(dir, compressedStore(spec, COMPRESSORS.zstd, { endian }));
     const store = `${servers.dataUrl}/${name}/`;
     // The source server here always serves the modules, even when the suite's default app serves a bundle.
     const source = built ? null : await startStaticServer(path.resolve(import.meta.dirname, '..'));
@@ -109,27 +112,35 @@ for (const built of [false, true]) {
       await page.goto(`${origin}/demo/index.html?store=${encodeURIComponent(plain)}`);
       await page.waitForFunction(() => window.chronozarr?.ready);
       await page.evaluate(() => window.chronozarr.ready);
-      const result = await page.evaluate(async (url) => {
+      const result = await page.evaluate((url) => new Promise((resolve, reject) => {
         const { viewer } = window.chronozarr;
-        // Start the open on the main thread, then read two chunks through the real decoder.
-        viewer.loadStore(url, { workers: 0 }).catch(() => {});
-        while (viewer.store?.url !== url) await new Promise((resolve) => setTimeout(resolve, 0));
-        const read = async (t) => {
-          try {
-            return Array.from(await viewer.store.getRaw(0, 0, 0, t));
-          } catch (error) {
-            return error.message;
-          }
-        };
-        return [await read(0), await read(1)];
-      }, store);
+        viewer.loadStore(url, {
+          workers: 0,
+          // Read on the same store handle before the viewer starts requesting chunks for the first frame.
+          async startTime(store) {
+            const read = async (t) => {
+              try {
+                return Array.from(await store.getRaw(0, 0, 0, t));
+              } catch (error) {
+                return error.message;
+              }
+            };
+            resolve([await read(0), await read(0), await read(1)]);
+            return 0;
+          },
+        }).catch(reject);
+      }), store);
       // The failed import reports a resource error even though the decoder recovers.
       for (let i = consoleErrors.length - 1; i >= 0; i--) {
         if (/Failed to load resource: .*503/.test(consoleErrors[i])) consoleErrors.splice(i, 1);
       }
-      expect(result).toEqual([[1000, 1013, 1007, 1020], [1040, 1050, 1047, 1057]]);
-      expect(requests).toHaveLength(2);
-      expect(requests[1]).not.toBe(requests[0]);
+      const firstPixels = [1000, 1013, 1007, 1020];
+      const [initial, ...recovered] = result;
+      // The fast path may already have used the first import in its decoder warmup.
+      if (endian === 'big' || typeof initial === 'string') expect(initial).toContain('Failed to fetch dynamically imported module');
+      else expect(initial).toEqual(firstPixels);
+      expect(recovered).toEqual([firstPixels, [1040, 1050, 1047, 1057]]);
+      expect(requests.map((url) => new URL(url).search)).toEqual(['', '?retry=1']);
     } finally {
       await source?.close();
     }

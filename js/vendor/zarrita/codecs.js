@@ -2,6 +2,7 @@
  * package: zarrita 0.7.5, license MIT, https://github.com/manzt/zarrita.js
  * file:    dist/src/codecs.js, sha256 of the published file 621474b3b99edda0074ee5ca5ad425f2fa66a2e80b45bac4868a939a520bbd7a
  * changes: this header; bare imports of other packages rewritten to relative paths; sourceMappingURL comment removed.
+ * Codec pipelines accept alternate default loaders, share parallel loads, and retry failed initialization.
  */
 import { BitroundCodec } from "./codecs/bitround.js";
 import { BytesCodec } from "./codecs/bytes.js";
@@ -49,13 +50,17 @@ function createDefaultRegistry() {
         .set("numcodecs.bitround", () => BitroundCodec)
         .set("numcodecs.json2", () => JsonCodec));
 }
-export const registry = createDefaultRegistry();
-export function createCodecPipeline(chunkMetadata) {
+const defaultRegistry = createDefaultRegistry();
+export const registry = new Map(defaultRegistry);
+export function createCodecPipeline(chunkMetadata, defaultCodecLoader) {
     // Lazily load codecs on first use. The promise is shared by all methods.
     let codecsPromise;
     function getCodecs() {
         if (!codecsPromise)
-            codecsPromise = loadCodecs(chunkMetadata);
+            codecsPromise = loadCodecs(chunkMetadata, defaultCodecLoader).catch((error) => {
+                codecsPromise = undefined;
+                throw error;
+            });
         return codecsPromise;
     }
     async function runStep(direction, codec, fn) {
@@ -107,14 +112,18 @@ function applyEncodedSize(name, codec, size) {
     }
     return codec.computeEncodedSize(size);
 }
-async function loadCodecs(chunkMeta) {
-    let promises = chunkMeta.codecs.map(async (meta) => {
-        let Codec = await registry.get(meta.name)?.();
+async function loadCodecs(chunkMeta, defaultCodecLoader) {
+    const loaded = await Promise.all(chunkMeta.codecs.map(async (meta) => {
+        const registered = registry.get(meta.name);
+        const load = registered === defaultRegistry.get(meta.name)
+            ? defaultCodecLoader?.(meta.name) ?? registered
+            : registered;
+        let Codec = await load?.();
         if (!Codec) {
             throw new UnknownCodecError(meta.name);
         }
         return { Codec, meta };
-    });
+    }));
     let arrayToArray = [];
     let arrayToBytes;
     let bytesToBytes = [];
@@ -122,7 +131,7 @@ async function loadCodecs(chunkMeta) {
     // codecs like cast_value may change the type, and subsequent codecs
     // (especially bytes) need to see the updated type.
     let currentMeta = { ...chunkMeta };
-    for await (let { Codec, meta } of promises) {
+    for (let { Codec, meta } of loaded) {
         let codec = Codec.fromConfig(meta.configuration, currentMeta);
         switch (codec.kind) {
             case "array_to_array":

@@ -5,10 +5,11 @@
 //   node js/support/vendor.mjs --check   exit 1 unless the vendored files are what regeneration would write
 //
 // The zarrita files are the published builds (package "files": dist/ of zarrita and @zarrita/storage),
-// unbundled, reached by following imports from zarrita's entry point. Three things change, each recorded in
-// the file's header comment: a header naming package, version, license and the SHA-256 of the original; bare
+// unbundled, reached by following imports from zarrita's entry point. The file header records each change.
+// The common changes are a header naming package, version, license and the SHA-256 of the original; bare
 // import specifiers of another package ("numcodecs/zstd") rewritten to relative paths, because workers do not
 // see import maps; and "//# sourceMappingURL" comments removed, because the maps are not shipped.
+// The codec pipeline also accepts retryable default loaders while preserving explicit registry overrides.
 //
 // Bundle each numcodecs entry separately so every lazy codec has a single retryable URL. A failed import of a
 // shared dependency would otherwise be cached by the browser even when the codec entry is retried at a fresh URL.
@@ -100,13 +101,65 @@ function render({ ref, original, imports }) {
     text = text.slice(0, at) + relative + text.slice(at + specifier.length);
   }
   text = text.replace(/\n?\/\/# sourceMappingURL=\S+\s*$/, '\n');
+  let changes = 'this header; bare imports of other packages rewritten to relative paths; sourceMappingURL comment removed.';
+  if (ref.pkg === 'zarrita' && ref.file === 'dist/src/codecs.js') {
+    text = patchCodecPipeline(text);
+    changes += '\n * Codec pipelines accept alternate default loaders, share parallel loads, and retry failed initialization.';
+  }
   const header =
     `/*! Vendored by js/support/vendor.mjs; regenerate, do not edit.\n` +
     ` * package: ${ref.pkg} ${info.version}, license ${info.license}, ${info.repository ?? ''}\n` +
     ` * file:    ${ref.file}, sha256 of the published file ${sha256(original)}\n` +
-    ` * changes: this header; bare imports of other packages rewritten to relative paths; sourceMappingURL comment removed.\n` +
+    ` * changes: ${changes}\n` +
     ` */\n`;
   return header + text;
+}
+
+/** Let Chronozarr reuse its retryable imports without changing Zarrita's standalone default registry. */
+function patchCodecPipeline(text) {
+  const edits = [
+    [
+      `export const registry = createDefaultRegistry();
+export function createCodecPipeline(chunkMetadata) {`,
+      `const defaultRegistry = createDefaultRegistry();
+export const registry = new Map(defaultRegistry);
+export function createCodecPipeline(chunkMetadata, defaultCodecLoader) {`,
+    ],
+    [
+      '            codecsPromise = loadCodecs(chunkMetadata);',
+      `            codecsPromise = loadCodecs(chunkMetadata, defaultCodecLoader).catch((error) => {
+                codecsPromise = undefined;
+                throw error;
+            });`,
+    ],
+    [
+      `async function loadCodecs(chunkMeta) {
+    let promises = chunkMeta.codecs.map(async (meta) => {
+        let Codec = await registry.get(meta.name)?.();`,
+      `async function loadCodecs(chunkMeta, defaultCodecLoader) {
+    const loaded = await Promise.all(chunkMeta.codecs.map(async (meta) => {
+        const registered = registry.get(meta.name);
+        const load = registered === defaultRegistry.get(meta.name)
+            ? defaultCodecLoader?.(meta.name) ?? registered
+            : registered;
+        let Codec = await load?.();`,
+    ],
+    [
+      `        return { Codec, meta };
+    });`,
+      `        return { Codec, meta };
+    }));`,
+    ],
+    [
+      '    for await (let { Codec, meta } of promises) {',
+      '    for (let { Codec, meta } of loaded) {',
+    ],
+  ];
+  for (const [from, to] of edits) {
+    if (!text.includes(from)) throw new Error(`vendor: Zarrita's codec pipeline changed: ${from}`);
+    text = text.replace(from, to);
+  }
+  return text;
 }
 
 function bundleModule(entry, { target, minify = false }) {
