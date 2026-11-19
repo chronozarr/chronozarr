@@ -79,7 +79,7 @@ const POOL_MOVES = {
  * bytes are transferred in and decoded arrays transferred back, so the caller must not reuse the bytes it
  * passes to decode().
  *
- * Workers take a few hundred milliseconds to load. With a `fallback` decoder, priority-0 jobs that arrive
+ * Workers take a few hundred milliseconds to load. With a `fallback` decoder, jobs arriving or promoted to priority 0
  * before any worker is ready are decoded on the calling thread instead of waiting, and if a worker cannot start
  * or stops with an error (logged once) everything falls back to that decoder; the jobs a worker held at that
  * moment are rejected. Without a fallback the pool fails and rejects every job.
@@ -166,6 +166,9 @@ export class DecodePool {
   /** Call after lowering a priority handle's value: queued jobs are re-sorted (stable) and may now start. */
   reprioritize() {
     this.#queue.sort((a, b) => a.handle.value - b.handle.value);
+    while (this.#fallback && this.#mode.state === 'starting' && this.#queue[0]?.handle.value === 0) {
+      this.#decodeFallback(this.#queue.shift());
+    }
     this.#dispatch();
   }
 
@@ -178,6 +181,22 @@ export class DecodePool {
     const at = this.#queue.findIndex((queued) => queued.handle.value > job.handle.value);
     if (at < 0) this.#queue.push(job);
     else this.#queue.splice(at, 0, job);
+  }
+
+  /** Keep delegated queued work cancellable until the fallback settles it. */
+  #decodeFallback(job) {
+    this.#jobs.set(job.id, job);
+    const finish = (settle, value) => {
+      if (!this.#jobs.delete(job.id)) return;
+      job.signal?.removeEventListener('abort', job.onAbort);
+      settle(value);
+    };
+    try {
+      Promise.resolve(this.#fallback.decode(job.bytes, job.handle, job.signal, job.spec, job.options))
+        .then((data) => finish(job.resolve, data), (error) => finish(job.reject, error));
+    } catch (error) {
+      finish(job.reject, error);
+    }
   }
 
   #dispatch() {
@@ -251,18 +270,17 @@ export class DecodePool {
   #useFallback(error) {
     this.#mode.send('fallback');
     console.warn(`chronozarr: ${error.message}; decoding on the main thread`);
+    const transferred = this.#workers.map((worker) => worker.current);
     this.#stopWorkers();
     const stopped = new Error(`decode worker stopped before it answered (${error.message}); its chunk bytes went to the worker, read the chunk again`);
-    for (const job of this.#jobs.values()) {
+    for (const id of transferred) {
+      const job = this.#jobs.get(id);
+      if (!job) continue;
+      this.#jobs.delete(id);
       job.signal?.removeEventListener('abort', job.onAbort);
       job.reject(stopped);
     }
-    this.#jobs.clear();
-    const fallback = this.#fallback;
-    for (const job of this.#queue.splice(0)) {
-      job.signal?.removeEventListener('abort', job.onAbort);
-      fallback.decode(job.bytes, job.handle, job.signal, job.spec, job.options).then(job.resolve, job.reject);
-    }
+    while (this.#queue.length) this.#decodeFallback(this.#queue.shift());
   }
 
   #stopWorkers() {
