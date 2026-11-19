@@ -190,11 +190,11 @@ function recordingStore(inner, records) {
   };
 }
 
-/** Like a real store, hands out fresh bytes on every read (the decode pool takes ownership of what it is given). */
+/** Replay the recorded bytes directly. The reader already snapshots each custom store result. */
 function replayStore(records) {
   return {
-    get: async (key) => records.get(key)?.slice(),
-    getRange: async (key, range) => records.get(`${key}|${JSON.stringify(range)}`)?.slice(),
+    get: async (key) => records.get(key),
+    getRange: async (key, range) => records.get(`${key}|${JSON.stringify(range)}`),
   };
 }
 

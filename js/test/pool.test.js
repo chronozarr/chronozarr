@@ -133,6 +133,39 @@ test('worker errors reject only their job', async () => {
   pool.close();
 });
 
+test('a failed worker transfer rejects just that job and keeps dispatching', async (t) => {
+  const { spawn, made } = manualWorkers();
+  const pool = new DecodePool({ size: 1, spawn, init: { type: 'init' } });
+  t.after(() => pool.close());
+  const [worker] = made;
+  const receive = worker.postMessage;
+  // Worker.postMessage uses the same transfer rules as structuredClone.
+  worker.postMessage = (message, transfer) => receive(structuredClone(message, { transfer }));
+  const reply = () => {
+    const { id, bytes } = worker.received.at(-1);
+    worker.onmessage({ data: { type: 'decoded', id, data: Uint16Array.from(bytes) } });
+  };
+
+  const detached = Uint8Array.of(1);
+  structuredClone(detached.buffer, { transfer: [detached.buffer] });
+  const controller = new AbortController();
+  const jobs = Promise.allSettled([pool.decode(detached, 0, controller.signal), pool.decode(Uint8Array.of(7))]);
+  assert.doesNotThrow(() => worker.onmessage({ data: { type: 'ready' } }));
+  assert.equal(worker.received.length, 2, 'the already queued job is dispatched after the failed send');
+  reply();
+  const [failed, queued] = await jobs;
+  assert.equal(failed.status, 'rejected');
+  assert.equal(failed.reason.name, 'DataCloneError');
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0, 'the failed job releases its abort listener');
+  assert.deepEqual(queued, { status: 'fulfilled', value: Uint16Array.of(7) });
+
+  const later = pool.decode(Uint8Array.of(9));
+  assert.equal(worker.received.length, 3, 'the pool still dispatches new jobs');
+  reply();
+  assert.deepEqual(await later, Uint16Array.of(9));
+  assert.equal(pool.mode, 'running');
+});
+
 test('a worker that fails to start fails every job with the reason', async () => {
   const { spawn } = fakeWorkerFactory({ failInit: true });
   const pool = new DecodePool({ size: 2, spawn, init: { type: 'init' } });
