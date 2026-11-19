@@ -812,6 +812,7 @@ class Viewer {
       const first = store.levels[0];
       const bytesPerSample = first.chunkBytes / (first.nBand * first.chunkWidth * first.chunkHeight);
       const slots = renderer.planSlots(first.nBand, first.chunkWidth, first.chunkHeight, POOL_BUDGET_BYTES, Math.max(4, 2 * cells.length + 4), bytesPerSample, store.hasMask, store.compactCacheEnabled);
+      if (cells.length > slots) throw new Error(`This export needs ${cells.length} GPU chunk slots, but this device can hold ${slots}. Zoom in to show fewer chunks or use a store with a coarser pyramid level.`);
       renderer.configure({ dtype: this.dtype, nBand: first.nBand, chunkWidth: first.chunkWidth, chunkHeight: first.chunkHeight, slots, hasMask: store.hasMask, compact: store.compactCacheEnabled });
     } catch (error) {
       renderer.dispose();
@@ -959,7 +960,7 @@ class Viewer {
    *   on the canvas (a coarser frame, another timestep or nothing stands in), and also whenever a store is open and a
    *   render is queued, since its outcome is not known yet; 'preview': a fast scrub's coarser frame of the timestep asked
    *   for is on the canvas (it sharpens when the scrub ends); 'settled': the frame asked for is on the canvas at the
-   *   level the view settles on, and no render is queued; 'unavailable': the frame asked for cannot be had, because
+   *   level the view settles on, and no render is queued; 'unavailable': the frame asked for cannot fit the GPU or
    *   every cell it misses has failed for good (until the view moves to another level or timestep).
    * - `playback`: 'paused': no movie plays (always so while no store is open); 'starting': play was pressed and the
    *   first frames are loading; 'playing': the movie steps; 'rebuffering': it stepped and now waits for frames.
@@ -1088,6 +1089,23 @@ class Viewer {
     this.#updateResHint();
     const cells = this.#visibleCells(lod);
     this.#view = { lod, cells: new Set(cells.map(([row, col]) => `${row}/${col}`)) };
+    if (cells.length > this.renderer.slots) {
+      const generation = this.#storeGeneration;
+      const timing = this.#viewTiming;
+      this.#playback?.pause();
+      if (generation !== this.#storeGeneration || timing !== this.#viewTiming) return { complete: false, ms: performance.now() - started, lod, cells: cells.length };
+      this.#abortBackground();
+      cancelAnimationFrame(this.#rafId);
+      this.#rafId = 0;
+      this.#frameOutcome = 'unavailable';
+      this.#setLoading(false);
+      this.#setProgress(0);
+      this.#updateFrameDate([]);
+      this.#firstFrameUnavailable?.();
+      if (this.#notice?.code === 'gpu_capacity') this.#publishStatus();
+      else this.#showError('View exceeds GPU capacity', `This view needs ${cells.length} GPU chunk slots, but this device can hold ${this.renderer.slots}. Zoom in to show fewer chunks or use a store with a coarser pyramid level.`, { toast: true, code: 'gpu_capacity' });
+      return { complete: false, ms: performance.now() - started, lod, cells: cells.length };
+    }
     const missing = cells.filter(([row, col]) => !this.#cellReady(lod, row, col, t));
     let choice = chooseFrame({
       targetLod: lod,
@@ -1140,6 +1158,12 @@ class Viewer {
       if (this.#firstFrameUnavailable !== null && this.#failedForGood(missing)) this.#firstFrameUnavailable();
     }
     if (this.#retiringPumps.length) this.#abortRetiringPumps();
+    // The level the view settles on, as #paintFrame tests it: a fast scrub's coarser level is not.
+    const sharp = showing && (!this.#scrubCoarser || choice.lod <= this.#scrubMemo.baseLod);
+    // The failures of the wave count only for its own level and timestep: a sampled scrub does not start a wave for this one.
+    const wave = this.#wave;
+    const failedForGood = !showing && wave !== null && wave.lod === lod && wave.t === t && this.#failedForGood(missing);
+    this.#frameOutcome = frameOutcome(true, showing, sharp, missing.length, failedForGood);
     this.#updateFrameDate(missing);
     if (this.#gaps.visible) this.#drawGapOverlay();
     const ms = performance.now() - started;
@@ -1147,12 +1171,6 @@ class Viewer {
       this.#paintMs = painted ? ms : this.#paintMs;
       for (const resolve of this.#painted.splice(0)) resolve();
     }
-    // The level the view settles on, as #paintFrame tests it: a fast scrub's coarser level is not.
-    const sharp = showing && (!this.#scrubCoarser || choice.lod <= this.#scrubMemo.baseLod);
-    // The failures of the wave count only for its own level and timestep: a sampled scrub does not start a wave for this one.
-    const wave = this.#wave;
-    const failedForGood = !showing && wave !== null && wave.lod === lod && wave.t === t && this.#failedForGood(missing);
-    this.#frameOutcome = frameOutcome(true, showing, sharp, missing.length, failedForGood);
     // The outcome is stored before anything publishes: hiding a toast publishes, and the status it gives is this render's.
     if (showing && this.#notice?.toast) this.#hideError();
     else this.#publishStatus();
@@ -2928,7 +2946,7 @@ class Viewer {
     let message = '';
     // While no store is open there is no timestep to load.
     if (this.store !== null && shown !== this.t) {
-      const action = this.#failedForGood(missing) ? 'Unavailable' : this.#scrubMemo?.sampled && !this.#playing ? 'Selected' : 'Loading';
+      const action = this.#frameOutcome === 'unavailable' || this.#failedForGood(missing) ? 'Unavailable' : this.#scrubMemo?.sampled && !this.#playing ? 'Selected' : 'Loading';
       message = `${action} ${this.#formatTime(this.t)}.`;
       if (shown !== undefined) message += ` Showing ${date}.`;
     }
