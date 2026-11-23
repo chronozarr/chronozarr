@@ -1332,6 +1332,7 @@ export class ChronoStore {
       entry.priority.value = 0;
       const index = this.#shardIndexes.get(entry.indexKey);
       if (index) index.priority.value = 0;
+      if (entry.priority.indexPriorities) for (const priority of entry.priority.indexPriorities) priority.value = 0;
       this.#limiter.reprioritize();
       this.#decoder.reprioritize?.();
       // The request is not a speculative one any more: a slot is free.
@@ -1398,6 +1399,8 @@ export class ChronoStore {
         this.#uncount(entry);
       });
     this.#inflight.set(key, entry);
+    // A new visible cell may join a generic index already queued by another cell at background priority.
+    if (!background && entry.priority.indexPriorities) this.#limiter.reprioritize();
     return entry;
   }
 
@@ -1434,7 +1437,7 @@ export class ChronoStore {
 
   /**
    * Abort a fetch that nobody wants any more. Its rejection (an AbortError) has no one left to handle it, so it is marked handled here.
-   * It stops counting as demand now: it may not settle for a while (a shard index read cannot be cancelled).
+   * It stops counting as demand now: it may not settle for a while (a shared shard index outlives one subscriber).
    */
   #abortEntry(entry) {
     entry.promise.catch(() => {});
@@ -1543,7 +1546,7 @@ export class ChronoStore {
     return this.#readable.getRange(shardKey, { offset, length: index[2 * at + 1] }, { signal, priority, progress });
   }
 
-  /** Shard index: read once, shared by every chunk of the shard, never tied to one caller's signal (see #readShardIndex). */
+  /** Shard index: shared by the shard's chunks until the store closes, never tied to one caller's signal. */
   #shardIndex(kind, lod, row, col, shardIndex, shardKey, storage, priority) {
     const cacheKey = `${lod}/${shardKey}`;
     const cached = this.#shardIndexes.get(cacheKey);
@@ -1594,7 +1597,7 @@ export class ChronoStore {
     const hinted = (range) => !storage.indexAtStart && 'offset' in range;
     const read = async (shardBytes) => {
       const range = rangeFor(shardBytes);
-      const bytes = await this.#readable.getRange(shardKey, range, { priority: handle, rangeMiss: hinted(range) });
+      const bytes = await this.#readable.getRange(shardKey, range, { signal: this.#closeController.signal, priority: handle, rangeMiss: hinted(range) });
       if (bytes === null) throw new ShardIndexError(`${where}: HTTP 416 for shard index range bytes=${range.offset}-${range.offset + range.length - 1}, the shard is shorter than shard_bytes says (${shardBytes})`);
       return bytes && parseShardIndex(bytes, storage.shardTime, storage.indexHasCrc, where, hinted(range) ? shardBytes : undefined);
     };

@@ -26,9 +26,12 @@ Rules, which keep every pixel's validity and value exactly as the store reads it
 from __future__ import annotations
 
 import math
+import os
 import re
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager, suppress
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 
@@ -138,6 +141,31 @@ def _overview_can_hit_nodata(dtype: np.dtype, nodata: int | float | None) -> boo
     return True
 
 
+@contextmanager
+def _cog_output(target: Path) -> Iterator[Path]:
+    """Publish a completed sibling file without replacing an existing destination."""
+    temporary = target.with_name(f".chronozarr-export-{uuid4().hex}.tif")
+    # Exclusive creation reserves our name and keeps the normal output mode/umask.
+    # Close it before GDAL writes, and all GDAL handles close before linking on Windows.
+    with temporary.open("xb"):
+        pass
+    try:
+        yield temporary
+        # Unlike rename on POSIX, link refuses even a destination created after preflight.
+        # Unsupported filesystems fail safely; copying or replacing here could clobber it.
+        os.link(temporary, target)
+    except BaseException as error:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError as cleanup_error:
+            error.add_note(f"could not remove temporary COG {temporary}: {cleanup_error}")
+        raise
+    else:
+        # Publication succeeded: failure to remove the spare link cannot fail the export.
+        with suppress(OSError):
+            temporary.unlink()
+
+
 def export_cog(
     store: ChronoStore | str | Path,
     out_dir: str | Path,
@@ -151,6 +179,8 @@ def export_cog(
     `store` is an opened store, a local path or an https URL. Files are named
     `L<level>_<date>.tif`. One timestep of the level is held in memory at a time, so pick a
     coarser `level` for very large stores. An existing file of the same name is an error.
+    Each file is completed beside its destination and published without replacement;
+    the output filesystem must support hard links.
     `physical` writes float32 physical values instead of the stored values; see the module
     docstring for how validity, scale and offset are written.
     """
@@ -224,10 +254,10 @@ def export_cog(
                     CHRONOZARR_LEVEL=str(level),
                     CHRONOZARR_TIMESTEP=str(t),
                 )
-            with memory.open() as src:
+            with _cog_output(target) as temporary, memory.open() as src:
                 rasterio.shutil.copy(
                     src,
-                    target,
+                    temporary,
                     driver="COG",
                     compress="DEFLATE",
                     predictor="YES",

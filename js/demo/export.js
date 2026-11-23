@@ -139,19 +139,20 @@ async function recordVideo(session, { format, from, to, stepsPerSecond, onProgre
   if (!mimeType) throw new Error(`This browser cannot record ${format.toUpperCase()}: MediaRecorder with a ${format.toUpperCase()} codec is not available. Choose another format.`);
   const total = to - from + 1;
   const stream = session.canvas.captureStream(0);
-  const [track] = stream.getVideoTracks();
-  const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: videoBitrate(session.canvas.width, session.canvas.height, stepsPerSecond) });
+  let recorder;
   const chunks = [];
-  recorder.ondataavailable = (event) => event.data.size > 0 && chunks.push(event.data);
-  const stopped = new Promise((resolve, reject) => {
-    recorder.onstop = resolve;
-    recorder.onerror = (event) => reject(event.error ?? new Error('MediaRecorder failed'));
-  });
-  const frame = (t) => {
-    renderFrame(session, t);
-    track.requestFrame();
-  };
   try {
+    const [track] = stream.getVideoTracks();
+    recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: videoBitrate(session.canvas.width, session.canvas.height, stepsPerSecond) });
+    recorder.ondataavailable = (event) => event.data.size > 0 && chunks.push(event.data);
+    const stopped = new Promise((resolve, reject) => {
+      recorder.onstop = resolve;
+      recorder.onerror = (event) => reject(event.error ?? new Error('MediaRecorder failed'));
+    });
+    const frame = (t) => {
+      renderFrame(session, t);
+      track.requestFrame();
+    };
     await ensureLoaded(session, from, signal);
     recorder.start();
     frame(from);
@@ -203,7 +204,7 @@ async function recordVideo(session, { format, from, to, stepsPerSecond, onProgre
     // A cancel that arrives while the recorder writes the last bytes still wins: no file is returned for it.
     signal?.throwIfAborted();
   } finally {
-    if (recorder.state !== 'inactive') recorder.stop();
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
     for (const t of stream.getTracks()) t.stop();
   }
   return new Blob(chunks, { type: recorder.mimeType || mimeType });

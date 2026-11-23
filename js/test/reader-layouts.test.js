@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openStore } from '../chronozarr/decoder.js';
+import { RequestLimiter } from '../chronozarr/limiter.js';
 import { buildSyntheticStore, crc32c } from '../support/synthetic-store.js';
 
 const spec = { nTime: 5, nBand: 3, height: 7, width: 11, chunk: 4, sharded: false, mask: true, coverage: true };
@@ -101,6 +102,97 @@ for (const options of [
     store.close();
   });
 }
+
+for (const demandTime of [6, 7]) test(demandTime === 6
+  ? 'a joined demand read promotes a queued generic shard index into the reserved request slot'
+  : 'a demand read sharing a queued generic shard index uses the reserved slot without promoting background payloads', { timeout: 5000 }, async (t) => {
+  const readable = buildSyntheticStore({ nTime: 8, nBand: 1, height: 3, width: 5, chunk: 4, sharded: false });
+  // Spatial sharding and nonsquare inner chunks deliberately exclude the one-cell fast path.
+  writeLayout(readable, 'data', [1, 1, 3, 5], { sharded: true });
+  const blockers = new Map([0, 1, 2].map((shard) => [
+    `/0/data/c/${shard}/0/0/0`,
+    { started: Promise.withResolvers(), release: Promise.withResolvers() },
+  ]));
+  const targetKey = '/0/data/c/3/0/0/0';
+  const queued = Promise.withResolvers();
+  const reads = [];
+  const run = RequestLimiter.prototype.run;
+  let observeTarget = false;
+  let targetIndexStarts = 0;
+  let targetPayloadStarts = 0;
+  let store;
+  let cleaned = false;
+  const cleanup = async () => {
+    if (cleaned) return;
+    cleaned = true;
+    RequestLimiter.prototype.run = run;
+    for (const gate of blockers.values()) gate.release.resolve();
+    store?.close();
+    await Promise.allSettled(reads);
+  };
+  t.after(cleanup);
+  const keep = (promise) => {
+    reads.push(promise);
+    promise.catch(() => {});
+    return promise;
+  };
+  try {
+    store = await openStore('memory://generic-index-promotion', {
+      workers: 0,
+      // The reader reserves floor(maxRequests / 4): three background slots and one demand slot.
+      maxRequests: 4,
+      store: {
+        get: (key, options) => readable.get(key, options),
+        async getRange(key, range, options) {
+          if ('suffixLength' in range) {
+            const gate = blockers.get(key);
+            if (gate) {
+              gate.started.resolve();
+              await gate.release.promise;
+            }
+            if (key === targetKey) targetIndexStarts++;
+          } else if (key === targetKey) targetPayloadStarts++;
+          return readable.getRange(key, range, options);
+        },
+      },
+    });
+    assert.ok(store.notes.some((note) => /chunk layout/.test(note)), 'fixture uses generic chunk assembly');
+    assert.deepEqual([store.levels[0].chunkHeight, store.levels[0].chunkWidth], [3, 5]);
+    for (const time of [0, 2, 4]) keep(store.getRaw(0, 0, 0, time, { background: true }));
+    await Promise.all([...blockers.values()].map((gate) => gate.started.promise));
+
+    // Observe the actual queue after run() returns, without replacing its scheduling behavior.
+    RequestLimiter.prototype.run = function (priority, signal, task) {
+      const result = run.call(this, priority, signal, task);
+      if (observeTarget && this.queued === 1) {
+        observeTarget = false;
+        queued.resolve({ limiter: this, priority });
+      }
+      return result;
+    };
+    observeTarget = true;
+    const background = keep(store.getRaw(0, 0, 0, 6, { background: true }));
+    const waiting = await queued.promise;
+    assert.equal(waiting.limiter.active, 3);
+    assert.equal(waiting.priority.value, 1);
+    assert.equal(targetIndexStarts, 0, 'the fourth background index is queued');
+
+    const demand = keep(store.getRaw(0, 0, 0, demandTime));
+    // Joining synchronously reprioritizes the queued request and drains the limiter.
+    assert.equal(targetIndexStarts, 1, 'the joined index takes the reserved demand slot before any blocker is released');
+    const data = await demand;
+    assert.deepEqual(data, Uint16Array.from({ length: 15 }, (_, i) => value(demandTime, 0, Math.floor(i / 5), i % 5)));
+    assert.equal(targetPayloadStarts, 1, 'only the visible cell uses the reserved payload slot');
+    if (demandTime === 6) assert.equal(await background, data, 'both callers share the same logical read');
+    else {
+      for (const gate of blockers.values()) gate.release.resolve();
+      assert.deepEqual(await background, Uint16Array.from({ length: 15 }, (_, i) => value(6, 0, Math.floor(i / 5), i % 5)));
+    }
+    assert.equal(targetIndexStarts, 1, 'promotion does not start a second index request');
+  } finally {
+    await cleanup();
+  }
+});
 
 test('a malformed general-layout chunk refuses instead of silently filling missing decoded elements', async () => {
   const readable = buildSyntheticStore(spec);

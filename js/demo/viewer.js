@@ -2352,7 +2352,8 @@ class Viewer {
     const maskValue = mask ? mask[cellY * level.chunkWidth + cellX] : null;
     const info = { t, lod, pixel: { x: Math.floor(worldX), y: Math.floor(worldY) }, observed, masked: maskValue === 0, ...describePixel(values, this.bands, this.#nodata, maskValue) };
     this.#hook('click', { pixel: info.pixel, t, lod, info });
-    if (!this.inspectorUi) return;
+    // The hook can replace the store or start another pixel inspection.
+    if (request !== this.#inspectRequest || !this.inspectorUi) return;
     this.#updateSidebar(info);
     this.openInspector();
     this.#startChart({ lod, row, col, x: cellX, y: cellY });
@@ -2732,6 +2733,7 @@ class Viewer {
             this.#drawGapOverlay();
           },
           (error) => {
+            requested.delete(key);
             // Closing the store at the end of its session aborts the read: that is no failure.
             if (error.name !== 'AbortError') console.error(`gap overlay: coverage load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, redactText(error));
           },

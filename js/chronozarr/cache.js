@@ -20,7 +20,7 @@ export class ChunkCache {
   #entries = new Map();
   #decodedKeys = new Set();
   #compressedKeys = new Set();
-  #pinned = new Set();
+  #pinned = new Map();
   #decodedBytes = 0;
   #compressedBytes = 0;
   #clock = 0;
@@ -98,13 +98,17 @@ export class ChunkCache {
 
   hasDecoded(key) { return !!this.#entries.get(key)?.data; }
 
-  /** Keep these keys out of eviction until unpin(): a caller that needs them all resident at once. */
+  /** Each caller holds its own pin until unpin(): overlapping frames keep their shared chunks resident. */
   pin(keys) {
-    for (const key of keys) this.#pinned.add(key);
+    for (const key of keys) this.#pinned.set(key, (this.#pinned.get(key) ?? 0) + 1);
   }
 
   unpin(keys) {
-    for (const key of keys) this.#pinned.delete(key);
+    for (const key of keys) {
+      const count = this.#pinned.get(key);
+      if (count > 1) this.#pinned.set(key, count - 1);
+      else this.#pinned.delete(key);
+    }
   }
 
   /**

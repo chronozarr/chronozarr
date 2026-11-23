@@ -95,6 +95,55 @@ test('a delayed sample cannot replace a newer pixel selection', async ({ page, s
   await expect(content).not.toContainText('50, 40');
 });
 
+test('a click callback that opens another store leaves no outgoing inspector work', async ({ page, servers, storeUrl, consoleErrors }) => {
+  await openViewer(page, servers, await storeUrl('u16_plain'));
+  const next = await storeUrl('u8_rgb');
+  const root = `${next}zarr.json`;
+  let release;
+  let held = false;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const hold = async (route) => {
+    held = true;
+    await gate;
+    await route.continue().catch(() => {});
+  };
+  await page.route(root, hold);
+  try {
+    await page.evaluate((url) => {
+      const { viewer } = window.chronozarr;
+      const click = viewer.hooks.click;
+      window.restoreClickHook = () => {
+        if (click === undefined) delete viewer.hooks.click;
+        else viewer.hooks.click = click;
+      };
+      viewer.hooks.click = () => {
+        window.restoreClickHook();
+        window.clickReplacement = viewer.loadStore(url, { workers: 0 });
+        window.clickReplacement.catch(() => {});
+      };
+    }, next);
+    await clickStorePixel(page, 50, 40);
+    await expect.poll(() => held, 'the click callback started the replacement and its metadata is held').toBe(true);
+    await expect(page.locator('#sidebar-content'), 'the outgoing pixel must not repopulate the cleared inspector').toBeEmpty();
+    await expect(page.locator('.chart-svg')).toHaveCount(0);
+    expect(consoleErrors, 'the outgoing inspector must not dereference the cleared store').toEqual([]);
+
+    release();
+    expect(await page.evaluate(() => window.clickReplacement)).toMatchObject({ firstPaintMs: expect.any(Number) });
+    expect(await page.evaluate(() => window.chronozarr.viewer.store.url)).toBe(next);
+    await clickStorePixel(page, 80, 90);
+    await expect(page.locator('#sidebar-content')).toContainText('80, 90');
+    await expect(page.locator('.chart-svg')).toHaveCount(1);
+  } finally {
+    release();
+    await page.unroute(root, hold);
+    await page.evaluate(async () => {
+      window.restoreClickHook?.();
+      await window.clickReplacement?.catch(() => {});
+    }).catch(() => {});
+  }
+});
+
 test('a nodata band remains missing when another band is valid at the same pixel', async ({ page, servers, storeUrl }) => {
   await openViewer(page, servers, await storeUrl('u16_partial'));
   await clickStorePixel(page, 50, 40);

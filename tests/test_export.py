@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import os
 import shutil
+import stat
 import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -178,6 +182,155 @@ def test_existing_files_and_bad_level_are_errors(store_and_truth, tmp_path):
         export_cog(path, tmp_path, times=[0])
     with pytest.raises(ValueError, match="level 9 out of range"):
         export_cog(path, tmp_path / "other", level=9)
+
+
+def test_export_preserves_a_target_created_after_its_initial_check(
+    store_and_truth, tmp_path, monkeypatch
+):
+    rasterio = pytest.importorskip("rasterio")
+    from rasterio.transform import Affine
+
+    path, _ = store_and_truth
+    store = chronozarr.open_store(path)
+    out = tmp_path / "cogs"
+    target = out / f"L0_{_file_stem(store.attrs.times[0])}.tif"
+    assert not target.exists()
+    sentinel = np.full((1, 2, 3), 54321, dtype=np.uint16)
+    created = []
+    read = store.read
+
+    def read_after_precheck(t, lod=0):
+        if not created:
+            assert out.is_dir(), "export has passed its initial target check"
+            assert not target.exists()
+            with rasterio.open(
+                target,
+                "w",
+                driver="GTiff",
+                width=3,
+                height=2,
+                count=1,
+                dtype="uint16",
+                crs=store.crs.to_string(),
+                transform=Affine(*store.levels[0].transform),
+            ) as dst:
+                dst.write(sentinel)
+            created.append(target.read_bytes())
+        return read(t, lod)
+
+    # Insert another writer's valid TIFF after preflight; keep the actual COG copy unchanged.
+    monkeypatch.setattr(store, "read", read_after_precheck)
+    refusal = None
+    try:
+        export_cog(store, out, times=[0])
+    except (FileExistsError, rasterio.errors.RasterioIOError) as error:
+        refusal = error
+    assert len(created) == 1, "the collision was introduced during the first pixel read"
+    assert target.read_bytes() == created[0], "another writer's TIFF must remain byte-identical"
+    with rasterio.open(target) as src:
+        np.testing.assert_array_equal(src.read(), sentinel)
+    assert refusal is not None, "the export must clearly refuse the existing target"
+    if not isinstance(refusal, FileExistsError):
+        assert any(word in str(refusal).lower() for word in ("exist", "overwrit", "occupied"))
+
+
+def test_export_publishes_a_complete_sibling_with_normal_permissions(
+    store_and_truth, tmp_path, monkeypatch
+):
+    rasterio = pytest.importorskip("rasterio")
+    path, truth = store_and_truth
+    out = tmp_path / "cogs"
+    out.mkdir()
+    control = out / "normal-permissions"
+    control.write_bytes(b"")
+    expected_mode = stat.S_IMODE(control.stat().st_mode)
+    control.unlink()
+    link = os.link
+    published = []
+
+    def publish(temporary, target):
+        assert temporary.parent == target.parent == out
+        assert not target.exists(), "the final path stays absent while the COG is written"
+        with rasterio.open(temporary) as src:
+            np.testing.assert_array_equal(src.read(), truth[0])
+            assert src.tags()["CHRONOZARR_TIME"] == "2024-01-01T00:00:00Z"
+        assert stat.S_IMODE(temporary.stat().st_mode) == expected_mode
+        published.append(target)
+        link(temporary, target)
+
+    monkeypatch.setattr(os, "link", publish)
+    targets = export_cog(path, out, times=[0])
+    assert published == targets
+    assert list(out.iterdir()) == targets, "the owned temporary name is removed after publication"
+    assert stat.S_IMODE(targets[0].stat().st_mode) == expected_mode
+
+
+@pytest.mark.parametrize("failure_at", ["copy", "publication"])
+def test_export_cleans_private_files_after_write_or_publication_failure(
+    store_and_truth, tmp_path, monkeypatch, failure_at
+):
+    pytest.importorskip("rasterio")
+    import rasterio.shutil  # ty: ignore[unresolved-import]  # compiled module, no stub
+
+    path, _ = store_and_truth
+    out = tmp_path / "cogs"
+    code = errno.EIO if failure_at == "copy" else getattr(errno, "ENOTSUP", errno.EPERM)
+    reason = "copy failed" if failure_at == "copy" else "hard links not supported"
+    failure = OSError(code, reason)
+    temporary_paths = []
+
+    def fail_copy(source, temporary, **options):
+        temporary_paths.append(Path(temporary))
+        Path(temporary).write_bytes(b"incomplete COG")
+        raise failure
+
+    def fail_publication(temporary, target):
+        temporary_paths.append(Path(temporary))
+        raise failure
+
+    if failure_at == "copy":
+        monkeypatch.setattr(rasterio.shutil, "copy", fail_copy)
+    else:
+        monkeypatch.setattr(os, "link", fail_publication)
+    with pytest.raises(OSError) as raised:
+        export_cog(path, out, times=[0])
+    assert raised.value is failure, "cleanup must preserve the original error"
+    assert len(temporary_paths) == 1
+    assert temporary_paths[0].parent == out
+    assert list(out.iterdir()) == [], "a failed write or link publishes no final TIFF"
+
+
+def test_export_preserves_the_write_error_when_private_cleanup_also_fails(
+    store_and_truth, tmp_path, monkeypatch
+):
+    pytest.importorskip("rasterio")
+    import rasterio.shutil  # ty: ignore[unresolved-import]  # compiled module, no stub
+
+    path, _ = store_and_truth
+    out = tmp_path / "cogs"
+    failure = OSError(errno.EIO, "COG write failed")
+    unlink = Path.unlink
+
+    def fail_copy(source, temporary, **options):
+        Path(temporary).write_bytes(b"incomplete COG")
+        raise failure
+
+    def fail_cleanup(temporary, *args, **options):
+        if temporary.parent == out:
+            raise PermissionError(errno.EACCES, "cleanup blocked", temporary)
+        return unlink(temporary, *args, **options)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(rasterio.shutil, "copy", fail_copy)
+        patch.setattr(Path, "unlink", fail_cleanup)
+        with pytest.raises(OSError) as raised:
+            export_cog(path, out, times=[0])
+        assert raised.value is failure
+        assert any("could not remove temporary COG" in note for note in failure.__notes__)
+        remaining = list(out.iterdir())
+        assert len(remaining) == 1 and remaining[0].name.startswith(".chronozarr-export-")
+    # The cleanup failure was injected only for the assertion above.
+    remaining[0].unlink()
 
 
 @pytest.mark.skipif(shutil.which("gdalinfo") is None, reason="GDAL command line not installed")

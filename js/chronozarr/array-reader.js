@@ -40,8 +40,17 @@ export function createArrayReader(storage, path, readable, closeSignal) {
       cache.set(key, index);
       promise.catch(() => cache.delete(key));
     }
+    // The shared index has its own priority; link it while this logical cell waits, so a later demand join
+    // can promote the index without promoting another cell's background payload.
+    const indexPriorities = priority.indexPriorities ??= new Set();
+    indexPriorities.add(index.priority);
     index.priority.value = Math.min(index.priority.value, priority.value);
-    const entries = await index.promise;
+    let entries;
+    try {
+      entries = await index.promise;
+    } finally {
+      indexPriorities.delete(index.priority);
+    }
     if (!entries) return undefined;
     const linear = coords.reduce((n, coordinate, i) => n * indexShape[i] + coordinate % indexShape[i], 0);
     const offset = entries[2 * linear];
