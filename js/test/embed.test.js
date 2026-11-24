@@ -288,6 +288,22 @@ test('makeGeo with a transform but a CRS the viewer cannot project: coordinates 
   assert.throws(() => geo.toPixel({ lon: 3, lat: 36 }), /needs a store CRS the viewer can project.*use \{x, y\}/);
 });
 
+test('makeGeo preserves a geographic camera center for Open in viewer', () => {
+  for (const transform of [
+    [1e-5, 0, -75, 0, -1e-5, 36],
+    [10, 0, 500000, 0, -1e-6, -36],
+    [1e-110, 0, 0, 0, -1e-110, 0],
+  ]) {
+    const geo = makeGeo({ transform });
+    const center = { col: 49.25, row: -49.75 };
+    const point = geo.fromPixel(center.col, center.row);
+    const restored = geo.toPixel(point);
+    assert.ok(Number.isFinite(point.x) && Number.isFinite(point.y));
+    assert.ok(Math.abs(restored.col - center.col) < 0.01, `${transform}: col ${restored.col}`);
+    assert.ok(Math.abs(restored.row - center.row) < 0.01, `${transform}: row ${restored.row}`);
+  }
+});
+
 // ---- messages ----
 
 test('embedMessage puts the contract version and the type on every message', () => {

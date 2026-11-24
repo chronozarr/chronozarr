@@ -62,6 +62,25 @@ test('sub-unit pixels keep millimetre precision in projected coordinates', () =>
   assert.ok(Math.abs(back.center.col - 10.3) < 0.01 && Math.abs(back.center.row - 20.7) < 0.01);
 });
 
+test('shared centers retain pixel precision on geographic, anisotropic and rotated grids', () => {
+  const transforms = [
+    [1e-5, 0, -75, 0, -1e-5, 36],
+    [10, 0, 500000, 0, -1e-5, -36],
+    [1e-10, 0, 150, 0, -1e-11, -45],
+    [0.0005, 0, 1e8, 0, -0.00025, -1e8],
+    [8.66e-6, 5e-6, -75, 5e-6, -8.66e-6, 36],
+    [1e-110, 0, 0, 0, -1e-110, 0],
+  ];
+  for (const transform of transforms) {
+    const center = { col: 49.2, row: -49.75 };
+    const query = encodeView({ center }, { transform });
+    const restored = decodeView(query, { ...STORE, transform }).center;
+    assert.ok(Math.abs(restored.col - center.col) < 0.01, `${transform}: col ${restored.col}`);
+    assert.ok(Math.abs(restored.row - center.row) < 0.01, `${transform}: row ${restored.row}`);
+    assert.ok(Number.isFinite(restored.col) && Number.isFinite(restored.row));
+  }
+});
+
 test('invalid or out-of-range values are ignored, valid ones kept', () => {
   assert.deepEqual(decodeView('t=abc&p=nope&z=-2&c=12&b=B99', STORE), {});
   assert.deepEqual(decodeView('t=117', STORE), {}, 'one past the last timestep');

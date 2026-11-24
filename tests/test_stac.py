@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +11,14 @@ import pytest
 
 import chronozarr
 from chronozarr import schema
-from chronozarr.stac import EXT_DATACUBE, ZARR_MEDIA_TYPE, build_stac, default_id, write_stac
+from chronozarr.stac import (
+    EXT_DATACUBE,
+    ZARR_MEDIA_TYPE,
+    _footprint,
+    build_stac,
+    default_id,
+    write_stac,
+)
 from tests.synthetic import BANDS, CRS, TRANSFORM, build_store, make_da, make_truth
 
 pytestmark = pytest.mark.unit
@@ -65,6 +73,112 @@ def test_footprint_is_a_closed_wgs84_polygon_containing_the_bbox_corners(store_p
     # UTM 31N has its central meridian at 3E; easting 746090 is ~2.4 degrees east of it, at ~23N
     assert 5.2 < item["bbox"][0] < 5.6
     assert 22.0 < item["bbox"][1] < 24.0
+
+
+def _contains(geometry, x, y):
+    """Independent planar ray-crossing check for the emitted GeoJSON polygons."""
+
+    def in_ring(ring):
+        inside = False
+        for (x0, y0), (x1, y1) in pairwise(ring):
+            if (y0 > y) != (y1 > y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+                inside = not inside
+        return inside
+
+    polygons = (
+        [geometry["coordinates"]] if geometry["type"] == "Polygon" else geometry["coordinates"]
+    )
+    return any(in_ring(rings[0]) and not any(map(in_ring, rings[1:])) for rings in polygons)
+
+
+@pytest.mark.parametrize("crs,left", [("EPSG:32660", 700000), ("EPSG:32601", 100000)])
+def test_dateline_stac_covers_both_sides_without_covering_greenwich(tmp_path, crs, left):
+    data = make_da(np.ones((2, 1, 10, 20), dtype=np.uint16), ["signal"])
+    data.attrs.update(crs=crs, transform=(10000, 0, left, 0, -10000, 100000))
+    path = tmp_path / "dateline"
+    chronozarr.encode(data, path, n_lods=1, chunk_size=16)
+    _, (collection, item) = documents(path)
+    geometry = item["geometry"]
+    assert geometry["type"] == "MultiPolygon"
+    assert _contains(geometry, 179.5, 0.45)
+    assert _contains(geometry, -179.5, 0.45)
+    assert not _contains(geometry, 0, 0.45)
+    west, south, east, north = item["bbox"]
+    assert west > east
+    assert 0 < east + 360 - west < 3
+    assert south == 0 and 0.9 < north < 1
+    assert collection["extent"]["spatial"]["bbox"] == [item["bbox"]]
+    for (ring,) in geometry["coordinates"]:
+        assert ring[0] == ring[-1]
+        assert all(-180 <= x <= 180 for x, _ in ring)
+        assert all(abs(a[0] - b[0]) <= 180 for a, b in pairwise(ring))
+
+
+@pytest.mark.parametrize("bounds", [(175, -5, 185, 5), (280, 0, 305, 10)])
+def test_geographic_longitudes_are_normalized_into_geojson_range(bounds):
+    geometry, bbox = _footprint("EPSG:4326", bounds)
+    if bounds[0] == 175:
+        assert geometry["type"] == "MultiPolygon"
+        assert _contains(geometry, 179, 0) and _contains(geometry, -179, 0)
+        assert bbox == [175, -5, -175, 5]
+    else:
+        assert geometry["type"] == "Polygon"
+        assert bbox == [-80, 0, -55, 10]
+        assert _contains(geometry, -70, 5)
+    assert not _contains(geometry, 0, 0.45)
+
+
+@pytest.mark.parametrize("crs,pole", [("EPSG:3413", 90), ("EPSG:3031", -90)])
+def test_a_polar_footprint_includes_its_pole(crs, pole):
+    geometry, bbox = _footprint(crs, (-100000, -100000, 100000, 100000))
+    assert geometry["type"] == "Polygon"
+    assert bbox[0] == -180 and bbox[2] == 180
+    assert bbox[3 if pole > 0 else 1] == pole
+    assert _contains(geometry, 0, pole * 0.999)
+    assert not _contains(geometry, 0, pole * 0.8)
+
+
+def test_a_zero_to_360_grid_has_one_global_polygon():
+    geometry, bbox = _footprint("EPSG:4326", (0, -80, 360, 80))
+    assert geometry["type"] == "Polygon"
+    assert bbox == [-180, -80, 180, 80]
+    assert all(_contains(geometry, x, 0) for x in (-179, 0, 179))
+
+
+@pytest.mark.parametrize("crs,pole", [("EPSG:3413", 90), ("EPSG:3031", -90)])
+def test_a_large_polar_footprint_uses_the_enclosed_pole(crs, pole):
+    geometry, bbox = _footprint(crs, (-50_000_000, -50_000_000, 50_000_000, 50_000_000))
+    assert geometry["type"] == "Polygon"
+    assert bbox[3 if pole > 0 else 1] == pole
+    assert _contains(geometry, 0, pole * 0.999)
+    assert not _contains(geometry, 0, -pole * 0.999)
+
+
+@pytest.mark.parametrize(
+    "crs,bounds",
+    [
+        ("EPSG:3413", (-100000, 0, 100000, 100000)),
+        ("EPSG:3413", (-100000, -100000, 0, 100000)),
+        ("EPSG:3031", (-100000, -100000, 100000, 0)),
+        ("EPSG:3031", (-100000, -100000, 0, 100000)),
+        ("EPSG:3413", (0, 0, 100000, 100000)),
+        ("EPSG:3031", (0, 0, 100000, 100000)),
+    ],
+)
+def test_an_ambiguous_pole_on_the_boundary_is_refused(crs, bounds):
+    with pytest.raises(ValueError, match="pole on its boundary"):
+        _footprint(crs, bounds)
+
+
+@pytest.mark.parametrize(
+    "bounds,inside_y",
+    [((-180, -90, 180, 90), 0), ((-10, 80, 10, 90), 89), ((-10, -90, 10, -80), -89)],
+)
+def test_geographic_grids_may_reach_the_poles(bounds, inside_y):
+    geometry, bbox = _footprint("EPSG:4326", bounds)
+    assert geometry["type"] == "Polygon"
+    assert bbox == list(bounds)
+    assert _contains(geometry, 0, inside_y)
 
 
 @pytest.mark.parametrize(

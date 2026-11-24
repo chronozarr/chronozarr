@@ -176,6 +176,40 @@ def test_local_unsharded_store_passes(unsharded_store):
     assert not failures(diagnose(str(unsharded_store)))
 
 
+@pytest.mark.parametrize("masked", [False, True])
+def test_matching_nan_values_do_not_report_decode_corruption(tmp_path, masked):
+    truth = np.ones((2, 1, 16, 16), dtype=np.float32)
+    truth[0, 0, 8, 8] = np.nan
+    mask = np.ones((2, 16, 16), dtype=np.uint8) if masked else None
+    if mask is not None:
+        mask[0, 8, 8] = 0
+    path = tmp_path / "nan"
+    chronozarr.encode(make_da(truth, ["signal"]), path, n_lods=1, chunk_size=16, mask=mask)
+    assert validate(path) == []
+    np.testing.assert_array_equal(chronozarr.open_store(path).read(0), truth[0])
+    assert not failures(diagnose(str(path)))
+
+
+def test_nan_comparison_still_detects_different_values(tmp_path, monkeypatch):
+    truth = np.ones((2, 1, 16, 16), dtype=np.float32)
+    truth[0, 0, 8, 8] = np.nan
+    path = tmp_path / "nan"
+    chronozarr.encode(make_da(truth, ["signal"]), path, n_lods=1, chunk_size=16)
+    opened = chronozarr.open_store(path)
+    actual_read = opened.read
+
+    def corrupted_full_read(t, lod=0):
+        values = actual_read(t, lod)
+        if t == 0:
+            values[0, 0, 0] = 2
+        return values
+
+    monkeypatch.setattr(opened, "read", corrupted_full_read)
+    check = doctor_module._decode_level(path, opened, 0, 1_000_000)
+    assert check.status == "fail"
+    assert "cell read differs from full read in 1 value(s)" in check.detail
+
+
 def test_full_read_limit_skips_large_levels(sharded_store):
     checks = diagnose(str(sharded_store), full_read_limit_mb=0.0)
     level0 = by_name(checks)["decode level 0"]

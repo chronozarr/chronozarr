@@ -127,7 +127,10 @@ ${hasMask ? `  if (texelFetch(u_mask, ivec3(texel, u_maskLayer), 0).r == 0u) {  
 ` : ''}  float v0 = value(texel, u_inputs.x);
   float v1 = value(texel, u_inputs.y);
   float v2 = value(texel, u_inputs.z);
-  bool empty = (u_inputs.x < 0 || isNodata(v0)) && (u_inputs.y < 0 || isNodata(v1)) && (u_inputs.z < 0 || isNodata(v2));
+  bool empty = missingProductInput(u_product, bvec3(
+    u_inputs.x < 0 || isNodata(v0),
+    u_inputs.y < 0 || isNodata(v1),
+    u_inputs.z < 0 || isNodata(v2)));
   if (empty) {
     outColor = vec4(BG, 1.0);
     return;

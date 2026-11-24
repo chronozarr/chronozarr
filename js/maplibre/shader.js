@@ -77,7 +77,10 @@ ${hasMask ? '  if (texelFetch(u_mask, ivec3(texel, u_maskLayer), 0).r == 0u) dis
   float v0 = value(texel, u_inputs.x);
   float v1 = value(texel, u_inputs.y);
   float v2 = value(texel, u_inputs.z);
-  bool empty = (u_inputs.x < 0 || isNodata(v0)) && (u_inputs.y < 0 || isNodata(v1)) && (u_inputs.z < 0 || isNodata(v2));
+  bool empty = missingProductInput(u_product, bvec3(
+    u_inputs.x < 0 || isNodata(v0),
+    u_inputs.y < 0 || isNodata(v1),
+    u_inputs.z < 0 || isNodata(v2)));
   if (empty) discard;                                              // no data: the basemap shows through
   vec3 x = toPhysical(vec3(v0, v1, v2));
   vec4 color = pseudocolor(u_product, u_colormap, u_display == 1 ? shadeLinear(u_product, x, u_rangeLo, u_rangeHi) : shade(u_product, x, u_stretchLo));
