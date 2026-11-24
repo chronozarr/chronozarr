@@ -512,15 +512,16 @@ def _decode_level(source: Any, store: ChronoStore, lod: int, full_read_limit: in
     problems: list[str] = []
     notes = [f"cell ({row},{col}) t=0 and t={t_last} in {decode_s * 1000:.0f} ms"]
     plain = _plain_pixel(source, store, lod, 0, y, x)
-    if not np.array_equal(plain, first[:, y - ys.start, x - xs.start]):
+    if not np.array_equal(plain, first[:, y - ys.start, x - xs.start], equal_nan=True):
         problems.append(f"pixel (y={y}, x={x}) at t=0 differs between chronozarr and plain Zarr")
     else:
         notes.append("plain-Zarr pixel at t=0 matches")
     if _level_bytes(store, lod) <= full_read_limit:
         for t, cell in ((0, first), (t_last, last)):
             full = store.read(t, lod)[:, ys, xs]
-            if not np.array_equal(full, cell):
-                n_bad = int(np.count_nonzero(full != cell))
+            if not np.array_equal(full, cell, equal_nan=True):
+                equal = (full == cell) | (np.isnan(full) & np.isnan(cell))
+                n_bad = int(np.count_nonzero(~equal))
                 problems.append(f"t={t}: cell read differs from full read in {n_bad} value(s)")
         notes.append(f"full read ({_level_bytes(store, lod) / 1e6:.1f} MB/timestep) matches")
     else:

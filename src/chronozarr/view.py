@@ -293,6 +293,11 @@ class _Phase(enum.Enum):
     CLOSED = "closed"
 
 
+def _store_mount(store: Path) -> str:
+    """Keep the store route distinct from the optional self-hosted viewer route."""
+    return "_store" if store.name == VIEWER_MOUNT else store.name
+
+
 class StoreServer:
     """A running local HTTP server for one store directory. It listens on loopback only.
 
@@ -310,7 +315,9 @@ class StoreServer:
         self.store = store
         self._phase = _Phase.SERVING
         self.state = ServerState(viewer_root=viewer_dir)
-        handler = partial(StoreRequestHandler, root=store, prefix=store.name, state=self.state)
+        handler = partial(
+            StoreRequestHandler, root=store, prefix=_store_mount(store), state=self.state
+        )
         in_use = OSError(
             f"port {port} on {host} is already in use. Pass another port, or none to let the "
             "system pick a free one."
@@ -382,7 +389,7 @@ class StoreServer:
     @property
     def url(self) -> str:
         """Loopback base URL of the store, suitable for `?store=` and `chronozarr.open_store`."""
-        return f"{self.root_url}/{urllib.parse.quote(self.store.name)}"
+        return f"{self.root_url}/{urllib.parse.quote(_store_mount(self.store))}"
 
     @property
     def viewer_dir(self) -> Path | None:
@@ -701,7 +708,7 @@ def local_access(
     )
     access = LocalAccess(
         server=server,
-        store_url=f"{root}/{urllib.parse.quote(server.store.name)}",
+        store_url=f"{root}/{urllib.parse.quote(_store_mount(server.store))}",
         viewer_url=page,
         route=route,
         viewer_source=source,

@@ -4,6 +4,7 @@ import { Renderer, TEXTURE_FORMATS, fragmentShader } from '../demo/renderer.js';
 import { packUint16 } from '../chronozarr/compact.js';
 import { PRODUCT_GLSL } from '../shared/products-glsl.js';
 import { GAIN, PRODUCTS } from '../shared/products.js';
+import { BACKGROUND, shadeTexel } from '../e2e/cpu-render.js';
 
 test('the product GLSL defines shade() and shadeLinear() with stable signatures, and the tone map gain of products.js', () => {
   assert.match(PRODUCT_GLSL, /vec4 shade\(int product, vec3 x, float stretchLo\)/);
@@ -46,6 +47,42 @@ test('the mask variant of each shader reads one mask layer per slot, writes the 
     assert.match(masked, /outColor = vec4\(BG, 1\.0\);\s*return;\s*\}\s*float v0/, `${dtype}: invalid pixels get the opaque background before any data is read`);
     const withoutMask = masked.replace(/  if \(texelFetch\(u_mask[\s\S]*?\n  \}\n/, '').split('\n').filter((line) => !/u_mask/.test(line));
     assert.deepEqual(withoutMask.filter(Boolean), plain.split('\n').filter(Boolean), `${dtype}: apart from the mask lines the two programs are the same`);
+  }
+});
+
+function pairFrame(shader, nodata = 0) {
+  return {
+    shader, nodata, inputs: [0, 1, -1], unitScale: [1, 1, 1], unitDivisor: [0, 0, 0],
+    unitOffset: [0, 0, 0], display: shader === 6 ? 'linear' : 'reflectance',
+    range: [-30, 30], stretchLo: 0, colormap: 0,
+  };
+}
+
+for (const product of PRODUCTS.filter((p) => ['ndvi', 'ndwi', 'water', 'dual_pol'].includes(p.id))) {
+  for (const missing of [0, 1]) {
+    for (const sentinel of [0, NaN]) {
+      test(`${product.id}: missing input ${missing} stays missing in the image reference (${sentinel})`, () => {
+        const stored = product.id === 'dual_pol' ? [-10, -20] : [1000, 2000];
+        stored[missing] = sentinel;
+        assert.deepEqual(shadeTexel(pairFrame(product.shader), stored), BACKGROUND);
+      });
+    }
+  }
+  test(`${product.id}: a valid zero and unused third slot still render`, () => {
+    assert.notDeepEqual(shadeTexel(pairFrame(product.shader, null), [0, 1000]), BACKGROUND);
+  });
+}
+
+test('the image reference retains partial RGB display while requiring both derived inputs', () => {
+  const frame = { ...pairFrame(0), inputs: [0, 1, 2] };
+  assert.notDeepEqual(shadeTexel(frame, [0, 0.2, 0.3]), BACKGROUND);
+});
+
+test('each viewer shader checks required product inputs before applying scale or offset', () => {
+  for (const dtype of Object.keys(TEXTURE_FORMATS)) {
+    const source = fragmentShader(dtype);
+    assert.match(source, /bool empty = missingProductInput\(u_product, bvec3\([\s\S]*?u_inputs\.x < 0 \|\| isNodata\(v0\)[\s\S]*?u_inputs\.y < 0 \|\| isNodata\(v1\)[\s\S]*?u_inputs\.z < 0 \|\| isNodata\(v2\)/);
+    assert.ok(source.indexOf('if (empty)') < source.indexOf('vec3 x = toPhysical('));
   }
 });
 

@@ -124,6 +124,50 @@ def test_viewer_dir_is_served_next_to_the_store_with_module_types(store, viewer_
     assert get(f"{base}/demo/missing.js")[0] == 404
 
 
+@pytest.mark.parametrize("add_viewer_later", [False, True])
+def test_reserved_viewer_basename_gets_a_distinct_store_route(
+    tmp_path, viewer_dir, monkeypatch, add_viewer_later
+):
+    """Exercise the real server and URL wiring with a socket-free server stand-in."""
+    store = tmp_path / VIEWER_MOUNT
+    store.mkdir()
+    metadata = store / "zarr.json"
+    metadata.write_text("{}")
+    handler_options: dict[str, object] = {}
+
+    class NoSocketServer:
+        def __init__(self, address, handler):
+            self.server_address = (address[0], 12345)
+            handler_options.update(handler.keywords)
+
+        def serve_forever(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr(view_module, "_Server", NoSocketServer)
+    initial = serve_store(store, viewer_dir=None if add_viewer_later else viewer_dir)
+    access = local_access(store, viewer_dir=viewer_dir, base_url="https://proxy.example/root")
+    assert access.server is initial
+    assert access.store_url == "https://proxy.example/root/_store"
+    assert access.viewer_url == "https://proxy.example/root/_viewer/demo/index.html"
+    assert initial.url == "http://127.0.0.1:12345/_store"
+    handler = object.__new__(view_module.StoreRequestHandler)
+    for key, value in handler_options.items():
+        setattr(handler, f"_{key}", value)
+    assert handler._file_for("/_store/zarr.json") == metadata.resolve()
+    assert (
+        handler._file_for("/_viewer/demo/index.html") == (viewer_dir / "demo/index.html").resolve()
+    )
+    handler._count("/_store/zarr.json")
+    handler._count("/_viewer/demo/index.html")
+    assert initial.state.store_requests == initial.state.viewer_requests == 1
+
+
 @pytest.mark.parametrize("mount", ["store", "viewer"])
 @pytest.mark.parametrize("link_kind", ["file", "directory"])
 @pytest.mark.parametrize("method", ["GET", "HEAD"])

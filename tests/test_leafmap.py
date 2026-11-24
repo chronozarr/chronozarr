@@ -91,6 +91,17 @@ def test_base_url_replaces_the_loopback_address_of_a_local_store(tmp_path):
             server.close()
 
 
+@pytest.mark.parametrize("name,route", [("_viewer", "_store"), ("my store", "my%20store")])
+def test_base_url_preserves_the_actual_server_mount(tmp_path, monkeypatch, name, route):
+    import chronozarr.leafmap as adapter
+
+    server = SimpleNamespace(url=f"http://127.0.0.1:9999/{route}", store=tmp_path / name)
+    monkeypatch.setattr(adapter, "serve_store", lambda *args, **kwargs: server)
+    m = Map()
+    add_chronozarr(m, tmp_path / name, base_url="https://proxy.example/root/")
+    assert m.calls[0][1]["options"]["url"] == f"https://proxy.example/root/{route}"
+
+
 def test_base_url_needs_a_local_store():
     m = Map()
     with pytest.raises(ValueError, match="local store"):

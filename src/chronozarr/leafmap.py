@@ -8,7 +8,6 @@ controls and Python message queue. Leafmap is optional; importing chronozarr doe
 import json
 import math
 import os
-import urllib.parse
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -64,7 +63,7 @@ def add_chronozarr(
         server = serve_store(os.fspath(url), port=port)
         url = server.url
         if base_url is not None:
-            url = f"{normalize_base_url(base_url)}/{urllib.parse.quote(server.store.name)}"
+            url = f"{normalize_base_url(base_url)}{urlsplit(server.url).path}"
     for value in (url, reader_url):
         if urlsplit(value).scheme not in {"http", "https"}:
             raise ValueError("store and reader URLs must use HTTP or HTTPS")
