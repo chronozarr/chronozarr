@@ -291,6 +291,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self._serve(False)
 
 
+class _HTTPServer(http.server.ThreadingHTTPServer):
+    # Validation prefetches metadata concurrently. Keep this fixture's listener queue
+    # at least as large as the reader's pool, especially with retry delays set to zero.
+    request_queue_size = store_module.REQUESTS_AT_ONCE
+
+
 @pytest.fixture
 def serve(monkeypatch):
     """Serve a directory over http://127.0.0.1; returns (url, handler class) for it."""
@@ -300,7 +306,7 @@ def serve(monkeypatch):
 
     def start(root: Path) -> tuple[str, type[_Handler]]:
         handler = type("Handler", (_Handler,), {"root": root, "log": []})
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server = _HTTPServer(("127.0.0.1", 0), handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         servers.append(server)
         return f"http://127.0.0.1:{server.server_port}", handler
