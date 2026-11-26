@@ -24,15 +24,15 @@ Both chronozarr and zarr-layer select a timestep on a time dimension. Their clie
 
 chronozarr stores a Zarr v3 pyramid of `(time, band, y, x)` arrays. Each level is one group. The default is one object per chunk, and sharding is an option.
 
-Time is a dimension of the array. Any timestep of any level is one data chunk read. The values are the exact stored values in `uint8`, `uint16`, `int16` or `float32`. They are lossless. Each band has a `scale` and an `offset` in the root metadata, and a store can carry a `mask` array. chronozarr's readers apply both. A reader that does not know chronozarr returns the stored values.
+Time is a dimension of the array. Each cell at one timestep and level is one data chunk. Mask and coverage arrays use separate chunks when present. The values are the exact stored values in `uint8`, `uint16`, `int16` or `float32`. Compression is lossless. Each band has a `scale` and an `offset` in the root metadata, and a store can carry a `mask` array. chronozarr's readers apply both. A reader that does not know chronozarr returns the stored values.
 
-The store keeps its native projected CRS, such as UTM. A static bucket with byte ranges and CORS serves it, and no server runs.
+The store keeps its native CRS, such as UTM. A static host with CORS serves it. A sharded store also needs byte ranges. The browser decodes and renders the data.
 
 ## PMTiles
 
 PMTiles stores one archive of z/x/y tiles, vector or image, addressed by byte range. It has no time axis, so a time series is one archive per timestep. The values are whatever the tile image encodes. That is rendered 8-bit pixels, or values packed into color channels at the precision of the packing.
 
-The tile scheme is Web Mercator in practice. A static bucket with byte ranges serves the archive, and no server runs.
+The tile scheme is Web Mercator in practice. A static bucket with byte ranges serves the archive.
 
 Choose PMTiles instead when you want finished map tiles for one moment, such as basemaps, vector layers or rendered imagery. It also has broad client support across MapLibre, Leaflet and OpenLayers. Choose it when you need neither raw values nor a time scrubber.
 

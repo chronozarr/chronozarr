@@ -16,7 +16,7 @@ Then install the library in that project:
 uv add 'chronozarr==0.5.2'
 ```
 
-Use `uv run python` to start Python in that folder, or `uv run python your_script.py` to run a script. The `"my_store"` paths below are relative to that folder; use the store's actual path if it is elsewhere. To use an existing Python 3.11+ environment instead:
+Use `uv run python` to start Python in that folder. Use `uv run python your_script.py` to run a script. The `"my_store"` paths below are relative to that folder. Use the store's actual path if it is elsewhere. To use an existing Python 3.11+ environment instead:
 
 ```bash
 python -m pip install 'chronozarr==0.5.2'
@@ -62,7 +62,9 @@ Attributes:
 
 Without the optional `geo` dependencies, `crs` may print as a full Well-Known Text (WKT) definition of the same coordinate system. Its meaning and the pixel coordinates are the same as for the EPSG code above.
 
-This is the store from the [quickstart](quickstart.md), whose bands declare units. `band_units` exists only when the source declares units. A store without units has no `band_units` coordinate, and `ds.band_units` raises `AttributeError`. `chronozarr bands my_store` prints the units of each band, or `-` where there are none. `x` and `y` are the centres of the pixels, in the coordinate system named by `crs`.
+This is the store from the [quickstart](quickstart.md), whose bands declare units. `band_units` exists only when the source declares units. A store without units has no `band_units` coordinate, and `ds.band_units` raises `AttributeError`. `chronozarr bands my_store` prints the units of each band, or `-` where there are none.
+
+`x` and `y` are the centres of the pixels, in the coordinate system named by `crs`.
 
 ## Physical values and stored values
 

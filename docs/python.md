@@ -14,10 +14,10 @@ import chronozarr
 chronozarr.encode(da, "my_store", crs="EPSG:32631")
 ```
 
-`da` is an xarray `DataArray` with dims `(time, band, y, x)`. Its dtype is uint8, uint16, int16 or float32. Its `x` and `y` coordinates are the projected pixel centres of a grid with north up.
+`da` is an xarray `DataArray` with dims `(time, band, y, x)`. Its dtype is uint8, uint16, int16 or float32. Its `x` and `y` coordinates are the pixel centres in the store's CRS, on a grid with north up.
 After slicing the spatial axes, update the transform attribute or drop it to infer a transform from the new pixel centres. If your axes are index labels, pass the intended `transform=` explicitly.
 
-`crs` is an authority code such as `EPSG:32631`, or WKT2 text for a CRS with no code, such as a Lambert conformal conic or a sinusoidal grid. Without `crs`, `encode` reads `da.attrs["crs"]`. WKT1, PROJJSON and PROJ strings are converted to WKT2 when pyproj is installed. A store whose CRS has an EPSG code is written as spec 0.3.0 and any other as 0.4.0. `convert` keeps the CRS of its sources as it finds it and does not reproject unless you pass `--crs` for another CRS with `--resampling`.
+`crs` is an authority code such as `EPSG:32631`, or WKT2 text for a CRS with no code. Lambert conformal conic and sinusoidal grids can use WKT2. Without `crs`, `encode` reads `da.attrs["crs"]`. WKT1, PROJJSON and PROJ strings are converted to WKT2 when pyproj is installed. A store whose CRS has an EPSG code is written as spec 0.3.0 and any other as 0.4.0. `convert` keeps the source CRS. To reproject during conversion, pass `--crs` for another CRS with `--resampling`.
 
 Choose an absent output path under a writable parent directory. On Linux and macOS, a writable empty directory or a symbolic link to one also works when the encoder can preserve its ownership, permission bits, and access control lists. The encoder applies those permissions before writing the store, then publishes the completed directory with a single rename. If the destination changes after those permissions are applied, retry with the intended destination.
 
@@ -47,7 +47,7 @@ da = store.to_xarray(lod=0, times=[0], physical=False)
 
 ## Read a store that chronozarr did not write
 
-`open_store` also reads a pyramid written by ndpyramid or by ESA's EOPF, or any Zarr v3 store whose root `multiscales` lists the levels. It finds the levels, the geometry and the CRS in the store's own metadata, and `store.notes` says what it had to assume: scale and offset taken as 1 and 0, no time axis (one timestep dated 1970-01-01), the fill value that marks a missing pixel, levels left out or in another order. Level 0 is the finest level whatever order the layout lists.
+`open_store` also reads pyramids written by ndpyramid or ESA's EOPF, and Zarr v3 stores whose root `multiscales` lists the levels. It reads the levels, geometry and CRS from the store's metadata. `store.notes` records assumptions and changes: scale and offset taken as 1 and 0, no time axis (one timestep dated 1970-01-01), the fill value that marks a missing pixel, or levels left out or reordered. Level 0 is the finest level whatever order the layout lists.
 
 ```python
 store = chronozarr.open_store("https://example.org/product.zarr/measurements/reflectance")
@@ -121,6 +121,12 @@ chronozarr link https://data.example.org/my_store --time 71 --lonlat -64.62,-3.4
 # https://chronozarr.org/demo/?store=...&t=71&z=2&c=684500,9123350
 ```
 
-`--lonlat` and `--xy` set the map centre and `--zoom` its zoom; [Choose a date and a place](viewer.md#choose-a-date-and-a-place) explains them. `link` checks each value against the store and prints the URL, because the viewer ignores a value that the store cannot honor. A product needs its roles. Display limits only apply to the single-band product of a band that is not reflectance-like: an unsigned 8-bit or 16-bit band whose largest possible physical value is 10 or less is toned with fixed reflectance limits, and every other band has adjustable ones. A colormap only applies to the single-band product. `--range` and `--colormap` need `--product band`, unless the single band is the only product the store has, as with a store of one elevation band: `link` then uses it and says so on stderr. `from chronozarr.view import viewer_url` builds the same URL from Python and refuses an unknown colormap. It, like `view`, takes `colormap` and `range` without a `product`; the viewer then applies them if the store opens on the single band. Its `zoom` and `center` arguments take the zoom and the centre `(x, y)` in the store's own coordinate system, not longitude and latitude. The viewer keeps the limits you set in its address bar, so copying the address shares them.
+`--lonlat` and `--xy` set the map centre and `--zoom` its zoom; [Choose a date and a place](viewer.md#choose-a-date-and-a-place) explains them. `link` checks each value against the store before printing the URL. The viewer ignores a value that the store cannot honor. A product needs its roles.
+
+Display limits apply to the single-band product. An unsigned 8-bit or 16-bit band whose largest possible physical value is 10 or less uses fixed reflectance limits. Every other band has adjustable limits. A colormap also applies only to the single-band product.
+
+`--range` and `--colormap` need `--product band` unless the single band is the store's only product, as with one elevation band. In that case, `link` selects it and says so on stderr.
+
+`from chronozarr.view import viewer_url` builds the same URL from Python and refuses an unknown colormap. Like `view`, it accepts `colormap` and `range` without a `product`. The viewer applies them if the store opens on the single band. Its `zoom` and `center` arguments take the zoom and centre `(x, y)` in the store's own coordinate system. The viewer keeps the limits you set in its address bar, so copying the address shares them.
 
 `chronozarr.add_chronozarr` adds a store as a layer on a leafmap or geemap MapLibre map. Install the `leafmap` or `geemap` extra. See [examples/leafmap](../examples/leafmap/README.md).

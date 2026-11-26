@@ -2,7 +2,7 @@
 
 **Package version — 0.5.2.** The npm package contains the production viewer bundle. You can copy that bundle with `chronozarr-viewer`, or build the same viewer from a [source checkout](development.md).
 
-The viewer folder contains the page, scripts for the viewer and decode worker, codecs and licenses. Node.js copies these files once; the host serves them as static files, and the viewer runs in the browser.
+The viewer folder contains the page, scripts for the viewer and decode worker, codecs and licenses. Node.js copies these files once. Your host serves them as static files, and the viewer runs in the browser.
 
 ## Copy the viewer
 
@@ -78,4 +78,4 @@ This builds the viewer before copying it. Use a new output folder for each build
 
 ## Test the package
 
-Run `npm run test:package` from `js/` using the development Playwright installation. It packs and installs the package in a temporary folder, verifies that the copy command refuses to overwrite, and renders a synthetic store from the copied viewer under a URL subpath. The browser checks cover time controls, pixel inspection and embedding, with no outside requests or browser errors.
+Run `npm run test:package` from `js/` using the development Playwright installation. It packs and installs the package in a temporary folder and verifies that the copy command refuses to overwrite. It then renders a synthetic store from the copied viewer under a URL subpath. The browser checks cover time controls, pixel inspection and embedding, with no outside requests or browser errors.
