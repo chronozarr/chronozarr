@@ -1434,7 +1434,7 @@ export class ChronoStore {
 
   /**
    * Abort a fetch that nobody wants any more. Its rejection (an AbortError) has no one left to handle it, so it is marked handled here.
-   * It stops counting as demand now: it may not settle for a while (a shard index read cannot be cancelled).
+   * It stops counting as demand now: a shared shard index may still wait until it completes or the store closes.
    */
   #abortEntry(entry) {
     entry.promise.catch(() => {});
@@ -1543,7 +1543,7 @@ export class ChronoStore {
     return this.#readable.getRange(shardKey, { offset, length: index[2 * at + 1] }, { signal, priority, progress });
   }
 
-  /** Shard index: read once, shared by every chunk of the shard, never tied to one caller's signal (see #readShardIndex). */
+  /** Shard index: read once, shared by every chunk of the shard, cancelled only when the store closes (see #readShardIndex). */
   #shardIndex(kind, lod, row, col, shardIndex, shardKey, storage, priority) {
     const cacheKey = `${lod}/${shardKey}`;
     const cached = this.#shardIndexes.get(cacheKey);
@@ -1594,7 +1594,7 @@ export class ChronoStore {
     const hinted = (range) => !storage.indexAtStart && 'offset' in range;
     const read = async (shardBytes) => {
       const range = rangeFor(shardBytes);
-      const bytes = await this.#readable.getRange(shardKey, range, { priority: handle, rangeMiss: hinted(range) });
+      const bytes = await this.#readable.getRange(shardKey, range, { signal: this.#closeController.signal, priority: handle, rangeMiss: hinted(range) });
       if (bytes === null) throw new ShardIndexError(`${where}: HTTP 416 for shard index range bytes=${range.offset}-${range.offset + range.length - 1}, the shard is shorter than shard_bytes says (${shardBytes})`);
       return bytes && parseShardIndex(bytes, storage.shardTime, storage.indexHasCrc, where, hinted(range) ? shardBytes : undefined);
     };

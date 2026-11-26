@@ -266,6 +266,8 @@ Reading a NetCDF4 file needs the `netcdf` extra, which adds h5netcdf, h5py and c
 
 Packed coordinates are decoded before deriving the grid and dates. An integer data variable with `_Unsigned` is read in its declared signedness, including its fill codes. Numeric `--nodata` overrides use that interpreted dtype.
 
+The x/y coordinates follow their declared units. For example, kilometer axes are stored as meter coordinates when the CRS uses meters. Axes without units are interpreted in the CRS's units. Unsupported or incompatible coordinate units are reported before writing.
+
 Use `convert` for NetCDF and Zarr variables. `chronozarr encode --help` describes the
 separate in-memory interface.
 

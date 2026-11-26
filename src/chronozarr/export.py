@@ -38,6 +38,12 @@ _DATE_PREFIX = re.compile(r"^\d{4}-\d{2}(-\d{2}([T ][\d:.]*Z?)?)?$")
 _COG_BLOCK_SIZE = 512
 
 
+def _timestamp_key(iso: str, precision: int) -> str:
+    """Comparable UTC timestamp with a common fractional precision and no terminal Z."""
+    clock, _, fraction = iso.replace(" ", "T").removesuffix("Z").partition(".")
+    return f"{clock}.{fraction.ljust(precision, '0')}" if precision else clock
+
+
 def select_times(spec: Sequence[str], times: Sequence[str]) -> list[int]:
     """Timestep indices picked by `spec`; all of them when `spec` is empty.
 
@@ -51,6 +57,15 @@ def select_times(spec: Sequence[str], times: Sequence[str]) -> list[int]:
     tokens = [t.strip() for item in spec for t in item.split(",") if t.strip()]
     if not tokens:
         return list(range(n))
+    dates = [*times, *(part for token in tokens for part in token.split(".."))]
+    precision = max(len(date.removesuffix("Z").partition(".")[2]) for date in dates)
+    keys = [_timestamp_key(time, precision) for time in times]
+
+    def prefix(text: str) -> str:
+        # A terminal Z denotes an instant. Without it, keep the written date/time
+        # precision so a month, minute or fractional-second prefix selects its period.
+        return _timestamp_key(text, precision) if text.endswith("Z") else text.replace(" ", "T")
+
     chosen: set[int] = set()
     for token in tokens:
         if token == "all":
@@ -61,12 +76,13 @@ def select_times(spec: Sequence[str], times: Sequence[str]) -> list[int]:
                 raise ValueError(
                     f"bad time range '{token}': use ISO date prefixes like 2020-01..2022-06"
                 )
-            start, end = start.replace(" ", "T"), end.replace(" ", "T")
+            start, end = prefix(start), prefix(end)
             chosen.update(
-                i for i, t in enumerate(times) if t[: len(start)] >= start and t[: len(end)] <= end
+                i for i, t in enumerate(keys) if t[: len(start)] >= start and t[: len(end)] <= end
             )
         elif _DATE_PREFIX.match(token):
-            matches = [i for i, t in enumerate(times) if t.startswith(token.replace(" ", "T"))]
+            selected_prefix = prefix(token)
+            matches = [i for i, t in enumerate(keys) if t.startswith(selected_prefix)]
             if not matches:
                 raise ValueError(
                     f"no timestep matches '{token}' (store spans {times[0]} to {times[-1]})"
@@ -170,6 +186,11 @@ def export_cog(
     iso_times = opened.attrs.times
     out = Path(out_dir)
     targets = [out / f"L{level}_{_file_stem(iso_times[t])}.tif" for t in selected]
+    if len(set(targets)) != len(targets):
+        raise ValueError(
+            "selected timesteps produce duplicate output filenames; "
+            "choose each timestamp only once"
+        )
     clashes = [p for p in targets if p.exists()]
     if clashes:
         raise FileExistsError(

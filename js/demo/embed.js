@@ -14,7 +14,7 @@
 import { Machine } from '../chronozarr/machine.js';
 import { redactText } from '../chronozarr/redact.js';
 import { COLORMAPS, colormapIndex } from '../shared/colormaps.js';
-import { pixelToProjected, projectedToPixel } from './permalink.js';
+import { pixelToProjected, projectedToPixel, roundProjectedCoordinates } from './permalink.js';
 
 /** Contract version, in the `v` field of every message the viewer sends; a command may carry it and then must say 1. */
 export const EMBED_VERSION = 1;
@@ -241,7 +241,7 @@ export function makeGeo({ transform = null, projection = null } = {}) {
       if (!geoReferenced) return { x: roundTo(col, 1), y: roundTo(row, 1), lon: null, lat: null };
       const { x, y } = pixelToProjected(transform, col, row);
       const [lon, lat] = projection ? projection.toLonLat(x, y) : [null, null];
-      return { x: roundTo(x, 3), y: roundTo(y, 3), lon: lon === null ? null : roundTo(lon, 6), lat: lat === null ? null : roundTo(lat, 6) };
+      return { ...roundProjectedCoordinates(transform, x, y, 3), lon: lon === null ? null : roundTo(lon, 6), lat: lat === null ? null : roundTo(lat, 6) };
     },
     /** {col, row} of a validated `center` ({x, y} or {lon, lat}); throws an Error that says what is missing for lon/lat. */
     toPixel(center) {

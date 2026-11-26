@@ -83,6 +83,34 @@ def test_select_times_accepts_timestamp_prefixes_and_ranges(separator):
     ) == [0, 1]
 
 
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        (["2024-03-01T12:30:00Z"], [0]),
+        (["2024-03-01T12:30:00.0000Z"], [0]),
+        (["2024-03-01T12:30:00"], [0, 1, 2]),
+        (["2024-03-01T12:30:00.1"], [1, 2]),
+        (["2024-03-01T12:30:00.1Z"], [1]),
+        (["2024-03-01T12:30:00Z..2024-03-01T12:30:30Z"], [0, 1, 2, 3]),
+        (["2024-03-01T12:30:00Z..2024-03-01T12:30"], [0, 1, 2, 3, 4]),
+        (["2024-03-01T12:30:00.1Z..2024-03-01T12:30:00.12Z"], [1, 2]),
+    ],
+)
+def test_select_times_compares_equivalent_utc_precision(spec, expected):
+    times = [
+        "2024-03-01T12:30:00.000Z",
+        "2024-03-01T12:30:00.100Z",
+        "2024-03-01T12:30:00.120Z",
+        "2024-03-01T12:30:30.000Z",
+        "2024-03-01T12:30:30.001Z",
+    ]
+    assert select_times(spec, times) == expected
+
+
+def test_select_times_accepts_fractional_zero_for_whole_second_metadata():
+    assert select_times(["2024-03-01T12:30:00.000Z"], ["2024-03-01T12:30:00Z"]) == [0]
+
+
 def test_file_stem_keeps_the_clock_only_when_needed():
     assert _file_stem("2024-03-01T00:00:00Z") == "2024-03-01"
     assert _file_stem("2024-03-01T00:00:00.000Z") == "2024-03-01"
@@ -168,6 +196,44 @@ def test_foreign_overview_export_uses_its_own_missing_value(tmp_path):
         np.testing.assert_array_equal(src.read(1), store.read(0, 1)[0])
         assert src.read_masks(1)[0, 0] == 0
         assert src.read_masks(1)[0, 1] == 255
+
+
+def test_foreign_subsecond_frames_export_to_distinct_files(tmp_path):
+    rasterio = pytest.importorskip("rasterio")
+    root = zarr.open_group(tmp_path / "foreign.zarr", mode="w", zarr_format=3)
+    root.attrs["multiscales"] = {"layout": [{"asset": "0"}]}
+    group = root.create_group("0")
+    group.attrs.update({"proj:code": "EPSG:4326", "spatial:transform": [1, 0, 0, 0, -1, 2]})
+    truth = np.stack([np.full((2, 2), value, dtype="uint16") for value in (1, 2)])
+    group.create_array("data", data=truth, chunks=(1, 2, 2), dimension_names=("time", "y", "x"))
+    clock = group.create_array(
+        "time", data=np.array([100, 200], dtype="int64"), dimension_names=("time",)
+    )
+    clock.attrs.update(
+        {"units": "milliseconds since 2024-01-01", "calendar": "proleptic_gregorian"}
+    )
+
+    store = chronozarr.open_store(tmp_path / "foreign.zarr")
+    paths = export_cog(store, tmp_path / "cogs")
+    assert [path.name for path in paths] == [
+        "L0_2024-01-01T000000.100Z.tif",
+        "L0_2024-01-01T000000.200Z.tif",
+    ]
+    assert len(list((tmp_path / "cogs").glob("*.tif"))) == 2
+    for t, path in enumerate(paths):
+        with rasterio.open(path) as src:
+            np.testing.assert_array_equal(src.read(1), truth[t])
+            assert src.tags()["CHRONOZARR_TIME"] == store.attrs.times[t]
+            assert src.tags()["CHRONOZARR_TIMESTEP"] == str(t)
+
+
+def test_duplicate_export_targets_are_rejected_before_writing(store_and_truth, tmp_path):
+    pytest.importorskip("rasterio")
+    path, _ = store_and_truth
+    out = tmp_path / "cogs"
+    with pytest.raises(ValueError, match="duplicate output"):
+        export_cog(path, out, times=[0, 0])
+    assert not out.exists()
 
 
 def test_existing_files_and_bad_level_are_errors(store_and_truth, tmp_path):

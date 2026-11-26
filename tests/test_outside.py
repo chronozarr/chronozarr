@@ -118,6 +118,30 @@ def test_the_times_come_from_the_cf_units_of_the_time_array(coarsen):
     assert store.attrs.times[0] == "2020-01-01T00:00:00Z"
 
 
+def test_foreign_time_metadata_preserves_milliseconds(tmp_path):
+    written = write_ndpyramid_coarsen(tmp_path / "subsecond.zarr")
+    root = zarr.open_group(written.path, mode="r+", zarr_format=3, use_consolidated=False)
+    for _, level in root.groups():
+        clock = array_at(level, "time")
+        clock[:] = [0, 100, 200]
+        clock.attrs["units"] = "milliseconds since 2024-01-01"
+    consolidate(written.path)
+
+    store = chronozarr.open_store(written.path)
+    assert store.attrs.times == (
+        "2024-01-01T00:00:00.000Z",
+        "2024-01-01T00:00:00.100Z",
+        "2024-01-01T00:00:00.200Z",
+    )
+    np.testing.assert_array_equal(
+        store.times,
+        np.array(
+            ["2024-01-01T00:00:00.000", "2024-01-01T00:00:00.100", "2024-01-01T00:00:00.200"],
+            dtype="datetime64[ms]",
+        ),
+    )
+
+
 def test_declared_scale_and_offset_are_applied_and_not_called_assumed(coarsen):
     store = chronozarr.open_store(coarsen.path)
     assert (store.attrs.bands[0].scale, store.attrs.bands[0].offset) == (1.0, 0.0)

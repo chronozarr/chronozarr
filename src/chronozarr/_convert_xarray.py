@@ -324,7 +324,79 @@ def _crs_attribute(attrs: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _crs_from_attrs(da: xr.DataArray, dataset: xr.Dataset) -> str | None:
+def _unit_name(raw: Any) -> str:
+    """Normalize common CF spellings without changing a unit's meaning."""
+    unit = str(raw).strip().lower().replace(" ", "_")
+    for suffix in ("_east", "_north", "_e", "_n"):
+        unit = unit.removesuffix(suffix)
+    if unit in ("degreee", "degreen", "degreese", "degreesn"):
+        unit = "degree"
+    if unit in ("ft_us", "us_survey_feet"):
+        unit = "us_survey_foot"
+    return unit.removesuffix("s")
+
+
+def _coordinate_unit(coordinate: xr.DataArray) -> tuple[str, float] | None:
+    """The declared unit's kind and SI factor; absent units mean the CRS's own units."""
+    raw = coordinate.attrs.get("units")
+    if not raw:
+        return None
+    unit = _unit_name(raw)
+    linear = {
+        "m": 1.0,
+        "meter": 1.0,
+        "metre": 1.0,
+        "km": 1000.0,
+        "kilometer": 1000.0,
+        "kilometre": 1000.0,
+        "cm": 0.01,
+        "centimeter": 0.01,
+        "centimetre": 0.01,
+        "mm": 0.001,
+        "millimeter": 0.001,
+        "millimetre": 0.001,
+        "ft": 0.3048,
+        "foot": 0.3048,
+        "feet": 0.3048,
+        "us_survey_foot": 1200.0 / 3937.0,
+    }
+    if unit in linear:
+        return "linear", linear[unit]
+    if unit == "degree":
+        return "angular", float(np.pi / 180.0)
+    if unit in ("rad", "radian"):
+        return "angular", 1.0
+    if unit in ("grad", "gon", "grade", "gradian"):
+        return "angular", float(np.pi / 200.0)
+    raise ValueError(f"coordinate {coordinate.name!r} has unsupported units {raw!r}")
+
+
+def _coordinate_values(coordinate: xr.DataArray, crs: str | None) -> np.ndarray:
+    """Pixel centers in the CRS's units, rather than an independent CF axis unit."""
+    values = np.asarray(coordinate.values, dtype=np.float64)
+    raw = coordinate.attrs.get("units")
+    if not raw or crs is None:
+        return values
+    from rasterio.crs import CRS  # ty: ignore[unresolved-import]  # compiled, no stubs
+
+    parsed = CRS.from_user_input(crs)
+    target_unit, target_factor = parsed.units_factor
+    if _unit_name(raw) == _unit_name(target_unit):
+        return values
+    unit = _coordinate_unit(coordinate)
+    assert unit is not None
+    kind, source_factor = unit
+    expected = "angular" if parsed.is_geographic else "linear"
+    if kind != expected:
+        raise ValueError(
+            f"coordinate {coordinate.name!r} units {coordinate.attrs['units']!r} are "
+            f"incompatible with the CRS's {expected} units"
+        )
+    factor = source_factor / target_factor
+    return values if factor == 1.0 else values * factor
+
+
+def _crs_from_attrs(da: xr.DataArray, dataset: xr.Dataset, dims: dict[str, str]) -> str | None:
     if text := _crs_attribute(da.attrs):
         return text
     mapping = da.attrs.get("grid_mapping", da.encoding.get("grid_mapping"))
@@ -335,7 +407,17 @@ def _crs_from_attrs(da: xr.DataArray, dataset: xr.Dataset) -> str | None:
                 "pass --crs with an EPSG code or WKT2 text"
             )
         attrs = dataset[mapping].attrs
-        return _crs_attribute(attrs) or wkt2_from_cf(attrs, mapping)
+        if text := _crs_attribute(attrs):
+            return text
+        # CF false offsets use the x/y variable's units; pyproj.from_cf expects meters.
+        attrs = dict(attrs)
+        for name, axis in (("false_easting", "x"), ("false_northing", "y")):
+            if name not in attrs:
+                continue
+            unit = _coordinate_unit(da[dims[axis]])
+            if unit is not None and unit[0] == "linear":
+                attrs[name] = float(attrs[name]) * unit[1]
+        return wkt2_from_cf(attrs, mapping)
     if text := _crs_attribute(dataset.attrs):
         return text
     for name in ("spatial_ref", "crs"):
@@ -378,6 +460,8 @@ def _inspect(
     dims: dict[str, str],
     *,
     read_crs: bool,
+    crs_override: str | None = None,
+    fallback_crs: str | None = None,
     cast_float32: bool = False,
 ) -> _Inspected:
     """What `dataset` says about `variable`; ValueError when it cannot be a step of a store."""
@@ -397,10 +481,12 @@ def _inspect(
         bands = tuple(str(b) for b in da[resolved["band"]].values)
     else:
         bands = (variable,)
+    declared_crs = _crs_from_attrs(da, dataset, resolved) if read_crs else None
+    axis_crs = crs_override or declared_crs or fallback_crs
     facts = _Facts(
         dims=tuple(str(d) for d in raw.dims),
-        x=np.asarray(da[resolved["x"]].values, dtype=np.float64),
-        y=np.asarray(da[resolved["y"]].values, dtype=np.float64),
+        x=_coordinate_values(da[resolved["x"]], axis_crs),
+        y=_coordinate_values(da[resolved["y"]], axis_crs),
         dtype=dtype,
         scale=_scalar_attr(da, "scale_factor", 1.0),
         offset=_scalar_attr(da, "add_offset", 0.0),
@@ -411,7 +497,7 @@ def _inspect(
             for value in np.atleast_1d(da.attrs.get(key, [])).tolist()
             if (token := _packed_nodata(value, da.dtype, logical_dtype)) is not None
         ),
-        crs=_crs_from_attrs(da, dataset) if read_crs else None,
+        crs=declared_crs,
         bands=bands,
         calendar=calendar,
         squeezed=squeezed_dimensions,
@@ -528,7 +614,12 @@ def _differences(
                 _FIX_DROP,
             )
         )
-    if check_crs and found.crs != ref.crs and not _crs_agree(found.crs, ref.crs):
+    if (
+        check_crs
+        and found.crs is not None
+        and found.crs != ref.crs
+        and not _crs_agree(found.crs, ref.crs)
+    ):
         out.append(
             (
                 f"declares the CRS {_crs_text(found.crs)}; {first} declares {_crs_text(ref.crs)}",
@@ -759,7 +850,12 @@ class XarraySource(Source):
         self.variable = variable
         self._dims_arg = dims
         ref = _inspect(
-            dataset, variable, dims, read_crs=crs is None, cast_float32=self._cast_float32
+            dataset,
+            variable,
+            dims,
+            read_crs=crs is None,
+            crs_override=crs,
+            cast_float32=self._cast_float32,
         )
         facts = ref.facts
         resolved = self._dims = ref.dims
@@ -927,7 +1023,14 @@ class XarraySource(Source):
                             "every file of a series holds the variable: " + _FIX_DROP,
                         )
                     ]
-                found = _inspect(dataset, self.variable, self._dims_arg, read_crs=crs is None)
+                found = _inspect(
+                    dataset,
+                    self.variable,
+                    self._dims_arg,
+                    read_crs=crs is None,
+                    crs_override=crs,
+                    fallback_crs=ref.facts.crs,
+                )
                 problems = [
                     Problem(path, what, fix)
                     for what, fix in _differences(

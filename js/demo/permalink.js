@@ -28,6 +28,23 @@ export function projectedToPixel(transform, x, y) {
 
 const round = (value, decimals) => Number(value.toFixed(decimals));
 
+/** Round store coordinates relative to pixel size, including degree units and rotated grids. */
+export function roundProjectedCoordinates(transform, x, y, minimumDecimals = 0) {
+  const [a, b, , d, e] = transform;
+  const determinant = Math.abs(a * e - b * d);
+  // A coordinate's rounding error maps through the inverse affine into pixel error.
+  const roundAxis = (value, resolution) => {
+    if (!(resolution > 0) || !Number.isFinite(resolution)) return value;
+    const decimals = resolution >= 1 ? minimumDecimals : Math.max(minimumDecimals, 3, 2 - Math.floor(Math.log10(resolution)));
+    // toFixed has a 100-decimal limit; keep the full number for still smaller grids.
+    return decimals <= 100 ? round(value, decimals) : value;
+  };
+  return {
+    x: roundAxis(x, determinant / Math.hypot(e, d)),
+    y: roundAxis(y, determinant / Math.hypot(a, b)),
+  };
+}
+
 /**
  * Query string for a view. Leave a field null/undefined to omit it (the viewer omits what matches the
  * default, so an untouched view has a clean URL). `center` is {col, row} in level-0 pixels.
@@ -43,8 +60,8 @@ export function encodeView({ t, productId, bandName, range, colormapId, zoom, ce
   if (center != null) {
     if (transform) {
       const { x, y } = pixelToProjected(transform, center.col, center.row);
-      const decimals = Math.abs(transform[0]) >= 1 ? 0 : 3;
-      params.set('c', `${round(x, decimals)},${round(y, decimals)}`);
+      const rounded = roundProjectedCoordinates(transform, x, y);
+      params.set('c', `${rounded.x},${rounded.y}`);
     } else {
       params.set('c', `${round(center.col, 1)},${round(center.row, 1)}`);
     }

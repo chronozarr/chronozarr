@@ -658,7 +658,8 @@ def _assemble(
         )
     if levels[0].shape[1] != len(names):
         raise SchemaError(f"level {first.path}: {levels[0].shape[1]} bands but {len(names)} names")
-    iso = [f"{s}Z" for s in np.datetime_as_string(times, unit="s")]
+    unit = "s" if (times == times.astype("datetime64[s]")).all() else "ms"
+    iso = [f"{s}Z" for s in np.datetime_as_string(times, unit=unit)]
     only = len(first.arrays.arrays) == 1
     variable = next(iter(first.arrays.arrays)) if only else schema.VARIABLE
     attrs = Chronozarr(
