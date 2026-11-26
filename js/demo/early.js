@@ -25,13 +25,34 @@ export function takeEarlyRootMs(reads = globalThis.chronozarrEarly) {
 
 /**
  * A fetch for `catalog.json` and for the reader (`openStore`'s `fetch` option). A plain GET of an address that was read
- * early is answered by that read; a range read, any other method and any other address go to `fetchNow`.
+ * early is answered by that read; its signal takes over cancellation of that read too. A range read, any other method
+ * and any other address go to `fetchNow`.
  */
 export function fetchWithEarlyReads(fetchNow = (input) => globalThis.fetch(input), reads = globalThis.chronozarrEarly) {
   return (input) => {
     const request = typeof input === 'string' || input instanceof URL ? null : input;
     const plain = !request || (request.method === 'GET' && !request.headers.has('range'));
     const pending = plain ? takeEarlyRead(request ? request.url : String(input), reads) : undefined;
-    return pending ? pending.then((response) => response ?? fetchNow(input)) : fetchNow(input);
+    if (!pending) return fetchNow(input);
+    if (!request) return pending.then((response) => response ?? fetchNow(input));
+    const { signal } = request;
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        pending.abort?.();
+        reject(new DOMException('Aborted', 'AbortError'));
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+      pending.then((response) => {
+        if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+        // A reused response still has a body to read: keep forwarding cancellation after its headers arrive.
+        // A retry uses the consumer's Request directly, so fetch handles its signal from here.
+        if (!response) signal.removeEventListener('abort', onAbort);
+        return response ?? fetchNow(input);
+      }).then(resolve, (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      });
+    });
   };
 }

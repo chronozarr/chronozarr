@@ -439,6 +439,32 @@ function sessionOpensAgain(viewer) {
   viewer.hooks.status();
 }
 
+test('connectEmbed: reopening cancels the outgoing camera notification and the new camera still reports', async () => {
+  const { w, viewer, bridge } = connected();
+  viewer.hooks.ready();
+  await until(() => w.posted.length === 1);
+  w.posted.length = 0;
+  const previous = viewer.store;
+  viewer.camera.cx += 10;
+  viewer.hooks.view();
+  sessionOpensAgain(viewer);
+  await sleep(160);
+  assert.deepEqual(w.posted, [], 'the outgoing camera is not sent while the next store opens');
+
+  viewer.store = { ...previous, url: 'https://data.example/stores/replacement/', transform: [10, 0, 600000, 0, -10, 5000000] };
+  viewer.status = { ...viewer.status, store: 'open', frame: 'loading' };
+  viewer.hooks.ready();
+  await until(() => w.posted.length === 1);
+  assert.equal(w.posted[0].data.type, 'chronozarr:ready');
+  w.posted.length = 0;
+  viewer.camera.cx += 5;
+  viewer.hooks.view();
+  await until(() => w.posted.length === 1);
+  assert.equal(w.posted[0].data.type, 'chronozarr:view');
+  assert.equal(w.posted[0].data.center.x, 601150);
+  bridge.stop();
+});
+
 /** The next store is open: the viewer calls the ready hook; the projection of the fake viewer loads with the real loader. */
 function nextStoreOpens(viewer, store) {
   viewer.store = { ...store };

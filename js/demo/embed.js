@@ -315,7 +315,7 @@ export class EmbedBridge {
   stop() {
     if (this.#listener) this.#win.removeEventListener('message', this.#listener);
     this.#listener = null;
-    clearTimeout(this.#viewTimer);
+    this.cancelView();
   }
 
   /** Send `chronozarr:<name>` to the host. */
@@ -327,6 +327,12 @@ export class EmbedBridge {
   /** Record the view the host already knows (the camera in a `ready` message), so it is not sent again as a `view`. */
   rememberView(payload) {
     this.#lastView = JSON.stringify(payload);
+  }
+
+  /** Discard a camera notification that belongs to the store being replaced. */
+  cancelView() {
+    clearTimeout(this.#viewTimer);
+    this.#viewTimer = 0;
   }
 
   /** Send `chronozarr:view` once the camera has been still for the debounce time, and only if it differs from the last one sent. */
@@ -525,6 +531,7 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
       // The viewer publishes a status when its session starts to open a store: from then on there is no store to
       // report on, a get waits for the next ready, and a failure the host was told about belongs to the store before.
       if (status.store === 'opening' && connection.can('reopen')) {
+        bridge.cancelView();
         connection.send('reopen');
         failure = null;
       }
