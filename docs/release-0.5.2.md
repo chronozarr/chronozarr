@@ -1,9 +1,5 @@
 # chronozarr 0.5.2
 
-Draft for the **0.5.2 release candidate**. These notes describe the proposed
-Python and npm packages, including fixes integrated locally for review.
-Publication and qualification of the combined candidate are pending.
-
 Python and npm **0.5.2** collect the fixes and import routes added after 0.5.1.
 Existing spec 0.3 and 0.4 stores remain readable with the same layout and codecs.
 
