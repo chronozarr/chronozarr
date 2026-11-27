@@ -28,6 +28,12 @@ export const PRODUCT_GLSL = `
 const float GAIN = ${GAIN.toFixed(1)};
 const float SAT_BOOST = 1.4;
 
+// Indices and the dual-pol difference need both bands. RGB keeps its partial-channel display.
+bool missingProductInput(int product, bvec3 missing) {
+  if (product == 2 || product == 3 || product == 4 || product == 6) return missing.x || missing.y;
+  return all(missing);
+}
+
 float toSrgb(float v) {
   return v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1.0 / 2.4) - 0.055;
 }

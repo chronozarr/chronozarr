@@ -237,6 +237,8 @@ class Viewer {
   /** While an open waits for its first frame: ends that wait when every cell the frame misses has failed for good. */
   #firstFrameUnavailable = null;
   #storeGeneration = 0;
+  /** Cancels metadata reads of the open in progress when another session takes over. */
+  #openController = null;
   #tickElements = [];
   #wave = null;
   #toastTimer = 0;
@@ -308,17 +310,24 @@ class Viewer {
    * until this one is.
    * @param {string} url
    * @param {{lod?:number, fetch?:typeof fetch, maxCacheBytes?:number, totalBytes?:number, workers?:number, camera?:{cx:number,cy:number,scale:number},
-   *   viewSearch?:string, store?:object, startTime?:(store:object)=>Promise<number>}} [options]  `viewSearch`: a query string whose t, p, b, z, c parameters restore the view (see permalink.js).
+   *   viewSearch?:string, store?:object, startTime?:(store:object, options:{signal:AbortSignal})=>Promise<number>}} [options]  `viewSearch`: a query string whose t, p, b, z, c parameters restore the view (see permalink.js).
    *   `store`: a store the caller has opened and checked (open-store.js); it is used as is, with no second read.
    *   `startTime`: where to start in time when `viewSearch` names no timestep (start-time.js); without it, the first timestep.
+   *   Its signal cancels startup reads when another open takes over.
    */
   async loadStore(url, options = {}) {
     // 1. End the previous session before publishing opening. A status hook can synchronously start another open.
     this.#session.send('open');
     const generation = ++this.#storeGeneration;
     this.#endSession();
-    this.#setProgress(0.02);
     let store = options.store ?? null;
+    if (generation !== this.#storeGeneration) {
+      if (store !== this.store) store?.close();
+      return null;
+    }
+    const opening = new AbortController();
+    this.#openController = opening;
+    this.#setProgress(0.02);
     this.#hideError(); // Clearing the old notice also publishes the opening status.
     if (generation !== this.#storeGeneration) {
       if (store !== this.store) store?.close();
@@ -328,28 +337,33 @@ class Viewer {
 
     // 2. Read the store and where it starts in time; a newer open may take over at each await.
     try {
-      store ??= await openStore(url, { fetch: options.fetch, maxCacheBytes: options.maxCacheBytes, totalBytes: options.totalBytes, workers: options.workers });
+      store ??= await openStore(url, { fetch: options.fetch, signal: opening.signal, maxCacheBytes: options.maxCacheBytes, totalBytes: options.totalBytes, workers: options.workers });
       checkUniformChunks(store);
     } catch (error) {
       // A store that this call opened and then refused is closed here: nothing else holds it or its decoder lease.
-      if (store !== null && store !== options.store) store.close();
+      if (store !== null && store !== options.store && store !== this.store) store.close();
+      if (generation !== this.#storeGeneration) return null;
       await this.#failOpen(error, url, generation);
       throw error;
     }
     if (generation !== this.#storeGeneration) {
-      store.close();
+      if (store !== this.store) store.close();
       return null;
     }
     let startT = null;
     if (options.startTime) {
       try {
-        startT = await options.startTime(store);
+        startT = await options.startTime(store, { signal: opening.signal });
       } catch (error) {
+        if (generation !== this.#storeGeneration) {
+          if (store !== this.store) store.close();
+          return null;
+        }
         // The start is a convenience: a failed read leaves the first timestep, and the store still opens.
         console.warn(`start time for ${redactUrl(url)} not found, starting at the first timestep:`, redactText(error?.message ?? error));
       }
       if (generation !== this.#storeGeneration) {
-        store.close();
+        if (store !== this.store) store.close();
         return null;
       }
     }
@@ -467,6 +481,20 @@ class Viewer {
    * and the timeline its ticks until the next store draws.
    */
   #endSession() {
+    // Detach every outgoing request owner before pausing or clearing the scrub: both paths stop pumps too.
+    // An abort observer can synchronously open and configure another store, so all old-session writes finish first.
+    const controllers = [
+      this.#openController, this.#bufferPump?.controller, this.#probePump?.controller,
+      ...this.#retiringPumps.splice(0), this.#coarseLoop?.controller, this.#wave?.controller,
+      this.#prefetchAbort, this.#chart?.controller,
+    ];
+    this.#openController = null;
+    this.#bufferPump = null;
+    this.#probePump = null;
+    this.#coarseLoop = null;
+    this.#wave = null;
+    this.#prefetchAbort = null;
+    this.#chart = null;
     // Detach before pausing so the playback callback cannot publish status or queue work during teardown.
     // Close near the end, after the work that still holds its requests has stopped.
     const store = this.store;
@@ -475,7 +503,7 @@ class Viewer {
     // A click being inspected drops its result once the token has moved on.
     ++this.#inspectRequest;
     this.#playback?.pause();
-    // The scrub hands the requests of its pumps over to the next frame; #abortBackground, after it, stops those too.
+    // Request owners are detached above; these calls reset the scrub and stop its timers and queued GPU work.
     this.#clearScrub();
     // The pumps, the coarse loop, the demand wave, the GPU fill and the prefetch.
     this.#abortBackground();
@@ -501,11 +529,13 @@ class Viewer {
     for (const resolve of this.#painted.splice(0)) resolve();
     this.#updateSidebar(null);
     this.closeInspector();
-    store?.close();
     this.#updatePlayUi();
     this.#updateFrameDate([]);
     // #loading is false from here: the tick of the timestep asked for and the track lose their loading look.
     this.#updateTimeUi();
+    for (const controller of controllers) controller?.abort();
+    // An abort observer may have handed this same store to a newer open.
+    if (store !== this.store) store?.close();
   }
 
   /**
@@ -2352,7 +2382,8 @@ class Viewer {
     const maskValue = mask ? mask[cellY * level.chunkWidth + cellX] : null;
     const info = { t, lod, pixel: { x: Math.floor(worldX), y: Math.floor(worldY) }, observed, masked: maskValue === 0, ...describePixel(values, this.bands, this.#nodata, maskValue) };
     this.#hook('click', { pixel: info.pixel, t, lod, info });
-    if (!this.inspectorUi) return;
+    // The hook can replace the store or start another pixel inspection.
+    if (request !== this.#inspectRequest || !this.inspectorUi) return;
     this.#updateSidebar(info);
     this.openInspector();
     this.#startChart({ lod, row, col, x: cellX, y: cellY });
@@ -2732,6 +2763,7 @@ class Viewer {
             this.#drawGapOverlay();
           },
           (error) => {
+            requested.delete(key);
             // Closing the store at the end of its session aborts the read: that is no failure.
             if (error.name !== 'AbortError') console.error(`gap overlay: coverage load failed (lod ${lod}, row ${row}, col ${col}, timestep ${t}):`, redactText(error));
           },
@@ -3000,7 +3032,9 @@ class Viewer {
    * the `error` hook gives the host page when it must say more than the box (the box is the same as `message` otherwise).
    */
   #showError(title, message, { toast = false, code = 'error', hostMessage = message } = {}) {
+    const generation = this.#storeGeneration;
     this.#hook('error', { code, title, message: hostMessage });
+    if (generation !== this.#storeGeneration) return;
     clearTimeout(this.#toastTimer);
     $('error-title').textContent = title;
     $('error-message').textContent = message;

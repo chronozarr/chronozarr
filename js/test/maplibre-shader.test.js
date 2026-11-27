@@ -33,6 +33,14 @@ test('a mask adds its sampler and discards masked texels; without one there is n
   assert.ok(!plain.includes('u_mask;') && !plain.includes('texelFetch(u_mask'));
 });
 
+test('each MapLibre shader checks required product inputs before applying scale or offset', () => {
+  for (const dtype of Object.keys(DTYPES)) {
+    const source = fragmentShader({ dtype, hasMask: false });
+    assert.match(source, /bool empty = missingProductInput\(u_product, bvec3\([\s\S]*?u_inputs\.x < 0 \|\| isNodata\(v0\)[\s\S]*?u_inputs\.y < 0 \|\| isNodata\(v1\)[\s\S]*?u_inputs\.z < 0 \|\| isNodata\(v2\)/);
+    assert.ok(source.indexOf('if (empty)') < source.indexOf('vec3 x = toPhysical('));
+  }
+});
+
 test('unknown dtypes are refused naming the supported ones; the vertex shader takes the origin-relative matrix and texel attributes', () => {
   assert.throws(() => fragmentShader({ dtype: 'float64', hasMask: false }), /no shader for data type float64.*uint8, uint16, int16, float32/);
   assert.ok(VERTEX_SHADER.includes('uniform mat4 u_matrix;') && VERTEX_SHADER.includes('in vec2 a_pos;') && VERTEX_SHADER.includes('in vec2 a_texel;'));

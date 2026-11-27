@@ -14,7 +14,7 @@
 import { Machine } from '../chronozarr/machine.js';
 import { redactText } from '../chronozarr/redact.js';
 import { COLORMAPS, colormapIndex } from '../shared/colormaps.js';
-import { pixelToProjected, projectedToPixel } from './permalink.js';
+import { pixelToProjected, projectedToPixel, roundProjectedCoordinates } from './permalink.js';
 
 /** Contract version, in the `v` field of every message the viewer sends; a command may carry it and then must say 1. */
 export const EMBED_VERSION = 1;
@@ -241,7 +241,7 @@ export function makeGeo({ transform = null, projection = null } = {}) {
       if (!geoReferenced) return { x: roundTo(col, 1), y: roundTo(row, 1), lon: null, lat: null };
       const { x, y } = pixelToProjected(transform, col, row);
       const [lon, lat] = projection ? projection.toLonLat(x, y) : [null, null];
-      return { x: roundTo(x, 3), y: roundTo(y, 3), lon: lon === null ? null : roundTo(lon, 6), lat: lat === null ? null : roundTo(lat, 6) };
+      return { ...roundProjectedCoordinates(transform, x, y, 3), lon: lon === null ? null : roundTo(lon, 6), lat: lat === null ? null : roundTo(lat, 6) };
     },
     /** {col, row} of a validated `center` ({x, y} or {lon, lat}); throws an Error that says what is missing for lon/lat. */
     toPixel(center) {
@@ -315,7 +315,7 @@ export class EmbedBridge {
   stop() {
     if (this.#listener) this.#win.removeEventListener('message', this.#listener);
     this.#listener = null;
-    clearTimeout(this.#viewTimer);
+    this.cancelView();
   }
 
   /** Send `chronozarr:<name>` to the host. */
@@ -327,6 +327,12 @@ export class EmbedBridge {
   /** Record the view the host already knows (the camera in a `ready` message), so it is not sent again as a `view`. */
   rememberView(payload) {
     this.#lastView = JSON.stringify(payload);
+  }
+
+  /** Discard a camera notification that belongs to the store being replaced. */
+  cancelView() {
+    clearTimeout(this.#viewTimer);
+    this.#viewTimer = 0;
   }
 
   /** Send `chronozarr:view` once the camera has been still for the debounce time, and only if it differs from the last one sent. */
@@ -525,6 +531,7 @@ export function connectEmbed(viewer, params, { win = window, loadProjection: pro
       // The viewer publishes a status when its session starts to open a store: from then on there is no store to
       // report on, a get waits for the next ready, and a failure the host was told about belongs to the store before.
       if (status.store === 'opening' && connection.can('reopen')) {
+        bridge.cancelView();
         connection.send('reopen');
         failure = null;
       }

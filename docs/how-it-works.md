@@ -2,9 +2,9 @@
 
 A chronozarr store is a Zarr v3 group arranged so that a browser can read it over plain HTTP.
 
-The map is divided into square cells, 512 by 512 pixels by default. Each chunk holds one cell at one timestep, with all of its bands. To show a view, the browser downloads only the chunks for the visible cells at the current timestep.
+The map is divided into square cells, 512 by 512 pixels by default. Each chunk holds one cell at one timestep, with all of its bands. To draw one view, the browser needs the chunks for its visible cells at the selected timestep.
 
-The store also holds a pyramid. Level 0 holds your values unchanged. Each coarser level is the mean of 2 by 2 blocks of the level below it, at half the resolution. When you zoom out, the viewer switches to a coarser level, so a view of the whole area still needs only a few chunks.
+The store also holds a pyramid. Level 0 holds the full-resolution stored values. Each coarser level is the mean of 2 by 2 blocks of the level below it, at half the resolution. When you zoom out, the viewer switches to a coarser level. A view of the whole area then needs only a few chunks.
 
 ```text
 my_store/

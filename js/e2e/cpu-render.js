@@ -82,7 +82,9 @@ function shadeLinear(product, x, range) {
 export function shadeTexel(frame, stored) {
   const isNodata = (v) => (frame.nodata !== null && v === frame.nodata) || Number.isNaN(v);
   const inputs = frame.inputs.map((band) => (band < 0 ? null : stored[band]));
-  if (inputs.every((v) => v === null || isNodata(v))) return [...BACKGROUND];
+  const valid = inputs.map((v) => v !== null && !isNodata(v));
+  // A ratio, classification or polarization difference has no value if either source is missing.
+  if (!valid.some(Boolean) || ([2, 3, 4, 6].includes(frame.shader) && !valid.slice(0, 2).every(Boolean))) return [...BACKGROUND];
   const physical = inputs.map((v, slot) => {
     const value = v ?? 0;
     return (frame.unitDivisor[slot] > 0 ? value / frame.unitDivisor[slot] : value * frame.unitScale[slot]) + frame.unitOffset[slot];

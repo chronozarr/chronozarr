@@ -1,6 +1,6 @@
 # What is chronozarr?
 
-chronozarr lets you share a georeferenced raster time series as an interactive map. A recipient can open a link, play or scrub through the dates, zoom in and click a pixel to see its values over time. The same static files keep the original pixel values for analysis in Python.
+chronozarr lets you share a georeferenced raster time series as an interactive map. A recipient can open a link and play or scrub through the dates. They can zoom in and click a pixel to see its values over time. The same static files keep the pixel values for analysis in Python.
 
 [Open the live demo](https://chronozarr.org/demo/). It shows 117 monthly Sentinel-2 composites of the Ucayali River in Peru, 2015 to 2026, read directly from a storage bucket.
 

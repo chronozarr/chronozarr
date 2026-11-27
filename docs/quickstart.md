@@ -23,7 +23,7 @@ uv tool install --python 3.13 'chronozarr[geo]==0.5.2'
 chronozarr --version
 ```
 
-uv installs the `chronozarr` command on your `PATH` and uses Python 3.13, downloading it if needed. This avoids selecting an older Python already on your computer. The second command prints `chronozarr, version 0.5.2`. On macOS the first command after an install can take 10 to 25 seconds while the system checks the new files; later commands start in about a second.
+uv installs the `chronozarr` command on your `PATH` and uses Python 3.13, downloading it if needed. This avoids selecting an older Python already on your computer. The second command prints `chronozarr, version 0.5.2`. On macOS the first command after an install can take 10 to 25 seconds while the system checks the new files. Later commands start in about a second.
 
 chronozarr supports Python 3.11 and newer; this page uses 3.13. The `geo` extra adds GeoTIFF support. NetCDF files need the `netcdf` extra as well; see the [NetCDF guide](convert.md#from-netcdf-or-zarr). To install with pip instead, use an environment with Python 3.11 or newer, such as a virtual environment or a conda environment:
 
@@ -151,7 +151,7 @@ Then install the library in that project:
 uv add 'chronozarr==0.5.2'
 ```
 
-Use `uv run python` to start Python in the same folder, or `uv run python your_script.py` to run a script. The `"my_store"` path below is relative to that folder. To use an existing Python 3.11+ environment instead, run `python -m pip install 'chronozarr==0.5.2'` there. A notebook must use that environment as its kernel.
+Use `uv run python` to start Python in the same folder. Use `uv run python your_script.py` to run a script. The `"my_store"` path below is relative to that folder. To use an existing Python 3.11+ environment instead, run `python -m pip install 'chronozarr==0.5.2'` there. A notebook must use that environment as its kernel.
 
 ```python
 import xarray as xr

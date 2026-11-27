@@ -1,6 +1,6 @@
 # Advanced hosting
 
-Use [`chronozarr publish`](publish.md) to upload a store, check the hosted files and get a viewer link. To set up a host by hand, use a provider that `publish` does not cover, or tune an existing host, choose a guide below.
+Use [`chronozarr publish`](publish.md) to upload a store, check the hosted files and get a viewer link. The guides below cover manual setup, providers outside `publish`, and changes to an existing host.
 
 | I want to | Page |
 |---|---|

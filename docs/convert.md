@@ -64,7 +64,9 @@ Files on another grid fail with a suggestion to pass `--resampling`, which warps
 When conversion warps any timestep, the store carries a validity mask. The resampling kernel uses valid source pixels, and the mask keeps a valid result even if it equals the source nodata value.
 Keep local GeoTIFF `.msk` sidecars beside their rasters. For hosted GeoTIFFs, put the mask inside the file.
 
-The store takes each band's description (its name), scale, offset and units from the files, so a Sentinel-2 file with a scale of 0.0001 gives reflectance. These must be identical in every file, unless you give the scale or the offset yourself: `--scale 0.0001` and `--offset 0` replace them for every band, and the files then need not agree. A file whose bands have no description gives bands named `1`, `2` and so on. To name them, write the files and dates to a manifest with `--write-manifest found.csv`, add a `bands` column such as `ndvi`, and convert the manifest. A `bands` column replaces whatever the files say, so it is also the way to rename a band.
+The store takes each band's description (its name), scale, offset and units from the files. A Sentinel-2 file with a scale of 0.0001 gives reflectance. These attributes must be identical in every file unless you override them. `--scale 0.0001` and `--offset 0` replace the scale and offset for every band. The files need not agree on an attribute that you override.
+
+A file whose bands have no description gives bands named `1`, `2` and so on. To name them, write the files and dates to a manifest with `--write-manifest found.csv`. Add a `bands` column such as `ndvi`, then convert the manifest. A `bands` column replaces whatever the files say, so it is also the way to rename a band.
 
 Some files carry a description that is the file's own name, such as the one band of a WorldClim file `wc2.1_10m_tmax_2020-01.tif`. When every file has one band and the descriptions are identical once the dates in them are left out, `convert` takes them for file labels and not for a band name. The band is named by the part they share (`wc2.1_10m_tmax`), or `1` when nothing is left, and the dry run prints a `bands:` line that says what it chose and how to change it. Descriptions that differ in anything but the date, such as `B04` and `B08` or `tmax` and `tmin`, are refused, and so are differing descriptions in files with more than one band. In those cases name the bands in a manifest. The store also takes the nodata value that the files declare. Files that declare none give a store with no nodata, so a stored 0 is data. `--nodata 0` sets one.
 
@@ -72,7 +74,7 @@ The dry run also reads three timesteps and checks their pixels. A value that the
 
 ## From other raster formats
 
-`convert` reads any raster that GDAL can open through rasterio, not only GeoTIFF. A folder, a quoted glob or an `s3://` prefix is searched for files with these extensions. Everything else is ignored, including the sidecars that GDAL reads for itself (`.hdr`, `.prj`, `.aux.xml`, `.stx`, `.xml`, `.txt`, `.csv`).
+`convert` reads rasters through GDAL and rasterio. It searches a folder, quoted glob or `s3://` prefix for files with these extensions. Everything else is ignored, including the sidecars that GDAL reads for itself (`.hdr`, `.prj`, `.aux.xml`, `.stx`, `.xml`, `.txt`, `.csv`).
 
 | Format | Extensions |
 |---|---|
@@ -260,11 +262,17 @@ chronozarr convert model.nc my_store --variable tas
 chronozarr convert data.zarr my_store --variable ndvi --crs EPSG:32618
 ```
 
-Reading a NetCDF4 file needs the `netcdf` extra, which adds h5netcdf, h5py and cftime. Install it in the environment that runs the command: `uv tool install --python 3.13 --force 'chronozarr[geo,netcdf]==0.5.2'` for the standalone tool, or `uv add 'chronozarr[geo,netcdf]==0.5.2'` for a Python project. Without it, `convert` stops with `reading a NetCDF4 file needs h5netcdf and h5py`. A Zarr store needs no NetCDF reader. A classic NetCDF3 file, which starts with the bytes `CDF`, needs `scipy` instead: add `--with scipy` to the tool installation, or add scipy to your analysis environment.
+Reading a NetCDF4 file needs the `netcdf` extra, which adds h5netcdf, h5py and cftime. Install it in the environment that runs the command. For the standalone tool, run `uv tool install --python 3.13 --force 'chronozarr[geo,netcdf]==0.5.2'`. For a Python project, run `uv add 'chronozarr[geo,netcdf]==0.5.2'`. Without it, `convert` stops with `reading a NetCDF4 file needs h5netcdf and h5py`.
 
-`--variable` names the array to convert. Its dimensions must be time, y and x, with an optional band dimension. `--dims time=NAME,y=NAME,x=NAME[,band=NAME]` names them when they are not `time`, `y`, `x` or common aliases such as `lat` and `lon`. The coordinate system comes from a `crs`, `crs_wkt` or `spatial_ref` attribute, or from the CF grid mapping variable that the variable names in `grid_mapping`; reading a grid mapping needs pyproj. `--crs` gives it, as an EPSG code or WKT2 text, when the file does not declare it. A CRS with no EPSG code, such as Daymet's Lambert conformal conic, is stored as it is and is never reprojected. The CF `scale_factor`, `add_offset` and `units` of the variable apply to every band. `--mask-var` names a variable whose nonzero values mark valid pixels.
+A Zarr store needs no NetCDF reader. A classic NetCDF3 file starts with the bytes `CDF` and needs `scipy`. Add `--with scipy` to the tool installation, or add scipy to your analysis environment.
+
+`--variable` names the array to convert. Its dimensions must be time, y and x, with an optional band dimension. `--dims time=NAME,y=NAME,x=NAME[,band=NAME]` names them when they are not `time`, `y`, `x` or common aliases such as `lat` and `lon`.
+
+The coordinate system comes from a `crs`, `crs_wkt` or `spatial_ref` attribute, or from the CF grid mapping named in `grid_mapping`. Reading a grid mapping needs pyproj. `--crs` supplies an EPSG code or WKT2 text when the file does not declare its CRS. A CRS with no EPSG code, such as Daymet's Lambert conformal conic, is stored without reprojection. The CF `scale_factor`, `add_offset` and `units` of the variable apply to every band. `--mask-var` names a variable whose nonzero values mark valid pixels.
 
 Packed coordinates are decoded before deriving the grid and dates. An integer data variable with `_Unsigned` is read in its declared signedness, including its fill codes. Numeric `--nodata` overrides use that interpreted dtype.
+
+The x/y coordinates follow their declared units. For example, kilometer axes are stored as meter coordinates when the CRS uses meters. Axes without units are interpreted in the CRS's units. Unsupported or incompatible coordinate units are reported before writing.
 
 Use `convert` for NetCDF and Zarr variables. `chronozarr encode --help` describes the
 separate in-memory interface.
@@ -351,7 +359,7 @@ import chronozarr
 chronozarr.encode(da, "my_store", crs="EPSG:32618")
 ```
 
-The `x` and `y` coordinates are the projected pixel centres. See [How it works](how-it-works.md#write-a-store-from-python) for a complete script, and the [Python API](python.md#write-a-store) for the options.
+The `x` and `y` coordinates are the pixel centres in the store's CRS. See [How it works](how-it-works.md#write-a-store-from-python) for a complete script, and the [Python API](python.md#write-a-store) for the options.
 
 ## Band roles
 

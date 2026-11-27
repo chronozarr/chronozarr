@@ -21,17 +21,19 @@ const CATALOG = [
 async function runEarlyScript(pageUrl, answers = {}) {
   const location = new URL(pageUrl);
   const fetched = [];
+  const signals = new Map();
   const window = {};
-  const fetchStub = (url) => {
+  const fetchStub = (url, options) => {
     const address = String(url);
     fetched.push(address);
+    signals.set(address, options?.signal);
     if (!(address in answers)) return Promise.reject(new TypeError('Failed to fetch'));
     const body = answers[address];
     return Promise.resolve({ ok: true, status: 200, body, clone: () => ({ json: async () => body }), json: async () => body });
   };
-  vm.runInNewContext(earlyScript, { URL, URLSearchParams, location, window, fetch: fetchStub, performance });
+  vm.runInNewContext(earlyScript, { URL, URLSearchParams, location, window, fetch: fetchStub, performance, AbortController });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  return { fetched, reads: window.chronozarrEarly };
+  return { fetched, reads: window.chronozarrEarly, signals };
 }
 
 const PAGE = 'https://chronozarr.org/demo/index.html';
@@ -169,4 +171,63 @@ test('fetchWithEarlyReads reads again when the early read failed', async () => {
 test('fetchWithEarlyReads works on a page that has no early reads', async () => {
   const fetchEarly = fetchWithEarlyReads(async () => new Response('network'), undefined);
   assert.equal(await (await fetchEarly(new Request('https://x.example/zarr.json'))).text(), 'network');
+});
+
+test('each inline early read can be aborted without cancelling another read', async () => {
+  const root = 'https://data.example.org/mine/zarr.json';
+  const { reads, signals } = await runEarlyScript(`${PAGE}?store=${encoded('https://data.example.org/mine')}`, { [root]: {}, [CATALOG_URL]: CATALOG });
+  const pending = reads.get(root);
+  assert.equal(typeof pending.abort, 'function');
+  pending.abort();
+  assert.equal(signals.get(root).aborted, true);
+  assert.equal(signals.get(CATALOG_URL).aborted, false, 'the independent catalog read keeps its signal');
+});
+
+test('cancelling an adopted early root settles without retrying and leaves the catalog alone', async () => {
+  const { promise: root, resolve } = Promise.withResolvers();
+  let aborted = 0;
+  root.abort = () => { aborted++; };
+  const catalog = new Response('catalog');
+  const reads = new Map([['https://x.example/zarr.json', root], ['https://x.example/catalog.json', Promise.resolve(catalog)]]);
+  const fetchEarly = fetchWithEarlyReads(() => assert.fail('an aborted adopted root is not retried'), reads);
+  const controller = new AbortController();
+  const reading = fetchEarly(new Request('https://x.example/zarr.json', { signal: controller.signal }));
+  controller.abort();
+  const result = await Promise.race([
+    reading.then(() => 'resolved', (error) => error.name),
+    new Promise((done) => setTimeout(() => done('pending'), 50)),
+  ]);
+  assert.equal(result, 'AbortError');
+  assert.equal(aborted, 1);
+  resolve(null);
+  assert.equal(await fetchEarly(new Request('https://x.example/catalog.json')), catalog);
+});
+
+test('an adopted early response still forwards abort after its headers arrive, while the body is pending', async () => {
+  const original = new AbortController();
+  const body = new ReadableStream({
+    start(stream) {
+      original.signal.addEventListener('abort', () => stream.error(new DOMException('Aborted', 'AbortError')), { once: true });
+    },
+  });
+  const root = Promise.resolve(new Response(body));
+  root.abort = () => original.abort();
+  const controller = new AbortController();
+  const fetchEarly = fetchWithEarlyReads(() => assert.fail('the early response is reused'), new Map([['https://x.example/zarr.json', root]]));
+  const response = await fetchEarly(new Request('https://x.example/zarr.json', { signal: controller.signal }));
+  const reading = response.arrayBuffer();
+  controller.abort();
+  assert.equal(original.signal.aborted, true);
+  await assert.rejects(reading, { name: 'AbortError' });
+});
+
+test('an already-aborted consumer cancels its early root without retrying it', async () => {
+  const root = Promise.resolve(null);
+  let aborted = 0;
+  root.abort = () => { aborted++; };
+  const controller = new AbortController();
+  controller.abort();
+  const fetchEarly = fetchWithEarlyReads(() => assert.fail('an aborted root is not retried'), new Map([['https://x.example/zarr.json', root]]));
+  await assert.rejects(fetchEarly(new Request('https://x.example/zarr.json', { signal: controller.signal })), { name: 'AbortError' });
+  assert.equal(aborted, 1);
 });

@@ -95,7 +95,7 @@ chronozarr link https://data.example.org/my_store --time 71 --lonlat -64.62,-3.4
 
 ## Automating the viewer
 
-A script that drives the viewer in a browser, such as a test, a screenshot job or an agent, can read what the viewer is doing instead of waiting a fixed time. The viewer page publishes this on `window.chronozarr.viewer`. A host page that embeds the hosted viewer in an iframe is on another origin and cannot reach that object. For it, the `chronozarr:status` message carries the same fields: see [`chronozarr:status`](embedding.md#chronozarrstatus) in the embedding guide.
+A browser script can read the viewer's state to decide when to act. This works for tests, screenshot jobs and agents. The viewer page publishes its state on `window.chronozarr.viewer`. A host page that embeds the hosted viewer in an iframe is on another origin and cannot reach that object. The `chronozarr:status` message carries the same fields to that page. See [`chronozarr:status`](embedding.md#chronozarrstatus) in the embedding guide.
 
 ### The status
 
@@ -166,7 +166,7 @@ await browser.close();
 
 ## What the browser downloads
 
-The map is divided into cells of 512 by 512 pixels. For each view, the browser downloads the cells on the screen, at the current timestep, at the level of detail that matches the zoom. It also downloads the timesteps around the current one in the background. Stepping through time then usually needs no new download. A link to a store gives read access to the whole store, but the browser fetches only what the view needs.
+The map is divided into cells of 512 by 512 pixels. To draw a view, the browser downloads its visible cells at the current timestep and the level of detail that matches the zoom. It also downloads data to buffer nearby timesteps and load a pixel's history. Stepping through time then usually needs no new download. A link to a public store gives read access to the whole store.
 
 ## Privacy
 

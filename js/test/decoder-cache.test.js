@@ -576,6 +576,63 @@ test('getCoarseFrame without materialize holds its chunks against eviction until
   assert.deepEqual(frame.cells, [{ row: 0, col: 0 }, { row: 0, col: 1 }, { row: 1, col: 0 }]);
 });
 
+test('aborting one coarse frame keeps a shared chunk pinned for another frame', { timeout: 5000 }, async () => {
+  const readable = buildSyntheticStore({ nTime: 1, nBand: 1, height: 2, width: 4, chunk: 2, sharded: false, nodata: null });
+  const keyA = '/0/data/c/0/0/0/0';
+  const keyB = '/0/data/c/0/0/0/1';
+  const held = new Map([keyA, keyB].map((key) => [key, {
+    started: Promise.withResolvers(), release: Promise.withResolvers(),
+  }]));
+  const gated = {
+    async get(key, options) {
+      const gate = held.get(key);
+      if (gate) {
+        gate.started.resolve();
+        await gate.release.promise;
+      }
+      return readable.get(key, options);
+    },
+  };
+  const firstAbort = new AbortController();
+  const secondAbort = new AbortController();
+  const pending = [];
+  const track = (promise) => {
+    pending.push(promise);
+    promise.catch(() => {});
+    return promise;
+  };
+  let store;
+  try {
+    const oneChunk = 2 * 2 * Uint16Array.BYTES_PER_ELEMENT;
+    store = await openStore('memory://overlapping-coarse-pins', {
+      store: gated, workers: 0, totalBytes: oneChunk, maxCacheBytes: oneChunk, compressedBytes: 0,
+    });
+    const first = track(store.getCoarseFrame(0, [[0, 0]], 0, { signal: firstAbort.signal, materialize: false }));
+    await held.get(keyA).started.promise;
+    const second = track(store.getCoarseFrame(0, [[0, 0], [0, 1]], 0, { signal: secondAbort.signal, materialize: false }));
+    // B starts after the second frame has pinned both keys and joined A's held read.
+    await held.get(keyB).started.promise;
+    firstAbort.abort();
+    await assert.rejects(first, { name: 'AbortError' });
+
+    held.get(keyA).release.resolve();
+    // Wait for A to be decoded without adding another cache pin or releasing B.
+    await track(store.ensureRaw(0, 0, 0, 0, { signal: secondAbort.signal }));
+    assert.equal(store.hasCachedRaw(0, 0, 0, 0), true);
+    held.get(keyB).release.resolve();
+    assert.deepEqual((await second).cells, [{ row: 0, col: 0 }, { row: 0, col: 1 }]);
+    assert.equal(store.hasCachedRaw(0, 0, 0, 0), true, 'the second frame still owns A after the first frame aborts');
+    assert.equal(store.hasCachedRaw(0, 0, 1, 0), true, 'B is resident with A although the budget holds one chunk');
+    assert.equal(store.cacheInfo().compressedEntries, 0);
+  } finally {
+    firstAbort.abort();
+    secondAbort.abort();
+    for (const gate of held.values()) gate.release.resolve();
+    store?.close();
+    await Promise.allSettled(pending);
+  }
+});
+
 test('getCoarseFrame rejects when its signal aborts, and on bad cells', async () => {
   const readable = buildSyntheticStore({ ...PYRAMID, delayMs: 30 });
   const store = await openStore('memory://coarse-abort', { store: readable, workers: 0 });

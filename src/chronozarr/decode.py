@@ -296,7 +296,7 @@ class ChronoStore:
         self, array: zarr.Array, timesteps: Sequence[int], ys: slice, xs: slice
     ) -> np.ndarray:
         """Mask or coverage over a window: (len(timesteps), y, x) uint8."""
-        return np.asarray(array.oindex[np.asarray(list(timesteps)), ys, xs])
+        return np.asarray(array.oindex[np.asarray(list(timesteps), dtype=np.int64), ys, xs])
 
     def _physical_region(
         self, level: Level, timesteps: Sequence[int], ys: slice, xs: slice

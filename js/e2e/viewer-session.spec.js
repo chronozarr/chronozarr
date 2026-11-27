@@ -558,6 +558,56 @@ test('a coverage read of the gap overlay that a store switch ends logs no error'
   expect(await waitForSettled(page)).toEqual(expect.objectContaining({ store: 'open', frame: 'settled' }));
 });
 
+test.describe('gap overlay retry', () => {
+  test.use({ expectedErrors: /^console\.error: gap overlay: coverage load failed .*coverage retry probe/ });
+
+  test('the gap overlay retries a failed coverage read and draws recovered hatching', async ({ page, servers, stores }) => {
+    const dir = path.join(stores.dir, 'gap-overlay-retry');
+    await writeTree(dir, buildSyntheticStore({ dtype: 'uint8', nTime: 1, nBand: 1, height: 64, width: 64, chunk: 64, sharded: false, nLevels: 1, consolidated: true, nodata: null, coverage: true }).files);
+    await openAt(page, servers, `${servers.dataUrl}/gap-overlay-retry/`);
+    try {
+      const uncached = await page.evaluate(() => {
+        const { viewer } = window.chronozarr;
+        const { store } = viewer;
+        const getCoverage = store.getCoverage;
+        const prefetch = store.prefetch;
+        const uncached = store.peekCoverage(0, 0, 0, 0) === undefined;
+        window.restoreGapReads = () => { store.getCoverage = getCoverage; store.prefetch = prefetch; };
+        // No inspector is opened, and prefetch stays off until cleanup.
+        store.prefetch = async () => ({ errors: [] });
+        store.getCoverage = () => {
+          store.getCoverage = getCoverage;
+          return new Promise((_, reject) => { window.rejectGapRead = () => reject(new Error('coverage retry probe')); });
+        };
+        viewer.toggleGaps();
+        return uncached;
+      });
+      expect(uncached, 'coverage starts uncached, so the overlay reaches the injected failure').toBe(true);
+      await page.evaluate(async () => {
+        window.rejectGapRead();
+        // The overlay attached its rejection handler before this call; it runs before this continuation.
+        await Promise.resolve();
+        const { viewer } = window.chronozarr;
+        viewer.toggleGaps();
+        viewer.toggleGaps();
+      });
+      await expect.poll(() => page.evaluate(() => {
+        const { viewer } = window.chronozarr;
+        const coverage = viewer.store.peekCoverage(0, 0, 0, 0);
+        const canvas = document.getElementById('gap-canvas');
+        const { data } = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+        return { recovered: Boolean(coverage?.includes(0)), hatched: data.some((value, i) => i % 4 === 3 && value > 0) };
+      }), 'the rejected read is retried and real zero-coverage pixels are hatched').toEqual({ recovered: true, hatched: true });
+      expect(servers.data.requests.filter(({ path: key }) => key === '/gap-overlay-retry/0/coverage/c/0/0/0').length, 'recovery fetched the real coverage chunk').toBeGreaterThan(0);
+    } finally {
+      await page.evaluate(() => {
+        window.rejectGapRead?.();
+        window.restoreGapReads?.();
+      }).catch(() => {});
+    }
+  });
+});
+
 test('an export of the previous store does not keep the prefetch of the next one off', async ({ page, servers, storeUrl }) => {
   await openAt(page, servers, await storeUrl('u16_sharded'));
   const next = await storeUrl('u16_plain');

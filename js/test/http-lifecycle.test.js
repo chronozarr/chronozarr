@@ -172,6 +172,58 @@ test('cancelling openStore aborts all outstanding array metadata reads', async (
   assert.ok(signals.length > 0 && signals.every(signal => signal.aborted));
 });
 
+test('closing a store aborts a held fast-path shard-index request', { timeout: 5000 }, async (t) => {
+  const readable = buildSyntheticStore({ nTime: 2, nBand: 1, height: 2, width: 2, chunk: 2, sharded: true, shardBytes: true, consolidated: true });
+  const shardKey = '/0/data/c/0/0/0/0';
+  const shard = readable.files.get(shardKey);
+  const indexStart = shard.length - (16 * 2 + 4);
+  const started = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  let store;
+  let pending;
+  const cleanup = async () => {
+    release.resolve();
+    store?.close();
+    if (pending) await Promise.allSettled([pending]);
+  };
+  t.after(cleanup);
+  try {
+    store = await openStore('https://example.test/store', {
+      workers: 0, retryDelaysMs: [],
+      fetch: async (request) => {
+        const key = new URL(request.url).pathname.slice('/store'.length);
+        if (key === '/zarr.json') return new Response(readable.files.get(key));
+        assert.equal(key, shardKey);
+        assert.equal(request.headers.get('Range'), `bytes=${indexStart}-${shard.length - 1}`);
+        let onAbort;
+        const aborted = new Promise((_, reject) => {
+          onAbort = () => reject(new DOMException('Aborted', 'AbortError'));
+          request.signal.addEventListener('abort', onAbort, { once: true });
+          if (request.signal.aborted) onAbort();
+        });
+        started.resolve(request);
+        try {
+          await Promise.race([release.promise, aborted]);
+        } finally {
+          request.signal.removeEventListener('abort', onAbort);
+        }
+        return new Response(shard.slice(indexStart), {
+          status: 206,
+          headers: { 'Content-Range': `bytes ${indexStart}-${shard.length - 1}/${shard.length}` },
+        });
+      },
+    });
+    pending = store.getRaw(0, 0, 0, 0);
+    pending.catch(() => {});
+    const request = await started.promise;
+    store.close();
+    assert.equal(request.signal.aborted, true, 'closing the store cancels its shared index fetch');
+    await assert.rejects(pending, { name: 'AbortError' });
+  } finally {
+    await cleanup();
+  }
+});
+
 test('removing a MapLibre layer cancels its opening request', async () => {
   const { ChronozarrLayer } = await import('../maplibre/layer.js');
   let signal;

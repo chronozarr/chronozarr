@@ -571,9 +571,9 @@ test('closing the store while joined requests are in flight leaves nothing count
   assert.equal(store.stats().cache.speculativeShare, 1);
 });
 
-test('a demand fetch that is aborted while its shard index read cannot be cancelled stops counting as demand at once', async () => {
+test('a demand fetch aborted while it waits for a shared shard index stops counting as demand at once', async () => {
   const readable = buildSyntheticStore({ nTime: 60, nBand: 4, height: 256, width: 256, chunk: 128, sharded: true, shardTime: 30, shardBytes: true });
-  // The first read of the shard that holds t=45 of cell (0, 1) (its index) waits for the test; a read of an index takes no signal.
+  // The first read of the shard that holds t=45 of cell (0, 1) (its index) waits for the test; only store closure cancels the index.
   let releaseIndex;
   const held = new Promise((resolve) => { releaseIndex = resolve; });
   let armed = false;

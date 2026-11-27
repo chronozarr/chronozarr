@@ -4,7 +4,7 @@
 [![PyPI](https://img.shields.io/pypi/v/chronozarr)](https://pypi.org/project/chronozarr/)
 [![npm](https://img.shields.io/npm/v/chronozarr)](https://www.npmjs.com/package/chronozarr)
 
-chronozarr lets you share a georeferenced raster time series as an interactive map. A recipient can open a link, play or scrub through the dates, zoom in and click a pixel to see its values over time. The browser reads the stored bands directly from static files, and Python can read the same values for analysis.
+chronozarr lets you share a georeferenced raster time series as an interactive map. A recipient can open a link and play or scrub through the dates. They can zoom in and click a pixel to see its values over time. The browser reads the stored bands directly from static files. Python can read the same values for analysis.
 
 [Live demo](https://chronozarr.org/demo/): 117 monthly Sentinel-2 composites of the Ucayali River in Peru, read directly from a storage bucket. Documentation: [chronozarr.org](https://chronozarr.org).
 

@@ -206,6 +206,23 @@ async function withBrowserGlobals(FakeMediaRecorder, body) {
   }
 }
 
+test('video export stops captured tracks if the MediaRecorder constructor throws', async () => {
+  const { FakeMediaRecorder, viewer, calls } = fakeRecorderEnvironment({ onStop() {} });
+  const failure = new DOMException('Recorder construction failed', 'NotSupportedError');
+  class RejectedRecorder extends FakeMediaRecorder {
+    constructor(...args) {
+      super(...args);
+      throw failure;
+    }
+  }
+  await withBrowserGlobals(RejectedRecorder, () => assert.rejects(
+    exportLoop(viewer, { format: 'webm', from: 0, to: 0, stepsPerSecond: 1 }),
+    (error) => error === failure,
+  ));
+  assert.equal(calls.trackStops, 1, 'release the stream captured before recorder construction');
+  assert.equal(calls.closed, 1, 'release the export session after the original failure');
+});
+
 test('an export cancelled while the recorder finishes the file rejects with an AbortError instead of returning the file', async () => {
   const controller = new AbortController();
   const { FakeMediaRecorder, viewer } = fakeRecorderEnvironment({ onStop: () => controller.abort() });

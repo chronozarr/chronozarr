@@ -39,8 +39,11 @@
     var query = new URLSearchParams(location.search);
     var reads = (window.chronozarrEarly = new Map());
     function read(url) {
-      reads.set(url.href, fetch(url).catch(function () { return null; }));
-      return reads.get(url.href);
+      var controller = new AbortController();
+      var pending = fetch(url, { signal: controller.signal }).catch(function () { return null; });
+      pending.abort = function () { controller.abort(); };
+      reads.set(url.href, pending);
+      return pending;
     }
     function readRoot(store) {
       // The address of the root metadata as the reader builds it (HttpStore): the store's folder, zarr.json, the store's query.

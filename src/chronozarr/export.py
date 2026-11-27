@@ -26,9 +26,12 @@ Rules, which keep every pixel's validity and value exactly as the store reads it
 from __future__ import annotations
 
 import math
+import os
 import re
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager, suppress
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 
@@ -36,6 +39,12 @@ from chronozarr.decode import ChronoStore, open_store
 
 _DATE_PREFIX = re.compile(r"^\d{4}-\d{2}(-\d{2}([T ][\d:.]*Z?)?)?$")
 _COG_BLOCK_SIZE = 512
+
+
+def _timestamp_key(iso: str, precision: int) -> str:
+    """Comparable UTC timestamp with a common fractional precision and no terminal Z."""
+    clock, _, fraction = iso.replace(" ", "T").removesuffix("Z").partition(".")
+    return f"{clock}.{fraction.ljust(precision, '0')}" if precision else clock
 
 
 def select_times(spec: Sequence[str], times: Sequence[str]) -> list[int]:
@@ -51,6 +60,15 @@ def select_times(spec: Sequence[str], times: Sequence[str]) -> list[int]:
     tokens = [t.strip() for item in spec for t in item.split(",") if t.strip()]
     if not tokens:
         return list(range(n))
+    dates = [*times, *(part for token in tokens for part in token.split(".."))]
+    precision = max(len(date.removesuffix("Z").partition(".")[2]) for date in dates)
+    keys = [_timestamp_key(time, precision) for time in times]
+
+    def prefix(text: str) -> str:
+        # A terminal Z denotes an instant. Without it, keep the written date/time
+        # precision so a month, minute or fractional-second prefix selects its period.
+        return _timestamp_key(text, precision) if text.endswith("Z") else text.replace(" ", "T")
+
     chosen: set[int] = set()
     for token in tokens:
         if token == "all":
@@ -61,12 +79,13 @@ def select_times(spec: Sequence[str], times: Sequence[str]) -> list[int]:
                 raise ValueError(
                     f"bad time range '{token}': use ISO date prefixes like 2020-01..2022-06"
                 )
-            start, end = start.replace(" ", "T"), end.replace(" ", "T")
+            start, end = prefix(start), prefix(end)
             chosen.update(
-                i for i, t in enumerate(times) if t[: len(start)] >= start and t[: len(end)] <= end
+                i for i, t in enumerate(keys) if t[: len(start)] >= start and t[: len(end)] <= end
             )
         elif _DATE_PREFIX.match(token):
-            matches = [i for i, t in enumerate(times) if t.startswith(token.replace(" ", "T"))]
+            selected_prefix = prefix(token)
+            matches = [i for i, t in enumerate(keys) if t.startswith(selected_prefix)]
             if not matches:
                 raise ValueError(
                     f"no timestep matches '{token}' (store spans {times[0]} to {times[-1]})"
@@ -138,6 +157,31 @@ def _overview_can_hit_nodata(dtype: np.dtype, nodata: int | float | None) -> boo
     return True
 
 
+@contextmanager
+def _cog_output(target: Path) -> Iterator[Path]:
+    """Publish a completed sibling file without replacing an existing destination."""
+    temporary = target.with_name(f".chronozarr-export-{uuid4().hex}.tif")
+    # Exclusive creation reserves our name and keeps the normal output mode/umask.
+    # Close it before GDAL writes, and all GDAL handles close before linking on Windows.
+    with temporary.open("xb"):
+        pass
+    try:
+        yield temporary
+        # Unlike rename on POSIX, link refuses even a destination created after preflight.
+        # Unsupported filesystems fail safely; copying or replacing here could clobber it.
+        os.link(temporary, target)
+    except BaseException as error:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError as cleanup_error:
+            error.add_note(f"could not remove temporary COG {temporary}: {cleanup_error}")
+        raise
+    else:
+        # Publication succeeded: failure to remove the spare link cannot fail the export.
+        with suppress(OSError):
+            temporary.unlink()
+
+
 def export_cog(
     store: ChronoStore | str | Path,
     out_dir: str | Path,
@@ -151,6 +195,8 @@ def export_cog(
     `store` is an opened store, a local path or an https URL. Files are named
     `L<level>_<date>.tif`. One timestep of the level is held in memory at a time, so pick a
     coarser `level` for very large stores. An existing file of the same name is an error.
+    Each file is completed beside its destination and published without replacement;
+    the output filesystem must support hard links.
     `physical` writes float32 physical values instead of the stored values; see the module
     docstring for how validity, scale and offset are written.
     """
@@ -170,6 +216,11 @@ def export_cog(
     iso_times = opened.attrs.times
     out = Path(out_dir)
     targets = [out / f"L{level}_{_file_stem(iso_times[t])}.tif" for t in selected]
+    if len(set(targets)) != len(targets):
+        raise ValueError(
+            "selected timesteps produce duplicate output filenames; "
+            "choose each timestamp only once"
+        )
     clashes = [p for p in targets if p.exists()]
     if clashes:
         raise FileExistsError(
@@ -224,10 +275,10 @@ def export_cog(
                     CHRONOZARR_LEVEL=str(level),
                     CHRONOZARR_TIMESTEP=str(t),
                 )
-            with memory.open() as src:
+            with _cog_output(target) as temporary, memory.open() as src:
                 rasterio.shutil.copy(
                     src,
-                    target,
+                    temporary,
                     driver="COG",
                     compress="DEFLATE",
                     predictor="YES",

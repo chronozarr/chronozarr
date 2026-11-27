@@ -112,6 +112,7 @@
 .cz-num small { font-size: 0.4em; font-weight: 500; font-stretch: 100%; letter-spacing: 0; color: var(--vocs-color_textAccent); margin-left: 0.12em; }
 .cz-what { font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; }
 .cz-note { font-size: 0.875rem; line-height: 1.5; color: var(--vocs-color_text2); }
+@media (min-width: 901px) { .cz-num { font-size: clamp(36px, 4vw, 64px); white-space: nowrap; } }
 @media (max-width: 900px) { .cz-specs { grid-template-columns: repeat(2, minmax(0, 1fr)); } .cz-spec { border-bottom: 1px solid var(--vocs-color_border); } }
 @media (max-width: 500px) { .cz-specs { grid-template-columns: minmax(0, 1fr); } }
 

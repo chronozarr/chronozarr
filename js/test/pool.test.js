@@ -72,6 +72,19 @@ function recordingFallback() {
   return fallback;
 }
 
+/** A fallback whose decodes stay pending until the test resolves or rejects them. */
+function manualFallback() {
+  const fallback = {
+    pending: [],
+    closed: 0,
+    decode: (...args) => new Promise((resolve, reject) => fallback.pending.push({ args, resolve, reject })),
+    close() {
+      fallback.closed++;
+    },
+  };
+  return fallback;
+}
+
 const settledWithin = (promise, ms) => Promise.race([
   promise.then((value) => ({ value }), (error) => ({ error })),
   new Promise((resolve) => setTimeout(() => resolve('still pending'), ms)),
@@ -234,6 +247,212 @@ test('with a fallback, demand jobs do not wait for workers to start; background 
   assert.equal(later[0], 3);
   assert.deepEqual(fallbackLog, [1], 'once a worker is ready, demand jobs use it too');
   pool.close();
+});
+
+test('prefetch promoted during startup uses the fallback before worker readiness', async (t) => {
+  const { spawn, made } = manualWorkers();
+  const calls = [];
+  const fallback = { decode: async (...args) => { calls.push(args); return Uint16Array.of(args[0][0]); } };
+  const pool = new DecodePool({ size: 1, spawn, init: { type: 'init' }, fallback });
+  t.after(() => pool.close());
+  const [worker] = made;
+  const background = pool.decode(Uint8Array.of(33), 1);
+  background.catch(() => {});
+  const priority = { value: 1 };
+  const controller = new AbortController();
+  const spec = { key: 'promoted' };
+  const options = { compact: true };
+  const promoted = pool.decode(Uint8Array.of(11), priority, controller.signal, spec, options);
+  priority.value = 0;
+  pool.reprioritize();
+  pool.reprioritize();
+  assert.deepEqual([...await pool.decode(Uint8Array.of(22), 0)], [22], 'fresh demand uses the fallback too');
+  assert.deepEqual(await settledWithin(promoted, 20), { value: Uint16Array.of(11) });
+  assert.deepEqual(calls.map(([bytes]) => bytes[0]), [11, 22], 'only demand runs on the fallback, once each');
+  assert.deepEqual(calls[0].slice(1), [priority, controller.signal, spec, options]);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+  assert.equal(pool.mode, 'starting');
+  assert.equal(worker.received.filter((message) => message.type === 'decode').length, 0);
+
+  worker.onmessage({ data: { type: 'ready' } });
+  const queued = worker.received.at(-1);
+  assert.equal(queued.bytes[0], 33, 'unrelated prefetch stays with the worker');
+  worker.onmessage({ data: { type: 'decoded', id: queued.id, data: Uint16Array.of(33) } });
+  assert.deepEqual([...await background], [33]);
+  const later = pool.decode(Uint8Array.of(44), 0);
+  const demand = worker.received.at(-1);
+  assert.equal(demand.bytes[0], 44, 'demand after readiness uses the worker');
+  worker.onmessage({ data: { type: 'decoded', id: demand.id, data: Uint16Array.of(44) } });
+  assert.deepEqual([...await later], [44]);
+  assert.deepEqual(calls.map(([bytes]) => bytes[0]), [11, 22]);
+});
+
+test('promoted jobs keep worker scheduling without a startup fallback or after readiness', async (t) => {
+  for (const ready of [false, true]) await t.test(ready ? 'worker already ready' : 'no fallback', async (t) => {
+    const { spawn, made } = manualWorkers();
+    const fallback = ready ? recordingFallback() : null;
+    const pool = new DecodePool({ size: 1, spawn, init: { type: 'init' }, fallback });
+    t.after(() => pool.close());
+    const [worker] = made;
+    if (ready) worker.onmessage({ data: { type: 'ready' } });
+    const first = pool.decode(Uint8Array.of(1), 1);
+    const priority = { value: 1 };
+    const promoted = pool.decode(Uint8Array.of(2), priority);
+    priority.value = 0;
+    pool.reprioritize();
+    if (!ready) worker.onmessage({ data: { type: 'ready' } });
+    const order = ready ? [1, 2] : [2, 1];
+    for (const value of order) {
+      const job = worker.received.at(-1);
+      assert.equal(job.bytes[0], value);
+      worker.onmessage({ data: { type: 'decoded', id: job.id, data: Uint16Array.of(value) } });
+    }
+    assert.deepEqual((await Promise.all([first, promoted])).map((data) => data[0]), [1, 2]);
+    assert.deepEqual(fallback?.decoded ?? [], []);
+  });
+});
+
+test('abort and close settle promoted fallback jobs and ignore their late results', async (t) => {
+  for (const action of ['abort', 'close']) for (const result of ['resolve', 'reject']) {
+    await t.test(`${action} then ${result}`, async (t) => {
+      const { spawn, made } = manualWorkers();
+      const fallback = manualFallback();
+      const pool = new DecodePool({ size: 1, spawn, init: { type: 'init' }, fallback });
+      t.after(() => pool.close());
+      const controller = new AbortController();
+      const priority = { value: 1 };
+      const promoted = pool.decode(Uint8Array.of(7), priority, controller.signal);
+      const rejected = assert.rejects(promoted, { name: 'AbortError' });
+      priority.value = 0;
+      pool.reprioritize();
+      assert.equal(fallback.pending.length, 1);
+      assert.equal(getEventListeners(controller.signal, 'abort').length, 1);
+      if (action === 'abort') controller.abort();
+      else pool.close();
+      await rejected;
+      assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+      fallback.pending[0][result](result === 'resolve' ? Uint16Array.of(7) : new Error('late fallback failure'));
+      await new Promise(setImmediate);
+      if (action === 'abort') {
+        made[0].onmessage({ data: { type: 'ready' } });
+        assert.equal(made[0].received.filter((message) => message.type === 'decode').length, 0);
+      } else {
+        assert.equal(pool.mode, 'closed');
+        assert.equal(fallback.closed, 1);
+      }
+    });
+  }
+});
+
+test('fallback errors reject only the promoted job and release its abort listener', async (t) => {
+  for (const synchronous of [true, false]) await t.test(synchronous ? 'synchronous throw' : 'rejected promise', async (t) => {
+    const { spawn } = manualWorkers();
+    const failure = new Error('fallback decode failed');
+    const fallback = {
+      decode(bytes) {
+        if (bytes[0] === 1) {
+          if (synchronous) throw failure;
+          return Promise.reject(failure);
+        }
+        return Promise.resolve(Uint16Array.of(bytes[0]));
+      },
+    };
+    const pool = new DecodePool({ size: 1, spawn, init: { type: 'init' }, fallback });
+    t.after(() => pool.close());
+    const controller = new AbortController();
+    const priority = { value: 1 };
+    const failed = pool.decode(Uint8Array.of(1), priority, controller.signal);
+    const later = pool.decode(Uint8Array.of(2), priority);
+    const rejected = assert.rejects(failed, failure);
+    priority.value = 0;
+    assert.doesNotThrow(() => pool.reprioritize());
+    await rejected;
+    assert.deepEqual(await settledWithin(later, 20), { value: Uint16Array.of(2) });
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+    assert.equal(pool.mode, 'starting');
+  });
+});
+
+test('readiness during fallback delegation sends remaining promoted work to the worker', async (t) => {
+  const { spawn, made } = manualWorkers();
+  const calls = [];
+  const fallback = { decode: async (bytes) => {
+    calls.push(bytes[0]);
+    made[0].onmessage({ data: { type: 'ready' } });
+    return Uint16Array.of(bytes[0]);
+  } };
+  const pool = new DecodePool({ size: 1, spawn, init: { type: 'init' }, fallback });
+  t.after(() => pool.close());
+  const priority = { value: 1 };
+  const first = pool.decode(Uint8Array.of(1), priority);
+  const second = pool.decode(Uint8Array.of(2), priority);
+  priority.value = 0;
+  pool.reprioritize();
+  assert.deepEqual(calls, [1]);
+  const jobs = made[0].received.filter((message) => message.type === 'decode');
+  assert.deepEqual(jobs.map((job) => job.bytes[0]), [2]);
+  made[0].onmessage({ data: { type: 'decoded', id: jobs[0].id, data: Uint16Array.of(2) } });
+  assert.deepEqual((await Promise.all([first, second])).map((data) => data[0]), [1, 2]);
+  assert.equal(pool.mode, 'running');
+});
+
+test('worker failure leaves an already delegated promoted job running on the fallback', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const { spawn, made } = manualWorkers();
+  const fallback = manualFallback();
+  const pool = new DecodePool({ size: 1, spawn, init: { type: 'init' }, fallback });
+  t.after(() => pool.close());
+  const priority = { value: 1 };
+  const promoted = pool.decode(Uint8Array.of(1), priority);
+  const controller = new AbortController();
+  const transferred = pool.decode(Uint8Array.of(2), 1, controller.signal);
+  const rejected = assert.rejects(transferred, /decode worker stopped before it answered/);
+  const queued = pool.decode(Uint8Array.of(3), 1);
+  priority.value = 0;
+  pool.reprioritize();
+  made[0].onmessage({ data: { type: 'ready' } });
+  assert.equal(made[0].received.at(-1).bytes[0], 2);
+  made[0].onerror({ message: 'worker stopped' });
+  await rejected;
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+  assert.deepEqual(fallback.pending.map(({ args }) => args[0][0]), [1, 3]);
+  fallback.pending[0].resolve(Uint16Array.of(1));
+  fallback.pending[1].resolve(Uint16Array.of(3));
+  assert.deepEqual((await Promise.all([promoted, queued])).map((data) => data[0]), [1, 3]);
+  assert.equal(pool.mode, 'fallback');
+});
+
+test('failure or close inside fallback delegation does not run queued work twice', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  for (const action of ['failure', 'close']) await t.test(action, async (t) => {
+    const { spawn, made } = manualWorkers();
+    const calls = [];
+    const fallback = { decode: async (bytes) => {
+      calls.push(bytes[0]);
+      if (bytes[0] === 1) {
+        if (action === 'failure') made[0].onerror({ message: 'worker cannot start' });
+        else pool.close();
+      }
+      return Uint16Array.of(bytes[0]);
+    } };
+    const pool = new DecodePool({ size: 1, spawn, init: { type: 'init' }, fallback });
+    t.after(() => pool.close());
+    const priority = { value: 1 };
+    const first = pool.decode(Uint8Array.of(1), priority);
+    const second = pool.decode(Uint8Array.of(2), priority);
+    const outcomes = Promise.allSettled([first, second]);
+    priority.value = 0;
+    assert.doesNotThrow(() => pool.reprioritize());
+    if (action === 'failure') {
+      assert.deepEqual((await outcomes).map(({ value }) => value[0]), [1, 2]);
+      assert.deepEqual(calls, [1, 2]);
+      assert.equal(pool.mode, 'fallback');
+    } else {
+      assert.deepEqual((await outcomes).map(({ reason }) => reason.name), ['AbortError', 'AbortError']);
+      assert.deepEqual(calls, [1]);
+      assert.equal(pool.mode, 'closed');
+    }
+  });
 });
 
 test('with a fallback, workers that cannot start are replaced by it, with one warning', async (t) => {
